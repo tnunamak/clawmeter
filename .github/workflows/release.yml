@@ -10,18 +10,26 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - goos: linux
             goarch: amd64
+            runner: ubuntu-latest
+            cc: gcc
           - goos: linux
             goarch: arm64
+            runner: ubuntu-24.04-arm
+            cc: gcc
           - goos: darwin
             goarch: amd64
+            runner: macos-13
+            cc: clang
           - goos: darwin
             goarch: arm64
+            runner: macos-latest
+            cc: clang
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,12 +37,19 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Linux tray deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libayatana-appindicator3-dev
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '0'
-        run: go build -trimpath -ldflags='-s -w' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
+          CGO_ENABLED: '1'
+          CC: ${{ matrix.cc }}
+        run: go build -tags tray -trimpath -ldflags='-s -w' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
 
       - uses: actions/upload-artifact@v4
         with:
