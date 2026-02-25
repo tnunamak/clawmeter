@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/tray"
 )
@@ -22,7 +23,7 @@ func run() int {
 	case "status":
 		return statusCmd(os.Args[2:])
 	case "tray":
-		return trayCmd()
+		return trayCmd(os.Args[2:])
 	case "help", "--help", "-h":
 		printHelp()
 		return 0
@@ -41,7 +42,29 @@ func statusCmd(args []string) int {
 	return cli.Status(*jsonMode, *plainMode)
 }
 
-func trayCmd() int {
+func trayCmd(args []string) int {
+	fs := flag.NewFlagSet("tray", flag.ExitOnError)
+	install := fs.Bool("install", false, "enable launch at login")
+	uninstall := fs.Bool("uninstall", false, "disable launch at login")
+	fs.Parse(args)
+
+	if *install {
+		if err := autostart.Install(); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+			return 1
+		}
+		fmt.Println("clawmeter will start at login")
+		return 0
+	}
+	if *uninstall {
+		if err := autostart.Uninstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+			return 1
+		}
+		fmt.Println("clawmeter autostart removed")
+		return 0
+	}
+
 	return tray.Run()
 }
 
@@ -55,5 +78,9 @@ Commands:
 
 Status flags:
   --json    Output as JSON
-  --plain   Plain text, no color codes`)
+  --plain   Plain text, no color codes
+
+Tray flags:
+  --install    Enable launch at login
+  --uninstall  Disable launch at login`)
 }

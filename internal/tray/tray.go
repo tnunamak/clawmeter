@@ -13,6 +13,7 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/api"
 	"github.com/tnunamak/clawmeter/internal/cache"
+	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 )
 
@@ -92,9 +93,11 @@ func updateMenu(usage *api.UsageResponse, mFive, mSeven *systray.MenuItem) {
 	sevenPct := usage.SevenDay.Utilization
 	fiveReset := formatDuration(time.Until(usage.FiveHour.ResetsAt))
 	sevenReset := formatDuration(time.Until(usage.SevenDay.ResetsAt))
+	fiveProj := forecast.Project(fivePct, usage.FiveHour.ResetsAt, forecast.FiveHourWindow)
+	sevenProj := forecast.Project(sevenPct, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
 
-	mFive.SetTitle(fmt.Sprintf("5h: %3.0f%%  resets %s", fivePct, fiveReset))
-	mSeven.SetTitle(fmt.Sprintf("7d: %3.0f%%  resets %s", sevenPct, sevenReset))
+	mFive.SetTitle(fmt.Sprintf("5h: %3.0f%%  resets %s  %s", fivePct, fiveReset, fiveProj.Indicator()))
+	mSeven.SetTitle(fmt.Sprintf("7d: %3.0f%%  resets %s  %s", sevenPct, sevenReset, sevenProj.Indicator()))
 	systray.SetTitle(fmt.Sprintf("5h:%.0f%% 7d:%.0f%%", fivePct, sevenPct))
 }
 

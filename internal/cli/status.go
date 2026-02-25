@@ -12,6 +12,7 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/api"
 	"github.com/tnunamak/clawmeter/internal/cache"
+	"github.com/tnunamak/clawmeter/internal/forecast"
 )
 
 const barWidth = 20
@@ -63,11 +64,13 @@ func PrintColor(usage *api.UsageResponse) {
 	sevenPct := usage.SevenDay.Utilization
 	fiveReset := formatDuration(time.Until(usage.FiveHour.ResetsAt))
 	sevenReset := formatDuration(time.Until(usage.SevenDay.ResetsAt))
+	fiveProj := forecast.Project(fivePct, usage.FiveHour.ResetsAt, forecast.FiveHourWindow)
+	sevenProj := forecast.Project(sevenPct, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
 
-	fmt.Printf("clawmeter  5h %s%s%s %3.0f%%  resets %s\n",
-		color(fivePct), bar(fivePct), reset, fivePct, fiveReset)
-	fmt.Printf("           7d %s%s%s %3.0f%%  resets %s\n",
-		color(sevenPct), bar(sevenPct), reset, sevenPct, sevenReset)
+	fmt.Printf("clawmeter  5h %s%s%s %3.0f%%  resets %s  %s\n",
+		color(fivePct), bar(fivePct), reset, fivePct, fiveReset, fiveProj.ColorIndicator())
+	fmt.Printf("           7d %s%s%s %3.0f%%  resets %s  %s\n",
+		color(sevenPct), bar(sevenPct), reset, sevenPct, sevenReset, sevenProj.ColorIndicator())
 }
 
 func PrintPlain(usage *api.UsageResponse) {
@@ -75,14 +78,27 @@ func PrintPlain(usage *api.UsageResponse) {
 	sevenPct := usage.SevenDay.Utilization
 	fiveReset := formatDuration(time.Until(usage.FiveHour.ResetsAt))
 	sevenReset := formatDuration(time.Until(usage.SevenDay.ResetsAt))
+	fiveProj := forecast.Project(fivePct, usage.FiveHour.ResetsAt, forecast.FiveHourWindow)
+	sevenProj := forecast.Project(sevenPct, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
 
-	fmt.Printf("5h: %.0f%% (resets %s)  7d: %.0f%% (resets %s)\n",
-		fivePct, fiveReset, sevenPct, sevenReset)
+	fmt.Printf("5h: %.0f%% (resets %s, %s)  7d: %.0f%% (resets %s, %s)\n",
+		fivePct, fiveReset, fiveProj.Indicator(), sevenPct, sevenReset, sevenProj.Indicator())
 }
 
 type JSONOutput struct {
-	Usage  *api.UsageResponse `json:"usage"`
-	Cache  *CacheInfo         `json:"cache,omitempty"`
+	Usage    *api.UsageResponse `json:"usage"`
+	Forecast *JSONForecast      `json:"forecast"`
+	Cache    *CacheInfo         `json:"cache,omitempty"`
+}
+
+type JSONForecast struct {
+	FiveHour  JSONProjection `json:"five_hour"`
+	SevenDay  JSONProjection `json:"seven_day"`
+}
+
+type JSONProjection struct {
+	ProjectedPct float64 `json:"projected_pct"`
+	Status       string  `json:"status"`
 }
 
 type CacheInfo struct {
@@ -91,7 +107,16 @@ type CacheInfo struct {
 }
 
 func PrintJSON(usage *api.UsageResponse, cacheEntry *cache.Entry) {
-	out := JSONOutput{Usage: usage}
+	fiveProj := forecast.Project(usage.FiveHour.Utilization, usage.FiveHour.ResetsAt, forecast.FiveHourWindow)
+	sevenProj := forecast.Project(usage.SevenDay.Utilization, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
+
+	out := JSONOutput{
+		Usage: usage,
+		Forecast: &JSONForecast{
+			FiveHour:  JSONProjection{ProjectedPct: math.Round(fiveProj.ProjectedPct), Status: fiveProj.Indicator()},
+			SevenDay:  JSONProjection{ProjectedPct: math.Round(sevenProj.ProjectedPct), Status: sevenProj.Indicator()},
+		},
+	}
 	if cacheEntry != nil {
 		out.Cache = &CacheInfo{Hit: true, FetchedAt: cacheEntry.FetchedAt}
 	}
