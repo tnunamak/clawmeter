@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -15,7 +18,43 @@ const (
 	timeout    = 5 * time.Second
 )
 
+// ReadCredentials tries, in order:
+//  1. CLAUDE_CODE_OAUTH_TOKEN env var (raw access token)
+//  2. macOS Keychain (security find-generic-password)
+//  3. ~/.claude/.credentials.json file (Linux)
 func ReadCredentials() (*OAuthCredentials, error) {
+	if token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); token != "" {
+		return &OAuthCredentials{tokenOnly: token}, nil
+	}
+
+	if runtime.GOOS == "darwin" {
+		if creds, err := readKeychain(); err == nil {
+			return creds, nil
+		}
+	}
+
+	return readCredentialsFile()
+}
+
+func readKeychain() (*OAuthCredentials, error) {
+	out, err := exec.Command("security", "find-generic-password",
+		"-s", "Claude Code-credentials", "-w").Output()
+	if err != nil {
+		return nil, fmt.Errorf("keychain: %w", err)
+	}
+	data := strings.TrimSpace(string(out))
+	if data == "" {
+		return nil, fmt.Errorf("keychain: empty value")
+	}
+	var creds OAuthCredentials
+	if err := json.Unmarshal([]byte(data), &creds); err != nil {
+		// Might be a raw token string
+		return &OAuthCredentials{tokenOnly: data}, nil
+	}
+	return &creds, nil
+}
+
+func readCredentialsFile() (*OAuthCredentials, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("home dir: %w", err)
@@ -31,7 +70,17 @@ func ReadCredentials() (*OAuthCredentials, error) {
 	return &creds, nil
 }
 
+func (c *OAuthCredentials) AccessToken() string {
+	if c.tokenOnly != "" {
+		return c.tokenOnly
+	}
+	return c.ClaudeAiOauth.AccessToken
+}
+
 func (c *OAuthCredentials) IsExpired() bool {
+	if c.tokenOnly != "" {
+		return false // can't check expiry for raw tokens
+	}
 	return time.Now().UnixMilli() >= c.ClaudeAiOauth.ExpiresAt
 }
 

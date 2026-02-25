@@ -122,7 +122,7 @@ func Status(jsonMode, plainMode bool) int {
 		return 0
 	}
 
-	usage, err := api.FetchUsage(creds.ClaudeAiOauth.AccessToken)
+	usage, err := api.FetchUsage(creds.AccessToken())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1

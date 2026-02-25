@@ -4,13 +4,15 @@ import "time"
 
 type OAuthCredentials struct {
 	ClaudeAiOauth struct {
-		AccessToken      string `json:"accessToken"`
-		RefreshToken     string `json:"refreshToken"`
-		ExpiresAt        int64  `json:"expiresAt"`
+		AccessToken      string   `json:"accessToken"`
+		RefreshToken     string   `json:"refreshToken"`
+		ExpiresAt        int64    `json:"expiresAt"`
 		Scopes           []string `json:"scopes"`
-		SubscriptionType string `json:"subscriptionType"`
-		RateLimitTier    string `json:"rateLimitTier"`
+		SubscriptionType string   `json:"subscriptionType"`
+		RateLimitTier    string   `json:"rateLimitTier"`
 	} `json:"claudeAiOauth"`
+
+	tokenOnly string // set when credentials come from env var or raw keychain value
 }
 
 type UsageResponse struct {

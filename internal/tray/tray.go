@@ -79,7 +79,7 @@ func fetchUsage() *api.UsageResponse {
 	if err != nil || creds.IsExpired() {
 		return nil
 	}
-	usage, err := api.FetchUsage(creds.ClaudeAiOauth.AccessToken)
+	usage, err := api.FetchUsage(creds.AccessToken())
 	if err != nil {
 		return nil
 	}
