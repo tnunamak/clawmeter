@@ -7,24 +7,29 @@ Anthropic doesn't expose a public API for plan utilization — the only way to s
 ## Install
 
 ```bash
-go install github.com/tnunamak/clawmeter/cmd/clawmeter@latest
+curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
-Or build from source:
+Override the install directory:
 
 ```bash
+INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
+```
+
+### Other methods
+
+```bash
+# Go install
+go install github.com/tnunamak/clawmeter/cmd/clawmeter@latest
+
+# Build from source
 git clone https://github.com/tnunamak/clawmeter.git
 cd clawmeter
 make install          # CLI only, pure Go
-# or
 make install-tray     # with system tray support (requires CGO)
 ```
 
-### Tray prerequisites (Linux)
-
-```bash
-sudo apt install libayatana-appindicator3-dev
-```
+Tray prerequisites (Linux): `sudo apt install libayatana-appindicator3-dev`
 
 ## Usage
 
@@ -97,6 +102,6 @@ Results are cached to `~/.cache/clawmeter/usage.json` with a 60-second TTL. The 
 
 ## Requirements
 
-- Go 1.24+
 - An active Claude Code session (for the OAuth token)
+- For building from source: Go 1.24+
 - For tray builds: CGO + `libayatana-appindicator3-dev` (Linux) or Xcode (macOS)
