@@ -23,7 +23,7 @@ jobs:
             cc: gcc
           - goos: darwin
             goarch: amd64
-            runner: macos-13
+            runner: macos-15-intel
             cc: clang
           - goos: darwin
             goarch: arm64
