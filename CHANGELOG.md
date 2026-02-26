@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/tnunamak/clawmeter/compare/v0.8.0...v0.8.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* install script falls back to previous release if latest has no binaries ([1951bef](https://github.com/tnunamak/clawmeter/commit/1951bef66f7ee9afef62bfb0d565ed9ed5fd47cb))
+
 ## [0.8.0](https://github.com/tnunamak/clawmeter/compare/v0.7.1...v0.8.0) (2026-02-26)
 
 
