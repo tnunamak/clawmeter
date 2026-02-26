@@ -24,6 +24,27 @@ func Install() error {
 	}
 }
 
+func IsInstalled() bool {
+	switch runtime.GOOS {
+	case "linux":
+		path, err := linuxDesktopPath()
+		if err != nil {
+			return false
+		}
+		_, err = os.Stat(path)
+		return err == nil
+	case "darwin":
+		path, err := darwinPlistPath()
+		if err != nil {
+			return false
+		}
+		_, err = os.Stat(path)
+		return err == nil
+	default:
+		return false
+	}
+}
+
 func Uninstall() error {
 	switch runtime.GOOS {
 	case "linux":

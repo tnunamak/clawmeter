@@ -12,6 +12,7 @@ import (
 	"fyne.io/systray"
 
 	"github.com/tnunamak/clawmeter/internal/api"
+	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
@@ -23,7 +24,6 @@ type state struct {
 	mu           sync.Mutex
 	lastFiveHour float64
 	lastSevenDay float64
-	wasExpired   bool
 }
 
 var s state
@@ -36,7 +36,7 @@ func Run() int {
 func onReady() {
 	systray.SetIcon(icons.Gray)
 	systray.SetTitle("clawmeter")
-	systray.SetTooltip("Claude usage monitor")
+	systray.SetTooltip("Claude usage monitor — loading...")
 
 	mHeader := systray.AddMenuItem("Claude Max", "")
 	mHeader.Disable()
@@ -53,11 +53,15 @@ func onReady() {
 	mReauth := systray.AddMenuItem("Open Claude Code to reauth", "")
 	mReauth.Hide()
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
+	systray.AddSeparator()
+	mAutostart := systray.AddMenuItem("", "")
+	updateAutostartLabel(mAutostart)
 	mQuit := systray.AddMenuItem("Quit", "")
 
 	setExpired := func() {
 		systray.SetIcon(icons.Gray)
 		systray.SetTitle("expired")
+		systray.SetTooltip("Claude — token expired")
 		mStatus.SetTitle("Token expired")
 		mStatus.Show()
 		mFive.Hide()
@@ -72,6 +76,7 @@ func onReady() {
 		mSeven.Show()
 		updateMenu(usage, mFive, mSeven)
 		updateIcon(usage)
+		updateTooltip(usage)
 		checkThresholds(usage)
 	}
 
@@ -103,6 +108,8 @@ func onReady() {
 				refresh()
 			case <-mReauth.ClickedCh:
 				openTerminalWithClaude()
+			case <-mAutostart.ClickedCh:
+				toggleAutostart(mAutostart)
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -111,10 +118,26 @@ func onReady() {
 	}()
 }
 
+func updateAutostartLabel(m *systray.MenuItem) {
+	if autostart.IsInstalled() {
+		m.SetTitle("✓ Launch at login")
+	} else {
+		m.SetTitle("  Launch at login")
+	}
+}
+
+func toggleAutostart(m *systray.MenuItem) {
+	if autostart.IsInstalled() {
+		autostart.Uninstall()
+	} else {
+		autostart.Install()
+	}
+	updateAutostartLabel(m)
+}
+
 func openTerminalWithClaude() {
 	switch runtime.GOOS {
 	case "linux":
-		// Try common terminal emulators
 		for _, term := range []string{"konsole", "gnome-terminal", "xterm"} {
 			if path, err := exec.LookPath(term); err == nil {
 				exec.Command(path, "-e", "claude").Start()
@@ -137,6 +160,21 @@ func updateMenu(usage *api.UsageResponse, mFive, mSeven *systray.MenuItem) {
 	mFive.SetTitle(fmt.Sprintf("5h: %3.0f%%  resets %s  %s", fivePct, fiveReset, fiveProj.Indicator()))
 	mSeven.SetTitle(fmt.Sprintf("7d: %3.0f%%  resets %s  %s", sevenPct, sevenReset, sevenProj.Indicator()))
 	systray.SetTitle(fmt.Sprintf("5h:%.0f%% 7d:%.0f%%", fivePct, sevenPct))
+}
+
+func updateTooltip(usage *api.UsageResponse) {
+	fivePct := usage.FiveHour.Utilization
+	sevenPct := usage.SevenDay.Utilization
+	fiveReset := formatDuration(time.Until(usage.FiveHour.ResetsAt))
+	sevenReset := formatDuration(time.Until(usage.SevenDay.ResetsAt))
+	fiveProj := forecast.Project(fivePct, usage.FiveHour.ResetsAt, forecast.FiveHourWindow)
+	sevenProj := forecast.Project(sevenPct, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
+
+	systray.SetTooltip(fmt.Sprintf(
+		"Claude Max\n5h: %.0f%% — resets %s — %s\n7d: %.0f%% — resets %s — %s",
+		fivePct, fiveReset, fiveProj.Indicator(),
+		sevenPct, sevenReset, sevenProj.Indicator(),
+	))
 }
 
 func updateIcon(usage *api.UsageResponse) {
