@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/tnunamak/clawmeter/compare/v0.4.1...v0.5.0) (2026-02-26)
+
+
+### Features
+
+* tray menu settings, hover tooltip, updated README ([8826047](https://github.com/tnunamak/clawmeter/commit/88260479df2c290edab3581d473b5e85a197ce95))
+
 ## [0.4.1](https://github.com/tnunamak/clawmeter/compare/v0.4.0...v0.4.1) (2026-02-26)
 
 
