@@ -13,19 +13,80 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.semantic.outputs.new_release_published }}
+      tag: ${{ steps.semantic.outputs.new_release_git_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install semantic-release
-        run: npm install -g semantic-release @semantic-release/commit-analyzer @semantic-release/release-notes-generator @semantic-release/github
-
-      - name: Release
+      - uses: cycjimmy/semantic-release-action@v4
+        id: semantic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx semantic-release
+
+  build:
+    needs: release
+    if: needs.release.outputs.new_release == 'true'
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            cc: gcc
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            cc: gcc
+          - goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            cc: clang
+          - goos: darwin
+            goarch: arm64
+            runner: macos-latest
+            cc: clang
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux tray deps
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libayatana-appindicator3-dev
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+          CC: ${{ matrix.cc }}
+        run: go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ needs.release.outputs.tag }}' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  upload:
+    needs: [release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release.outputs.tag }}" artifacts/* --repo "${{ github.repository }}" --clobber
