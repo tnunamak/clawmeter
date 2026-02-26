@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/tnunamak/clawmeter/compare/v0.6.1...v0.6.2) (2026-02-26)
+
+
+### Bug Fixes
+
+* auto-install tray dependency on Linux ([a47c2a0](https://github.com/tnunamak/clawmeter/commit/a47c2a04d41eabfa82c31dee107244d9c476200f))
+* reduce install friction ([b2fcfc3](https://github.com/tnunamak/clawmeter/commit/b2fcfc3f4ccca3a227d4a7f37002a0c4195ff5f3))
+
 ## [0.6.1](https://github.com/tnunamak/clawmeter/compare/v0.6.0...v0.6.1) (2026-02-26)
 
 
