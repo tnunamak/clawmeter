@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/tnunamak/clawmeter/compare/v0.5.0...v0.6.0) (2026-02-26)
+
+
+### Features
+
+* projection-based colors, auto-launch tray on install ([b0ee052](https://github.com/tnunamak/clawmeter/commit/b0ee052710fde77e2806e02956dc76475a7053da))
+
 ## [0.5.0](https://github.com/tnunamak/clawmeter/compare/v0.4.1...v0.5.0) (2026-02-26)
 
 
