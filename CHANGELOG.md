@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/tnunamak/clawmeter/compare/v0.7.1...v0.8.0) (2026-02-26)
+
+
+### Features
+
+* proper KDE icon sizing, show projected percentage ([343384d](https://github.com/tnunamak/clawmeter/commit/343384d5873da8516f8e3298534740d074816de7))
+
 ## [0.7.1](https://github.com/tnunamak/clawmeter/compare/v0.7.0...v0.7.1) (2026-02-26)
 
 
