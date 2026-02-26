@@ -119,9 +119,12 @@ pkill -x "$BINARY" 2>/dev/null || true
 
 if [ -w "$INSTALL_DIR" ]; then
   ensure mv "$TMPDIR/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-else
-  say "Need sudo to install to ${INSTALL_DIR}"
+elif sudo -n true 2>/dev/null; then
   ensure sudo mv "$TMPDIR/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+else
+  err "${INSTALL_DIR} is not writable and sudo requires a password"
+  err "re-run with: INSTALL_DIR=~/.local/bin sh install.sh"
+  exit 1
 fi
 
 say "${BINARY} ${LATEST} installed to ${INSTALL_DIR}/${BINARY}"
@@ -202,20 +205,23 @@ add_to_path
 # --- Install tray dependency on Linux ---
 
 if [ "$OS" = "linux" ] && ! ldconfig -p 2>/dev/null | grep -q libayatana-appindicator3; then
-  say "Installing tray dependency (libayatana-appindicator3)..."
-  if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get install -y -qq libayatana-appindicator3-dev
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y -q libayatana-appindicator3-gtk3-devel
-  elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -S --noconfirm libayatana-appindicator
-  elif command -v zypper >/dev/null 2>&1; then
-    sudo zypper install -y libayatana-appindicator3-devel
-  elif command -v apk >/dev/null 2>&1; then
-    sudo apk add libayatana-appindicator-dev
+  # Check if sudo is available without a password (avoid hanging when piped to sh)
+  if sudo -n true 2>/dev/null; then
+    say "Installing tray dependency (libayatana-appindicator3)..."
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get install -y -qq libayatana-appindicator3-dev
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y -q libayatana-appindicator3-gtk3-devel
+    elif command -v pacman >/dev/null 2>&1; then
+      sudo pacman -S --noconfirm libayatana-appindicator
+    elif command -v zypper >/dev/null 2>&1; then
+      sudo zypper install -y libayatana-appindicator3-devel
+    elif command -v apk >/dev/null 2>&1; then
+      sudo apk add libayatana-appindicator-dev
+    fi
   else
-    warn "could not detect package manager — install libayatana-appindicator3 manually for tray support"
-    warn "CLI works without it: ${BINARY}"
+    warn "libayatana-appindicator3 not found (needed for tray icon)"
+    warn "install it with: sudo apt-get install -y libayatana-appindicator3-dev"
   fi
 fi
 
