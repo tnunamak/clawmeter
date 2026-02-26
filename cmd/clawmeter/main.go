@@ -10,6 +10,8 @@ import (
 	"github.com/tnunamak/clawmeter/internal/tray"
 )
 
+var Version = "dev"
+
 func main() {
 	os.Exit(run())
 }
@@ -24,6 +26,9 @@ func run() int {
 		return statusCmd(os.Args[2:])
 	case "tray":
 		return trayCmd(os.Args[2:])
+	case "version", "--version", "-v":
+		fmt.Println("clawmeter " + Version)
+		return 0
 	case "help", "--help", "-h":
 		printHelp()
 		return 0
@@ -65,7 +70,7 @@ func trayCmd(args []string) int {
 		return 0
 	}
 
-	return tray.Run()
+	return tray.Run(Version)
 }
 
 func printHelp() {
@@ -74,6 +79,7 @@ func printHelp() {
 Commands:
   status    Show current usage (default)
   tray      Run as system tray icon
+  version   Show version
   help      Show this help
 
 Status flags:

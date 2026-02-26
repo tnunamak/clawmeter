@@ -16,9 +16,13 @@ import (
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
+	"github.com/tnunamak/clawmeter/internal/update"
 )
 
-const pollInterval = 5 * time.Minute
+const (
+	pollInterval       = 5 * time.Minute
+	updateCheckInterval = 4 * time.Hour
+)
 
 type state struct {
 	mu           sync.Mutex
@@ -26,9 +30,13 @@ type state struct {
 	lastSevenDay float64
 }
 
-var s state
+var (
+	s       state
+	version string
+)
 
-func Run() int {
+func Run(ver string) int {
+	version = ver
 	systray.Run(onReady, func() {})
 	return 0
 }
@@ -60,6 +68,8 @@ func onReady() {
 	mReauth.Hide()
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	systray.AddSeparator()
+	mUpdate := systray.AddMenuItem("", "")
+	mUpdate.Hide()
 	mAutostart := systray.AddMenuItem("", "")
 	updateAutostartLabel(mAutostart)
 	mQuit := systray.AddMenuItem("Quit", "")
@@ -104,14 +114,50 @@ func onReady() {
 
 	refresh()
 
+	var pendingRelease *update.Release
+
+	checkUpdate := func() {
+		rel, err := update.Check(version)
+		if err != nil || rel == nil {
+			return
+		}
+		pendingRelease = rel
+		mUpdate.SetTitle(fmt.Sprintf("Update to %s", rel.Version))
+		mUpdate.Show()
+	}
+
+	applyUpdate := func() {
+		if pendingRelease == nil {
+			return
+		}
+		mUpdate.SetTitle("Updating...")
+		mUpdate.Disable()
+		if err := update.Apply(pendingRelease.URL); err != nil {
+			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
+			mUpdate.Enable()
+			return
+		}
+		notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", pendingRelease.Version), "low")
+		update.Restart()
+		systray.Quit()
+	}
+
+	// Check for updates on startup (non-blocking)
+	go checkUpdate()
+
 	ticker := time.NewTicker(pollInterval)
+	updateTicker := time.NewTicker(updateCheckInterval)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
 				refresh()
+			case <-updateTicker.C:
+				checkUpdate()
 			case <-mRefresh.ClickedCh:
 				refresh()
+			case <-mUpdate.ClickedCh:
+				applyUpdate()
 			case <-mReauth.ClickedCh:
 				openTerminalWithClaude()
 			case <-mAutostart.ClickedCh:

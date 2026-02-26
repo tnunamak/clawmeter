@@ -50,7 +50,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
           CC: ${{ matrix.cc }}
-        run: go build -tags tray -trimpath -ldflags='-s -w' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
+        run: go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ github.ref_name }}' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
 
       - uses: actions/upload-artifact@v4
         with:
