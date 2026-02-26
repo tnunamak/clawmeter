@@ -34,6 +34,12 @@ func Run() int {
 }
 
 func onReady() {
+	// Auto-enable launch at login on first run
+	if !autostart.IsInstalled() {
+		autostart.Install()
+		notify("Clawmeter", "Enabled launch at login. Disable from the tray menu.", "low")
+	}
+
 	systray.SetIcon(icons.Gray)
 	systray.SetTitle("clawmeter")
 	systray.SetTooltip("Claude usage monitor — loading...")
@@ -178,14 +184,18 @@ func updateTooltip(usage *api.UsageResponse) {
 }
 
 func updateIcon(usage *api.UsageResponse) {
-	pct := usage.FiveHour.Utilization
-	if usage.SevenDay.Utilization > pct {
-		pct = usage.SevenDay.Utilization
+	fiveProj := forecast.Project(usage.FiveHour.Utilization, usage.FiveHour.ResetsAt, forecast.FiveHourWindow)
+	sevenProj := forecast.Project(usage.SevenDay.Utilization, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
+
+	// Use the worse projection to pick the icon color
+	projected := fiveProj.ProjectedPct
+	if sevenProj.ProjectedPct > projected {
+		projected = sevenProj.ProjectedPct
 	}
 	switch {
-	case pct >= 80:
+	case projected >= 100:
 		systray.SetIcon(icons.Red)
-	case pct >= 60:
+	case projected >= 90:
 		systray.SetIcon(icons.Yellow)
 	default:
 		systray.SetIcon(icons.Green)

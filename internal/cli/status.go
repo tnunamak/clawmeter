@@ -38,14 +38,14 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm", mins)
 }
 
-func color(pct float64) string {
+func color(projectedPct float64) string {
 	switch {
-	case pct >= 80:
-		return "\033[31m" // red
-	case pct >= 60:
-		return "\033[33m" // yellow
+	case projectedPct >= 100:
+		return "\033[31m" // red — projected to hit limit
+	case projectedPct >= 90:
+		return "\033[33m" // yellow — tight
 	default:
-		return "\033[32m" // green
+		return "\033[32m" // green — on track
 	}
 }
 
@@ -68,9 +68,9 @@ func PrintColor(usage *api.UsageResponse) {
 	sevenProj := forecast.Project(sevenPct, usage.SevenDay.ResetsAt, forecast.SevenDayWindow)
 
 	fmt.Printf("clawmeter  5h %s%s%s %3.0f%%  resets %s  %s\n",
-		color(fivePct), bar(fivePct), reset, fivePct, fiveReset, fiveProj.ColorIndicator())
+		color(fiveProj.ProjectedPct), bar(fivePct), reset, fivePct, fiveReset, fiveProj.ColorIndicator())
 	fmt.Printf("           7d %s%s%s %3.0f%%  resets %s  %s\n",
-		color(sevenPct), bar(sevenPct), reset, sevenPct, sevenReset, sevenProj.ColorIndicator())
+		color(sevenProj.ProjectedPct), bar(sevenPct), reset, sevenPct, sevenReset, sevenProj.ColorIndicator())
 }
 
 func PrintPlain(usage *api.UsageResponse) {

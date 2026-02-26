@@ -50,3 +50,8 @@ else
 fi
 
 echo "${BINARY} ${LATEST} installed to ${INSTALL_DIR}/${BINARY}"
+
+# Start the tray daemon
+echo "Starting ${BINARY} tray..."
+nohup "${INSTALL_DIR}/${BINARY}" tray >/dev/null 2>&1 &
+echo "Tray is running. It will auto-start on login from now on."
