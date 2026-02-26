@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/tnunamak/clawmeter/compare/v0.4.0...v0.4.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* trim icon whitespace, auto-merge release PRs ([c607ff6](https://github.com/tnunamak/clawmeter/commit/c607ff6ae540c0017b1c7af30e3c282c887904fd))
+
 ## [0.4.0](https://github.com/tnunamak/clawmeter/compare/v0.3.0...v0.4.0) (2026-02-26)
 
 
