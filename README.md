@@ -85,7 +85,8 @@ Automatic when stdout isn't a TTY (pipes, scripts), or force with `--plain`:
 ## Requirements
 
 - An active [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session (for the OAuth token)
-- Linux tray: `libayatana-appindicator3-dev` — install with `sudo apt install libayatana-appindicator3-dev`
+
+The install script handles all other dependencies automatically.
 
 ## How it works
 
