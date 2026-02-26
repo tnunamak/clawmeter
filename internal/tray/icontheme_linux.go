@@ -9,7 +9,6 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"fyne.io/systray"
 
@@ -28,10 +27,6 @@ var iconSet = map[string][]byte{
 }
 
 func setupIconTheme() {
-	if runtime.GOOS != "linux" {
-		return
-	}
-
 	dir, err := os.MkdirTemp("", "clawmeter-icons-*")
 	if err != nil {
 		return
@@ -87,7 +82,7 @@ func cleanupIconTheme() {
 }
 
 func setIconByName(name string, data []byte) {
-	if runtime.GOOS == "linux" && iconThemePath != "" {
+	if iconThemePath != "" {
 		systray.SetIconName(iconThemePath, "clawmeter-"+name)
 		return
 	}
@@ -105,7 +100,6 @@ func resizePNG(data []byte, size int) []byte {
 	srcW := srcBounds.Dx()
 	srcH := srcBounds.Dy()
 
-	// Nearest-neighbor resize — fine for simple filled-circle icons
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			srcX := x * srcW / size
