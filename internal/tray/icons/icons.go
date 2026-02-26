@@ -10,3 +10,6 @@ var Yellow []byte
 
 //go:embed red.png
 var Red []byte
+
+//go:embed gray.png
+var Gray []byte

@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -65,7 +66,14 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" artifacts/* --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Create release if it doesn't exist (manual tag push), otherwise upload to existing
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
+            gh release create "$TAG" artifacts/* --repo "${{ github.repository }}" --title "$TAG" --generate-notes
+          else
+            gh release upload "$TAG" artifacts/* --repo "${{ github.repository }}" --clobber
+          fi

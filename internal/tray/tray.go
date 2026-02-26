@@ -23,6 +23,7 @@ type state struct {
 	mu           sync.Mutex
 	lastFiveHour float64
 	lastSevenDay float64
+	wasExpired   bool
 }
 
 var s state
@@ -33,28 +34,61 @@ func Run() int {
 }
 
 func onReady() {
+	systray.SetIcon(icons.Gray)
 	systray.SetTitle("clawmeter")
 	systray.SetTooltip("Claude usage monitor")
 
 	mHeader := systray.AddMenuItem("Claude Max", "")
 	mHeader.Disable()
 	systray.AddSeparator()
-	mFive := systray.AddMenuItem("5h:  --%", "")
+	mStatus := systray.AddMenuItem("Loading...", "")
+	mStatus.Disable()
+	mFive := systray.AddMenuItem("", "")
 	mFive.Disable()
-	mSeven := systray.AddMenuItem("7d:  --%", "")
+	mFive.Hide()
+	mSeven := systray.AddMenuItem("", "")
 	mSeven.Disable()
+	mSeven.Hide()
 	systray.AddSeparator()
+	mReauth := systray.AddMenuItem("Open Claude Code to reauth", "")
+	mReauth.Hide()
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	refresh := func() {
-		usage := fetchUsage()
-		if usage == nil {
-			return
-		}
+	setExpired := func() {
+		systray.SetIcon(icons.Gray)
+		systray.SetTitle("expired")
+		mStatus.SetTitle("Token expired")
+		mStatus.Show()
+		mFive.Hide()
+		mSeven.Hide()
+		mReauth.Show()
+	}
+
+	setUsage := func(usage *api.UsageResponse) {
+		mStatus.Hide()
+		mReauth.Hide()
+		mFive.Show()
+		mSeven.Show()
 		updateMenu(usage, mFive, mSeven)
 		updateIcon(usage)
 		checkThresholds(usage)
+	}
+
+	refresh := func() {
+		creds, err := api.ReadCredentials()
+		if err != nil || creds.IsExpired() {
+			setExpired()
+			return
+		}
+		usage, err := api.FetchUsage(creds.AccessToken())
+		if err != nil {
+			mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
+			mStatus.Show()
+			return
+		}
+		_ = cache.Write(usage)
+		setUsage(usage)
 	}
 
 	refresh()
@@ -67,6 +101,8 @@ func onReady() {
 				refresh()
 			case <-mRefresh.ClickedCh:
 				refresh()
+			case <-mReauth.ClickedCh:
+				openTerminalWithClaude()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -75,17 +111,19 @@ func onReady() {
 	}()
 }
 
-func fetchUsage() *api.UsageResponse {
-	creds, err := api.ReadCredentials()
-	if err != nil || creds.IsExpired() {
-		return nil
+func openTerminalWithClaude() {
+	switch runtime.GOOS {
+	case "linux":
+		// Try common terminal emulators
+		for _, term := range []string{"konsole", "gnome-terminal", "xterm"} {
+			if path, err := exec.LookPath(term); err == nil {
+				exec.Command(path, "-e", "claude").Start()
+				return
+			}
+		}
+	case "darwin":
+		exec.Command("open", "-a", "Terminal", "claude").Start()
 	}
-	usage, err := api.FetchUsage(creds.AccessToken())
-	if err != nil {
-		return nil
-	}
-	_ = cache.Write(usage)
-	return usage
 }
 
 func updateMenu(usage *api.UsageResponse, mFive, mSeven *systray.MenuItem) {
