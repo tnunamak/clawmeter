@@ -51,6 +51,16 @@ fi
 
 echo "${BINARY} ${LATEST} installed to ${INSTALL_DIR}/${BINARY}"
 
+# Check tray dependency on Linux
+if [ "$OS" = "linux" ] && ! ldconfig -p 2>/dev/null | grep -q libayatana-appindicator3; then
+  echo ""
+  echo "Note: System tray requires libayatana-appindicator3. Install with:"
+  echo "  sudo apt install libayatana-appindicator3-dev"
+  echo ""
+  echo "CLI works without it: ${BINARY}"
+  exit 0
+fi
+
 # Start the tray daemon
 echo "Starting ${BINARY} tray..."
 nohup "${INSTALL_DIR}/${BINARY}" tray >/dev/null 2>&1 &

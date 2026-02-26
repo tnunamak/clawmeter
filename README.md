@@ -10,6 +10,8 @@ Anthropic doesn't expose a public API for plan utilization — the only way to s
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
+This installs the binary, starts the system tray, and enables launch at login automatically.
+
 Override the install directory:
 
 ```bash
@@ -33,16 +35,14 @@ Tray prerequisites (Linux): `sudo apt install libayatana-appindicator3-dev`
 
 ## System tray
 
-```bash
-clawmeter tray
-```
+The installer starts the tray automatically. To launch manually: `clawmeter tray`
 
-- Color-coded icon: green (<60%), yellow (60–80%), red (>80%), gray (token expired)
+- Color-coded icon based on projected usage: green (on track), yellow (tight), red (over limit), gray (token expired)
 - Hover tooltip shows full usage summary
 - Polls every 5 minutes with "Refresh Now" for immediate update
 - Desktop notifications at 80% and 95% thresholds
 - Usage projection shows whether you're on track to hit limits
-- "Launch at login" toggle in the menu
+- "Launch at login" toggle in the menu (auto-enabled on first run)
 - "Open Claude Code to reauth" when token expires
 
 ### Launch at login
@@ -62,7 +62,7 @@ clawmeter  5h ███░░░░░░░░░░░░░░░░░  17% 
            7d ████████████░░░░░░░░  60%  resets 1d7h   ✓ on track
 ```
 
-Colors: green <60%, yellow 60–80%, red >80%.
+Colors based on projected usage: green (on track), yellow (tight), red (over limit).
 
 ### Commands
 
@@ -81,6 +81,11 @@ Automatic when stdout isn't a TTY (pipes, scripts), or force with `--plain`:
 ```
 5h: 17% (resets 3h05m, on track)  7d: 60% (resets 1d7h, on track)
 ```
+
+## Requirements
+
+- An active [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session (for the OAuth token)
+- Linux tray: `libayatana-appindicator3-dev` — install with `sudo apt install libayatana-appindicator3-dev`
 
 ## How it works
 
@@ -102,8 +107,7 @@ Results are cached to `~/.cache/clawmeter/usage.json` with a 60-second TTL. The 
 | 1 | API or runtime error |
 | 2 | Token missing or expired |
 
-## Requirements
+### Building from source
 
-- An active Claude Code session (for the OAuth token)
-- For building from source: Go 1.24+
+- Go 1.24+
 - For tray builds: CGO + `libayatana-appindicator3-dev` (Linux) or Xcode (macOS)
