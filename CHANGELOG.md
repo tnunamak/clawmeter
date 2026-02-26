@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/tnunamak/clawmeter/compare/v0.6.3...v0.7.0) (2026-02-26)
+
+
+### Features
+
+* self-update from tray menu ([c75d80c](https://github.com/tnunamak/clawmeter/commit/c75d80c69fa8da14edf17cd0bc6d7347d2c3a71c))
+
 ## [0.6.3](https://github.com/tnunamak/clawmeter/compare/v0.6.2...v0.6.3) (2026-02-26)
 
 
