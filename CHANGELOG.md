@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/tnunamak/clawmeter/compare/v0.8.3...v0.8.4) (2026-02-26)
+
+
+### Bug Fixes
+
+* split icontheme into platform files to fix macOS/Windows build ([89e67ab](https://github.com/tnunamak/clawmeter/commit/89e67ab5d1aec24b1a7aa1e31b0d6e360cb2449c))
+
 ## [0.8.3](https://github.com/tnunamak/clawmeter/compare/v0.8.2...v0.8.3) (2026-02-26)
 
 
