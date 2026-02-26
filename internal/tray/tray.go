@@ -37,7 +37,10 @@ var (
 
 func Run(ver string) int {
 	version = ver
-	systray.Run(onReady, func() {})
+	setupIconTheme()
+	systray.Run(onReady, func() {
+		cleanupIconTheme()
+	})
 	return 0
 }
 
@@ -48,7 +51,7 @@ func onReady() {
 		notify("Clawmeter", "Enabled launch at login. Disable from the tray menu.", "low")
 	}
 
-	systray.SetIcon(icons.Gray)
+	setIconByName("gray", icons.Gray)
 	systray.SetTitle("clawmeter")
 	systray.SetTooltip("Claude usage monitor — loading...")
 
@@ -75,7 +78,7 @@ func onReady() {
 	mQuit := systray.AddMenuItem("Quit", "")
 
 	setExpired := func() {
-		systray.SetIcon(icons.Gray)
+		setIconByName("gray", icons.Gray)
 		systray.SetTitle("expired")
 		systray.SetTooltip("Claude — token expired")
 		mStatus.SetTitle("Token expired")
@@ -240,11 +243,11 @@ func updateIcon(usage *api.UsageResponse) {
 	}
 	switch {
 	case projected >= 100:
-		systray.SetIcon(icons.Red)
+		setIconByName("red", icons.Red)
 	case projected >= 90:
-		systray.SetIcon(icons.Yellow)
+		setIconByName("yellow", icons.Yellow)
 	default:
-		systray.SetIcon(icons.Green)
+		setIconByName("green", icons.Green)
 	}
 }
 

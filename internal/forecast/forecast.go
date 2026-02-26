@@ -1,6 +1,9 @@
 package forecast
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	FiveHourWindow = 5 * time.Hour
@@ -38,9 +41,9 @@ func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Pr
 func (p Projection) Indicator() string {
 	switch {
 	case p.ProjectedPct >= 100:
-		return "on pace to exceed"
+		return fmt.Sprintf("projected %.0f%%", p.ProjectedPct)
 	case p.ProjectedPct >= 90:
-		return "may hit limit"
+		return fmt.Sprintf("projected %.0f%%", p.ProjectedPct)
 	default:
 		return "on pace"
 	}
@@ -50,9 +53,9 @@ func (p Projection) Indicator() string {
 func (p Projection) ColorIndicator() string {
 	switch {
 	case p.ProjectedPct >= 100:
-		return "\033[31m⚠ on pace to exceed\033[0m"
+		return fmt.Sprintf("\033[31m⚠ projected %.0f%%\033[0m", p.ProjectedPct)
 	case p.ProjectedPct >= 90:
-		return "\033[33m~ may hit limit\033[0m"
+		return fmt.Sprintf("\033[33m~ projected %.0f%%\033[0m", p.ProjectedPct)
 	default:
 		return "\033[32m✓ on pace\033[0m"
 	}
