@@ -6,16 +6,30 @@ Anthropic doesn't expose a public API for plan utilization — the only way to s
 
 ## Install
 
+### macOS (Homebrew)
+
+```bash
+brew install tnunamak/clawmeter/clawmeter
+brew services start clawmeter
+```
+
+### Linux
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
-This installs the binary to `~/.local/bin`, starts the system tray, and enables launch at login automatically. On Linux it also installs the tray dependency (`libayatana-appindicator3-dev`) if missing.
+This installs the binary to `~/.local/bin`, starts the system tray, and enables launch at login automatically. It also installs the tray dependency (`libayatana-appindicator3-dev`) if missing.
 
-Override the install directory:
+### Uninstall
 
 ```bash
-INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
+# macOS
+brew services stop clawmeter
+brew uninstall clawmeter
+
+# Linux
+curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --uninstall
 ```
 
 ### Other methods
@@ -37,7 +51,7 @@ Tray prerequisites (Linux): `sudo apt install libayatana-appindicator3-dev`
 
 The installer starts the tray automatically. To launch manually: `clawmeter tray`
 
-- Color-coded icon based on projected usage: green (on track), yellow (tight), red (over limit), gray (token expired)
+- Color-coded icon based on projected usage: green (on pace), yellow (may hit limit), red (projected to exceed), gray (token expired)
 - Hover tooltip shows full usage summary
 - Polls every 5 minutes with "Refresh Now" for immediate update
 - Desktop notifications at 80% and 95% thresholds
