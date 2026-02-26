@@ -1,9 +1,8 @@
-name: Release
+name: Build
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -33,6 +32,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - uses: actions/setup-go@v5
         with:
@@ -50,14 +51,14 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
           CC: ${{ matrix.cc }}
-        run: go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ github.ref_name }}' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
+        run: go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ github.event.release.tag_name || github.ref_name }}' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
 
       - uses: actions/upload-artifact@v4
         with:
           name: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
           path: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
 
-  release:
+  upload:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -69,11 +70,4 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          # Create release if it doesn't exist (manual tag push), otherwise upload to existing
-          if ! gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
-            gh release create "$TAG" artifacts/* --repo "${{ github.repository }}" --title "$TAG" --generate-notes
-          else
-            gh release upload "$TAG" artifacts/* --repo "${{ github.repository }}" --clobber
-          fi
+        run: gh release upload "${{ github.event.release.tag_name || github.ref_name }}" artifacts/* --repo "${{ github.repository }}" --clobber
