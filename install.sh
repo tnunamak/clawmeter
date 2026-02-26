@@ -50,7 +50,34 @@ if [ "${1:-}" = "--uninstall" ]; then
     say "Removed autostart entry"
   fi
 
-  say "Done. Shell PATH entry in your rc file was left in place."
+  # Remove PATH entry from shell rc files
+  for _f in .bashrc .bash_profile .zshrc .zprofile .profile; do
+    _rc="${HOME}/${_f}"
+    if [ -f "$_rc" ] && grep -q "# Added by clawmeter installer" "$_rc" 2>/dev/null; then
+      # Remove the comment line and the export line that follows it
+      sed -i.bak '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null || \
+        sed -i '' '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null
+      rm -f "${_rc}.bak"
+      say "Removed PATH entry from ${_rc}"
+    fi
+  done
+  # Also check ZDOTDIR
+  if [ -n "${ZDOTDIR:-}" ]; then
+    for _f in .zshrc .zprofile; do
+      _rc="${ZDOTDIR}/${_f}"
+      if [ -f "$_rc" ] && grep -q "# Added by clawmeter installer" "$_rc" 2>/dev/null; then
+        sed -i.bak '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null || \
+          sed -i '' '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null
+        rm -f "${_rc}.bak"
+        say "Removed PATH entry from ${_rc}"
+      fi
+    done
+  fi
+
+  # Remove cache
+  rm -rf "${HOME}/.cache/clawmeter"
+
+  say "Done."
   exit 0
 fi
 
