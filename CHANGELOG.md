@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/tnunamak/clawmeter/compare/v0.8.1...v0.8.2) (2026-02-26)
+
+
+### Bug Fixes
+
+* restore original claw icons ([1347b33](https://github.com/tnunamak/clawmeter/commit/1347b331748459e2371727c3c2f485a3b73ea3a2))
+
 ## [0.8.1](https://github.com/tnunamak/clawmeter/compare/v0.8.0...v0.8.1) (2026-02-26)
 
 
