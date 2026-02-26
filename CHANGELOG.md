@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/tnunamak/clawmeter/compare/v0.8.2...v0.8.3) (2026-02-26)
+
+
+### Bug Fixes
+
+* prevent install script from hanging when piped to sh ([39ee5b3](https://github.com/tnunamak/clawmeter/commit/39ee5b3b79301243cec2f0f6d08be1f51091c223))
+
 ## [0.8.2](https://github.com/tnunamak/clawmeter/compare/v0.8.1...v0.8.2) (2026-02-26)
 
 
