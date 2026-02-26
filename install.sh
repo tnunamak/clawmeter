@@ -55,22 +55,45 @@ case "$ARCH" in
   *)       err "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-# --- Get latest release tag ---
+# --- Find latest release with binaries ---
 
 TMPDIR="$(mktemp -d)" || { err "failed to create temp directory"; exit 1; }
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-download "https://api.github.com/repos/${REPO}/releases/latest" "$TMPDIR/release.json"
-LATEST="$(grep '"tag_name"' "$TMPDIR/release.json" | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+ASSET_NAME="${BINARY}-${OS}-${ARCH}"
+
+# Fetch recent releases (not just latest — latest may still be building)
+download "https://api.github.com/repos/${REPO}/releases?per_page=5" "$TMPDIR/releases.json"
+
+# Find the first release that has our binary asset
+LATEST=""
+URL=""
+for tag in $(grep '"tag_name"' "$TMPDIR/releases.json" | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'); do
+  _url="https://github.com/${REPO}/releases/download/${tag}/${ASSET_NAME}"
+  # HEAD request to check if asset exists
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsSL --head "$_url" >/dev/null 2>&1; then
+      LATEST="$tag"
+      URL="$_url"
+      break
+    fi
+  elif command -v wget >/dev/null 2>&1; then
+    if wget --spider -q "$_url" 2>/dev/null; then
+      LATEST="$tag"
+      URL="$_url"
+      break
+    fi
+  fi
+done
+
 if [ -z "$LATEST" ]; then
-  err "failed to determine latest release"
+  err "no release found with binaries for ${OS}/${ARCH}"
   exit 1
 fi
 
 # --- Download binary ---
 
-URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}-${OS}-${ARCH}"
 say "Installing ${BINARY} ${LATEST} (${OS}/${ARCH})..."
 
 download "$URL" "$TMPDIR/${BINARY}"
