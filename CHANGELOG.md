@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/tnunamak/clawmeter/compare/v0.6.0...v0.6.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* update README for projection-based colors, check tray deps in installer ([1e420e6](https://github.com/tnunamak/clawmeter/commit/1e420e659c74b73c872cf425bc2f46a8aa2ef8ce))
+
 ## [0.6.0](https://github.com/tnunamak/clawmeter/compare/v0.5.0...v0.6.0) (2026-02-26)
 
 
