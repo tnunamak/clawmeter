@@ -10,12 +10,12 @@ Anthropic doesn't expose a public API for plan utilization — the only way to s
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
-This installs the binary, starts the system tray, and enables launch at login automatically.
+This installs the binary to `~/.local/bin`, starts the system tray, and enables launch at login automatically. On Linux it also installs the tray dependency (`libayatana-appindicator3-dev`) if missing.
 
 Override the install directory:
 
 ```bash
-INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
 ### Other methods

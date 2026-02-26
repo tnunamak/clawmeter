@@ -2,7 +2,7 @@
 set -eu
 
 REPO="tnunamak/clawmeter"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 BINARY="clawmeter"
 
 # Detect OS
@@ -41,6 +41,12 @@ if [ "$OS" = "darwin" ]; then
   xattr -d com.apple.quarantine "/tmp/${BINARY}" 2>/dev/null || true
 fi
 
+# Ensure install directory exists
+mkdir -p "$INSTALL_DIR"
+
+# Stop existing tray instance if running
+pkill -x "$BINARY" 2>/dev/null || true
+
 # Install — use sudo if needed
 if [ -w "$INSTALL_DIR" ]; then
   mv "/tmp/${BINARY}" "${INSTALL_DIR}/${BINARY}"
@@ -50,6 +56,16 @@ else
 fi
 
 echo "${BINARY} ${LATEST} installed to ${INSTALL_DIR}/${BINARY}"
+
+# Ensure ~/.local/bin is on PATH
+case ":$PATH:" in
+  *":${INSTALL_DIR}:"*) ;;
+  *)
+    echo "Adding ${INSTALL_DIR} to PATH in ~/.profile"
+    echo "export PATH=\"${INSTALL_DIR}:\$PATH\"" >> "$HOME/.profile"
+    export PATH="${INSTALL_DIR}:$PATH"
+    ;;
+esac
 
 # Install tray dependency on Linux if missing
 if [ "$OS" = "linux" ] && ! ldconfig -p 2>/dev/null | grep -q libayatana-appindicator3; then
