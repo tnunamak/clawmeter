@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/tnunamak/clawmeter/compare/v0.7.0...v0.7.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* clearer projection language, bolder tray icons ([81eb5ac](https://github.com/tnunamak/clawmeter/commit/81eb5ac4e52c0297e6c48ebb3c73bb396ce5bdd0))
+
 ## [0.7.0](https://github.com/tnunamak/clawmeter/compare/v0.6.3...v0.7.0) (2026-02-26)
 
 
