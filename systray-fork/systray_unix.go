@@ -51,6 +51,8 @@ func SetTemplateIcon(templateIconBytes []byte, regularIconBytes []byte) {
 // This is preferred on Linux/KDE over SetIcon for proper icon sizing.
 func SetIconName(themePath, iconName string) {
 	instance.lock.Lock()
+	instance.iconThemePath = themePath
+	instance.iconName = iconName
 	props := instance.props
 	conn := instance.conn
 	defer instance.lock.Unlock()
@@ -332,6 +334,8 @@ type tray struct {
 
 	// icon data for the main systray icon
 	iconData []byte
+	// icon name and theme path for freedesktop icon themes
+	iconName, iconThemePath string
 	// title and tooltip state
 	title, tooltipTitle string
 
@@ -376,7 +380,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 			"IconName": {
-				Value:    "",
+				Value:    t.iconName,
 				Writable: true,
 				Emit:     prop.EmitTrue,
 				Callback: nil,
@@ -388,7 +392,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 			"IconThemePath": {
-				Value:    "",
+				Value:    t.iconThemePath,
 				Writable: true,
 				Emit:     prop.EmitTrue,
 				Callback: nil,

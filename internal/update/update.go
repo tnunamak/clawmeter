@@ -120,8 +120,9 @@ func Apply(url string) error {
 		return fmt.Errorf("verify binary: %w", err)
 	}
 
-	// Replace: rename new over old.
-	// On some systems os.Rename fails across filesystems; fall back to copy.
+	// Replace: remove the old binary first (Linux can't write to a running
+	// executable, but can unlink it), then rename/copy the new one in.
+	os.Remove(exe)
 	if err := os.Rename(tmpBin, exe); err != nil {
 		if err := copyFile(tmpBin, exe); err != nil {
 			return fmt.Errorf("replace binary: %w", err)
