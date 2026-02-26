@@ -23,6 +23,37 @@ need_cmd() {
   fi
 }
 
+# --- Uninstall ---
+
+if [ "${1:-}" = "--uninstall" ]; then
+  say "Uninstalling ${BINARY}..."
+  pkill -x "$BINARY" 2>/dev/null || true
+
+  # Remove binary
+  if [ -f "${INSTALL_DIR}/${BINARY}" ]; then
+    rm -f "${INSTALL_DIR}/${BINARY}"
+    say "Removed ${INSTALL_DIR}/${BINARY}"
+  fi
+
+  # Remove macOS LaunchAgent
+  _plist="${HOME}/Library/LaunchAgents/com.clawmeter.tray.plist"
+  if [ -f "$_plist" ]; then
+    launchctl unload "$_plist" 2>/dev/null || true
+    rm -f "$_plist"
+    say "Removed LaunchAgent"
+  fi
+
+  # Remove Linux autostart
+  _desktop="${HOME}/.config/autostart/clawmeter.desktop"
+  if [ -f "$_desktop" ]; then
+    rm -f "$_desktop"
+    say "Removed autostart entry"
+  fi
+
+  say "Done. Shell PATH entry in your rc file was left in place."
+  exit 0
+fi
+
 # --- Download helper (curl-first, wget fallback) ---
 
 download() {
