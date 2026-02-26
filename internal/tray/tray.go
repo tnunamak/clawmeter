@@ -55,7 +55,7 @@ func onReady() {
 	systray.SetTitle("clawmeter")
 	systray.SetTooltip("Claude usage monitor — loading...")
 
-	mHeader := systray.AddMenuItem("Claude Max", "")
+	mHeader := systray.AddMenuItem(fmt.Sprintf("Clawmeter %s", version), "")
 	mHeader.Disable()
 	systray.AddSeparator()
 	mStatus := systray.AddMenuItem("Loading...", "")
