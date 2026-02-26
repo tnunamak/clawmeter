@@ -264,9 +264,9 @@ func checkThresholds(usage *api.UsageResponse) {
 	s.mu.Unlock()
 
 	if pct >= 95 && prevPct < 95 {
-		notify("Claude usage critical", fmt.Sprintf("Usage at %.0f%% — you may be rate limited soon", pct), "critical")
+		notify("Claude usage critical", fmt.Sprintf("Usage at %.0f%% — rate limiting likely before reset", pct), "critical")
 	} else if pct >= 80 && prevPct < 80 {
-		notify("Claude usage warning", fmt.Sprintf("Usage at %.0f%%", pct), "normal")
+		notify("Claude usage warning", fmt.Sprintf("Usage at %.0f%% — on pace to reach limit before reset", pct), "normal")
 	}
 }
 

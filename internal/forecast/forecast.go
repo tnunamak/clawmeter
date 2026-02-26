@@ -38,11 +38,11 @@ func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Pr
 func (p Projection) Indicator() string {
 	switch {
 	case p.ProjectedPct >= 100:
-		return "over limit"
+		return "on pace to exceed"
 	case p.ProjectedPct >= 90:
-		return "tight"
+		return "may hit limit"
 	default:
-		return "on track"
+		return "on pace"
 	}
 }
 
@@ -50,10 +50,10 @@ func (p Projection) Indicator() string {
 func (p Projection) ColorIndicator() string {
 	switch {
 	case p.ProjectedPct >= 100:
-		return "\033[31m⚠ over limit\033[0m"
+		return "\033[31m⚠ on pace to exceed\033[0m"
 	case p.ProjectedPct >= 90:
-		return "\033[33m~ tight\033[0m"
+		return "\033[33m~ may hit limit\033[0m"
 	default:
-		return "\033[32m✓ on track\033[0m"
+		return "\033[32m✓ on pace\033[0m"
 	}
 }

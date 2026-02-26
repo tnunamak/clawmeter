@@ -58,11 +58,11 @@ clawmeter tray --uninstall  # disable
 
 ```
 $ clawmeter
-clawmeter  5h ███░░░░░░░░░░░░░░░░░  17%  resets 3h05m  ✓ on track
-           7d ████████████░░░░░░░░  60%  resets 1d7h   ✓ on track
+clawmeter  5h ███░░░░░░░░░░░░░░░░░  17%  resets 3h05m  ✓ on pace
+           7d ████████████░░░░░░░░  60%  resets 1d7h   ✓ on pace
 ```
 
-Colors based on projected usage: green (on track), yellow (tight), red (over limit).
+Colors based on projected usage at reset: green (on pace), yellow (may hit limit), red (on pace to exceed).
 
 ### Commands
 
@@ -79,7 +79,7 @@ clawmeter help             # show help
 Automatic when stdout isn't a TTY (pipes, scripts), or force with `--plain`:
 
 ```
-5h: 17% (resets 3h05m, on track)  7d: 60% (resets 1d7h, on track)
+5h: 17% (resets 3h05m, on pace)  7d: 60% (resets 1d7h, on pace)
 ```
 
 ## Requirements
