@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/tnunamak/clawmeter/compare/v0.6.2...v0.6.3) (2026-02-26)
+
+
+### Bug Fixes
+
+* rewrite install script with battle-tested patterns ([6e3fefb](https://github.com/tnunamak/clawmeter/commit/6e3fefbf543ef143f3ec294cc9a115603c0d27a8))
+
 ## [0.6.2](https://github.com/tnunamak/clawmeter/compare/v0.6.1...v0.6.2) (2026-02-26)
 
 
