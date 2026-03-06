@@ -1,2 +1,6 @@
 /clawmeter
 /clawmeter-*
+.refs/
+.cleanup/
+*.png
+llm-*.md

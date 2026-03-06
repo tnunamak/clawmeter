@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	fyne.io/systray v1.12.0
 	golang.org/x/term v0.40.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

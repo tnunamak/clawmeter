@@ -1,3 +1,4 @@
+// Package cache provides caching for provider usage data.
 package cache
 
 import (
@@ -7,32 +8,28 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tnunamak/clawmeter/internal/api"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
 const defaultTTL = 60 * time.Second
 
+// Entry represents cached usage data for all providers.
 type Entry struct {
-	Usage     *api.UsageResponse `json:"usage"`
-	FetchedAt time.Time          `json:"fetched_at"`
+	// ProviderData maps provider name to their usage data
+	ProviderData map[string]*provider.UsageData `json:"provider_data"`
+	FetchedAt    time.Time                      `json:"fetched_at"`
 }
 
-func cacheDir() (string, error) {
+// cachePath returns the path to the cache file.
+func cachePath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cache", "clawmeter"), nil
+	return filepath.Join(home, ".cache", "clawmeter", "usage.json"), nil
 }
 
-func cachePath() (string, error) {
-	dir, err := cacheDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "usage.json"), nil
-}
-
+// Read loads cached usage data from disk.
 func Read() (*Entry, error) {
 	path, err := cachePath()
 	if err != nil {
@@ -49,11 +46,19 @@ func Read() (*Entry, error) {
 	return &entry, nil
 }
 
+// IsValid returns true if the cache entry is fresh (within TTL).
 func (e *Entry) IsValid() bool {
 	return time.Since(e.FetchedAt) < defaultTTL
 }
 
-func Write(usage *api.UsageResponse) error {
+// GetProvider retrieves usage data for a specific provider.
+func (e *Entry) GetProvider(name string) (*provider.UsageData, bool) {
+	data, ok := e.ProviderData[name]
+	return data, ok
+}
+
+// Write saves usage data to the cache.
+func Write(result *provider.MultiFetchResult) error {
 	dir, err := cacheDir()
 	if err != nil {
 		return err
@@ -63,8 +68,8 @@ func Write(usage *api.UsageResponse) error {
 	}
 
 	entry := Entry{
-		Usage:     usage,
-		FetchedAt: time.Now(),
+		ProviderData: result.Results,
+		FetchedAt:    result.FetchedAt,
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -76,9 +81,18 @@ func Write(usage *api.UsageResponse) error {
 		return err
 	}
 
+	// Atomic write
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
 	return os.Rename(tmp, path)
+}
+
+func cacheDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cache", "clawmeter"), nil
 }

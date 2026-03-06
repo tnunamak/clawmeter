@@ -1,6 +1,7 @@
 package update
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -30,9 +30,13 @@ type ghRelease struct {
 
 // Check queries GitHub for the latest release and returns it if newer
 // than currentVersion. Returns nil if already up to date.
-func Check(currentVersion string) (*Release, error) {
+func Check(ctx context.Context, currentVersion string) (*Release, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("check update: %w", err)
+	}
 	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Get(apiURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("check update: %w", err)
 	}
@@ -43,7 +47,7 @@ func Check(currentVersion string) (*Release, error) {
 	}
 
 	var rel ghRelease
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
 		return nil, fmt.Errorf("check update: %w", err)
 	}
 
@@ -66,7 +70,7 @@ func Check(currentVersion string) (*Release, error) {
 
 // Apply downloads the binary from url, verifies it, and replaces the
 // currently running executable. The caller should restart after Apply returns.
-func Apply(url string) error {
+func Apply(ctx context.Context, url string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
@@ -85,8 +89,12 @@ func Apply(url string) error {
 	tmpBin := filepath.Join(tmpDir, "clawmeter")
 
 	// Download
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
@@ -162,9 +170,4 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Chmod(0755)
-}
-
-// StripV removes a leading "v" prefix for display: "v1.2.3" -> "1.2.3".
-func StripV(version string) string {
-	return strings.TrimPrefix(version, "v")
 }

@@ -69,7 +69,7 @@ func execPath() (string, error) {
 const desktopEntry = `[Desktop Entry]
 Type=Application
 Name=Clawmeter
-Comment=Claude usage monitor
+Comment=AI usage monitor
 Exec=%s tray
 Terminal=false
 X-GNOME-Autostart-enabled=true

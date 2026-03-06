@@ -1,11 +1,12 @@
 package update
 
 import (
+	"context"
 	"testing"
 )
 
 func TestCheck_findsUpdate(t *testing.T) {
-	rel, err := Check("v0.0.1")
+	rel, err := Check(context.Background(), "v0.0.1")
 	if err != nil {
 		t.Fatalf("Check error: %v", err)
 	}
@@ -22,7 +23,7 @@ func TestCheck_findsUpdate(t *testing.T) {
 }
 
 func TestCheck_devSkipped(t *testing.T) {
-	rel, err := Check("dev")
+	rel, err := Check(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("Check error: %v", err)
 	}
@@ -33,7 +34,7 @@ func TestCheck_devSkipped(t *testing.T) {
 
 func TestCheck_currentVersionUpToDate(t *testing.T) {
 	// First get the latest version
-	rel, err := Check("v0.0.1")
+	rel, err := Check(context.Background(), "v0.0.1")
 	if err != nil {
 		t.Fatalf("Check error: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestCheck_currentVersionUpToDate(t *testing.T) {
 	}
 
 	// Now check with that version — should be nil
-	rel2, err := Check(rel.Version)
+	rel2, err := Check(context.Background(), rel.Version)
 	if err != nil {
 		t.Fatalf("Check error: %v", err)
 	}

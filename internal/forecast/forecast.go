@@ -2,7 +2,11 @@ package forecast
 
 import (
 	"fmt"
+	"math"
+	"strings"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/format"
 )
 
 const (
@@ -15,6 +19,12 @@ type Projection struct {
 	ProjectedPct float64
 	// OnTrack is true if projected usage stays under 100% at reset.
 	OnTrack bool
+	// Delta is the difference between actual and expected usage (positive = ahead/deficit).
+	Delta float64
+	// WillLastToReset is true if current rate won't exhaust quota before reset.
+	WillLastToReset bool
+	// RunsOutIn is how long until quota is exhausted at current rate (zero if WillLastToReset).
+	RunsOutIn time.Duration
 }
 
 // Project estimates where utilization will be at window reset.
@@ -25,38 +35,95 @@ func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Pr
 	elapsed := windowLen - remaining
 
 	if elapsed <= 0 || currentPct <= 0 {
-		return Projection{ProjectedPct: currentPct, OnTrack: true}
+		return Projection{
+			ProjectedPct:    currentPct,
+			OnTrack:         true,
+			WillLastToReset: true,
+		}
 	}
 
 	rate := currentPct / elapsed.Seconds()
 	projected := rate * windowLen.Seconds()
+	expected := (elapsed.Seconds() / windowLen.Seconds()) * 100
+	delta := currentPct - expected
+
+	// ETA: how long until 100% at current rate
+	willLast := true
+	var runsOutIn time.Duration
+	if rate > 0 {
+		secsToExhaust := (100 - currentPct) / rate
+		if secsToExhaust < remaining.Seconds() {
+			willLast = false
+			runsOutIn = time.Duration(secsToExhaust * float64(time.Second))
+		}
+	}
 
 	return Projection{
-		ProjectedPct: projected,
-		OnTrack:      projected < 100,
+		ProjectedPct:    projected,
+		OnTrack:         projected < 100,
+		Delta:           delta,
+		WillLastToReset: willLast,
+		RunsOutIn:       runsOutIn,
 	}
 }
 
 // Indicator returns a short status string for the projection.
 func (p Projection) Indicator() string {
+	return fmt.Sprintf("%.0f%%", p.ProjectedPct)
+}
+
+// PaceIndicator returns a human-readable pace summary like CodexBar.
+func (p Projection) PaceIndicator() string {
+	absDelta := math.Abs(p.Delta)
+
+	var left string
+	switch {
+	case absDelta <= 2:
+		left = "on pace"
+	case p.Delta > 0:
+		left = fmt.Sprintf("%.0f%% deficit", absDelta)
+	default:
+		left = fmt.Sprintf("%.0f%% reserve", absDelta)
+	}
+
+	var right string
+	if p.WillLastToReset {
+		right = "lasts to reset"
+	} else if p.RunsOutIn > 0 {
+		right = "runs out " + shortDuration(p.RunsOutIn)
+	}
+
+	if right != "" {
+		return left + " · " + right
+	}
+	return left
+}
+
+// ColorIndicator returns an ANSI-colored indicator with pace info.
+func (p Projection) ColorIndicator() string {
+	pace := p.PaceIndicator()
 	switch {
 	case p.ProjectedPct >= 100:
-		return fmt.Sprintf("projected %.0f%%", p.ProjectedPct)
+		return fmt.Sprintf("\033[31m⚠ %s\033[0m", pace)
 	case p.ProjectedPct >= 90:
-		return fmt.Sprintf("projected %.0f%%", p.ProjectedPct)
+		return fmt.Sprintf("\033[33m~ %s\033[0m", pace)
 	default:
-		return "on pace"
+		return fmt.Sprintf("\033[32m✓ %s\033[0m", pace)
 	}
 }
 
-// ColorIndicator returns an ANSI-colored indicator.
-func (p Projection) ColorIndicator() string {
+// GuessWindowType infers the window duration from a window name string.
+func GuessWindowType(name string) time.Duration {
 	switch {
-	case p.ProjectedPct >= 100:
-		return fmt.Sprintf("\033[31m⚠ projected %.0f%%\033[0m", p.ProjectedPct)
-	case p.ProjectedPct >= 90:
-		return fmt.Sprintf("\033[33m~ projected %.0f%%\033[0m", p.ProjectedPct)
+	case name == "5h":
+		return FiveHourWindow
+	case strings.HasPrefix(name, "7d"):
+		return SevenDayWindow
 	default:
-		return "\033[32m✓ on pace\033[0m"
+		return 24 * time.Hour // default to daily
 	}
+}
+
+func shortDuration(d time.Duration) string {
+	return "in " + format.FormatDuration(d)
 }

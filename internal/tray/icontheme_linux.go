@@ -13,11 +13,10 @@ import (
 	"fyne.io/systray"
 
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
-
-	_ "image/png"
 )
 
 var iconThemePath string
+var currentIconName string
 
 var iconSet = map[string][]byte{
 	"green":  icons.Green,
@@ -26,9 +25,20 @@ var iconSet = map[string][]byte{
 	"gray":   icons.Gray,
 }
 
-func setupIconTheme() {
-	dir, err := os.MkdirTemp("", "clawmeter-icons-*")
+func iconThemeDir() (string, error) {
+	home, err := os.UserHomeDir()
 	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "clawmeter", "icons"), nil
+}
+
+func setupIconTheme() {
+	dir, err := iconThemeDir()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return
 	}
 	iconThemePath = dir
@@ -87,17 +97,20 @@ Type=Fixed
 }
 
 func cleanupIconTheme() {
-	if iconThemePath != "" {
-		os.RemoveAll(iconThemePath)
-	}
+	// Persistent dir — nothing to clean up.
 }
 
 func setIconByName(name string, data []byte) {
-	if iconThemePath != "" {
-		systray.SetIconName(iconThemePath, "clawmeter-"+name)
+	if iconThemePath == "" {
+		systray.SetIcon(data)
 		return
 	}
-	systray.SetIcon(data)
+	iconName := "clawmeter-" + name
+	if iconName == currentIconName {
+		return
+	}
+	currentIconName = iconName
+	systray.SetIconName(iconThemePath, iconName)
 }
 
 func resizePNG(data []byte, size int) []byte {
