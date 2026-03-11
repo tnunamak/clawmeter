@@ -21,7 +21,7 @@ func main() {
 
 func run() int {
 	if len(os.Args) < 2 {
-		return cli.Status(false, false)
+		return cli.Status(false, false, false)
 	}
 
 	// Handle top-level flags (clawmeter --json, clawmeter --plain, clawmeter --check)
@@ -72,6 +72,7 @@ func statusCmd(args []string) int {
 	plainMode := fs.Bool("plain", false, "plain text (no color)")
 	checkMode := fs.Bool("check", false, "exit 0=healthy, 1=warning, 2=critical/expired/error")
 	providerFlag := fs.String("provider", "", "show only specific provider")
+	showAll := fs.Bool("all", false, "show all providers including unavailable ones")
 	fs.Parse(args)
 
 	if *checkMode {
@@ -80,7 +81,7 @@ func statusCmd(args []string) int {
 	if *providerFlag != "" {
 		return cli.SingleProviderStatus(*providerFlag, *jsonMode, *plainMode)
 	}
-	return cli.Status(*jsonMode, *plainMode)
+	return cli.Status(*jsonMode, *plainMode, *showAll)
 }
 
 func providerCmd(providerName string, args []string) int {

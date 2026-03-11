@@ -22,6 +22,8 @@ func HumanizeError(errMsg string) string {
 	fullLowered := strings.ToLower(errMsg)
 
 	switch {
+	case strings.Contains(lowered, "authentication required to read rate limits"):
+		return "rate limits unavailable — check plan at platform.openai.com"
 	case strings.Contains(lowered, "context deadline exceeded") || strings.Contains(lowered, "client.timeout"):
 		return "connection timed out"
 	case strings.Contains(lowered, "connection refused"):

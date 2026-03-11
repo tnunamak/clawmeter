@@ -73,72 +73,119 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
 
-	// Step 1: Send initialize request
-	initReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
-		Params: map[string]interface{}{
-			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]interface{}{},
+	// Step 1: initialize (matching CodexBar's wire format — no jsonrpc field)
+	if err := writeJSON(stdin, map[string]interface{}{
+		"id":     1,
+		"method": "initialize",
+		"params": map[string]interface{}{
 			"clientInfo": map[string]interface{}{
 				"name":    "clawmeter",
 				"version": "1.0.0",
 			},
 		},
-	}
-
-	if err := writeJSON(stdin, &initReq); err != nil {
+	}); err != nil {
 		return nil, fmt.Errorf("send initialize: %w", err)
 	}
 
-	// Read initialize response
 	if _, err := readResponse(scanner); err != nil {
 		return nil, fmt.Errorf("read initialize response: %w", err)
 	}
 
-	// Step 2: Send initialized notification
-	initNotif := jsonRPCNotification{
-		JSONRPC: "2.0",
-		Method:  "notifications/initialized",
-	}
-	if err := writeJSON(stdin, &initNotif); err != nil {
+	// Step 2: initialized notification
+	if err := writeJSON(stdin, map[string]interface{}{
+		"method": "initialized",
+		"params": map[string]interface{}{},
+	}); err != nil {
 		return nil, fmt.Errorf("send initialized: %w", err)
 	}
 
-	// Step 3: Send account/rateLimits/read request
-	rateLimitsReq := jsonRPCRequest{
-		JSONRPC: "2.0",
-		ID:      2,
-		Method:  "account/rateLimits/read",
+	// Step 3: account/read — check auth type
+	if err := writeJSON(stdin, map[string]interface{}{
+		"id":     2,
+		"method": "account/read",
+		"params": map[string]interface{}{},
+	}); err != nil {
+		return nil, fmt.Errorf("send account/read: %w", err)
 	}
-	if err := writeJSON(stdin, &rateLimitsReq); err != nil {
+
+	acctData, err := readResponse(scanner)
+	if err != nil {
+		return nil, fmt.Errorf("read account response: %w", err)
+	}
+
+	acct, err := parseAccountResponse(acctData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 4: account/rateLimits/read
+	if err := writeJSON(stdin, map[string]interface{}{
+		"id":     3,
+		"method": "account/rateLimits/read",
+		"params": map[string]interface{}{},
+	}); err != nil {
 		return nil, fmt.Errorf("send rateLimits: %w", err)
 	}
 
-	// Read rate limits response
 	respData, err := readResponse(scanner)
 	if err != nil {
 		return nil, fmt.Errorf("read rateLimits response: %w", err)
 	}
 
-	return p.parseRateLimits(respData)
+	return p.parseRateLimits(respData, acct)
 }
 
-func (p *Provider) parseRateLimits(data []byte) (*provider.UsageData, error) {
+// Account response types
+
+type accountResponse struct {
+	Account           *accountDetails `json:"account"`
+	RequiresOpenAIAuth bool           `json:"requiresOpenaiAuth"`
+}
+
+type accountDetails struct {
+	Type     string `json:"type"`     // "apiKey" or "chatgpt"
+	Email    string `json:"email"`    // only for chatgpt type
+	PlanType string `json:"planType"` // only for chatgpt type
+}
+
+func parseAccountResponse(data []byte) (*accountResponse, error) {
+	var resp struct {
+		Result *accountResponse `json:"result"`
+		Error  *rpcError        `json:"error"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("parse account response: %w", err)
+	}
+	if resp.Error != nil {
+		return &accountResponse{}, nil
+	}
+	if resp.Result == nil {
+		return &accountResponse{}, nil
+	}
+	return resp.Result, nil
+}
+
+// Rate limits parsing
+
+func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provider.UsageData, error) {
 	var resp struct {
 		Result *rateLimitsResult `json:"result"`
-		Error  *jsonRPCError     `json:"error"`
+		Error  *rpcError         `json:"error"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
 	if resp.Error != nil {
+		msg := resp.Error.Message
+		// API key users can't read rate limits — show informational message
+		if acct.Account != nil && acct.Account.Type == "apiKey" {
+			msg = "API key · billed per token (codex login for ChatGPT)"
+		}
 		return &provider.UsageData{
 			Provider:  p.Name(),
 			FetchedAt: time.Now(),
-			Error:     resp.Error.Message,
+			Error:     msg,
 		}, nil
 	}
 
@@ -158,49 +205,29 @@ func (p *Provider) parseRateLimits(data []byte) (*provider.UsageData, error) {
 	}
 
 	if rl.Primary != nil {
-		w := provider.UsageWindow{
-			Name:        "session",
-			DisplayName: "Session",
+		result.Windows = append(result.Windows, provider.UsageWindow{
+			Name:        "5h",
+			DisplayName: "5h",
 			Utilization: rl.Primary.UsedPercent,
-			ResetsAt:    time.Now().Add(5 * time.Hour), // default
-		}
-		if rl.Primary.ResetDescription != "" {
-			w.DisplayName = fmt.Sprintf("Session (%s)", rl.Primary.ResetDescription)
-		}
-		result.Windows = append(result.Windows, w)
+			ResetsAt:    time.Unix(rl.Primary.ResetsAt, 0),
+		})
 	}
 
 	if rl.Secondary != nil {
-		w := provider.UsageWindow{
+		result.Windows = append(result.Windows, provider.UsageWindow{
 			Name:        "weekly",
 			DisplayName: "Weekly",
 			Utilization: rl.Secondary.UsedPercent,
-			ResetsAt:    time.Now().Add(7 * 24 * time.Hour),
-		}
-		if rl.Secondary.ResetDescription != "" {
-			w.DisplayName = fmt.Sprintf("Weekly (%s)", rl.Secondary.ResetDescription)
-		}
-		result.Windows = append(result.Windows, w)
+			ResetsAt:    time.Unix(rl.Secondary.ResetsAt, 0),
+		})
 	}
 
 	return result, nil
 }
 
-// JSON-RPC types
+// Wire types
 
-type jsonRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-type jsonRPCNotification struct {
-	JSONRPC string `json:"jsonrpc"`
-	Method  string `json:"method"`
-}
-
-type jsonRPCError struct {
+type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
@@ -215,8 +242,8 @@ type rateLimits struct {
 }
 
 type rateLimitWindow struct {
-	UsedPercent      float64 `json:"usedPercent"`
-	ResetDescription string  `json:"resetDescription"`
+	UsedPercent float64 `json:"usedPercent"`
+	ResetsAt    int64   `json:"resetsAt"`
 }
 
 func writeJSON(w interface{ Write([]byte) (int, error) }, v interface{}) error {
@@ -235,7 +262,6 @@ func readResponse(scanner *bufio.Scanner) ([]byte, error) {
 		if len(line) == 0 {
 			continue
 		}
-		// Check if this is a JSON-RPC response (has "id" field)
 		var peek struct {
 			ID     *int   `json:"id"`
 			Method string `json:"method"`
@@ -248,7 +274,6 @@ func readResponse(scanner *bufio.Scanner) ([]byte, error) {
 			continue
 		}
 		if peek.ID != nil {
-			// Copy bytes — scanner.Bytes() is only valid until next Scan()
 			result := make([]byte, len(line))
 			copy(result, line)
 			return result, nil

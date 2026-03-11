@@ -56,16 +56,25 @@ type ProviderFormatter struct {
 	Status  *status.ProviderStatus
 }
 
-// FormatColor returns colorized multi-line output for a provider.
+// FormatColor returns colorized multi-line output for a provider (legacy, unaligned).
 func (pf *ProviderFormatter) FormatColor() []string {
-	// Status issue line (shown before usage if there's a problem)
+	return pf.FormatColorAligned(len(pf.Display), 2)
+}
+
+// FormatColorAligned returns colorized output with consistent column widths.
+func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) []string {
 	var statusLine string
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
 		statusLine = pf.Status.FormatCLI()
 	}
 
+	pad := fmt.Sprintf("%%-%ds", providerWidth)
+
+	winPad := fmt.Sprintf("%%-%ds", windowWidth)
+	blankWin := fmt.Sprintf(winPad, "")
+
 	if pf.Data == nil {
-		line := fmt.Sprintf("%s  %s%s%s (no data)", pf.Display, color(0), bar(0), reset)
+		line := fmt.Sprintf(pad+" %s %s%s%s (no data)", pf.Display, blankWin, color(0), bar(0), reset)
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
@@ -77,7 +86,7 @@ func (pf *ProviderFormatter) FormatColor() []string {
 		if pf.Data.Error != "" {
 			expiredMsg += " — " + format.HumanizeError(pf.Data.Error)
 		}
-		line := fmt.Sprintf("%s  %s%s%s  %s", pf.Display, color(100), bar(100), reset, expiredMsg)
+		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(100), reset, expiredMsg)
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
@@ -85,7 +94,7 @@ func (pf *ProviderFormatter) FormatColor() []string {
 	}
 
 	if pf.Data.Error != "" {
-		line := fmt.Sprintf("%s  %s%s%s  error: %s", pf.Display, color(100), bar(0), reset, format.HumanizeError(pf.Data.Error))
+		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(0), reset, format.HumanizeError(pf.Data.Error))
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
@@ -101,7 +110,7 @@ func (pf *ProviderFormatter) FormatColor() []string {
 		if i > 0 {
 			label = ""
 		}
-		line := fmt.Sprintf("%-9s %2s %s%s%s %3.0f%%  resets %s  %s",
+		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-7s %s",
 			label, window.Name, color(proj.ProjectedPct), bar(window.Utilization), reset,
 			window.Utilization, resetStr, proj.ColorIndicator())
 		if i == 0 && statusLine != "" {
@@ -152,27 +161,69 @@ type MultiProviderOutput struct {
 	Providers []ProviderFormatter
 }
 
+// HideUnavailable removes providers that are expired and have never returned
+// healthy data (e.g. credentials on disk but no active subscription).
+func (m *MultiProviderOutput) HideUnavailable() {
+	filtered := make([]ProviderFormatter, 0, len(m.Providers))
+	for _, pf := range m.Providers {
+		if pf.Data != nil && pf.Data.IsExpired {
+			continue
+		}
+		filtered = append(filtered, pf)
+	}
+	m.Providers = filtered
+}
+
 // PrintColor prints colorized output for all providers.
 func (m *MultiProviderOutput) PrintColor() {
+	// Compute column widths for alignment
+	providerWidth := 0
+	windowWidth := 0
+	hasWindows := false
+	for _, pf := range m.Providers {
+		if len(pf.Display) > providerWidth {
+			providerWidth = len(pf.Display)
+		}
+		if pf.Data != nil {
+			for _, w := range pf.Data.Windows {
+				hasWindows = true
+				if len(w.Name) > windowWidth {
+					windowWidth = len(w.Name)
+				}
+			}
+		}
+	}
+
+	// Header row
+	if hasWindows {
+		dim := "\033[2m"
+		// Columns: provider(pad) window(winPad) bar(20) " "pct(4)"  resets "time(7)" " pace
+		hdr := fmt.Sprintf("%-*s %-*s %-*s %4s  resets %-7s %s",
+			providerWidth, "PROVIDER",
+			windowWidth, "WIN",
+			barWidth, "USAGE",
+			"PCT",
+			"IN",
+			"PACE")
+		fmt.Printf("%s%s%s\n", dim, hdr, reset)
+	}
+
 	for i, pf := range m.Providers {
-		lines := pf.FormatColor()
+		lines := pf.FormatColorAligned(providerWidth, windowWidth)
 		for _, line := range lines {
 			fmt.Println(line)
 		}
-		// Add blank line between providers (but not after the last one)
 		if i < len(m.Providers)-1 && len(lines) > 0 {
 			fmt.Println()
 		}
 	}
 }
 
-// PrintPlain prints plain text output for all providers.
+// PrintPlain prints plain text output for all providers, one per line.
 func (m *MultiProviderOutput) PrintPlain() {
-	parts := make([]string, 0, len(m.Providers))
 	for _, pf := range m.Providers {
-		parts = append(parts, pf.FormatPlain())
+		fmt.Println(pf.FormatPlain())
 	}
-	fmt.Println(strings.Join(parts, "  "))
 }
 
 // JSONOutput represents the JSON structure for multi-provider output.
@@ -258,7 +309,7 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 }
 
 // Status fetches and displays usage status for all configured providers.
-func Status(jsonMode, plainMode bool) int {
+func Status(jsonMode, plainMode, showAll bool) int {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -273,6 +324,9 @@ func Status(jsonMode, plainMode bool) int {
 	// Try cache first
 	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() {
 		output := buildOutputFromCache(registry, cacheEntry)
+		if !showAll {
+			output.HideUnavailable()
+		}
 		printOutput(output, jsonMode, plainMode, cacheEntry)
 		return 0
 	}
@@ -317,6 +371,9 @@ func Status(jsonMode, plainMode bool) int {
 
 	// Build output
 	output := buildOutputFromResult(registry, result, statuses)
+	if !showAll {
+		output.HideUnavailable()
+	}
 	printOutput(output, jsonMode, plainMode, nil)
 
 	return 0
@@ -415,6 +472,7 @@ func buildOutputFromResult(registry *provider.Registry, result *provider.MultiFe
 type providerUrgency struct {
 	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
 	maxProjectedPct float64
+	delta           float64 // positive = behind (over-using), negative = ahead (under-using)
 	worstWindow     string
 	runsOutIn       time.Duration
 }
@@ -431,12 +489,14 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	}
 
 	var maxPct float64
+	var worstDelta float64
 	var worstWindow string
 	var runsOut time.Duration
 	for _, w := range pf.Data.Windows {
 		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
 		if proj.ProjectedPct > maxPct {
 			maxPct = proj.ProjectedPct
+			worstDelta = proj.Delta
 			worstWindow = w.Name
 			runsOut = proj.RunsOutIn
 		}
@@ -450,7 +510,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 		tier = 3
 	}
 
-	return providerUrgency{tier: tier, maxProjectedPct: maxPct, worstWindow: worstWindow, runsOutIn: runsOut}
+	return providerUrgency{tier: tier, maxProjectedPct: maxPct, delta: worstDelta, worstWindow: worstWindow, runsOutIn: runsOut}
 }
 
 // sortProvidersByUrgency sorts providers so the most urgent appear first.
@@ -540,7 +600,17 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			rest = summaryCounts(healthy-1, warning, critical, errored, expired)
 		}
 
-		line = fmt.Sprintf("⚠ %s at %.0f%%%s", windowLabel, worstU.maxProjectedPct, etaStr)
+		absDelta := math.Abs(worstU.delta)
+		var paceWord string
+		switch {
+		case absDelta <= 2:
+			paceWord = "on pace"
+		case worstU.delta > 0:
+			paceWord = fmt.Sprintf("%.0f%% behind", absDelta)
+		default:
+			paceWord = fmt.Sprintf("%.0f%% ahead", absDelta)
+		}
+		line = fmt.Sprintf("⚠ %s %s%s", windowLabel, paceWord, etaStr)
 		if rest != "" {
 			line += " — " + rest
 		}
@@ -601,10 +671,8 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 	if jsonMode {
 		output.PrintJSON(cacheEntry)
 	} else if plainMode || !isTTY() {
-		printSummary(output, false)
 		output.PrintPlain()
 	} else {
-		printSummary(output, true)
 		output.PrintColor()
 	}
 }

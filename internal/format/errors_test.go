@@ -54,9 +54,9 @@ func TestHumanizeError(t *testing.T) {
 			want:  "rate limited",
 		},
 		{
-			name:  "unauthorized kept as-is",
+			name:  "codex rate limits unavailable",
 			input: "chatgpt authentication required to read rate limits",
-			want:  "chatgpt authentication required to read rate limits",
+			want:  "rate limits unavailable — check plan at platform.openai.com",
 		},
 		{
 			name:  "401 kept as-is",

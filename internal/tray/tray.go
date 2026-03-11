@@ -195,13 +195,15 @@ func onReady() {
 
 		_ = cache.Write(result)
 
+		now := time.Now()
 		s.mu.Lock()
 		s.lastResults = result.Results
-		s.lastRefreshAt = time.Now()
+		s.lastRefreshAt = now
 		statuses := s.statuses // reuse last known statuses
 		s.mu.Unlock()
 
 		updateUI(result.Results, statuses, providerMenus, mReauth)
+		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
 	}
 
 	// Refresh status pages (heavier, runs less often)
@@ -307,9 +309,11 @@ func onReady() {
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
 	provider      provider.Provider
+	headerItem    *systray.MenuItem
 	statusItem    *systray.MenuItem
 	windowItems   []*systray.MenuItem
 	dashboardItem *systray.MenuItem
+	everHealthy   bool // true once we've seen a successful fetch
 }
 
 const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
@@ -344,10 +348,24 @@ func createProviderMenuItems(p provider.Provider) *providerMenuItems {
 
 	return &providerMenuItems{
 		provider:      p,
+		headerItem:    header,
 		statusItem:    statusItem,
 		windowItems:   windowItems,
 		dashboardItem: dashboardItem,
 	}
+}
+
+func hideProviderMenu(menu *providerMenuItems) {
+	menu.headerItem.Hide()
+	menu.statusItem.Hide()
+	for _, w := range menu.windowItems {
+		w.Hide()
+	}
+	menu.dashboardItem.Hide()
+}
+
+func showProviderHeader(menu *providerMenuItems) {
+	menu.headerItem.Show()
 }
 
 func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem) {
@@ -361,15 +379,29 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		if data == nil {
+			showProviderHeader(menu)
 			menu.statusItem.SetTitle("No data")
 			menu.statusItem.Show()
 			continue
 		}
 
+		// Track providers that have worked at least once
+		if data.IsHealthy() {
+			menu.everHealthy = true
+		}
+
 		if data.IsExpired {
+			// Hide providers that have never worked (e.g. credentials on disk
+			// but no active subscription). Only show expired state for providers
+			// the user has actually used successfully before.
+			if !menu.everHealthy {
+				hideProviderMenu(menu)
+				continue
+			}
 			if name == "claude" {
 				hasExpiredClaude = true
 			}
+			showProviderHeader(menu)
 			expiredMsg := "Token expired"
 			if data.Error != "" {
 				expiredMsg = format.HumanizeError(data.Error)
@@ -380,58 +412,38 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		if data.Error != "" {
-			menu.statusItem.SetTitle(fmt.Sprintf("Error: %s", format.HumanizeError(data.Error)))
+			showProviderHeader(menu)
+			menu.statusItem.SetTitle(format.HumanizeError(data.Error))
 			menu.statusItem.Show()
+			menu.dashboardItem.Show()
 			continue
 		}
 
 		// Hide status, show window items
+		showProviderHeader(menu)
 		menu.statusItem.Hide()
 
-		// Check if this provider is "boring" (all windows at 0%)
-		allZero := true
-		for _, window := range data.Windows {
-			if window.Utilization > 0 {
-				allZero = false
+		for i, window := range data.Windows {
+			if i >= len(menu.windowItems) {
 				break
 			}
+
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			resetStr := format.FormatDuration(time.Until(window.ResetsAt))
+			menu.windowItems[i].SetTitle(fmt.Sprintf("%s: %.0f%% — %s — %s",
+				window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
+			menu.windowItems[i].Show()
+
+			if window.Utilization > highestUsage {
+				highestUsage = window.Utilization
+			}
 		}
 
-		if allZero && len(data.Windows) > 0 {
-			// Show single collapsed line, hide the rest
-			menu.windowItems[0].SetTitle("all clear")
-			menu.windowItems[0].Show()
-			for i := 1; i < len(menu.windowItems); i++ {
-				menu.windowItems[i].Hide()
-			}
-			// Hide dashboard link for collapsed healthy providers
-			menu.dashboardItem.Hide()
-		} else {
-			// Show full window breakdown
-			for i, window := range data.Windows {
-				if i >= len(menu.windowItems) {
-					break // more windows than pre-allocated slots
-				}
-
-				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-				resetStr := format.FormatDuration(time.Until(window.ResetsAt))
-				menu.windowItems[i].SetTitle(fmt.Sprintf("%s: %.0f%% — %s — %s",
-					window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
-				menu.windowItems[i].Show()
-
-				if window.Utilization > highestUsage {
-					highestUsage = window.Utilization
-				}
-			}
-
-			// Hide unused window items
-			for i := len(data.Windows); i < len(menu.windowItems); i++ {
-				menu.windowItems[i].Hide()
-			}
-
-			// Ensure dashboard is visible for active providers
-			menu.dashboardItem.Show()
+		for i := len(data.Windows); i < len(menu.windowItems); i++ {
+			menu.windowItems[i].Hide()
 		}
+
+		menu.dashboardItem.Show()
 	}
 
 	// Show/hide reauth button (only for Claude expired tokens)
@@ -441,16 +453,20 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		mReauth.Hide()
 	}
 
-	// Build display names map from provider menus
+	// Build display names map and filtered results (exclude never-healthy providers)
 	displayNames := make(map[string]string, len(menus))
+	activeResults := make(map[string]*provider.UsageData, len(results))
 	for name, menu := range menus {
 		displayNames[name] = menu.provider.DisplayName()
+		if menu.everHealthy {
+			activeResults[name] = results[name]
+		}
 	}
 
-	// Update icon and title based on worst usage
-	updateTrayIcon(results)
-	updateTrayTitle(results)
-	updateTrayTooltip(results, statuses, displayNames)
+	// Update icon and title based on worst usage (only active providers)
+	updateTrayIcon(activeResults)
+	updateTrayTitle(activeResults)
+	updateTrayTooltip(activeResults, statuses, displayNames)
 
 	// Check notification thresholds
 	checkThresholds(results, displayNames)

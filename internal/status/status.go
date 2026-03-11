@@ -69,15 +69,46 @@ type ProviderStatus struct {
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
-// Known status page base URLs (statuspage.io format).
-var StatusPages = map[string]string{
-	"claude":     "https://status.anthropic.com",
-	"openai":     "https://status.openai.com",
-	"copilot":    "https://www.githubstatus.com",
-	"openrouter": "https://status.openrouter.ai",
+// statusPageConfig defines how to check a provider's status page.
+type statusPageConfig struct {
+	BaseURL    string
+	Components []string // component names to monitor (empty = use overall status)
 }
 
-// statuspageResponse is the statuspage.io API response structure.
+// StatusPages maps provider names to their status page configuration.
+var StatusPages = map[string]statusPageConfig{
+	"claude": {
+		BaseURL:    "https://status.anthropic.com",
+		Components: []string{"Claude API (api.anthropic.com)", "Claude Code"},
+	},
+	"openai": {
+		BaseURL:    "https://status.openai.com",
+		Components: []string{"Chat Completions", "Codex", "Responses"},
+	},
+	"copilot": {
+		BaseURL:    "https://www.githubstatus.com",
+		Components: []string{"Copilot"},
+	},
+	"openrouter": {
+		BaseURL: "https://status.openrouter.ai",
+	},
+}
+
+// componentsResponse is the statuspage.io components API response.
+type componentsResponse struct {
+	Components []componentEntry `json:"components"`
+	Page       struct {
+		UpdatedAt string `json:"updated_at"`
+	} `json:"page"`
+}
+
+type componentEntry struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// statuspageResponse is the statuspage.io overall status API response (fallback).
 type statuspageResponse struct {
 	Status struct {
 		Indicator   string `json:"indicator"`
@@ -91,11 +122,14 @@ type statuspageResponse struct {
 // Fetch retrieves the operational status for a provider.
 // Returns nil if no status page is configured for the provider.
 func Fetch(ctx context.Context, providerName string) *ProviderStatus {
-	baseURL, ok := StatusPages[providerName]
+	cfg, ok := StatusPages[providerName]
 	if !ok {
 		return nil
 	}
-	return fetchStatuspage(ctx, baseURL)
+	if len(cfg.Components) > 0 {
+		return fetchComponents(ctx, cfg)
+	}
+	return fetchStatuspage(ctx, cfg.BaseURL)
 }
 
 // FetchAll retrieves status only for the given provider names that have status pages.
@@ -107,6 +141,7 @@ func FetchAll(ctx context.Context, providerNames []string) map[string]*ProviderS
 			toFetch = append(toFetch, name)
 		}
 	}
+
 	if len(toFetch) == 0 {
 		return nil
 	}
@@ -131,6 +166,97 @@ func FetchAll(ctx context.Context, providerNames []string) map[string]*ProviderS
 		}
 	}
 	return results
+}
+
+// componentStatusWeight maps statuspage.io component statuses to severity.
+var componentStatusWeight = map[string]int{
+	"operational":          0,
+	"under_maintenance":    1,
+	"degraded_performance": 2,
+	"partial_outage":       3,
+	"major_outage":         4,
+}
+
+func fetchComponents(ctx context.Context, cfg statusPageConfig) *ProviderStatus {
+	url := cfg.BaseURL + "/api/v2/components.json"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return &ProviderStatus{Indicator: Unknown}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &ProviderStatus{Indicator: Unknown}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fetchStatuspage(ctx, cfg.BaseURL)
+	}
+
+	var apiResp componentsResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&apiResp); err != nil {
+		return &ProviderStatus{Indicator: Unknown}
+	}
+
+	// Build set of component names to watch
+	watched := make(map[string]bool, len(cfg.Components))
+	for _, name := range cfg.Components {
+		watched[name] = true
+	}
+
+	// Find worst status among watched components
+	var worstWeight int
+	var worstStatus string
+	var worstName string
+	var updatedAt time.Time
+
+	for _, c := range apiResp.Components {
+		if !watched[c.Name] {
+			continue
+		}
+		w := componentStatusWeight[c.Status]
+		if w > worstWeight {
+			worstWeight = w
+			worstStatus = c.Status
+			worstName = c.Name
+			if c.UpdatedAt != "" {
+				if t, err := time.Parse(time.RFC3339, c.UpdatedAt); err == nil {
+					updatedAt = t
+				} else if t, err := time.Parse(time.RFC3339Nano, c.UpdatedAt); err == nil {
+					updatedAt = t
+				}
+			}
+		}
+	}
+
+	if worstWeight == 0 {
+		return &ProviderStatus{Indicator: None}
+	}
+
+	indicator := componentStatusToIndicator(worstStatus)
+	desc := fmt.Sprintf("%s: %s", worstName, indicator.Label())
+
+	return &ProviderStatus{
+		Indicator:   indicator,
+		Description: desc,
+		UpdatedAt:   updatedAt,
+	}
+}
+
+func componentStatusToIndicator(status string) Indicator {
+	switch status {
+	case "degraded_performance", "partial_outage":
+		return Minor
+	case "major_outage":
+		return Major
+	case "under_maintenance":
+		return Maintenance
+	default:
+		return None
+	}
 }
 
 func fetchStatuspage(ctx context.Context, baseURL string) *ProviderStatus {
@@ -200,14 +326,18 @@ func (ps *ProviderStatus) FormatCLI() string {
 	if !ps.Indicator.HasIssue() {
 		return ""
 	}
+	label := ps.Indicator.Label()
+	if ps.Description != "" {
+		label = ps.Description
+	}
 	switch ps.Indicator {
 	case Major, Critical:
-		return fmt.Sprintf("\033[31m%s %s\033[0m", ps.Indicator.Emoji(), ps.Indicator.Label())
+		return fmt.Sprintf("\033[31m%s %s\033[0m", ps.Indicator.Emoji(), label)
 	case Minor:
-		return fmt.Sprintf("\033[33m%s %s\033[0m", ps.Indicator.Emoji(), ps.Indicator.Label())
+		return fmt.Sprintf("\033[33m%s %s\033[0m", ps.Indicator.Emoji(), label)
 	case Maintenance:
-		return fmt.Sprintf("\033[36m%s %s\033[0m", ps.Indicator.Emoji(), ps.Indicator.Label())
+		return fmt.Sprintf("\033[36m%s %s\033[0m", ps.Indicator.Emoji(), label)
 	default:
-		return ps.Indicator.Label()
+		return label
 	}
 }

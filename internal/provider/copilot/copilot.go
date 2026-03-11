@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -70,7 +71,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			Provider:  p.Name(),
 			FetchedAt: time.Now(),
 			IsExpired: true,
-			Error:     "unauthorized — check GITHUB_TOKEN or gh auth login",
+			Error:     "no active subscription — enable at github.com/settings/copilot",
 		}, nil
 	}
 
@@ -92,25 +93,46 @@ func (p *Provider) getToken() (string, error) {
 		return p.cfg.APIKey, nil
 	}
 
-	// 2. Environment variables
+	// 2. Copilot-specific env var (not GITHUB_TOKEN — a generic GitHub
+	// token doesn't grant Copilot API access and causes false positives)
 	if token := os.Getenv("COPILOT_API_TOKEN"); token != "" {
 		return token, nil
 	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		return token, nil
+
+	// 3. GitHub Copilot hosts.json (VS Code extension credential store)
+	for _, path := range copilotHostsPaths() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		return tokenFromHostsJSON(data)
 	}
 
-	// 3. GitHub Copilot hosts.json
+	return "", fmt.Errorf("no copilot credentials found")
+}
+
+// copilotHostsPaths returns platform-specific paths for the Copilot hosts.json file.
+func copilotHostsPaths() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
+		return nil
 	}
 
-	hostsPath := filepath.Join(home, ".config", "github-copilot", "hosts.json")
-	data, err := os.ReadFile(hostsPath)
-	if err != nil {
-		return "", fmt.Errorf("no copilot credentials found")
+	if runtime.GOOS == "windows" {
+		var paths []string
+		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
+			paths = append(paths, filepath.Join(appData, "github-copilot", "hosts.json"))
+		}
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			paths = append(paths, filepath.Join(appData, "github-copilot", "hosts.json"))
+		}
+		return paths
 	}
+
+	return []string{filepath.Join(home, ".config", "github-copilot", "hosts.json")}
+}
+
+func tokenFromHostsJSON(data []byte) (string, error) {
 
 	var hosts map[string]struct {
 		OAuthToken string `json:"oauth_token"`

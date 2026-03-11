@@ -12,6 +12,10 @@ import (
 const (
 	FiveHourWindow = 5 * time.Hour
 	SevenDayWindow = 7 * 24 * time.Hour
+
+	// paceWidth is the fixed column width for the pace label (e.g. "100% behind").
+	// Must be >= the longest output of the pace switch in PaceIndicator.
+	paceWidth = 11
 )
 
 type Projection struct {
@@ -85,6 +89,7 @@ func (p Projection) PaceIndicator() string {
 	default:
 		left = fmt.Sprintf("%.0f%% ahead", absDelta)
 	}
+	left = fmt.Sprintf("%-*s", paceWidth, left)
 
 	var right string
 	if p.WillLastToReset {

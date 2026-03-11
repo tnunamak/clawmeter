@@ -224,6 +224,31 @@ func TestProjection_PaceIndicator(t *testing.T) {
 	}
 }
 
+func TestPaceIndicatorAlignment(t *testing.T) {
+	// The left part of every PaceIndicator must be exactly paceWidth chars
+	// so columns align in CLI output.
+	cases := []Projection{
+		{Delta: 0, WillLastToReset: true},       // "on pace"
+		{Delta: -3, WillLastToReset: true},       // "3% ahead"
+		{Delta: -28, WillLastToReset: true},      // "28% ahead"
+		{Delta: -100, WillLastToReset: true},     // "100% ahead"
+		{Delta: 5, WillLastToReset: true},        // "5% behind"
+		{Delta: 50, WillLastToReset: true},       // "50% behind"
+		{Delta: 100, WillLastToReset: true},      // "100% behind"
+	}
+
+	for _, proj := range cases {
+		got := proj.PaceIndicator()
+		// With "lasts to reset", format is "<left> · lasts to reset"
+		parts := strings.SplitN(got, " · ", 2)
+		left := parts[0]
+		if len(left) != paceWidth {
+			t.Errorf("PaceIndicator() left %q has len %d, want %d (delta=%.0f)",
+				left, len(left), paceWidth, proj.Delta)
+		}
+	}
+}
+
 func TestShortDuration(t *testing.T) {
 	tests := []struct {
 		d    time.Duration
