@@ -80,10 +80,26 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ needs.release.outputs.tag }}' -o "clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" ./cmd/clawmeter
 
+      - name: Package .deb and .rpm
+        if: matrix.goos == 'linux'
+        env:
+          VERSION: ${{ needs.release.outputs.tag }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # Strip leading 'v' from version for package managers
+          export VERSION="${VERSION#v}"
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          nfpm package -p deb -f nfpm.yaml
+          nfpm package -p rpm -f nfpm.yaml
+
       - uses: actions/upload-artifact@v4
         with:
           name: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}*
+          path: |
+            clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}*
+            *.deb
+            *.rpm
 
   upload:
     needs: [release, build]

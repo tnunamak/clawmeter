@@ -1,0 +1,12 @@
+name: clawmeter
+arch: ${GOARCH}
+version: ${VERSION}
+maintainer: Tim Nunamak <tim@nunamak.com>
+description: Monitor AI coding assistant usage quotas
+vendor: tnunamak
+homepage: https://github.com/tnunamak/clawmeter
+license: MIT
+
+contents:
+  - src: ./clawmeter-${GOOS}-${GOARCH}
+    dst: /usr/bin/clawmeter
