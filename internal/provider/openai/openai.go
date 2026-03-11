@@ -215,8 +215,8 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 
 	if rl.Secondary != nil {
 		result.Windows = append(result.Windows, provider.UsageWindow{
-			Name:        "weekly",
-			DisplayName: "Weekly",
+			Name:        "7d",
+			DisplayName: "7 days",
 			Utilization: rl.Secondary.UsedPercent,
 			ResetsAt:    time.Unix(rl.Secondary.ResetsAt, 0),
 		})

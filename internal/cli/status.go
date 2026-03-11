@@ -194,13 +194,21 @@ func (m *MultiProviderOutput) PrintColor() {
 		}
 	}
 
+	// Ensure column widths fit header labels
+	if windowWidth < 6 {
+		windowWidth = 6 // "WINDOW"
+	}
+	if providerWidth < 8 {
+		providerWidth = 8 // "PROVIDER"
+	}
+
 	// Header row
 	if hasWindows {
 		dim := "\033[2m"
 		// Columns: provider(pad) window(winPad) bar(20) " "pct(4)"  resets "time(7)" " pace
 		hdr := fmt.Sprintf("%-*s %-*s %-*s %4s  resets %-7s %s",
 			providerWidth, "PROVIDER",
-			windowWidth, "WIN",
+			windowWidth, "WINDOW",
 			barWidth, "USAGE",
 			"PCT",
 			"IN",

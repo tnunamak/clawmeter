@@ -204,6 +204,7 @@ type quotaResponse struct {
 type quotaBucket struct {
 	ModelID           string  `json:"modelId"`
 	RemainingFraction float64 `json:"remainingFraction"` // 0.0-1.0
+	ResetTime         string  `json:"resetTime"`         // ISO 8601 timestamp
 }
 
 func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
@@ -213,41 +214,50 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
-	// Group buckets by tier (pro vs flash)
-	proWorst := 1.0
-	flashWorst := 1.0
-	hasPro := false
-	hasFlash := false
+	type tierInfo struct {
+		worst    float64
+		resetAt  time.Time
+		found    bool
+	}
+	pro := tierInfo{worst: 1.0}
+	flash := tierInfo{worst: 1.0}
 
 	for _, b := range resp.Buckets {
+		tier := &flash
 		if isProModel(b.ModelID) {
-			hasPro = true
-			if b.RemainingFraction < proWorst {
-				proWorst = b.RemainingFraction
-			}
-		} else {
-			hasFlash = true
-			if b.RemainingFraction < flashWorst {
-				flashWorst = b.RemainingFraction
+			tier = &pro
+		}
+		tier.found = true
+		if b.RemainingFraction < tier.worst {
+			tier.worst = b.RemainingFraction
+			if t, err := time.Parse(time.RFC3339, b.ResetTime); err == nil {
+				tier.resetAt = t
+			} else if t, err := time.Parse(time.RFC3339Nano, b.ResetTime); err == nil {
+				tier.resetAt = t
 			}
 		}
 	}
 
-	if hasPro {
+	for _, t := range []struct {
+		info tierInfo
+		name string
+		disp string
+	}{
+		{pro, "24h Pro", "Pro (24h)"},
+		{flash, "24h Flash", "Flash (24h)"},
+	} {
+		if !t.info.found {
+			continue
+		}
+		resetAt := t.info.resetAt
+		if resetAt.IsZero() {
+			resetAt = time.Now().Add(24 * time.Hour)
+		}
 		data.Windows = append(data.Windows, provider.UsageWindow{
-			Name:        "pro",
-			DisplayName: "Pro",
-			Utilization: (1 - proWorst) * 100,
-			ResetsAt:    time.Now().Add(24 * time.Hour), // Gemini resets daily
-		})
-	}
-
-	if hasFlash {
-		data.Windows = append(data.Windows, provider.UsageWindow{
-			Name:        "flash",
-			DisplayName: "Flash",
-			Utilization: (1 - flashWorst) * 100,
-			ResetsAt:    time.Now().Add(24 * time.Hour),
+			Name:        t.name,
+			DisplayName: t.disp,
+			Utilization: (1 - t.info.worst) * 100,
+			ResetsAt:    resetAt,
 		})
 	}
 

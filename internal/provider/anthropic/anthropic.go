@@ -146,10 +146,10 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 	for _, nw := range []namedWindow{
 		{"5h", "5 hours", apiResp.FiveHour},
-		{"7d", "7 days", apiResp.SevenDay},
-		{"7d-oauth", "7 days (OAuth apps)", apiResp.SevenDayOAuthApps},
-		{"7d-opus", "7 days (Opus)", apiResp.SevenDayOpus},
-		{"7d-sonnet", "7 days (Sonnet)", apiResp.SevenDaySonnet},
+		{"7d All", "7 days (all models)", apiResp.SevenDay},
+		{"7d OAuth", "7 days (OAuth apps)", apiResp.SevenDayOAuthApps},
+		{"7d Opus", "7 days (Opus)", apiResp.SevenDayOpus},
+		{"7d Sonnet", "7 days (Sonnet)", apiResp.SevenDaySonnet},
 		{"bonus", "Bonus", apiResp.IguanaNecktie},
 	} {
 		if nw.w != nil && nw.w.Utilization >= 0 {

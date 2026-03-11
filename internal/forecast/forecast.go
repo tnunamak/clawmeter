@@ -124,6 +124,8 @@ func GuessWindowType(name string) time.Duration {
 		return FiveHourWindow
 	case strings.HasPrefix(name, "7d"):
 		return SevenDayWindow
+	case strings.HasPrefix(name, "24h"):
+		return 24 * time.Hour
 	default:
 		return 24 * time.Hour // default to daily
 	}
