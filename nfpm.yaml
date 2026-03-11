@@ -8,5 +8,5 @@ homepage: https://github.com/tnunamak/clawmeter
 license: MIT
 
 contents:
-  - src: ./clawmeter-${GOOS}-${GOARCH}
+  - src: ./clawmeter
     dst: /usr/bin/clawmeter
