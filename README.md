@@ -120,6 +120,7 @@ clawmeter providers                # list all providers and their status
 clawmeter config show              # show configuration
 clawmeter config enable openai     # enable a provider
 clawmeter config disable copilot   # disable a provider
+clawmeter update                   # self-update to latest release
 clawmeter version                  # show version
 ```
 

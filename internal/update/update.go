@@ -60,12 +60,26 @@ func Check(ctx context.Context, currentVersion string) (*Release, error) {
 		return nil, nil
 	}
 
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
 	url := fmt.Sprintf(
-		"https://github.com/%s/releases/download/%s/clawmeter-%s-%s",
-		repo, rel.TagName, runtime.GOOS, runtime.GOARCH,
+		"https://github.com/%s/releases/download/%s/clawmeter-%s-%s%s",
+		repo, rel.TagName, runtime.GOOS, runtime.GOARCH, ext,
 	)
 
 	return &Release{Version: rel.TagName, URL: url}, nil
+}
+
+// CleanupOld removes leftover .old files from a previous update (Windows).
+func CleanupOld() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	os.Remove(exe + ".old")
 }
 
 // Apply downloads the binary from url, verifies it, and replaces the
@@ -86,7 +100,11 @@ func Apply(ctx context.Context, url string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	tmpBin := filepath.Join(tmpDir, "clawmeter")
+	binName := "clawmeter"
+	if runtime.GOOS == "windows" {
+		binName = "clawmeter.exe"
+	}
+	tmpBin := filepath.Join(tmpDir, binName)
 
 	// Download
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -128,12 +146,30 @@ func Apply(ctx context.Context, url string) error {
 		return fmt.Errorf("verify binary: %w", err)
 	}
 
-	// Replace: remove the old binary first (Linux can't write to a running
-	// executable, but can unlink it), then rename/copy the new one in.
-	os.Remove(exe)
-	if err := os.Rename(tmpBin, exe); err != nil {
-		if err := copyFile(tmpBin, exe); err != nil {
+	// Replace the running binary.
+	// On Windows, you can't delete or overwrite a running exe, but you CAN
+	// rename it. So: rename current → .old, then move new into place.
+	// On Linux/macOS, unlink works on a running binary.
+	oldExe := exe + ".old"
+	os.Remove(oldExe) // clean up any previous .old
+
+	if runtime.GOOS == "windows" {
+		// Rename running exe out of the way, then move new one in
+		if err := os.Rename(exe, oldExe); err != nil {
+			return fmt.Errorf("rename current binary: %w", err)
+		}
+		if err := os.Rename(tmpBin, exe); err != nil {
+			// Rollback
+			os.Rename(oldExe, exe)
 			return fmt.Errorf("replace binary: %w", err)
+		}
+		// .old can't be deleted while the old process runs; CleanupOld() handles it next launch
+	} else {
+		os.Remove(exe)
+		if err := os.Rename(tmpBin, exe); err != nil {
+			if err := copyFile(tmpBin, exe); err != nil {
+				return fmt.Errorf("replace binary: %w", err)
+			}
 		}
 	}
 

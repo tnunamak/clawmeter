@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cli"
@@ -11,6 +13,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	"github.com/tnunamak/clawmeter/internal/tray"
+	"github.com/tnunamak/clawmeter/internal/update"
 )
 
 var Version = "dev"
@@ -20,6 +23,8 @@ func main() {
 }
 
 func run() int {
+	update.CleanupOld()
+
 	if len(os.Args) < 2 {
 		return cli.Status(false, false, false)
 	}
@@ -38,6 +43,8 @@ func run() int {
 		return configCmd(os.Args[2:])
 	case "providers":
 		return providersCmd(os.Args[2:])
+	case "update":
+		return updateCmd()
 	case "version", "--version", "-v":
 		fmt.Println("clawmeter " + Version)
 		return 0
@@ -317,6 +324,43 @@ func providersCmd(args []string) int {
 	return 0
 }
 
+func updateCmd() int {
+	if Version == "dev" {
+		fmt.Fprintln(os.Stderr, "clawmeter: self-update is not available for dev builds")
+		return 1
+	}
+
+	fmt.Printf("Current version: %s\n", Version)
+	fmt.Print("Checking for updates... ")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rel, err := update.Check(ctx, Version)
+	if err != nil {
+		fmt.Println()
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 1
+	}
+	if rel == nil {
+		fmt.Println("already up to date.")
+		return 0
+	}
+
+	fmt.Printf("found %s\n", rel.Version)
+	fmt.Printf("Downloading and installing %s... ", rel.Version)
+
+	if err := update.Apply(ctx, rel.URL); err != nil {
+		fmt.Println()
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 1
+	}
+
+	fmt.Println("done.")
+	fmt.Printf("Updated to %s. Restart any running tray instances.\n", rel.Version)
+	return 0
+}
+
 func printHelp() {
 	fmt.Fprintln(os.Stderr, `Usage: clawmeter [command] [flags]
 
@@ -326,6 +370,7 @@ Commands:
   providers                 List available providers
   tray                      Run as system tray icon
   config                    Manage configuration
+  update                    Self-update to the latest release
   version                   Show version
   help                      Show this help
 
