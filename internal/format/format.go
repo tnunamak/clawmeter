@@ -15,6 +15,14 @@ func FormatDuration(d time.Duration) string {
 	days := int(d.Hours()) / 24
 	hours := int(d.Hours()) % 24
 	mins := int(d.Minutes()) % 60
+	if days > 30 {
+		months := days / 30
+		remainDays := days % 30
+		if remainDays > 0 {
+			return fmt.Sprintf("%dmo%dd", months, remainDays)
+		}
+		return fmt.Sprintf("%dmo", months)
+	}
 	if days > 0 {
 		return fmt.Sprintf("%dd%dh", days, hours)
 	}

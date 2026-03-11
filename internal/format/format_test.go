@@ -76,6 +76,26 @@ func TestFormatDuration(t *testing.T) {
 			d:    -100 * time.Hour,
 			want: "now",
 		},
+		{
+			name: "365 days shows months",
+			d:    365 * 24 * time.Hour,
+			want: "12mo5d",
+		},
+		{
+			name: "60 days shows months",
+			d:    60 * 24 * time.Hour,
+			want: "2mo",
+		},
+		{
+			name: "31 days shows months",
+			d:    31 * 24 * time.Hour,
+			want: "1mo1d",
+		},
+		{
+			name: "30 days stays in days",
+			d:    30 * 24 * time.Hour,
+			want: "30d0h",
+		},
 	}
 
 	for _, tt := range tests {

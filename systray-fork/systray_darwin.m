@@ -385,7 +385,7 @@ void setIcon(const char* iconBytes, int length, bool template) {
   NSData* buffer = [NSData dataWithBytes: iconBytes length:length];
   @autoreleasepool {
     NSImage *image = [[NSImage alloc] initWithData:buffer];
-    [image setSize:NSMakeSize(16, 16)];
+    [image setSize:NSMakeSize(18, 18)];
     image.template = template;
     runInMainThread(@selector(setIcon:), (id)image);
   }

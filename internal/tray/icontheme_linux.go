@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"fyne.io/systray"
@@ -15,7 +16,6 @@ import (
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 )
 
-var iconThemePath string
 var currentIconName string
 
 var iconSet = map[string][]byte{
@@ -25,92 +25,42 @@ var iconSet = map[string][]byte{
 	"gray":   icons.Gray,
 }
 
-func iconThemeDir() (string, error) {
+func setupIconTheme() {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "share", "clawmeter", "icons"), nil
-}
-
-func setupIconTheme() {
-	dir, err := iconThemeDir()
-	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-	iconThemePath = dir
+	base := filepath.Join(home, ".local", "share", "icons", "hicolor")
 
-	// KDE's KIconLoader with addAppDir looks for icons at:
-	//   {path}/hicolor/{size}x{size}/{iconname}.png
-	// NOT under an apps/ subdirectory.
-	indexContent := `[Icon Theme]
-Name=clawmeter
-Comment=Clawmeter tray icons
-Directories=hicolor/16x16,hicolor/22x22,hicolor/24x24,hicolor/32x32,hicolor/48x48,hicolor/64x64,hicolor/128x128,hicolor/256x256
-
-[hicolor/16x16]
-Size=16
-Type=Fixed
-
-[hicolor/22x22]
-Size=22
-Type=Fixed
-
-[hicolor/24x24]
-Size=24
-Type=Fixed
-
-[hicolor/32x32]
-Size=32
-Type=Fixed
-
-[hicolor/48x48]
-Size=48
-Type=Fixed
-
-[hicolor/64x64]
-Size=64
-Type=Fixed
-
-[hicolor/128x128]
-Size=128
-Type=Fixed
-
-[hicolor/256x256]
-Size=256
-Type=Fixed
-`
-	os.WriteFile(filepath.Join(dir, "index.theme"), []byte(indexContent), 0644)
-
-	sizes := []int{16, 22, 24, 32, 48, 64, 128, 256}
+	sizes := []int{16, 22, 24, 32, 48, 64, 128}
 	for name, data := range iconSet {
 		for _, size := range sizes {
-			sizeDir := filepath.Join(dir, "hicolor", fmt.Sprintf("%dx%d", size, size))
-			os.MkdirAll(sizeDir, 0755)
-			resized := resizePNG(data, size)
-			os.WriteFile(filepath.Join(sizeDir, "clawmeter-"+name+".png"), resized, 0644)
+			dir := filepath.Join(base, fmt.Sprintf("%dx%d", size, size), "status")
+			os.MkdirAll(dir, 0755)
+			os.WriteFile(filepath.Join(dir, "clawmeter-"+name+".png"), resizePNG(data, size), 0644)
 		}
 	}
+
+	exec.Command("gtk-update-icon-cache", "-f", "-t", base).Run()
 }
 
-func cleanupIconTheme() {
-	// Persistent dir — nothing to clean up.
-}
+func cleanupIconTheme() {}
 
-func setIconByName(name string, data []byte) {
-	if iconThemePath == "" {
-		systray.SetIcon(data)
-		return
-	}
+func setIconByName(name string, _ []byte) {
 	iconName := "clawmeter-" + name
 	if iconName == currentIconName {
 		return
 	}
 	currentIconName = iconName
-	systray.SetIconName(iconThemePath, iconName)
+
+	// Provide multiple pixmap sizes as fallback for DEs that can't resolve
+	// the icon name (e.g. user hicolor dir without index.theme).
+	data := iconSet[name]
+	pixmaps := make([][]byte, 0, 3)
+	for _, size := range []int{16, 32, 64} {
+		pixmaps = append(pixmaps, resizePNG(data, size))
+	}
+	systray.SetIconNameWithPixmap(iconName, pixmaps)
 }
 
 func resizePNG(data []byte, size int) []byte {

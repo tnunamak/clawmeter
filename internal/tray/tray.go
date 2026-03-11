@@ -333,12 +333,14 @@ func createProviderMenuItems(p provider.Provider) *providerMenuItems {
 	}
 
 	// Dashboard item (clickable)
-	dashboardItem := systray.AddMenuItem("Open Dashboard", p.DashboardURL())
+	dashboardItem := systray.AddMenuItem(fmt.Sprintf("Open %s Dashboard", p.DisplayName()), p.DashboardURL())
 	go func() {
 		for range dashboardItem.ClickedCh {
 			openURL(p.DashboardURL())
 		}
 	}()
+
+	systray.AddSeparator()
 
 	return &providerMenuItems{
 		provider:      p,
@@ -557,7 +559,11 @@ func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[stri
 		}
 
 		if data.IsExpired {
-			blocks = append(blocks, fmt.Sprintf("%s: expired — run `claude` to reauth", display))
+			msg := data.Error
+			if msg == "" {
+				msg = "token expired"
+			}
+			blocks = append(blocks, fmt.Sprintf("%s: %s", display, format.HumanizeError(msg)))
 			continue
 		}
 
@@ -568,12 +574,16 @@ func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[stri
 
 		var windowLines []string
 		for _, window := range data.Windows {
+			remaining := time.Until(window.ResetsAt)
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			resetStr := format.FormatDuration(time.Until(window.ResetsAt))
-			line := fmt.Sprintf("  %s: %.0f%%  resets %s", window.Name, window.Utilization, resetStr)
-			// Append pace info if usage is non-trivial (> 0%)
-			if window.Utilization > 0 {
-				line += "  " + proj.PaceIndicator()
+			var line string
+			if remaining <= 0 {
+				line = fmt.Sprintf("  %s: %.0f%%  just reset", window.Name, window.Utilization)
+			} else {
+				line = fmt.Sprintf("  %s: %.0f%%  resets %s", window.Name, window.Utilization, format.FormatDuration(remaining))
+				if window.Utilization > 0 {
+					line += "  " + proj.PaceIndicator()
+				}
 			}
 			windowLines = append(windowLines, line)
 		}

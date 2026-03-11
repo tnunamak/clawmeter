@@ -19,7 +19,7 @@ type Projection struct {
 	ProjectedPct float64
 	// OnTrack is true if projected usage stays under 100% at reset.
 	OnTrack bool
-	// Delta is the difference between actual and expected usage (positive = ahead/deficit).
+	// Delta is the difference between actual and expected usage (positive = behind pace).
 	Delta float64
 	// WillLastToReset is true if current rate won't exhaust quota before reset.
 	WillLastToReset bool
@@ -81,15 +81,15 @@ func (p Projection) PaceIndicator() string {
 	case absDelta <= 2:
 		left = "on pace"
 	case p.Delta > 0:
-		left = fmt.Sprintf("%.0f%% deficit", absDelta)
+		left = fmt.Sprintf("%.0f%% behind", absDelta)
 	default:
-		left = fmt.Sprintf("%.0f%% reserve", absDelta)
+		left = fmt.Sprintf("%.0f%% ahead", absDelta)
 	}
 
 	var right string
 	if p.WillLastToReset {
 		right = "lasts to reset"
-	} else if p.RunsOutIn > 0 {
+	} else if p.RunsOutIn > 0 && absDelta > 2 {
 		right = "runs out " + shortDuration(p.RunsOutIn)
 	}
 

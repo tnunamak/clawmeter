@@ -48,6 +48,10 @@ jobs:
             goarch: arm64
             runner: macos-latest
             cc: clang
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+            cc: gcc
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -70,12 +74,16 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '1'
           CC: ${{ matrix.cc }}
-        run: go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ needs.release.outputs.tag }}' -o clawmeter-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/clawmeter
+        shell: bash
+        run: |
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ needs.release.outputs.tag }}' -o "clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" ./cmd/clawmeter
 
       - uses: actions/upload-artifact@v4
         with:
           name: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}*
 
   upload:
     needs: [release, build]

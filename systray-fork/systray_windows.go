@@ -3,10 +3,13 @@
 package systray
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/png"
 	"io/ioutil"
 	"log"
 	"os"
@@ -24,6 +27,7 @@ import (
 
 var (
 	g32                     = windows.NewLazySystemDLL("Gdi32.dll")
+	pCreateBitmap           = g32.NewProc("CreateBitmap")
 	pCreateCompatibleBitmap = g32.NewProc("CreateCompatibleBitmap")
 	pCreateCompatibleDC     = g32.NewProc("CreateCompatibleDC")
 	pCreateDIBSection       = g32.NewProc("CreateDIBSection")
@@ -37,6 +41,7 @@ var (
 	pShellNotifyIcon = s32.NewProc("Shell_NotifyIconW")
 
 	u32                    = windows.NewLazySystemDLL("User32.dll")
+	pCreateIconIndirect    = u32.NewProc("CreateIconIndirect")
 	pCreateMenu            = u32.NewProc("CreateMenu")
 	pCreatePopupMenu       = u32.NewProc("CreatePopupMenu")
 	pCreateWindowEx        = u32.NewProc("CreateWindowExW")
@@ -279,6 +284,16 @@ func (t *winTray) setTooltip(src string) error {
 	b, err := windows.UTF16FromString(src)
 	if err != nil {
 		return err
+	}
+
+	// Tip field is [128]uint16: max 127 chars + null terminator.
+	// Truncate gracefully with "..." if the text is too long.
+	if len(b) > 128 {
+		b = b[:128]
+		b[124] = '.'
+		b[125] = '.'
+		b[126] = '.'
+		b[127] = 0
 	}
 
 	t.muNID.Lock()
@@ -860,6 +875,115 @@ func iconToBitmap(hIcon windows.Handle) (windows.Handle, error) {
 	return windows.Handle(hMemBmp), nil
 }
 
+// iconinfo matches the Windows ICONINFO structure.
+type iconinfo struct {
+	FIcon    uint32
+	XHotspot uint32
+	YHotspot uint32
+	HbmMask  windows.Handle
+	HbmColor windows.Handle
+}
+
+// pngToHIcon decodes PNG bytes and creates a Windows HICON in memory.
+// This avoids the temp-file approach which only works with .ico files.
+func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
+	img, _, err := image.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return 0, fmt.Errorf("decode image: %w", err)
+	}
+
+	bounds := img.Bounds()
+	w := int32(bounds.Dx())
+	h := int32(bounds.Dy())
+
+	hDC, _, _ := pGetDC.Call(0)
+	if hDC == 0 {
+		return 0, fmt.Errorf("GetDC failed")
+	}
+	defer pReleaseDC.Call(0, hDC)
+
+	hMemDC, _, _ := pCreateCompatibleDC.Call(hDC)
+	if hMemDC == 0 {
+		return 0, fmt.Errorf("CreateCompatibleDC failed")
+	}
+	defer pDeleteDC.Call(hMemDC)
+
+	// Create 32-bit top-down DIB for color data.
+	bmi := bitmapInfo{
+		BmiHeader: bitmapInfoHeader{
+			BiWidth:       w,
+			BiHeight:      -h, // negative = top-down
+			BiPlanes:      1,
+			BiBitCount:    32,
+			BiCompression: 0, // BI_RGB
+		},
+	}
+	bmi.BmiHeader.BiSize = uint32(unsafe.Sizeof(bmi.BmiHeader))
+
+	var bits uintptr
+	hColorBmp, _, _ := pCreateDIBSection.Call(
+		hMemDC,
+		uintptr(unsafe.Pointer(&bmi)),
+		0, // DIB_RGB_COLORS
+		uintptr(unsafe.Pointer(&bits)),
+		0,
+		0,
+	)
+	if hColorBmp == 0 {
+		return 0, fmt.Errorf("CreateDIBSection failed")
+	}
+
+	// Write BGRA pixel data into the DIB.
+	pixelData := unsafe.Slice((*byte)(unsafe.Pointer(bits)), int(w)*int(h)*4)
+	for y := int32(0); y < h; y++ {
+		for x := int32(0); x < w; x++ {
+			r, g, b, a := img.At(bounds.Min.X+int(x), bounds.Min.Y+int(y)).RGBA()
+			offset := (y*w + x) * 4
+			pixelData[offset] = byte(b >> 8)
+			pixelData[offset+1] = byte(g >> 8)
+			pixelData[offset+2] = byte(r >> 8)
+			pixelData[offset+3] = byte(a >> 8)
+		}
+	}
+
+	// Create monochrome AND mask (all zeros = fully opaque).
+	hMaskBmp, _, _ := pCreateBitmap.Call(
+		uintptr(w), uintptr(h), 1, 1, 0,
+	)
+	if hMaskBmp == 0 {
+		return 0, fmt.Errorf("CreateBitmap failed")
+	}
+
+	ii := iconinfo{
+		FIcon:    1, // TRUE = icon (not cursor)
+		HbmMask:  windows.Handle(hMaskBmp),
+		HbmColor: windows.Handle(hColorBmp),
+	}
+	hIcon, _, _ := pCreateIconIndirect.Call(uintptr(unsafe.Pointer(&ii)))
+	if hIcon == 0 {
+		return 0, fmt.Errorf("CreateIconIndirect failed")
+	}
+
+	return windows.Handle(hIcon), nil
+}
+
+// setIconFromHIcon sets the tray icon from an existing HICON handle.
+func (t *winTray) setIconFromHIcon(hIcon windows.Handle) error {
+	if !wt.isReady() {
+		return ErrTrayNotReadyYet
+	}
+
+	const NIF_ICON = 0x00000002
+
+	t.muNID.Lock()
+	defer t.muNID.Unlock()
+	t.nid.Icon = hIcon
+	t.nid.Flags |= NIF_ICON
+	t.nid.Size = uint32(unsafe.Sizeof(*t.nid))
+
+	return t.nid.modify()
+}
+
 // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createdibsection
 func create32BitHBitmap(hDC uintptr, cx, cy int32) (uintptr, error) {
 	const BI_RGB uint32 = 0
@@ -986,6 +1110,15 @@ func iconBytesToFilePath(iconBytes []byte) (string, error) {
 // iconBytes should be the content of .ico for windows and .ico/.jpg/.png
 // for other platforms.
 func SetIcon(iconBytes []byte) {
+	// Try in-memory PNG→HICON conversion first (handles PNG natively).
+	if h, err := pngToHIcon(iconBytes); err == nil {
+		if err := wt.setIconFromHIcon(h); err != nil {
+			log.Printf("systray error: unable to set icon from HICON: %s\n", err)
+		}
+		return
+	}
+
+	// Fall back to temp file approach (for .ico format).
 	iconFilePath, err := iconBytesToFilePath(iconBytes)
 	if err != nil {
 		log.Printf("systray error: unable to write icon data to temp file: %s\n", err)

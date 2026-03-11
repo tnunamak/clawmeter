@@ -76,6 +76,47 @@ func SetIconName(themePath, iconName string) {
 	}
 }
 
+// SetIconNameWithPixmap sets both IconName for theme lookup and IconPixmap as
+// fallback, matching what apps like Telegram do for reliable KDE rendering.
+// pixmaps should contain multiple sizes (e.g. 16x16, 64x64) for HiDPI.
+func SetIconNameWithPixmap(iconName string, pixmapBytes [][]byte) {
+	instance.lock.Lock()
+	instance.iconName = iconName
+	instance.iconThemePath = ""
+	if len(pixmapBytes) > 0 {
+		instance.iconData = pixmapBytes[0]
+	}
+	props := instance.props
+	conn := instance.conn
+	defer instance.lock.Unlock()
+
+	if props == nil {
+		return
+	}
+
+	var pixmaps []PX
+	for _, b := range pixmapBytes {
+		if px := convertToPixels(b); px.W > 0 {
+			pixmaps = append(pixmaps, px)
+		}
+	}
+
+	props.SetMust("org.kde.StatusNotifierItem", "IconName", iconName)
+	props.SetMust("org.kde.StatusNotifierItem", "IconThemePath", "")
+	props.SetMust("org.kde.StatusNotifierItem", "IconPixmap", pixmaps)
+	if conn == nil {
+		return
+	}
+
+	err := notifier.Emit(conn, &notifier.StatusNotifierItem_NewIconSignal{
+		Path: path,
+		Body: &notifier.StatusNotifierItem_NewIconSignalBody{},
+	})
+	if err != nil {
+		log.Printf("systray error: failed to emit new icon signal: %s\n", err)
+	}
+}
+
 // SetIcon sets the systray icon.
 // iconBytes should be the content of .ico for windows and .ico/.jpg/.png
 // for other platforms.
@@ -155,6 +196,7 @@ func SetTooltip(tooltipTitle string) {
 	instance.lock.Lock()
 	instance.tooltipTitle = tooltipTitle
 	props := instance.props
+	conn := instance.conn
 	defer instance.lock.Unlock()
 
 	if props == nil {
@@ -165,6 +207,15 @@ func SetTooltip(tooltipTitle string) {
 	if dbusErr != nil {
 		log.Printf("systray error: failed to set ToolTip prop: %s\n", dbusErr)
 		return
+	}
+
+	if conn == nil {
+		return
+	}
+	// Emit NewToolTip signal so KDE re-reads the property.
+	err := conn.Emit(path, "org.kde.StatusNotifierItem.NewToolTip")
+	if err != nil {
+		log.Printf("systray error: failed to emit new tooltip signal: %s\n", err)
 	}
 }
 
@@ -388,7 +439,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 			"IconPixmap": {
 				Value:    []PX{convertToPixels(t.iconData)},
 				Writable: true,
-				Emit:     prop.EmitTrue,
+				Emit:     prop.EmitInvalidates,
 				Callback: nil,
 			},
 			"IconThemePath": {
@@ -457,10 +508,10 @@ func argbForImage(img image.Image) []byte {
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			r, g, b, a := img.At(x, y).RGBA()
-			data[i] = byte(a)
-			data[i+1] = byte(r)
-			data[i+2] = byte(g)
-			data[i+3] = byte(b)
+			data[i] = byte(a >> 8)
+			data[i+1] = byte(r >> 8)
+			data[i+2] = byte(g >> 8)
+			data[i+3] = byte(b >> 8)
 			i += 4
 		}
 	}

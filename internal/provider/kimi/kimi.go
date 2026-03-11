@@ -17,8 +17,11 @@ import (
 )
 
 const (
-	usageURL = "https://api.kimi.com/coding/v1/usages"
-	timeout  = 5 * time.Second
+	usageURL     = "https://api.kimi.com/coding/v1/usages"
+	tokenURL     = "https://auth.kimi.com/api/oauth/token"
+	clientID     = "17e5f671-d194-4dfb-9706-5516cb48c098"
+	timeout      = 5 * time.Second
+	refreshThreshold = 5 * time.Minute
 )
 
 // Provider implements the provider.Provider interface for Kimi Code.
@@ -66,13 +69,14 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
-	if creds.IsExpired() {
-		return &provider.UsageData{
-			Provider:  p.Name(),
-			FetchedAt: time.Now(),
-			IsExpired: true,
-			Error:     "token expired — reauth in Kimi Code CLI",
-		}, nil
+	// Refresh the token if expired or about to expire.
+	if creds.IsExpired() || creds.ExpiresWithin(refreshThreshold) {
+		if creds.RefreshToken != "" {
+			refreshed, err := p.refreshAccessToken(ctx, creds.RefreshToken)
+			if err == nil {
+				creds = refreshed
+			}
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", usageURL, nil)
@@ -120,6 +124,65 @@ type Credentials struct {
 // IsExpired checks if the token is expired.
 func (c *Credentials) IsExpired() bool {
 	return time.Now().Unix() >= int64(c.ExpiresAt)
+}
+
+// ExpiresWithin checks if the token expires within the given duration.
+func (c *Credentials) ExpiresWithin(d time.Duration) bool {
+	return time.Now().Add(d).Unix() >= int64(c.ExpiresAt)
+}
+
+// refreshAccessToken uses the refresh token to obtain a new access token,
+// writes the updated credentials to disk, and returns the new credentials.
+func (p *Provider) refreshAccessToken(ctx context.Context, refreshToken string) (*Credentials, error) {
+	form := fmt.Sprintf("client_id=%s&grant_type=refresh_token&refresh_token=%s", clientID, refreshToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(form))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("refresh returned %d", resp.StatusCode)
+	}
+
+	var tokenResp struct {
+		AccessToken  string  `json:"access_token"`
+		RefreshToken string  `json:"refresh_token"`
+		ExpiresIn    float64 `json:"expires_in"`
+		Scope        string  `json:"scope"`
+		TokenType    string  `json:"token_type"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenResp); err != nil {
+		return nil, fmt.Errorf("decode refresh response: %w", err)
+	}
+
+	creds := &Credentials{
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		ExpiresAt:    float64(time.Now().Unix()) + tokenResp.ExpiresIn,
+		Scope:        tokenResp.Scope,
+		TokenType:    tokenResp.TokenType,
+	}
+
+	// Write refreshed credentials back to disk so Kimi CLI and future
+	// clawmeter polls pick them up.
+	home, err := os.UserHomeDir()
+	if err == nil {
+		path := filepath.Join(home, ".kimi", "credentials", "kimi-code.json")
+		data, err := json.Marshal(creds)
+		if err == nil {
+			os.WriteFile(path, data, 0600)
+		}
+	}
+
+	return creds, nil
 }
 
 // readCredentials reads Kimi OAuth credentials from the credentials file.

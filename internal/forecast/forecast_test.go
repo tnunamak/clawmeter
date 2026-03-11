@@ -188,14 +188,14 @@ func TestProjection_PaceIndicator(t *testing.T) {
 			want: "on pace",
 		},
 		{
-			name: "deficit with runs out",
+			name: "behind with runs out",
 			proj: Projection{Delta: 15, WillLastToReset: false, RunsOutIn: 2 * time.Hour},
-			want: "15% deficit",
+			want: "15% behind",
 		},
 		{
-			name: "reserve and lasts",
+			name: "ahead and lasts",
 			proj: Projection{Delta: -20, WillLastToReset: true},
-			want: "20% reserve",
+			want: "20% ahead",
 		},
 		{
 			name: "on pace boundary (delta=2)",
@@ -205,7 +205,7 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		{
 			name: "just beyond on pace (delta=3)",
 			proj: Projection{Delta: 3, WillLastToReset: true},
-			want: "3% deficit",
+			want: "3% behind",
 		},
 		{
 			name: "runs out includes duration",
