@@ -134,7 +134,6 @@ func Fetch(ctx context.Context, providerName string) *ProviderStatus {
 
 // FetchAll retrieves status only for the given provider names that have status pages.
 func FetchAll(ctx context.Context, providerNames []string) map[string]*ProviderStatus {
-	// Only fetch for providers that have a status page
 	var toFetch []string
 	for _, name := range providerNames {
 		if _, ok := StatusPages[name]; ok {
@@ -168,7 +167,6 @@ func FetchAll(ctx context.Context, providerNames []string) map[string]*ProviderS
 	return results
 }
 
-// componentStatusWeight maps statuspage.io component statuses to severity.
 var componentStatusWeight = map[string]int{
 	"operational":          0,
 	"under_maintenance":    1,
@@ -201,13 +199,11 @@ func fetchComponents(ctx context.Context, cfg statusPageConfig) *ProviderStatus 
 		return &ProviderStatus{Indicator: Unknown}
 	}
 
-	// Build set of component names to watch
 	watched := make(map[string]bool, len(cfg.Components))
 	for _, name := range cfg.Components {
 		watched[name] = true
 	}
 
-	// Find worst status among watched components
 	var worstWeight int
 	var worstStatus string
 	var worstName string

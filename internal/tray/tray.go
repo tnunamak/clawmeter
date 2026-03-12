@@ -5,6 +5,7 @@ package tray
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -77,20 +78,25 @@ func onReady() {
 
 	setIconByName("gray", icons.Gray)
 	systray.SetTitle("clawmeter")
-	systray.SetTooltip("Clawmeter — loading...")
+	systray.SetTooltip("Clawmeter — loading…")
 
-	// Build header
+	// ── Menu structure ──
+	// Version header
 	mHeader := systray.AddMenuItem(fmt.Sprintf("Clawmeter %s", version), "")
 	mHeader.Disable()
 	systray.AddSeparator()
+
+	// Alert line — shows most urgent issue, hidden when all clear
+	mAlert := systray.AddMenuItem("", "")
+	mAlert.Disable()
+	mAlert.Hide()
 
 	// Create registry and register providers
 	registry := provider.NewRegistry()
 	all.Register(registry, cfg)
 
-	// Provider menu items - dynamically created based on configured providers
+	// Provider menu items
 	providerMenus := make(map[string]*providerMenuItems)
-
 	for _, p := range registry.GetAll() {
 		if !p.IsConfigured() {
 			continue
@@ -104,13 +110,16 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	// Global menu items
-	mRefresh := systray.AddMenuItem("Refresh Now", "")
+	// Refresh
+	mRefresh := systray.AddMenuItem("Refresh now", "")
+
 	systray.AddSeparator()
 
+	// Reauth (hidden unless Claude is expired)
 	mReauth := systray.AddMenuItem("Run `claude` to reauth", "")
 	mReauth.Hide()
 
+	// Update
 	var pendingRelease *update.Release
 	mUpdate := systray.AddMenuItem("", "")
 	mUpdate.Hide()
@@ -120,26 +129,34 @@ func onReady() {
 	updateAutostartLabel(mAutostart)
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	// Guard against concurrent refreshes
+	// ── Refresh machinery ──
 	var refreshing sync.Mutex
 
-	// Collect configured provider names once
+	setRefreshLabel := func(title string, enabled bool) {
+		mRefresh.SetTitle(title)
+		if enabled {
+			mRefresh.Enable()
+		} else {
+			mRefresh.Disable()
+		}
+	}
+
 	var configuredNames []string
 	for _, p := range registry.GetConfigured() {
 		configuredNames = append(configuredNames, p.Name())
 	}
 
-	// Refresh usage only (lightweight, runs every poll cycle)
 	refresh := func() {
 		if !refreshing.TryLock() {
-			return // already refreshing
+			return
 		}
 		defer refreshing.Unlock()
+		setRefreshLabel("Refreshing…", false)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// Split providers: fetch active ones, use cache for backed-off ones
+		// Split providers: active fetch vs backed-off cache
 		s.mu.Lock()
 		var toFetch []provider.Provider
 		skipped := make(map[string]*provider.UsageData)
@@ -156,16 +173,15 @@ func onReady() {
 
 		result := provider.FetchProvidersParallel(ctx, toFetch)
 
-		// Merge in cached data for backed-off providers
 		for name, cached := range skipped {
 			result.Results[name] = cached
 		}
 
-		// Apply failure gate: suppress transient errors when cached data exists
+		// Apply failure gate
 		s.mu.Lock()
 		for name, data := range result.Results {
 			if _, wasSkipped := skipped[name]; wasSkipped {
-				continue // already using cached data
+				continue
 			}
 			if data == nil {
 				continue
@@ -174,18 +190,15 @@ func onReady() {
 				s.failureGate.RecordSuccess(name)
 				continue
 			}
-			// Provider errored — check if we should suppress it
 			hasPrior := false
 			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.IsHealthy() {
 				hasPrior = true
 			}
 			if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
-				// First transient failure with prior data — keep showing cache silently
 				if prev, ok := s.lastResults[name]; ok && prev != nil {
 					result.Results[name] = prev
 				}
 			} else if hasPrior && len(data.Windows) == 0 {
-				// Persistent failure — fall back to cache but show the error
 				prev := s.lastResults[name]
 				prev.Error = data.Error + " (showing cached)"
 				result.Results[name] = prev
@@ -199,31 +212,26 @@ func onReady() {
 		s.mu.Lock()
 		s.lastResults = result.Results
 		s.lastRefreshAt = now
-		statuses := s.statuses // reuse last known statuses
+		statuses := s.statuses
 		s.mu.Unlock()
 
-		updateUI(result.Results, statuses, providerMenus, mReauth)
-		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
+		updateUI(result.Results, statuses, providerMenus, mReauth, mAlert)
+		setRefreshLabel("Refresh now · just now", true)
 	}
 
-	// Refresh status pages (heavier, runs less often)
 	refreshStatus := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
 		statuses := status.FetchAll(ctx, configuredNames)
-
 		s.mu.Lock()
 		s.statuses = statuses
 		lastResults := s.lastResults
 		s.mu.Unlock()
-
 		if lastResults != nil {
-			updateUI(lastResults, statuses, providerMenus, mReauth)
+			updateUI(lastResults, statuses, providerMenus, mReauth, mAlert)
 		}
 	}
 
-	// Check update function
 	checkUpdate := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -236,12 +244,11 @@ func onReady() {
 		mUpdate.Show()
 	}
 
-	// Apply update function
 	applyUpdate := func() {
 		if pendingRelease == nil {
 			return
 		}
-		mUpdate.SetTitle("Updating...")
+		mUpdate.SetTitle("Updating…")
 		mUpdate.Disable()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -255,32 +262,29 @@ func onReady() {
 		systray.Quit()
 	}
 
-	// Show cached data immediately while fetching fresh data
+	// Show cached data immediately
 	if cached, err := cache.Read(); err == nil && cached != nil {
 		s.mu.Lock()
 		s.lastResults = cached.ProviderData
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
-		updateUI(cached.ProviderData, nil, providerMenus, mReauth)
+		updateUI(cached.ProviderData, nil, providerMenus, mReauth, mAlert)
 	}
 
-	// Initial refresh in background (don't block tray UI)
 	go refresh()
 	go refreshStatus()
-
-	// Check for updates on startup
 	go checkUpdate()
 
-	// Setup tickers
+	// Tickers
 	pollInterval := time.Duration(cfg.Settings.PollInterval) * time.Second
 	if pollInterval < 60*time.Second {
-		pollInterval = 5 * time.Minute // minimum 5 minutes
+		pollInterval = 5 * time.Minute
 	}
 	ticker := time.NewTicker(pollInterval)
-	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
+	statusTicker := time.NewTicker(15 * time.Minute)
 	updateTicker := time.NewTicker(updateCheckInterval)
+	stalenessTicker := time.NewTicker(1 * time.Minute)
 
-	// Event loop (never blocks on network I/O)
 	go func() {
 		for {
 			select {
@@ -290,6 +294,13 @@ func onReady() {
 				go refreshStatus()
 			case <-updateTicker.C:
 				go checkUpdate()
+			case <-stalenessTicker.C:
+				s.mu.Lock()
+				t := s.lastRefreshAt
+				s.mu.Unlock()
+				if !t.IsZero() {
+					setRefreshLabel(fmt.Sprintf("Refresh now · %s ago", format.FormatDuration(time.Since(t))), true)
+				}
 			case <-mRefresh.ClickedCh:
 				go refresh()
 			case <-mUpdate.ClickedCh:
@@ -306,28 +317,30 @@ func onReady() {
 	}()
 }
 
-// providerMenuItems holds menu items for a single provider.
+// ═══════════════════════════════════════════════════════════════
+// Provider menu items
+// ═══════════════════════════════════════════════════════════════
+
 type providerMenuItems struct {
-	provider      provider.Provider
-	headerItem    *systray.MenuItem
-	statusItem    *systray.MenuItem
-	windowItems   []*systray.MenuItem
-	dashboardItem *systray.MenuItem
-	everHealthy   bool // true once we've seen a successful fetch
+	provider    provider.Provider
+	summaryItem *systray.MenuItem   // clickable, one-line: "● Claude — 66% / 33% left"
+	windowItems []*systray.MenuItem // detail rows, shown on expand
+	paceItem    *systray.MenuItem   // "⚠ 5h runs out in 38m at current pace"
+	dashItem    *systray.MenuItem   // "Open Claude Dashboard"
+	expanded    bool
+	everHealthy bool
+
+	// Track which detail items have content (since MenuItem.Title() is unexported)
+	activeWindows int  // how many windowItems have been populated
+	hasPaceWarn   bool // whether paceItem has content
 }
 
-const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
+const maxWindowItems = 8
 
 func createProviderMenuItems(p provider.Provider) *providerMenuItems {
-	// Provider header (disabled)
-	header := systray.AddMenuItem(p.DisplayName(), "")
-	header.Disable()
+	summary := systray.AddMenuItem(p.DisplayName()+" — loading…", "")
+	summary.Disable()
 
-	// Status item (shows loading/error)
-	statusItem := systray.AddMenuItem("Loading...", "")
-	statusItem.Disable()
-
-	// Pre-create window items (hidden until populated)
 	windowItems := make([]*systray.MenuItem, maxWindowItems)
 	for i := range windowItems {
 		item := systray.AddMenuItem("", "")
@@ -336,124 +349,309 @@ func createProviderMenuItems(p provider.Provider) *providerMenuItems {
 		windowItems[i] = item
 	}
 
-	// Dashboard item (clickable)
-	dashboardItem := systray.AddMenuItem(fmt.Sprintf("Open %s Dashboard", p.DisplayName()), p.DashboardURL())
+	pace := systray.AddMenuItem("", "")
+	pace.Disable()
+	pace.Hide()
+
+	dash := systray.AddMenuItem(fmt.Sprintf("  Open %s Dashboard", p.DisplayName()), p.DashboardURL())
+	dash.Hide()
 	go func() {
-		for range dashboardItem.ClickedCh {
+		for range dash.ClickedCh {
 			openURL(p.DashboardURL())
 		}
 	}()
 
 	systray.AddSeparator()
 
-	return &providerMenuItems{
-		provider:      p,
-		headerItem:    header,
-		statusItem:    statusItem,
-		windowItems:   windowItems,
-		dashboardItem: dashboardItem,
+	pmi := &providerMenuItems{
+		provider:    p,
+		summaryItem: summary,
+		windowItems: windowItems,
+		paceItem:    pace,
+		dashItem:    dash,
+	}
+
+	go func() {
+		for range summary.ClickedCh {
+			pmi.toggleExpand()
+		}
+	}()
+
+	return pmi
+}
+
+func (pmi *providerMenuItems) toggleExpand() {
+	pmi.expanded = !pmi.expanded
+	if pmi.expanded {
+		for i := 0; i < pmi.activeWindows && i < len(pmi.windowItems); i++ {
+			pmi.windowItems[i].Show()
+		}
+		if pmi.hasPaceWarn {
+			pmi.paceItem.Show()
+		}
+		pmi.dashItem.Show()
+	} else {
+		pmi.collapseDetail()
 	}
 }
 
-func hideProviderMenu(menu *providerMenuItems) {
-	menu.headerItem.Hide()
-	menu.statusItem.Hide()
-	for _, w := range menu.windowItems {
+func (pmi *providerMenuItems) collapseDetail() {
+	pmi.expanded = false
+	for _, w := range pmi.windowItems {
 		w.Hide()
 	}
-	menu.dashboardItem.Hide()
+	pmi.paceItem.Hide()
+	pmi.dashItem.Hide()
 }
 
-func showProviderHeader(menu *providerMenuItems) {
-	menu.headerItem.Show()
+func (pmi *providerMenuItems) hide() {
+	pmi.summaryItem.Hide()
+	pmi.collapseDetail()
 }
 
-func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem) {
-	hasExpiredClaude := false
-	highestUsage := 0.0
+// ═══════════════════════════════════════════════════════════════
+// Urgency classification
+// ═══════════════════════════════════════════════════════════════
 
-	for name, data := range results {
-		menu, ok := menus[name]
-		if !ok {
-			continue
-		}
+type providerUrgency struct {
+	tier            int // 0=expired, 1=errored, 2=critical(≥100%), 3=warning(≥90%), 4=healthy
+	maxProjectedPct float64
+	delta           float64
+	worstWindow     string
+	runsOutIn       time.Duration
+}
 
-		if data == nil {
-			showProviderHeader(menu)
-			menu.statusItem.SetTitle("No data")
-			menu.statusItem.Show()
-			continue
-		}
-
-		// Track providers that have worked at least once
-		if data.IsHealthy() {
-			menu.everHealthy = true
-		}
-
-		if data.IsExpired {
-			// Hide providers that have never worked (e.g. credentials on disk
-			// but no active subscription). Only show expired state for providers
-			// the user has actually used successfully before.
-			if !menu.everHealthy {
-				hideProviderMenu(menu)
-				continue
-			}
-			if name == "claude" {
-				hasExpiredClaude = true
-			}
-			showProviderHeader(menu)
-			expiredMsg := "Token expired"
-			if data.Error != "" {
-				expiredMsg = format.HumanizeError(data.Error)
-			}
-			menu.statusItem.SetTitle(expiredMsg)
-			menu.statusItem.Show()
-			continue
-		}
-
-		if data.Error != "" {
-			showProviderHeader(menu)
-			menu.statusItem.SetTitle(format.HumanizeError(data.Error))
-			menu.statusItem.Show()
-			menu.dashboardItem.Show()
-			continue
-		}
-
-		// Hide status, show window items
-		showProviderHeader(menu)
-		menu.statusItem.Hide()
-
-		for i, window := range data.Windows {
-			if i >= len(menu.windowItems) {
-				break
-			}
-
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			resetStr := format.FormatDuration(time.Until(window.ResetsAt))
-			menu.windowItems[i].SetTitle(fmt.Sprintf("%s: %.0f%% — %s — %s",
-				window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
-			menu.windowItems[i].Show()
-
-			if window.Utilization > highestUsage {
-				highestUsage = window.Utilization
-			}
-		}
-
-		for i := len(data.Windows); i < len(menu.windowItems); i++ {
-			menu.windowItems[i].Hide()
-		}
-
-		menu.dashboardItem.Show()
+func classify(data *provider.UsageData) providerUrgency {
+	if data == nil {
+		return providerUrgency{tier: 1}
+	}
+	if data.IsExpired {
+		return providerUrgency{tier: 0, maxProjectedPct: 100}
+	}
+	if data.Error != "" && len(data.Windows) == 0 {
+		return providerUrgency{tier: 1}
 	}
 
-	// Show/hide reauth button (only for Claude expired tokens)
+	var maxPct, worstDelta float64
+	var worstWin string
+	var runsOut time.Duration
+	for _, w := range data.Windows {
+		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
+		if proj.ProjectedPct > maxPct {
+			maxPct = proj.ProjectedPct
+			worstDelta = proj.Delta
+			worstWin = w.Name
+			runsOut = proj.RunsOutIn
+		}
+	}
+
+	tier := 4
+	if maxPct >= 100 {
+		tier = 2
+	} else if maxPct >= 90 {
+		tier = 3
+	}
+
+	return providerUrgency{tier: tier, maxProjectedPct: maxPct, delta: worstDelta, worstWindow: worstWin, runsOutIn: runsOut}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// updateUI — the core refresh that rewrites all menu content
+// ═══════════════════════════════════════════════════════════════
+
+func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth, mAlert *systray.MenuItem) {
+	hasExpiredClaude := false
+
+	// ── Classify and sort ──
+	type entry struct {
+		name    string
+		display string
+		data    *provider.UsageData
+		menu    *providerMenuItems
+		u       providerUrgency
+	}
+	var entries []entry
+
+	for name, menu := range menus {
+		data := results[name]
+		if data != nil && data.IsHealthy() {
+			menu.everHealthy = true
+		}
+		// Hide never-healthy expired providers
+		if data != nil && data.IsExpired && !menu.everHealthy {
+			menu.hide()
+			continue
+		}
+		if data != nil && data.IsExpired && name == "claude" {
+			hasExpiredClaude = true
+		}
+		entries = append(entries, entry{
+			name:    name,
+			display: menu.provider.DisplayName(),
+			data:    data,
+			menu:    menu,
+			u:       classify(data),
+		})
+	}
+
+	// Sort: worst first
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].u.tier != entries[j].u.tier {
+			return entries[i].u.tier < entries[j].u.tier
+		}
+		return entries[i].u.maxProjectedPct > entries[j].u.maxProjectedPct
+	})
+
+	// ── Alert header ──
+	if len(entries) > 0 {
+		worst := entries[0]
+		switch {
+		case worst.u.tier == 0:
+			mAlert.SetTitle("✗ " + worst.display + " token expired")
+			mAlert.Show()
+		case worst.u.tier == 1:
+			mAlert.SetTitle("✗ " + worst.display + " error")
+			mAlert.Show()
+		case worst.u.tier <= 3:
+			label := worst.display
+			if worst.u.worstWindow != "" {
+				label += " " + worst.u.worstWindow
+			}
+			if worst.u.runsOutIn > 0 {
+				mAlert.SetTitle(fmt.Sprintf("⚠ %s runs out in %s", label, format.FormatDuration(worst.u.runsOutIn)))
+			} else {
+				absDelta := math.Abs(worst.u.delta)
+				pace := "on pace"
+				if absDelta > 2 {
+					if worst.u.delta > 0 {
+						pace = fmt.Sprintf("%.0f%% behind", absDelta)
+					} else {
+						pace = fmt.Sprintf("%.0f%% ahead", absDelta)
+					}
+				}
+				mAlert.SetTitle(fmt.Sprintf("⚠ %s %s", label, pace))
+			}
+			mAlert.Show()
+		default:
+			mAlert.Hide()
+		}
+	} else {
+		mAlert.Hide()
+	}
+
+	// ── Update each provider row ──
+	for _, e := range entries {
+		m := e.menu
+		data := e.data
+
+		// No data
+		if data == nil {
+			m.summaryItem.SetTitle("? " + e.display + " — no data")
+			m.summaryItem.Show()
+			m.summaryItem.Disable()
+			m.collapseDetail()
+			continue
+		}
+
+		// Expired
+		if data.IsExpired {
+			msg := "expired, reauth needed"
+			if data.Error != "" {
+				msg = format.HumanizeError(data.Error)
+			}
+			m.summaryItem.SetTitle("✗ " + e.display + " — " + msg)
+			m.summaryItem.Show()
+			m.summaryItem.Disable()
+			m.collapseDetail()
+			continue
+		}
+
+		// Error with no windows
+		if data.Error != "" && len(data.Windows) == 0 {
+			m.summaryItem.SetTitle("? " + e.display + " — " + format.HumanizeError(data.Error))
+			m.summaryItem.Show()
+			m.summaryItem.Disable()
+			m.collapseDetail()
+			continue
+		}
+
+		// ── Healthy / has windows ──
+		m.summaryItem.SetTitle(buildSummary(e.display, data, e.u))
+		m.summaryItem.Show()
+		m.summaryItem.Enable()
+
+		// Populate detail rows
+		var worstWinForPace *provider.UsageWindow
+		var worstProj forecast.Projection
+
+		activeCount := 0
+		for i, w := range data.Windows {
+			if i >= len(m.windowItems) {
+				break
+			}
+			proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
+
+			left := 100 - w.Utilization
+			if left < 0 {
+				left = 0
+			}
+
+			resetStr := "just reset"
+			if rem := time.Until(w.ResetsAt); rem > 0 {
+				resetStr = "resets " + format.FormatDuration(rem)
+			}
+
+			verdict := "will last"
+			if !proj.WillLastToReset && proj.RunsOutIn > 0 {
+				verdict = "runs out " + format.FormatDuration(proj.RunsOutIn)
+			}
+
+			m.windowItems[i].SetTitle(fmt.Sprintf("  %-7s %2.0f%% left · %s · %s", w.Name, left, resetStr, verdict))
+			activeCount++
+
+			if !proj.WillLastToReset && proj.RunsOutIn > 0 {
+				if worstWinForPace == nil || proj.ProjectedPct > worstProj.ProjectedPct {
+					wCopy := w
+					worstWinForPace = &wCopy
+					worstProj = proj
+				}
+			}
+		}
+		for i := len(data.Windows); i < len(m.windowItems); i++ {
+			m.windowItems[i].SetTitle("")
+			m.windowItems[i].Hide()
+		}
+		m.activeWindows = activeCount
+
+		if worstWinForPace != nil {
+			m.paceItem.SetTitle(fmt.Sprintf("  ⚠ %s runs out in %s at current pace", worstWinForPace.Name, format.FormatDuration(worstProj.RunsOutIn)))
+			m.hasPaceWarn = true
+		} else {
+			m.paceItem.SetTitle("")
+			m.paceItem.Hide()
+			m.hasPaceWarn = false
+		}
+
+		// If expanded, ensure new items are visible
+		if m.expanded {
+			for i := 0; i < m.activeWindows && i < len(m.windowItems); i++ {
+				m.windowItems[i].Show()
+			}
+			if m.hasPaceWarn {
+				m.paceItem.Show()
+			}
+			m.dashItem.Show()
+		}
+	}
+
+	// Reauth button
 	if hasExpiredClaude {
 		mReauth.Show()
 	} else {
 		mReauth.Hide()
 	}
 
-	// Build display names map and filtered results (exclude never-healthy providers)
+	// ── Dynamic gauge icon ──
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	for name, menu := range menus {
@@ -463,89 +661,136 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 	}
 
-	// Update icon and title based on worst usage (only active providers)
-	updateTrayIcon(activeResults)
-	updateTrayTitle(activeResults)
-	updateTrayTooltip(activeResults, statuses, displayNames)
+	bars := classifyForIcon(activeResults)
+	if len(bars) > 0 {
+		iconData := renderGaugeIcon(bars, 64)
+		setDynamicIcon(iconData)
+	} else {
+		setIconByName("gray", icons.Gray)
+	}
 
-	// Check notification thresholds
+	updateTrayTitle(activeResults, displayNames)
+	updateTrayTooltip(activeResults, statuses, displayNames)
 	checkThresholds(results, displayNames)
 }
 
-func updateTrayIcon(results map[string]*provider.UsageData) {
-	worstProjected := 0.0
+// ═══════════════════════════════════════════════════════════════
+// Summary line builder
+// ═══════════════════════════════════════════════════════════════
 
-	for _, data := range results {
-		if data == nil || data.Error != "" || data.IsExpired {
-			continue
+func buildSummary(display string, data *provider.UsageData, u providerUrgency) string {
+	dot := "●"
+	if u.tier == 2 {
+		dot = "✗"
+	} else if u.tier == 3 {
+		dot = "⚠"
+	}
+
+	if len(data.Windows) == 0 {
+		return dot + " " + display
+	}
+
+	// Single window
+	if len(data.Windows) == 1 {
+		w := data.Windows[0]
+		left := 100 - w.Utilization
+		if left < 0 {
+			left = 0
 		}
+		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
+		if !proj.WillLastToReset && proj.RunsOutIn > 0 {
+			return fmt.Sprintf("%s %s — %.0f%% left, runs out %s", dot, display, left, format.FormatDuration(proj.RunsOutIn))
+		}
+		return fmt.Sprintf("%s %s — %.0f%% left on %s", dot, display, left, w.Name)
+	}
 
-		for _, window := range data.Windows {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			if proj.ProjectedPct > worstProjected {
-				worstProjected = proj.ProjectedPct
+	// Multiple windows — if urgent, lead with the trouble window
+	if u.runsOutIn > 0 && u.worstWindow != "" {
+		for _, w := range data.Windows {
+			if w.Name == u.worstWindow {
+				left := 100 - w.Utilization
+				if left < 0 {
+					left = 0
+				}
+				return fmt.Sprintf("%s %s — %s at %.0f%%, runs out %s",
+					dot, display, w.Name, left, format.FormatDuration(u.runsOutIn))
 			}
 		}
 	}
 
-	switch {
-	case worstProjected >= 100:
-		setIconByName("red", icons.Red)
-	case worstProjected >= 90:
-		setIconByName("yellow", icons.Yellow)
-	case worstProjected > 0:
-		setIconByName("green", icons.Green)
-	default:
-		setIconByName("gray", icons.Gray)
+	// Otherwise show compact % left per window
+	parts := make([]string, 0, len(data.Windows))
+	for _, w := range data.Windows {
+		left := 100 - w.Utilization
+		if left < 0 {
+			left = 0
+		}
+		parts = append(parts, fmt.Sprintf("%.0f%%", left))
 	}
+	return fmt.Sprintf("%s %s — %s left", dot, display, strings.Join(parts, " / "))
 }
 
-func updateTrayTitle(results map[string]*provider.UsageData) {
-	var title string
-	worstPct := 0.0
-	worstProvider := ""
+// ═══════════════════════════════════════════════════════════════
+// Tray title and tooltip
+// ═══════════════════════════════════════════════════════════════
 
-	for _, name := range sortedKeys(results) {
-		data := results[name]
-		if data == nil {
-			continue
-		}
-
-		display := name
-		// Capitalize first letter for display
-		if len(display) > 0 {
-			display = strings.ToUpper(display[:1]) + display[1:]
-		}
-
-		if data.IsExpired {
-			// Expired always takes priority as the "worst"
-			title = display + " expired"
-			break
-		}
-
-		if data.Error != "" && len(data.Windows) == 0 {
-			// Track error but keep looking for expired (higher priority)
-			if title == "" {
-				title = display + " error"
-			}
-			continue
-		}
-
-		for _, window := range data.Windows {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			if proj.ProjectedPct > worstPct {
-				worstPct = proj.ProjectedPct
-				worstProvider = display
-			}
-		}
+func updateTrayTitle(results map[string]*provider.UsageData, displayNames map[string]string) {
+	type ranked struct {
+		display string
+		u       providerUrgency
+		data    *provider.UsageData
 	}
+	var items []ranked
+	for name, data := range results {
+		d := displayNames[name]
+		if d == "" {
+			d = name
+		}
+		items = append(items, ranked{d, classify(data), data})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].u.tier != items[j].u.tier {
+			return items[i].u.tier < items[j].u.tier
+		}
+		return items[i].u.maxProjectedPct > items[j].u.maxProjectedPct
+	})
 
-	// If no expired/error took priority, show the worst provider by projected usage
-	if title == "" {
-		if worstProvider != "" {
-			title = fmt.Sprintf("%s %.0f%%", worstProvider, worstPct)
-		} else {
-			title = "clawmeter"
+	var title string
+	if len(items) == 0 {
+		title = "clawmeter"
+	} else {
+		w := items[0]
+		switch w.u.tier {
+		case 0:
+			title = w.display + " expired"
+		case 1:
+			title = w.display + " error"
+		case 2, 3:
+			if w.u.worstWindow != "" {
+				title = fmt.Sprintf("%s %s tight", w.display, w.u.worstWindow)
+			} else {
+				title = w.display + " tight"
+			}
+		default:
+			// All healthy — show least remaining
+			worstLeft := 100.0
+			worstD := ""
+			for _, it := range items {
+				if it.data == nil {
+					continue
+				}
+				for _, win := range it.data.Windows {
+					if l := 100 - win.Utilization; l < worstLeft {
+						worstLeft = l
+						worstD = it.display
+					}
+				}
+			}
+			if worstD != "" {
+				title = fmt.Sprintf("%s %.0f%% left", worstD, worstLeft)
+			} else {
+				title = "clawmeter"
+			}
 		}
 	}
 
@@ -562,13 +807,11 @@ func updateTrayTitle(results map[string]*provider.UsageData) {
 
 func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, displayNames map[string]string) {
 	var blocks []string
-
 	for _, name := range sortedKeys(results) {
 		data := results[name]
 		if data == nil {
 			continue
 		}
-
 		display := displayNames[name]
 		if display == "" {
 			display = name
@@ -582,44 +825,45 @@ func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[stri
 			blocks = append(blocks, fmt.Sprintf("%s: %s", display, format.HumanizeError(msg)))
 			continue
 		}
-
 		if data.Error != "" && len(data.Windows) == 0 {
 			blocks = append(blocks, fmt.Sprintf("%s: error — %s", display, format.HumanizeError(data.Error)))
 			continue
 		}
 
-		var windowLines []string
-		for _, window := range data.Windows {
-			remaining := time.Until(window.ResetsAt)
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			var line string
-			if remaining <= 0 {
-				line = fmt.Sprintf("  %s: %.0f%%  just reset", window.Name, window.Utilization)
-			} else {
-				line = fmt.Sprintf("  %s: %.0f%%  resets %s", window.Name, window.Utilization, format.FormatDuration(remaining))
-				if window.Utilization > 0 {
-					line += "  " + proj.PaceIndicator()
-				}
+		var lines []string
+		for _, w := range data.Windows {
+			left := 100 - w.Utilization
+			if left < 0 {
+				left = 0
 			}
-			windowLines = append(windowLines, line)
+			rem := time.Until(w.ResetsAt)
+			proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
+			verdict := "will last"
+			if !proj.WillLastToReset && proj.RunsOutIn > 0 {
+				verdict = "runs out " + format.FormatDuration(proj.RunsOutIn)
+			}
+			if rem <= 0 {
+				lines = append(lines, fmt.Sprintf("  %s: %.0f%% left · just reset", w.Name, left))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s: %.0f%% left · resets %s · %s", w.Name, left, format.FormatDuration(rem), verdict))
+			}
 		}
-
-		block := display + "\n" + strings.Join(windowLines, "\n")
-		blocks = append(blocks, block)
+		blocks = append(blocks, display+"\n"+strings.Join(lines, "\n"))
 	}
 
 	var tooltip string
 	if len(blocks) > 0 {
 		tooltip = strings.Join(blocks, "\n\n")
 		s.mu.Lock()
-		refreshTime := s.lastRefreshAt
+		t := s.lastRefreshAt
 		s.mu.Unlock()
-		if !refreshTime.IsZero() {
-			tooltip += "\n\nUpdated " + format.FormatDuration(time.Since(refreshTime)) + " ago"
+		if !t.IsZero() {
+			tooltip += "\n\nUpdated " + format.FormatDuration(time.Since(t)) + " ago"
 		}
 	} else {
 		tooltip = "Clawmeter — no providers configured"
 	}
+
 	s.mu.Lock()
 	changed := tooltip != s.currentTooltip
 	if changed {
@@ -631,6 +875,10 @@ func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[stri
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Notifications
+// ═══════════════════════════════════════════════════════════════
+
 func checkThresholds(results map[string]*provider.UsageData, displayNames map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -639,50 +887,45 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 		s.lastResults = make(map[string]*provider.UsageData)
 	}
 
-	warningThreshold := 80.0
-	criticalThreshold := 95.0
+	warnAt := 80.0
+	critAt := 95.0
 	if cfg != nil {
-		warningThreshold = cfg.Settings.NotificationThresholds.Warning
-		criticalThreshold = cfg.Settings.NotificationThresholds.Critical
+		warnAt = cfg.Settings.NotificationThresholds.Warning
+		critAt = cfg.Settings.NotificationThresholds.Critical
 	}
 
 	for name, data := range results {
 		if data == nil || data.Error != "" {
 			continue
 		}
-
 		oldData, hadOld := s.lastResults[name]
-
-		for _, window := range data.Windows {
-			pct := window.Utilization
+		for _, w := range data.Windows {
+			pct := w.Utilization
 			oldPct := 0.0
-
 			if hadOld && oldData != nil {
-				if oldWindow, ok := oldData.GetWindow(window.Name); ok {
-					oldPct = oldWindow.Utilization
+				if ow, ok := oldData.GetWindow(w.Name); ok {
+					oldPct = ow.Utilization
 				}
 			}
-
 			display := displayNames[name]
 			if display == "" {
 				display = name
 			}
-
-			if pct >= criticalThreshold && oldPct < criticalThreshold {
+			if pct >= critAt && oldPct < critAt {
 				notify(fmt.Sprintf("%s usage critical", display),
-					fmt.Sprintf("%s window at %.0f%% — rate limiting likely before reset", window.Name, pct),
-					"critical")
-			} else if pct >= warningThreshold && oldPct < warningThreshold {
+					fmt.Sprintf("%s window at %.0f%% — rate limiting likely before reset", w.Name, pct), "critical")
+			} else if pct >= warnAt && oldPct < warnAt {
 				notify(fmt.Sprintf("%s usage warning", display),
-					fmt.Sprintf("%s window at %.0f%% — on pace to reach limit", window.Name, pct),
-					"normal")
+					fmt.Sprintf("%s window at %.0f%% — on pace to reach limit", w.Name, pct), "normal")
 			}
 		}
 	}
-
-	// Update stored results
 	s.lastResults = results
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════
 
 func setErrorState(msg string) {
 	setIconByName("gray", icons.Gray)
@@ -748,4 +991,3 @@ func sortedKeys(m map[string]*provider.UsageData) []string {
 	sort.Strings(keys)
 	return keys
 }
-
