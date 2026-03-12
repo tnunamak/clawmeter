@@ -27,7 +27,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "jetbrains" }
+func (p *Provider) Name() string         { return "jetbrains" }
 func (p *Provider) DisplayName() string  { return "JetBrains" }
 func (p *Provider) Description() string  { return "JetBrains AI Assistant (via local config)" }
 func (p *Provider) DashboardURL() string { return "https://account.jetbrains.com/usage" }

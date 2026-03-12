@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	repo       = "tnunamak/clawmeter"
-	apiURL     = "https://api.github.com/repos/" + repo + "/releases/latest"
+	repo        = "tnunamak/clawmeter"
+	apiURL      = "https://api.github.com/repos/" + repo + "/releases/latest"
 	httpTimeout = 15 * time.Second
 )
 

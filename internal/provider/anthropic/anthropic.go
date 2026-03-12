@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	usageURL        = "https://api.anthropic.com/api/oauth/usage"
-	tokenURL        = "https://platform.claude.com/v1/oauth/token"
-	oauthClientID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	betaHeader      = "oauth-2025-04-20"
-	timeout         = 15 * time.Second
+	usageURL      = "https://api.anthropic.com/api/oauth/usage"
+	tokenURL      = "https://platform.claude.com/v1/oauth/token"
+	oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	betaHeader    = "oauth-2025-04-20"
+	timeout       = 15 * time.Second
 )
 
 // Provider implements the provider.Provider interface for Anthropic/Claude.
@@ -362,13 +362,13 @@ func (p *Provider) writeCredentials(creds *Credentials) error {
 
 // Internal API response types.
 type usageResponse struct {
-	FiveHour         *usageWindow `json:"five_hour,omitempty"`
-	SevenDay         *usageWindow `json:"seven_day,omitempty"`
-	SevenDayOAuthApps *usageWindow `json:"seven_day_oauth_apps,omitempty"`
-	SevenDayOpus     *usageWindow `json:"seven_day_opus,omitempty"`
-	SevenDaySonnet   *usageWindow `json:"seven_day_sonnet,omitempty"`
-	IguanaNecktie    *usageWindow `json:"iguana_necktie,omitempty"`
-	ExtraUsage       *extraUsageWindow `json:"extra_usage,omitempty"`
+	FiveHour          *usageWindow      `json:"five_hour,omitempty"`
+	SevenDay          *usageWindow      `json:"seven_day,omitempty"`
+	SevenDayOAuthApps *usageWindow      `json:"seven_day_oauth_apps,omitempty"`
+	SevenDayOpus      *usageWindow      `json:"seven_day_opus,omitempty"`
+	SevenDaySonnet    *usageWindow      `json:"seven_day_sonnet,omitempty"`
+	IguanaNecktie     *usageWindow      `json:"iguana_necktie,omitempty"`
+	ExtraUsage        *extraUsageWindow `json:"extra_usage,omitempty"`
 }
 
 type usageWindow struct {
@@ -377,7 +377,7 @@ type usageWindow struct {
 }
 
 type extraUsageWindow struct {
-	IsEnabled   bool    `json:"is_enabled"`
+	IsEnabled    bool    `json:"is_enabled"`
 	MonthlyLimit float64 `json:"monthly_limit"`
 	UsedCredits  float64 `json:"used_credits"`
 	Utilization  float64 `json:"utilization"`

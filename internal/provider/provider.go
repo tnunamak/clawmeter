@@ -41,11 +41,11 @@ type UsageWindow struct {
 
 // UsageData contains usage information for a provider.
 type UsageData struct {
-	Provider  string        `json:"provider"`            // Provider name
-	FetchedAt time.Time     `json:"fetched_at"`          // When this data was fetched
-	Windows   []UsageWindow `json:"windows"`             // Usage windows (providers may have 1 or more)
+	Provider  string        `json:"provider"`             // Provider name
+	FetchedAt time.Time     `json:"fetched_at"`           // When this data was fetched
+	Windows   []UsageWindow `json:"windows"`              // Usage windows (providers may have 1 or more)
 	IsExpired bool          `json:"is_expired,omitempty"` // True if credentials are expired
-	Error     string        `json:"error,omitempty"`     // Error message if fetch failed
+	Error     string        `json:"error,omitempty"`      // Error message if fetch failed
 }
 
 // IsHealthy returns true if the usage data was fetched successfully.
@@ -130,9 +130,9 @@ func (r *Registry) GetConfigured() []Provider {
 // errors when prior cached data is available, and backs off polling for
 // persistently failing providers. Modeled after CodexBar's ConsecutiveFailureGate.
 type FailureGate struct {
-	streaks   map[string]int
-	backoffs  map[string]time.Duration
-	nextPoll  map[string]time.Time
+	streaks  map[string]int
+	backoffs map[string]time.Duration
+	nextPoll map[string]time.Time
 }
 
 const (

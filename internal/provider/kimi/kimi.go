@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	usageURL     = "https://api.kimi.com/coding/v1/usages"
-	tokenURL     = "https://auth.kimi.com/api/oauth/token"
-	clientID     = "17e5f671-d194-4dfb-9706-5516cb48c098"
-	timeout      = 5 * time.Second
+	usageURL         = "https://api.kimi.com/coding/v1/usages"
+	tokenURL         = "https://auth.kimi.com/api/oauth/token"
+	clientID         = "17e5f671-d194-4dfb-9706-5516cb48c098"
+	timeout          = 5 * time.Second
 	refreshThreshold = 5 * time.Minute
 )
 
@@ -261,45 +261,45 @@ type usageResponse struct {
 
 // usageSummary represents the overall usage summary (weekly limit).
 type usageSummary struct {
-	Name      string      `json:"name,omitempty"`
-	Title     string      `json:"title,omitempty"`
-	Used      jsonInt    `json:"used,omitempty"`
-	Limit     jsonInt    `json:"limit,omitempty"`
-	Remaining jsonInt    `json:"remaining,omitempty"`
-	ResetAt   string      `json:"reset_at,omitempty"`   // ISO timestamp
-	ResetTime string     `json:"resetTime,omitempty"`  // Alternative field name
-	ResetIn   int         `json:"reset_in,omitempty"`   // Seconds until reset
-	TTL       int         `json:"ttl,omitempty"`        // Seconds until reset
+	Name      string  `json:"name,omitempty"`
+	Title     string  `json:"title,omitempty"`
+	Used      jsonInt `json:"used,omitempty"`
+	Limit     jsonInt `json:"limit,omitempty"`
+	Remaining jsonInt `json:"remaining,omitempty"`
+	ResetAt   string  `json:"reset_at,omitempty"`  // ISO timestamp
+	ResetTime string  `json:"resetTime,omitempty"` // Alternative field name
+	ResetIn   int     `json:"reset_in,omitempty"`  // Seconds until reset
+	TTL       int     `json:"ttl,omitempty"`       // Seconds until reset
 }
 
 // limitItem represents a single rate limit window.
 type limitItem struct {
-	Name    string         `json:"name,omitempty"`
-	Title   string         `json:"title,omitempty"`
-	Scope   string         `json:"scope,omitempty"`
-	Detail  limitDetail    `json:"detail,omitempty"`
-	Window  *limitWindow   `json:"window,omitempty"`
-	ResetAt string         `json:"reset_at,omitempty"`
-	ResetIn int            `json:"reset_in,omitempty"`
+	Name    string       `json:"name,omitempty"`
+	Title   string       `json:"title,omitempty"`
+	Scope   string       `json:"scope,omitempty"`
+	Detail  limitDetail  `json:"detail,omitempty"`
+	Window  *limitWindow `json:"window,omitempty"`
+	ResetAt string       `json:"reset_at,omitempty"`
+	ResetIn int          `json:"reset_in,omitempty"`
 }
 
 // limitDetail contains the actual limit numbers.
 type limitDetail struct {
-	Name      string   `json:"name,omitempty"`
-	Title     string   `json:"title,omitempty"`
-	Used      jsonInt  `json:"used,omitempty"`
-	Limit     jsonInt  `json:"limit,omitempty"`
-	Remaining jsonInt  `json:"remaining,omitempty"`
-	ResetAt   string   `json:"reset_at,omitempty"`
-	ResetTime string   `json:"resetTime,omitempty"` // Alternative field name
-	ResetIn   int      `json:"reset_in,omitempty"`
-	TTL       int      `json:"ttl,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	Title     string  `json:"title,omitempty"`
+	Used      jsonInt `json:"used,omitempty"`
+	Limit     jsonInt `json:"limit,omitempty"`
+	Remaining jsonInt `json:"remaining,omitempty"`
+	ResetAt   string  `json:"reset_at,omitempty"`
+	ResetTime string  `json:"resetTime,omitempty"` // Alternative field name
+	ResetIn   int     `json:"reset_in,omitempty"`
+	TTL       int     `json:"ttl,omitempty"`
 }
 
 // limitWindow describes the time window for the limit.
 type limitWindow struct {
-	Duration int    `json:"duration,omitempty"`  // e.g., 300
-	TimeUnit string `json:"timeUnit,omitempty"`  // e.g., "MINUTES"
+	Duration int    `json:"duration,omitempty"` // e.g., 300
+	TimeUnit string `json:"timeUnit,omitempty"` // e.g., "MINUTES"
 }
 
 // transformUsage converts the Kimi API response to our standard format.

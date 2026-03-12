@@ -38,7 +38,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "gemini" }
+func (p *Provider) Name() string         { return "gemini" }
 func (p *Provider) DisplayName() string  { return "Gemini" }
 func (p *Provider) Description() string  { return "Google Gemini (via OAuth credentials)" }
 func (p *Provider) DashboardURL() string { return "https://aistudio.google.com" }
@@ -215,9 +215,9 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 	}
 
 	type tierInfo struct {
-		worst    float64
-		resetAt  time.Time
-		found    bool
+		worst   float64
+		resetAt time.Time
+		found   bool
 	}
 	pro := tierInfo{worst: 1.0}
 	flash := tierInfo{worst: 1.0}

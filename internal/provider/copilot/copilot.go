@@ -33,7 +33,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "copilot" }
+func (p *Provider) Name() string         { return "copilot" }
 func (p *Provider) DisplayName() string  { return "Copilot" }
 func (p *Provider) Description() string  { return "GitHub Copilot (via GitHub token)" }
 func (p *Provider) DashboardURL() string { return "https://github.com/settings/copilot" }

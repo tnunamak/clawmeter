@@ -31,7 +31,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "openrouter" }
+func (p *Provider) Name() string         { return "openrouter" }
 func (p *Provider) DisplayName() string  { return "OpenRouter" }
 func (p *Provider) Description() string  { return "OpenRouter (via OPENROUTER_API_KEY)" }
 func (p *Provider) DashboardURL() string { return "https://openrouter.ai/credits" }

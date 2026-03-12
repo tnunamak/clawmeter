@@ -1,0 +1,27 @@
+========================================
+NETI SCAN REPORT
+========================================
+
+SCAN SUMMARY: 60 files | 103246 tokens | Clean
+
+
+
+========================================
+NETI LOCALITY REPORT
+========================================
+
+Mode: warn
+Edges analyzed: 0
+Violations: 0
+Cycles: 0
+Result: PASS
+
+
+========================================
+NETI COMMANDS REPORT
+========================================
+
+$ go vet ./...
+> FAIL (0ms)
+Failed to execute: No such file or directory (os error 2)
+

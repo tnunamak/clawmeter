@@ -29,7 +29,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{cfg: cfg}
 }
 
-func (p *Provider) Name() string        { return "zai" }
+func (p *Provider) Name() string         { return "zai" }
 func (p *Provider) DisplayName() string  { return "z.ai" }
 func (p *Provider) Description() string  { return "Zhipu AI / GLM (via Z_AI_API_KEY)" }
 func (p *Provider) DashboardURL() string { return "https://z.ai/manage-apikey/subscription" }
@@ -118,10 +118,10 @@ func (p *Provider) getQuotaURL() string {
 // API response types
 
 type apiResponse struct {
-	Code    int      `json:"code"`
-	Msg     string   `json:"msg"`
-	Success bool     `json:"success"`
-	Data    apiData  `json:"data"`
+	Code    int     `json:"code"`
+	Msg     string  `json:"msg"`
+	Success bool    `json:"success"`
+	Data    apiData `json:"data"`
 }
 
 type apiData struct {
@@ -130,14 +130,14 @@ type apiData struct {
 }
 
 type apiLimit struct {
-	Type          string  `json:"type"`           // "TOKENS_LIMIT" or "TIME_LIMIT"
-	Unit          int     `json:"unit"`            // 0=unknown, 1=days, 3=hours, 5=minutes
-	Number        int     `json:"number"`          // multiplier for unit
-	Usage         *int64  `json:"usage"`           // total limit
-	CurrentValue  *int64  `json:"currentValue"`    // amount used
-	Remaining     *int64  `json:"remaining"`
-	Percentage    int     `json:"percentage"`       // 0-100 fallback
-	NextResetTime int64   `json:"nextResetTime"`   // milliseconds epoch
+	Type          string `json:"type"`         // "TOKENS_LIMIT" or "TIME_LIMIT"
+	Unit          int    `json:"unit"`         // 0=unknown, 1=days, 3=hours, 5=minutes
+	Number        int    `json:"number"`       // multiplier for unit
+	Usage         *int64 `json:"usage"`        // total limit
+	CurrentValue  *int64 `json:"currentValue"` // amount used
+	Remaining     *int64 `json:"remaining"`
+	Percentage    int    `json:"percentage"`    // 0-100 fallback
+	NextResetTime int64  `json:"nextResetTime"` // milliseconds epoch
 }
 
 func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {

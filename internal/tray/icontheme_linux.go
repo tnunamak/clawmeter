@@ -63,6 +63,24 @@ func setIconByName(name string, _ []byte) {
 	systray.SetIconNameWithPixmap(iconName, pixmaps)
 }
 
+// setDynamicIcon sets the tray icon from dynamically rendered PNG data.
+// On Linux, we generate a temporary icon name and provide multi-size pixmaps.
+func setDynamicIcon(pngData []byte) {
+	// Reset the named icon tracking so we always update
+	currentIconName = ""
+
+	// Decode the provided PNG (assumed to be the canonical size, e.g. 64px)
+	// and provide re-rendered versions at standard sizes
+	pixmaps := make([][]byte, 0, 3)
+	for _, size := range []int{16, 32, 64} {
+		pixmaps = append(pixmaps, resizePNG(pngData, size))
+	}
+
+	// Use a stable icon name with pixmap data — the pixmap is the actual
+	// rendered gauge, the name is just for StatusNotifierItem protocol.
+	systray.SetIconNameWithPixmap("clawmeter-gauge", pixmaps)
+}
+
 func resizePNG(data []byte, size int) []byte {
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {

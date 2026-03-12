@@ -58,11 +58,11 @@ func TestFailureGate_PerProvider(t *testing.T) {
 func TestFailureGate_BackoffGrows(t *testing.T) {
 	g := NewFailureGate()
 
-	g.ShouldSurfaceError("claude", true)  // backoff = 5m
-	g.ShouldSurfaceError("claude", true)  // backoff = 10m
-	g.ShouldSurfaceError("claude", true)  // backoff = 20m
-	g.ShouldSurfaceError("claude", true)  // backoff = 30m (cap)
-	g.ShouldSurfaceError("claude", true)  // backoff = 30m (stays capped)
+	g.ShouldSurfaceError("claude", true) // backoff = 5m
+	g.ShouldSurfaceError("claude", true) // backoff = 10m
+	g.ShouldSurfaceError("claude", true) // backoff = 20m
+	g.ShouldSurfaceError("claude", true) // backoff = 30m (cap)
+	g.ShouldSurfaceError("claude", true) // backoff = 30m (stays capped)
 
 	if g.backoffs["claude"] != maxBackoff {
 		t.Errorf("backoff = %v, want %v", g.backoffs["claude"], maxBackoff)

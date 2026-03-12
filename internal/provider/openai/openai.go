@@ -28,7 +28,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "openai" }
+func (p *Provider) Name() string         { return "openai" }
 func (p *Provider) DisplayName() string  { return "OpenAI" }
 func (p *Provider) Description() string  { return "OpenAI/Codex (via codex CLI)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
@@ -138,8 +138,8 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 // Account response types
 
 type accountResponse struct {
-	Account           *accountDetails `json:"account"`
-	RequiresOpenAIAuth bool           `json:"requiresOpenaiAuth"`
+	Account            *accountDetails `json:"account"`
+	RequiresOpenAIAuth bool            `json:"requiresOpenaiAuth"`
 }
 
 type accountDetails struct {
