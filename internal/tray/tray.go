@@ -18,6 +18,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/shellpath"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -49,6 +50,7 @@ var (
 
 func Run(ver string) int {
 	version = ver
+	shellpath.Init()
 	setupIconTheme()
 	systray.Run(onReady, func() {
 		cleanupIconTheme()
