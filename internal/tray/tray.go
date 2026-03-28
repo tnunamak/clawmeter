@@ -476,8 +476,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 func updateTrayIcon(results map[string]*provider.UsageData) {
 	worstProjected := 0.0
+	worstProvider := ""
+	worstUtilization := 0.0
 
-	for _, data := range results {
+	for name, data := range results {
 		if data == nil || data.Error != "" || data.IsExpired {
 			continue
 		}
@@ -486,20 +488,16 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 			if proj.ProjectedPct > worstProjected {
 				worstProjected = proj.ProjectedPct
+				worstProvider = name
+				worstUtilization = window.Utilization
 			}
 		}
 	}
 
-	switch {
-	case worstProjected >= 100:
-		setIconByName("red", icons.Red)
-	case worstProjected >= 90:
-		setIconByName("yellow", icons.Yellow)
-	case worstProjected > 0:
-		setIconByName("green", icons.Green)
-	default:
-		setIconByName("gray", icons.Gray)
-	}
+	// Generate a dynamic icon: provider logo inside crawfish gauge
+	logo := icons.ProviderLogos[worstProvider]
+	iconData := icons.GenerateIcon(logo, worstUtilization, 128)
+	setIconDynamic(worstProvider, worstUtilization, iconData)
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
@@ -742,12 +740,43 @@ func notify(title, body, urgency string) {
 	}
 }
 
+// sortedKeys returns provider names sorted by severity (worst first).
+// Expired > error > highest projected usage > alphabetical.
 func sortedKeys(m map[string]*provider.UsageData) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		di, dj := m[keys[i]], m[keys[j]]
+		si, sj := providerSeverity(di), providerSeverity(dj)
+		if si != sj {
+			return si > sj // higher severity first
+		}
+		return keys[i] < keys[j] // alphabetical tiebreak
+	})
 	return keys
+}
+
+// providerSeverity returns a numeric severity score for sorting.
+// Higher = more urgent.
+func providerSeverity(data *provider.UsageData) float64 {
+	if data == nil {
+		return -1
+	}
+	if data.IsExpired {
+		return 10000 // expired always on top
+	}
+	if data.Error != "" && len(data.Windows) == 0 {
+		return 9000 // error next
+	}
+	worst := 0.0
+	for _, w := range data.Windows {
+		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
+		if proj.ProjectedPct > worst {
+			worst = proj.ProjectedPct
+		}
+	}
+	return worst
 }
 

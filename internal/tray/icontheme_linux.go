@@ -63,6 +63,43 @@ func setIconByName(name string, _ []byte) {
 	systray.SetIconNameWithPixmap(iconName, pixmaps)
 }
 
+func setIconDynamic(providerName string, pct float64, data128 []byte) {
+	// Use a unique icon name per provider so KDE picks up the change
+	iconName := fmt.Sprintf("clawmeter-dyn-%s", providerName)
+	if providerName == "" {
+		iconName = "clawmeter-dyn-none"
+	}
+
+	// Write to icon theme at multiple sizes
+	home, err := os.UserHomeDir()
+	if err == nil {
+		base := filepath.Join(home, ".local", "share", "icons", "hicolor")
+		for _, size := range []int{16, 22, 24, 32, 48, 64, 128} {
+			dir := filepath.Join(base, fmt.Sprintf("%dx%d", size, size), "status")
+			os.MkdirAll(dir, 0755)
+			os.WriteFile(filepath.Join(dir, iconName+".png"),
+				icons.GenerateIcon(icons.ProviderLogos[providerName], pct, size), 0644)
+		}
+	}
+
+	if iconName == currentIconName {
+		// Same provider — force pixmap update (icon name unchanged so KDE won't re-read theme)
+		pixmaps := make([][]byte, 0, 3)
+		for _, size := range []int{16, 32, 64} {
+			pixmaps = append(pixmaps, icons.GenerateIcon(icons.ProviderLogos[providerName], pct, size))
+		}
+		systray.SetIconNameWithPixmap(iconName, pixmaps)
+		return
+	}
+
+	currentIconName = iconName
+	pixmaps := make([][]byte, 0, 3)
+	for _, size := range []int{16, 32, 64} {
+		pixmaps = append(pixmaps, icons.GenerateIcon(icons.ProviderLogos[providerName], pct, size))
+	}
+	systray.SetIconNameWithPixmap(iconName, pixmaps)
+}
+
 func resizePNG(data []byte, size int) []byte {
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
