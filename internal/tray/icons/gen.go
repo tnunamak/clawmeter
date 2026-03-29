@@ -3,7 +3,6 @@ package icons
 import (
 	"bytes"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/png"
 	_ "embed"
@@ -84,20 +83,7 @@ func GenerateIcon(providerLogo []byte, usagePct float64, size int) []byte {
 	dst := image.NewRGBA(image.Rect(0, 0, workSize, workSize))
 
 	// 1. Provider logo as full-size base layer.
-	// The logos are white-on-transparent — render them white on a dark circle.
-	cx, cy := workSize/2, workSize/2
-	bgR := workSize/2 - 2
-	for y := 0; y < workSize; y++ {
-		for x := 0; x < workSize; x++ {
-			dx, dy := x-cx, y-cy
-			if dx*dx+dy*dy <= bgR*bgR {
-				dst.Set(x, y, color.RGBA{26, 26, 46, 255})
-			}
-		}
-	}
-
-	// Scale logo to ~85% of the icon and center it
-	logoSize := int(float64(workSize) * 0.85)
+	logoSize := int(float64(workSize) * 0.95)
 	logoResized := resize(logoImg, logoSize)
 	lx := (workSize - logoSize) / 2
 	ly := (workSize - logoSize) / 2
