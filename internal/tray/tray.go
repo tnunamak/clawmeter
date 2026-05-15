@@ -68,14 +68,8 @@ func onReady() {
 		return
 	}
 
-	// Auto-enable launch at login on first run
-	if !autostart.IsInstalled() {
-		if err := autostart.Install(); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: warning: failed to enable autostart: %v\n", err)
-		} else {
-			notify("Clawmeter", "Enabled launch at login. Disable from the tray menu.", "low")
-		}
-	}
+	// Launch at login is opt-in: the user enables it from the tray menu.
+	// Do not silently persist anything on first run.
 
 	setIconByName("gray", icons.Gray)
 	systray.SetTitle("clawmeter")
@@ -691,6 +685,11 @@ func setErrorState(msg string) {
 }
 
 func updateAutostartLabel(m *systray.MenuItem) {
+	if !autostart.IsSupported() {
+		m.SetTitle("Launch at login (unsupported on this OS)")
+		m.Disable()
+		return
+	}
 	if autostart.IsInstalled() {
 		m.SetTitle("✓ Launch at login")
 	} else {
@@ -699,10 +698,20 @@ func updateAutostartLabel(m *systray.MenuItem) {
 }
 
 func toggleAutostart(m *systray.MenuItem) {
+	if !autostart.IsSupported() {
+		updateAutostartLabel(m)
+		return
+	}
 	if autostart.IsInstalled() {
-		autostart.Uninstall()
+		if err := autostart.Uninstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: failed to disable launch at login: %v\n", err)
+			notify("Clawmeter", fmt.Sprintf("Could not disable launch at login: %v", err), "normal")
+		}
 	} else {
-		autostart.Install()
+		if err := autostart.Install(); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: failed to enable launch at login: %v\n", err)
+			notify("Clawmeter", fmt.Sprintf("Could not enable launch at login: %v", err), "normal")
+		}
 	}
 	updateAutostartLabel(m)
 }

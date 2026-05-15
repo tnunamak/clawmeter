@@ -6,7 +6,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
+
+// IsSupported reports whether autostart is implemented for the current OS.
+// Tray UI uses this to decide whether to expose the toggle at all.
+func IsSupported() bool {
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		return true
+	default:
+		return false
+	}
+}
 
 func Install() error {
 	bin, err := execPath()
@@ -65,8 +77,13 @@ func execPath() (string, error) {
 }
 
 // Linux: XDG autostart .desktop file
+//
+// Per the Desktop Entry spec, the Exec= value is parsed with shell-like
+// quoting: backslash, backtick, dollar sign and double-quote are reserved
+// inside quoted strings. We always wrap the path in double quotes and
+// escape the reserved characters so paths with spaces or symbols still work.
 
-const desktopEntry = `[Desktop Entry]
+const desktopEntryTemplate = `[Desktop Entry]
 Type=Application
 Name=Clawmeter
 Comment=AI usage monitor
@@ -74,6 +91,21 @@ Exec=%s tray
 Terminal=false
 X-GNOME-Autostart-enabled=true
 `
+
+func renderDesktopEntry(bin string) string {
+	return fmt.Sprintf(desktopEntryTemplate, escapeDesktopExec(bin))
+}
+
+func escapeDesktopExec(s string) string {
+	// Reserved characters per the Desktop Entry "Quoting" section.
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"`", "\\`",
+		`$`, `\$`,
+	)
+	return `"` + replacer.Replace(s) + `"`
+}
 
 func linuxDesktopPath() (string, error) {
 	configDir, err := os.UserConfigDir()
@@ -91,7 +123,7 @@ func installLinux(bin string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(fmt.Sprintf(desktopEntry, bin)), 0644)
+	return os.WriteFile(path, []byte(renderDesktopEntry(bin)), 0644)
 }
 
 func uninstallLinux() error {
@@ -99,16 +131,18 @@ func uninstallLinux() error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); os.IsNotExist(err) {
-		return nil
-	} else {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	return nil
 }
 
 // macOS: LaunchAgent plist
+//
+// The path is interpolated into a <string> element, so it must be
+// XML-escaped to keep the plist valid for paths containing &, <, or >.
 
-const launchAgentPlist = `<?xml version="1.0" encoding="UTF-8"?>
+const launchAgentPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -127,6 +161,21 @@ const launchAgentPlist = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+func renderLaunchAgentPlist(bin string) string {
+	return fmt.Sprintf(launchAgentPlistTemplate, escapeXML(bin))
+}
+
+func escapeXML(s string) string {
+	replacer := strings.NewReplacer(
+		`&`, `&amp;`,
+		`<`, `&lt;`,
+		`>`, `&gt;`,
+		`"`, `&quot;`,
+		`'`, `&apos;`,
+	)
+	return replacer.Replace(s)
+}
+
 func darwinPlistPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -143,7 +192,7 @@ func installDarwin(bin string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(fmt.Sprintf(launchAgentPlist, bin)), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(renderLaunchAgentPlist(bin)), 0644); err != nil {
 		return err
 	}
 	return exec.Command("launchctl", "load", path).Run()
@@ -155,9 +204,8 @@ func uninstallDarwin() error {
 		return err
 	}
 	exec.Command("launchctl", "unload", path).Run()
-	if err := os.Remove(path); os.IsNotExist(err) {
-		return nil
-	} else {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	return nil
 }
