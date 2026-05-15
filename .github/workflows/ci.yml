@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux tray deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libayatana-appindicator3-dev
+
+      - name: go vet (no tags)
+        run: go vet ./...
+
+      - name: go vet (tray)
+        run: go vet -tags tray ./...
+
+      - name: go test (no tags)
+        run: go test ./...
+
+      - name: go test (tray)
+        run: go test -tags tray ./...
+
+      - name: Build smoke (no tray)
+        run: go build ./cmd/clawmeter
+
+      - name: Build smoke (tray)
+        run: go build -tags tray ./cmd/clawmeter

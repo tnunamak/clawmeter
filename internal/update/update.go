@@ -14,9 +14,18 @@ import (
 )
 
 const (
-	repo       = "tnunamak/clawmeter"
-	apiURL     = "https://api.github.com/repos/" + repo + "/releases/latest"
-	httpTimeout = 15 * time.Second
+	repo            = "tnunamak/clawmeter"
+	defaultAPIURL   = "https://api.github.com/repos/" + repo + "/releases/latest"
+	defaultDLPrefix = "https://github.com/" + repo + "/releases/download"
+	httpTimeout     = 15 * time.Second
+)
+
+// apiURL and dlPrefix are overridable by tests via the package-level
+// Check function below. They are not exported to keep the public API stable.
+var (
+	apiURL    = defaultAPIURL
+	dlPrefix  = defaultDLPrefix
+	httpClient = &http.Client{Timeout: httpTimeout}
 )
 
 type Release struct {
@@ -31,11 +40,14 @@ type ghRelease struct {
 // Check queries GitHub for the latest release and returns it if newer
 // than currentVersion. Returns nil if already up to date.
 func Check(ctx context.Context, currentVersion string) (*Release, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	return checkWith(ctx, currentVersion, apiURL, dlPrefix, httpClient)
+}
+
+func checkWith(ctx context.Context, currentVersion, api, dl string, client *http.Client) (*Release, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", api, nil)
 	if err != nil {
 		return nil, fmt.Errorf("check update: %w", err)
 	}
-	client := &http.Client{Timeout: httpTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("check update: %w", err)
@@ -65,8 +77,8 @@ func Check(ctx context.Context, currentVersion string) (*Release, error) {
 		ext = ".exe"
 	}
 	url := fmt.Sprintf(
-		"https://github.com/%s/releases/download/%s/clawmeter-%s-%s%s",
-		repo, rel.TagName, runtime.GOOS, runtime.GOARCH, ext,
+		"%s/%s/clawmeter-%s-%s%s",
+		dl, rel.TagName, runtime.GOOS, runtime.GOARCH, ext,
 	)
 
 	return &Release{Version: rel.TagName, URL: url}, nil

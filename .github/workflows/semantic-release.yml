@@ -11,7 +11,27 @@ permissions:
   pull-requests: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux tray deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libayatana-appindicator3-dev
+
+      - run: go vet ./...
+      - run: go vet -tags tray ./...
+      - run: go test ./...
+      - run: go test -tags tray ./...
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       new_release: ${{ steps.semantic.outputs.new_release_published }}
