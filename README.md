@@ -19,7 +19,44 @@ brew services start clawmeter   # start tray
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
-Downloads the binary to `~/.local/bin`, starts the system tray, and enables launch at login. Installs tray dependencies automatically if missing.
+Default behavior: download the binary to `~/.local/bin` and ensure that directory is on `PATH`. The tray is NOT started, launch-at-login is NOT enabled, and no system packages are installed. On Linux, the tray dependency `libayatana-appindicator3` is installed only when you pass `--start` or `--autostart` (and only if passwordless `sudo` is already available — the script never prompts for a password).
+
+To install and start the tray for this session (does not enable launch-at-login):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --start
+```
+
+To install and enable launch-at-login (and start the tray now):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --start --autostart
+```
+
+You can also enable launch-at-login at any time without re-running the installer:
+
+```bash
+clawmeter tray --install     # enable launch-at-login
+clawmeter tray --uninstall   # disable launch-at-login
+```
+
+Preview what the installer would do without making any changes:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --dry-run
+curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --help
+```
+
+Flags:
+
+| Flag | Effect |
+|------|--------|
+| `--start` | Launch the tray now for this session. Does not enable launch-at-login. |
+| `--autostart` | Enable launch-at-login via `clawmeter tray --install`. Combine with `--start` to also launch the tray now. |
+| `--dry-run` | Print what would happen — no downloads, no installs, no file writes, no tray launch. Combine with any other flag (e.g. `--uninstall --dry-run`). |
+| `--no-modify-path` | Do not edit shell rc files to add `INSTALL_DIR` to `PATH`. Same as `NO_MODIFY_PATH=1`. |
+| `--uninstall` | Remove the binary, autostart entries, cache, and installer-added `PATH` lines. |
+| `--help`, `-h` | Print usage and exit. |
 
 #### .deb / .rpm
 
@@ -134,7 +171,7 @@ clawmeter version                  # show version
 
 ## System tray
 
-The installer starts the tray automatically. To launch manually: `clawmeter tray`
+Launch the tray manually with `clawmeter tray`, or pass `--start` to `install.sh`.
 
 - Color-coded icon: green (on pace), yellow (tight), red (projected to exceed), gray (expired)
 - Hover tooltip shows usage for all providers

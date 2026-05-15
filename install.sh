@@ -13,7 +13,20 @@ warn() { printf "  \033[33mwarning:\033[0m %s\n" "$@" >&2; }
 err() { printf "  \033[31merror:\033[0m %s\n" "$@" >&2; }
 
 ensure() {
+  if [ "$DRY_RUN" = "1" ]; then
+    say "[dry-run] would run: $*"
+    return 0
+  fi
   if ! "$@"; then err "command failed: $*"; exit 1; fi
+}
+
+# Run a shell command string, or echo it in dry-run mode.
+run() {
+  if [ "$DRY_RUN" = "1" ]; then
+    say "[dry-run] would run: $*"
+    return 0
+  fi
+  eval "$@"
 }
 
 need_cmd() {
@@ -23,42 +36,147 @@ need_cmd() {
   fi
 }
 
+print_help() {
+  cat <<EOF
+Usage: install.sh [options]
+
+Install or uninstall clawmeter.
+
+By default this script downloads the latest clawmeter release binary into
+\$INSTALL_DIR (default: ~/.local/bin) and ensures that directory is on PATH.
+It does NOT launch the tray, enable launch-at-login, or install system
+packages unless you ask for it. On Linux, the tray dependency
+(libayatana-appindicator3) is only installed when --start or --autostart
+is passed, and only when passwordless sudo is already available.
+
+Options:
+  --help                  Show this help and exit.
+  --dry-run               Print what would happen without making changes.
+                          No network downloads, no file writes, no package
+                          installs, no tray launch.
+  --start                 After install, start the tray daemon for this
+                          session. Does NOT enable launch-at-login — pass
+                          --autostart for that, or use the tray menu.
+  --autostart             After install, enable launch-at-login by running
+                          'clawmeter tray --install'. Can be combined with
+                          --start to also launch the tray now.
+  --no-modify-path        Do not edit shell rc files to add INSTALL_DIR to
+                          PATH. Equivalent to setting NO_MODIFY_PATH=1.
+  --uninstall             Remove the binary, autostart entries, cache, and
+                          installer-added PATH lines. Combine with --dry-run
+                          to preview the removals.
+  -h                      Alias for --help.
+
+Environment variables:
+  INSTALL_DIR             Install location (default: ~/.local/bin).
+  NO_MODIFY_PATH          If non-empty, do not edit shell rc files.
+
+Examples:
+  sh install.sh                          # install binary only
+  sh install.sh --start                  # install + start tray now (no autostart)
+  sh install.sh --autostart              # install + enable launch-at-login
+  sh install.sh --start --autostart      # install, start now, and on every login
+  sh install.sh --dry-run                # preview an install
+  sh install.sh --uninstall              # remove everything
+  sh install.sh --uninstall --dry-run    # preview uninstall
+EOF
+}
+
+# --- Argument parsing (parse everything before any side effect) ---
+
+DRY_RUN=0
+DO_UNINSTALL=0
+DO_START=0
+DO_AUTOSTART=0
+SHOW_HELP=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)        SHOW_HELP=1 ;;
+    --dry-run)        DRY_RUN=1 ;;
+    --uninstall)      DO_UNINSTALL=1 ;;
+    --start)          DO_START=1 ;;
+    --autostart)      DO_AUTOSTART=1 ;;
+    --no-modify-path) NO_MODIFY_PATH=1 ;;
+    --)               ;;
+    -*)
+      err "unknown option: $arg"
+      err "run 'install.sh --help' for usage"
+      exit 2
+      ;;
+    *)
+      err "unexpected argument: $arg"
+      err "run 'install.sh --help' for usage"
+      exit 2
+      ;;
+  esac
+done
+
+if [ "$SHOW_HELP" = "1" ]; then
+  print_help
+  exit 0
+fi
+
+if [ "$DRY_RUN" = "1" ]; then
+  say "Dry run: no files will be written, no commands executed, no downloads made."
+fi
+
 # --- Uninstall ---
 
-if [ "${1:-}" = "--uninstall" ]; then
+if [ "$DO_UNINSTALL" = "1" ]; then
   say "Uninstalling ${BINARY}..."
-  pkill -x "$BINARY" 2>/dev/null || true
+  if [ "$DRY_RUN" = "1" ]; then
+    say "[dry-run] would stop any running '${BINARY}' process"
+  else
+    pkill -x "$BINARY" 2>/dev/null || true
+  fi
 
   # Remove binary
   if [ -f "${INSTALL_DIR}/${BINARY}" ]; then
-    rm -f "${INSTALL_DIR}/${BINARY}"
-    say "Removed ${INSTALL_DIR}/${BINARY}"
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would remove ${INSTALL_DIR}/${BINARY}"
+    else
+      rm -f "${INSTALL_DIR}/${BINARY}"
+      say "Removed ${INSTALL_DIR}/${BINARY}"
+    fi
   fi
 
   # Remove macOS LaunchAgent
   _plist="${HOME}/Library/LaunchAgents/com.clawmeter.tray.plist"
   if [ -f "$_plist" ]; then
-    launchctl unload "$_plist" 2>/dev/null || true
-    rm -f "$_plist"
-    say "Removed LaunchAgent"
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would unload and remove LaunchAgent ${_plist}"
+    else
+      launchctl unload "$_plist" 2>/dev/null || true
+      rm -f "$_plist"
+      say "Removed LaunchAgent"
+    fi
   fi
 
   # Remove Linux autostart
   _desktop="${HOME}/.config/autostart/clawmeter.desktop"
   if [ -f "$_desktop" ]; then
-    rm -f "$_desktop"
-    say "Removed autostart entry"
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would remove autostart entry ${_desktop}"
+    else
+      rm -f "$_desktop"
+      say "Removed autostart entry"
+    fi
   fi
 
   # Remove PATH entry from shell rc files
   for _f in .bashrc .bash_profile .zshrc .zprofile .profile; do
     _rc="${HOME}/${_f}"
     if [ -f "$_rc" ] && grep -q "# Added by clawmeter installer" "$_rc" 2>/dev/null; then
-      # Remove the comment line and the export line that follows it
-      sed -i.bak '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null || \
-        sed -i '' '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null
-      rm -f "${_rc}.bak"
-      say "Removed PATH entry from ${_rc}"
+      if [ "$DRY_RUN" = "1" ]; then
+        say "[dry-run] would remove PATH entry from ${_rc}"
+      else
+        # Remove the comment line and the export line that follows it
+        sed -i.bak '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null || \
+          sed -i '' '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null
+        rm -f "${_rc}.bak"
+        say "Removed PATH entry from ${_rc}"
+      fi
     fi
   done
   # Also check ZDOTDIR
@@ -66,16 +184,26 @@ if [ "${1:-}" = "--uninstall" ]; then
     for _f in .zshrc .zprofile; do
       _rc="${ZDOTDIR}/${_f}"
       if [ -f "$_rc" ] && grep -q "# Added by clawmeter installer" "$_rc" 2>/dev/null; then
-        sed -i.bak '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null || \
-          sed -i '' '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null
-        rm -f "${_rc}.bak"
-        say "Removed PATH entry from ${_rc}"
+        if [ "$DRY_RUN" = "1" ]; then
+          say "[dry-run] would remove PATH entry from ${_rc}"
+        else
+          sed -i.bak '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null || \
+            sed -i '' '/# Added by clawmeter installer/{N;d;}' "$_rc" 2>/dev/null
+          rm -f "${_rc}.bak"
+          say "Removed PATH entry from ${_rc}"
+        fi
       fi
     done
   fi
 
   # Remove cache
-  rm -rf "${HOME}/.cache/clawmeter"
+  if [ -d "${HOME}/.cache/clawmeter" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would remove ${HOME}/.cache/clawmeter"
+    else
+      rm -rf "${HOME}/.cache/clawmeter"
+    fi
+  fi
 
   say "Done."
   exit 0
@@ -113,13 +241,46 @@ case "$ARCH" in
   *)       err "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
+ASSET_NAME="${BINARY}-${OS}-${ARCH}"
+
+# --- Dry run short-circuit ---
+# In dry-run we describe what would happen without touching the network or disk.
+
+if [ "$DRY_RUN" = "1" ]; then
+  say "[dry-run] would resolve latest release of ${REPO} containing asset ${ASSET_NAME}"
+  say "[dry-run] would download ${ASSET_NAME} to a temp directory and verify it"
+  say "[dry-run] would install to ${INSTALL_DIR}/${BINARY} (sudo if not writable)"
+  if [ -n "$NO_MODIFY_PATH" ]; then
+    say "[dry-run] would NOT modify PATH (NO_MODIFY_PATH set / --no-modify-path)"
+  else
+    say "[dry-run] would ensure ${INSTALL_DIR} is on PATH via shell rc file"
+  fi
+  if [ "$OS" = "linux" ]; then
+    if [ "$DO_START" = "1" ] || [ "$DO_AUTOSTART" = "1" ]; then
+      say "[dry-run] on Linux: would install libayatana-appindicator3 via the system package manager if missing (requires passwordless sudo; gated on --start/--autostart)"
+    else
+      say "[dry-run] on Linux: would NOT install any system packages (no --start or --autostart given)"
+    fi
+  fi
+  if [ "$DO_START" = "1" ]; then
+    say "[dry-run] would launch '${BINARY} tray' in the background (this session only)"
+  else
+    say "[dry-run] would NOT start the tray (pass --start to launch it)"
+  fi
+  if [ "$DO_AUTOSTART" = "1" ]; then
+    say "[dry-run] would enable launch-at-login via '${BINARY} tray --install'"
+  else
+    say "[dry-run] would NOT enable launch-at-login (pass --autostart to enable)"
+  fi
+  say "Done (dry-run)."
+  exit 0
+fi
+
 # --- Find latest release with binaries ---
 
 TMPDIR="$(mktemp -d)" || { err "failed to create temp directory"; exit 1; }
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
-
-ASSET_NAME="${BINARY}-${OS}-${ARCH}"
 
 # Fetch recent releases (not just latest — latest may still be building)
 download "https://api.github.com/repos/${REPO}/releases?per_page=5" "$TMPDIR/releases.json"
@@ -261,9 +422,14 @@ add_to_path() {
 add_to_path
 
 # --- Install tray dependency on Linux ---
+# Only runs when the user asked for tray-related side effects (--start or
+# --autostart). A default install touches no system packages and never
+# invokes sudo. Even when gated, we still require passwordless sudo so the
+# curl|sh path never hangs on a password prompt.
 
-if [ "$OS" = "linux" ] && ! ldconfig -p 2>/dev/null | grep -q libayatana-appindicator3; then
-  # Check if sudo is available without a password (avoid hanging when piped to sh)
+if [ "$OS" = "linux" ] \
+   && { [ "$DO_START" = "1" ] || [ "$DO_AUTOSTART" = "1" ]; } \
+   && ! ldconfig -p 2>/dev/null | grep -q libayatana-appindicator3; then
   if sudo -n true 2>/dev/null; then
     say "Installing tray dependency (libayatana-appindicator3)..."
     if command -v apt-get >/dev/null 2>&1; then
@@ -283,8 +449,29 @@ if [ "$OS" = "linux" ] && ! ldconfig -p 2>/dev/null | grep -q libayatana-appindi
   fi
 fi
 
-# --- Start tray ---
+# --- Enable launch-at-login (only if requested) ---
 
-say "Starting ${BINARY} tray..."
-nohup "${INSTALL_DIR}/${BINARY}" tray >/dev/null 2>&1 &
-say "Tray is running. It will auto-start on login from now on."
+if [ "$DO_AUTOSTART" = "1" ]; then
+  say "Enabling launch-at-login..."
+  if ! "${INSTALL_DIR}/${BINARY}" tray --install; then
+    warn "failed to enable launch-at-login"
+  fi
+fi
+
+# --- Start tray (only if requested) ---
+
+if [ "$DO_START" = "1" ]; then
+  say "Starting ${BINARY} tray..."
+  nohup "${INSTALL_DIR}/${BINARY}" tray >/dev/null 2>&1 &
+  say "Tray started for this session."
+fi
+
+# --- Closing guidance ---
+
+if [ "$DO_START" != "1" ] && [ "$DO_AUTOSTART" != "1" ]; then
+  say "Binary installed. To start the tray now, run: ${BINARY} tray"
+  say "To enable launch-at-login, run: ${BINARY} tray --install"
+  say "Or re-run this installer with --start and/or --autostart."
+elif [ "$DO_START" = "1" ] && [ "$DO_AUTOSTART" != "1" ]; then
+  say "Launch-at-login is NOT enabled. Run '${BINARY} tray --install' or re-run with --autostart to enable it."
+fi
