@@ -1,9 +1,99 @@
 package provider
 
 import (
+	"context"
 	"testing"
 	"time"
 )
+
+// stubProvider is a minimal Provider for registry testing.
+type stubProvider struct {
+	name       string
+	configured bool
+}
+
+func (s *stubProvider) Name() string         { return s.name }
+func (s *stubProvider) DisplayName() string  { return s.name }
+func (s *stubProvider) Description() string  { return "" }
+func (s *stubProvider) DashboardURL() string { return "" }
+func (s *stubProvider) IsConfigured() bool   { return s.configured }
+func (s *stubProvider) FetchUsage(ctx context.Context) (*UsageData, error) {
+	return &UsageData{Provider: s.name, FetchedAt: time.Now()}, nil
+}
+
+// disabledSet is a tiny EnabledFilter for tests.
+type disabledSet map[string]bool
+
+func (d disabledSet) IsProviderDisabled(name string) bool { return d[name] }
+
+func TestGetConfigured_RespectsEnabledFilter(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(&stubProvider{name: "alpha", configured: true})
+	_ = r.Register(&stubProvider{name: "beta", configured: true})
+	_ = r.Register(&stubProvider{name: "gamma", configured: false})
+
+	// Without filter: both configured providers returned.
+	names := providerNames(r.GetConfigured())
+	if want := []string{"alpha", "beta"}; !equalSlice(names, want) {
+		t.Errorf("no filter: got %v, want %v", names, want)
+	}
+
+	// With filter disabling beta: only alpha returned.
+	r.SetEnabledFilter(disabledSet{"beta": true})
+	names = providerNames(r.GetConfigured())
+	if want := []string{"alpha"}; !equalSlice(names, want) {
+		t.Errorf("with filter: got %v, want %v", names, want)
+	}
+
+	// Disabling an unconfigured provider has no effect.
+	r.SetEnabledFilter(disabledSet{"gamma": true})
+	names = providerNames(r.GetConfigured())
+	if want := []string{"alpha", "beta"}; !equalSlice(names, want) {
+		t.Errorf("disable-unconfigured: got %v, want %v", names, want)
+	}
+
+	// Clearing the filter restores prior behavior.
+	r.SetEnabledFilter(nil)
+	names = providerNames(r.GetConfigured())
+	if want := []string{"alpha", "beta"}; !equalSlice(names, want) {
+		t.Errorf("nil filter: got %v, want %v", names, want)
+	}
+}
+
+func TestFetchAllParallel_SkipsDisabledProvider(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(&stubProvider{name: "alpha", configured: true})
+	_ = r.Register(&stubProvider{name: "beta", configured: true})
+	r.SetEnabledFilter(disabledSet{"beta": true})
+
+	result := FetchAllParallel(context.Background(), r)
+	if _, ok := result.Results["alpha"]; !ok {
+		t.Error("alpha should have been fetched")
+	}
+	if _, ok := result.Results["beta"]; ok {
+		t.Error("beta is disabled and must not be fetched")
+	}
+}
+
+func providerNames(ps []Provider) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Name())
+	}
+	return out
+}
+
+func equalSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 func TestFailureGate_SuppressesFirstFailure(t *testing.T) {
 	g := NewFailureGate()

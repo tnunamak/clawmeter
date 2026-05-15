@@ -66,6 +66,7 @@ func (u *UsageData) GetWindow(name string) (*UsageWindow, bool) {
 // Registry holds all registered providers.
 type Registry struct {
 	providers map[string]Provider
+	filter    EnabledFilter
 }
 
 // NewRegistry creates a new provider registry.
@@ -73,6 +74,14 @@ func NewRegistry() *Registry {
 	return &Registry{
 		providers: make(map[string]Provider),
 	}
+}
+
+// SetEnabledFilter records an optional filter consulted by GetConfigured to
+// exclude providers the user has explicitly disabled. Without a filter,
+// GetConfigured returns all providers reporting credentials. Calling with
+// nil clears any previously-set filter.
+func (r *Registry) SetEnabledFilter(f EnabledFilter) {
+	r.filter = f
 }
 
 // Register adds a provider to the registry.
@@ -112,13 +121,26 @@ func (r *Registry) Has(name string) bool {
 	return ok
 }
 
-// GetConfigured returns only providers that are properly configured, in deterministic order.
+// EnabledFilter decides whether a provider has been explicitly disabled by
+// the user. Providers with no config entry are treated as auto-enabled when
+// detected, preserving the zero-config UX.
+type EnabledFilter interface {
+	IsProviderDisabled(name string) bool
+}
+
+// GetConfigured returns providers that should be polled: those with
+// credentials AND not explicitly disabled by the registry's configured
+// EnabledFilter. Order is deterministic.
 func (r *Registry) GetConfigured() []Provider {
 	result := make([]Provider, 0)
 	for _, p := range r.providers {
-		if p.IsConfigured() {
-			result = append(result, p)
+		if !p.IsConfigured() {
+			continue
 		}
+		if r.filter != nil && r.filter.IsProviderDisabled(p.Name()) {
+			continue
+		}
+		result = append(result, p)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name() < result[j].Name()
@@ -198,6 +220,8 @@ type MultiFetchResult struct {
 }
 
 // FetchAllParallel fetches usage from all configured providers in parallel.
+// Honors any EnabledFilter set on the registry, so explicitly disabled
+// providers are skipped.
 func FetchAllParallel(ctx context.Context, registry *Registry) *MultiFetchResult {
 	return FetchProvidersParallel(ctx, registry.GetConfigured())
 }

@@ -702,6 +702,11 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 		return 1
 	}
 
+	if cfg.IsProviderDisabled(providerName) {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider %q is disabled (run 'clawmeter config enable %s')\n", providerName, providerName)
+		return 2
+	}
+
 	if !p.IsConfigured() {
 		fmt.Fprintf(os.Stderr, "clawmeter: provider %q is not configured\n", providerName)
 		return 2

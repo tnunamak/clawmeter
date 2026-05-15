@@ -68,6 +68,17 @@ func (c *Config) GetProvider(name string) (ProviderConfig, bool) {
 	return pc, ok
 }
 
+// IsProviderDisabled reports whether the user has explicitly turned this
+// provider off. Providers with no config entry are treated as auto-enabled
+// (so detected credentials work without manual setup).
+func (c *Config) IsProviderDisabled(name string) bool {
+	pc, ok := c.Providers[name]
+	if !ok {
+		return false
+	}
+	return !pc.Enabled
+}
+
 // configPath returns the path to the config file.
 func configPath() (string, error) {
 	home, err := os.UserHomeDir()

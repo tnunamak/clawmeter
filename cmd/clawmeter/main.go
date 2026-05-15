@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
@@ -154,13 +155,20 @@ func configShowCmd(args []string) int {
 		return 1
 	}
 
-	fmt.Println("Providers:")
+	fmt.Println("Providers (config entries):")
+	if len(cfg.Providers) == 0 {
+		fmt.Println("  (none — detected providers run by default)")
+	}
 	for name, pc := range cfg.Providers {
-		status := "disabled"
+		state := "disabled"
 		if pc.Enabled {
-			status = "enabled"
+			state = "enabled"
 		}
-		fmt.Printf("  %s: %s\n", name, status)
+		marker := ""
+		if !all.IsKnown(name) {
+			marker = "  (unknown provider name — ignored)"
+		}
+		fmt.Printf("  %s: %s%s\n", name, state, marker)
 		if pc.APIKey != "" {
 			show := pc.APIKey
 			if len(show) > 4 {
@@ -254,16 +262,26 @@ func configSetCmd(args []string) int {
 }
 
 func configEnableCmd(args []string, enable bool) int {
+	action := "enable"
+	if !enable {
+		action = "disable"
+	}
 	if len(args) < 1 {
-		action := "enable"
-		if !enable {
-			action = "disable"
-		}
 		fmt.Fprintf(os.Stderr, "Usage: clawmeter config %s <provider>\n", action)
+		fmt.Fprintf(os.Stderr, "Known providers: %s\n", strings.Join(all.Names(), ", "))
 		return 1
 	}
 
 	providerName := args[0]
+
+	if !all.IsKnown(providerName) {
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", providerName)
+		if suggestion := all.Suggest(providerName); suggestion != "" {
+			fmt.Fprintf(os.Stderr, "  did you mean %q?\n", suggestion)
+		}
+		fmt.Fprintf(os.Stderr, "  known providers: %s\n", strings.Join(all.Names(), ", "))
+		return 1
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -278,11 +296,11 @@ func configEnableCmd(args []string, enable bool) int {
 		return 1
 	}
 
-	action := "Enabled"
+	verb := "Enabled"
 	if !enable {
-		action = "Disabled"
+		verb = "Disabled"
 	}
-	fmt.Printf("%s provider: %s\n", action, providerName)
+	fmt.Printf("%s provider: %s\n", verb, providerName)
 	return 0
 }
 
@@ -298,16 +316,7 @@ func providersCmd(args []string) int {
 	fmt.Println()
 
 	for _, p := range registry.GetAll() {
-		st := "not configured"
-		if pc, ok := cfg.Providers[p.Name()]; ok {
-			if pc.Enabled {
-				st = "enabled"
-			} else {
-				st = "disabled"
-			}
-		} else if p.IsConfigured() {
-			st = "detected"
-		}
+		st := describeProviderState(p, cfg)
 
 		indicator := "○"
 		if st == "enabled" || st == "detected" {
@@ -319,9 +328,35 @@ func providersCmd(args []string) int {
 		fmt.Println()
 	}
 
-	fmt.Println("Use 'clawmeter config enable <provider>' to enable a provider.")
-	fmt.Println("Detected providers will be auto-enabled when you run 'clawmeter'.")
+	fmt.Println("Legend:")
+	fmt.Println("  detected      credentials found, will be polled")
+	fmt.Println("  enabled       explicitly enabled in config, will be polled")
+	fmt.Println("  disabled      explicitly disabled in config, will NOT be polled")
+	fmt.Println("  no credentials  no credentials detected; nothing to poll")
+	fmt.Println()
+	fmt.Println("Use 'clawmeter config enable <provider>' to opt a provider in,")
+	fmt.Println("'clawmeter config disable <provider>' to opt out.")
 	return 0
+}
+
+// describeProviderState returns one of: "enabled", "disabled", "detected",
+// "configured but no credentials", or "no credentials". This is the
+// user-facing summary of how a provider will be treated.
+func describeProviderState(p provider.Provider, cfg *config.Config) string {
+	pc, hasEntry := cfg.Providers[p.Name()]
+	configured := p.IsConfigured()
+	switch {
+	case hasEntry && !pc.Enabled:
+		return "disabled"
+	case hasEntry && pc.Enabled && configured:
+		return "enabled"
+	case hasEntry && pc.Enabled && !configured:
+		return "enabled but no credentials"
+	case configured:
+		return "detected"
+	default:
+		return "no credentials"
+	}
 }
 
 func updateCmd() int {
