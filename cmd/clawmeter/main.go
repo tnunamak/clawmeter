@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -50,7 +51,7 @@ func run() int {
 		fmt.Println("clawmeter " + Version)
 		return 0
 	case "help", "--help", "-h":
-		printHelp()
+		printHelp(os.Stdout)
 		return 0
 	default:
 		// Check if it's a provider name (e.g., "clawmeter claude --json")
@@ -58,7 +59,7 @@ func run() int {
 			return providerCmd(os.Args[1], os.Args[2:])
 		}
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown command %q\n", os.Args[1])
-		printHelp()
+		printHelp(os.Stderr)
 		return 1
 	}
 }
@@ -129,11 +130,14 @@ func trayCmd(args []string) int {
 
 func configCmd(args []string) int {
 	if len(args) < 1 {
-		printConfigHelp()
+		printConfigHelp(os.Stderr)
 		return 1
 	}
 
 	switch args[0] {
+	case "help", "--help", "-h":
+		printConfigHelp(os.Stdout)
+		return 0
 	case "show":
 		return configShowCmd(args[1:])
 	case "set":
@@ -143,7 +147,7 @@ func configCmd(args []string) int {
 	case "disable":
 		return configEnableCmd(args[1:], false)
 	default:
-		printConfigHelp()
+		printConfigHelp(os.Stderr)
 		return 1
 	}
 }
@@ -396,8 +400,8 @@ func updateCmd() int {
 	return 0
 }
 
-func printHelp() {
-	fmt.Fprintln(os.Stderr, `Usage: clawmeter [command] [flags]
+func printHelp(w io.Writer) {
+	fmt.Fprintln(w, `Usage: clawmeter [command] [flags]
 
 Commands:
   status                    Show usage for all configured providers (default)
@@ -433,8 +437,8 @@ Examples:
   clawmeter providers                # List available providers`)
 }
 
-func printConfigHelp() {
-	fmt.Fprintln(os.Stderr, `Usage: clawmeter config <command>
+func printConfigHelp(w io.Writer) {
+	fmt.Fprintln(w, `Usage: clawmeter config <command>
 
 Commands:
   show                      Show current configuration
