@@ -1,8 +1,8 @@
 # Clawmeter
 
 <p align="center">
-  <img src="assets/readme/tray-openai-5h.png" alt="OpenAI 5H tray icon" width="96" height="96">
-  <img src="assets/readme/tray-openai-7d.png" alt="OpenAI 7D tray icon" width="96" height="96">
+  <img src="assets/readme/tray-claude-5h.png" alt="Claude 5H tray icon" width="48" height="48">
+  <img src="assets/readme/tray-openai-7d.png" alt="OpenAI 7D tray icon" width="48" height="48">
 </p>
 
 Clawmeter is a system tray and CLI quota meter for AI coding tools.
