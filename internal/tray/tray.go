@@ -592,7 +592,7 @@ func iconCycleMenuTitle(target iconTarget, displayNames map[string]string) strin
 	if target.Provider == "" {
 		return "Icon: Auto (click to cycle)"
 	}
-	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (double-click tray for Auto)"
+	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (click for next, double-click for Auto)"
 }
 
 func nextIconTargetOverride(current iconTarget, choices []iconTarget) iconTarget {
@@ -607,11 +607,11 @@ func nextIconTargetOverride(current iconTarget, choices []iconTarget) iconTarget
 			continue
 		}
 		if i == len(choices)-1 {
-			return iconTarget{}
+			return choices[0]
 		}
 		return choices[i+1]
 	}
-	return iconTarget{}
+	return choices[0]
 }
 
 func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {

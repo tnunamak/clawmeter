@@ -73,7 +73,7 @@ func TestProviderSeverityUsesHighestProjectedUsage(t *testing.T) {
 	}
 }
 
-func TestIconTargetOverrideCyclesThroughAutoProvidersAndQuotaWindows(t *testing.T) {
+func TestIconTargetOverrideCyclesOnlyThroughProviderQuotaWindows(t *testing.T) {
 	choices := []iconTarget{
 		{Provider: "claude", Window: "5h"},
 		{Provider: "claude", Window: "7d All"},
@@ -87,11 +87,11 @@ func TestIconTargetOverrideCyclesThroughAutoProvidersAndQuotaWindows(t *testing.
 	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
 		t.Fatalf("next from claude 5h = %+v, want claude/7d All", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices); got != (iconTarget{}) {
-		t.Fatalf("next from final target = %+v, want auto", got)
+	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+		t.Fatalf("next from final target = %+v, want claude/5h", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices); got != (iconTarget{}) {
-		t.Fatalf("next from missing override = %+v, want auto", got)
+	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+		t.Fatalf("next from missing override = %+v, want claude/5h", got)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestIconCycleMenuTitleMentionsDoubleClickAutoReset(t *testing.T) {
 		t.Fatalf("auto title = %q", got)
 	}
 	got := iconCycleMenuTitle(iconTarget{Provider: "claude", Window: "7d All"}, displayNames)
-	want := "Icon: Claude 7A (double-click tray for Auto)"
+	want := "Icon: Claude 7A (click for next, double-click for Auto)"
 	if got != want {
 		t.Fatalf("pinned title = %q, want %q", got, want)
 	}
