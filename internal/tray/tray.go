@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	updateCheckInterval = 4 * time.Hour
+	updateCheckInterval = 30 * time.Minute
 )
 
 type state struct {
@@ -113,6 +113,8 @@ func onReady() {
 	mReauth.Hide()
 
 	var pendingRelease *update.Release
+	var pendingReleaseMu sync.Mutex
+	var updateChecking sync.Mutex
 	mUpdate := systray.AddMenuItem("", "")
 	mUpdate.Hide()
 
@@ -229,32 +231,42 @@ func onReady() {
 
 	// Check update function
 	checkUpdate := func() {
+		if !updateChecking.TryLock() {
+			return
+		}
+		defer updateChecking.Unlock()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		rel, err := update.Check(ctx, version)
 		if err != nil || rel == nil {
 			return
 		}
+		pendingReleaseMu.Lock()
 		pendingRelease = rel
+		pendingReleaseMu.Unlock()
 		mUpdate.SetTitle(fmt.Sprintf("Update to %s", rel.Version))
 		mUpdate.Show()
 	}
 
 	// Apply update function
 	applyUpdate := func() {
-		if pendingRelease == nil {
+		pendingReleaseMu.Lock()
+		rel := pendingRelease
+		pendingReleaseMu.Unlock()
+		if rel == nil {
 			return
 		}
 		mUpdate.SetTitle("Updating...")
 		mUpdate.Disable()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if err := update.Apply(ctx, pendingRelease.URL); err != nil {
+		if err := update.Apply(ctx, rel.URL); err != nil {
 			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
 			mUpdate.Enable()
 			return
 		}
-		notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", pendingRelease.Version), "low")
+		notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", rel.Version), "low")
 		update.Restart()
 		systray.Quit()
 	}
@@ -297,6 +309,7 @@ func onReady() {
 				go checkUpdate()
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
+				go checkUpdate()
 			case <-mIconProvider.ClickedCh:
 				cycleIconProviderOverride()
 				s.mu.Lock()

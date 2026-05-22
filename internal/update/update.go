@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -23,8 +24,8 @@ const (
 // apiURL and dlPrefix are overridable by tests via the package-level
 // Check function below. They are not exported to keep the public API stable.
 var (
-	apiURL    = defaultAPIURL
-	dlPrefix  = defaultDLPrefix
+	apiURL     = defaultAPIURL
+	dlPrefix   = defaultDLPrefix
 	httpClient = &http.Client{Timeout: httpTimeout}
 )
 
@@ -35,6 +36,10 @@ type Release struct {
 
 type ghRelease struct {
 	TagName string `json:"tag_name"`
+	Assets  []struct {
+		Name string `json:"name"`
+		URL  string `json:"browser_download_url"`
+	} `json:"assets"`
 }
 
 // Check queries GitHub for the latest release and returns it if newer
@@ -72,16 +77,30 @@ func checkWith(ctx context.Context, currentVersion, api, dl string, client *http
 		return nil, nil
 	}
 
-	ext := ""
-	if runtime.GOOS == "windows" {
-		ext = ".exe"
+	assetName := assetNameFor(runtime.GOOS, runtime.GOARCH)
+	url := ""
+	for _, asset := range rel.Assets {
+		if asset.Name == assetName && asset.URL != "" {
+			url = asset.URL
+			break
+		}
 	}
-	url := fmt.Sprintf(
-		"%s/%s/clawmeter-%s-%s%s",
-		dl, rel.TagName, runtime.GOOS, runtime.GOARCH, ext,
-	)
+	if url == "" {
+		if len(rel.Assets) > 0 {
+			return nil, fmt.Errorf("check update: release %s has no asset %s", rel.TagName, assetName)
+		}
+		url = fmt.Sprintf("%s/%s/%s", strings.TrimRight(dl, "/"), rel.TagName, assetName)
+	}
 
 	return &Release{Version: rel.TagName, URL: url}, nil
+}
+
+func assetNameFor(goos, goarch string) string {
+	ext := ""
+	if goos == "windows" {
+		ext = ".exe"
+	}
+	return fmt.Sprintf("clawmeter-%s-%s%s", goos, goarch, ext)
 }
 
 // CleanupOld removes leftover .old files from a previous update (Windows).
