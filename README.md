@@ -43,7 +43,7 @@ Or download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest 
 
 The provider logo stays visible. The text names the quota window: `5H`, `7D`, `7A`, `7S`, or `MO`.
 
-The radial meter compares actual burn with expected pace. White is remaining pace allowance, green is usage within pace, and red means your current rate projects past the limit.
+The radial meter compares actual burn with expected pace. The white dot marks expected pace; the green or red dot marks current usage depending on whether you are under or over pace.
 
 - Left-click the tray icon to cycle through active provider/quota windows.
 - Double-click the tray icon to return to Auto.

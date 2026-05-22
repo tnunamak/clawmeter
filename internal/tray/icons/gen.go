@@ -83,6 +83,8 @@ const (
 	// Keep a small minimum visible warning wedge so a just-over-pace state
 	// survives downscaling instead of becoming a one-pixel fleck.
 	meterMinimumOverPaceVisibleDeg = 14.0
+	meterEndpointMarkerRadius      = 13
+	meterEndpointMarkerOutlineR    = 15
 )
 
 // MeterState is the provider-agnostic state rendered by the Clawmeter overlay.
@@ -223,26 +225,32 @@ func drawMeterLabel(dst *image.RGBA, label string) {
 	}
 	drawer.DrawString(label)
 
-	scale := 6
-	scaled := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx()*scale, src.Bounds().Dy()*scale))
+	const (
+		labelScale       = 6
+		labelScalePct    = 90
+		labelOffsetScale = labelScale * labelScalePct / 100
+	)
+	scaledW := max(1, src.Bounds().Dx()*labelScale*labelScalePct/100)
+	scaledH := max(1, src.Bounds().Dy()*labelScale*labelScalePct/100)
+	scaled := image.NewRGBA(image.Rect(0, 0, scaledW, scaledH))
 	xdraw.NearestNeighbor.Scale(scaled, scaled.Bounds(), src, src.Bounds(), draw.Over, nil)
 
 	x := dst.Bounds().Min.X + (dst.Bounds().Dx()-scaled.Bounds().Dx())/2
 	y := dst.Bounds().Min.Y + (dst.Bounds().Dy()-scaled.Bounds().Dy())/2
 	halo := color.NRGBA{R: 255, G: 255, B: 255, A: 150}
 	for _, off := range []image.Point{
-		{X: -7, Y: 0},
-		{X: 7, Y: 0},
-		{X: 0, Y: -7},
-		{X: 0, Y: 7},
-		{X: -5, Y: -5},
-		{X: 5, Y: -5},
-		{X: -5, Y: 5},
-		{X: 5, Y: 5},
-		{X: -3, Y: -6},
-		{X: 3, Y: -6},
-		{X: -3, Y: 6},
-		{X: 3, Y: 6},
+		{X: -7 * labelOffsetScale / labelScale, Y: 0},
+		{X: 7 * labelOffsetScale / labelScale, Y: 0},
+		{X: 0, Y: -7 * labelOffsetScale / labelScale},
+		{X: 0, Y: 7 * labelOffsetScale / labelScale},
+		{X: -5 * labelOffsetScale / labelScale, Y: -5 * labelOffsetScale / labelScale},
+		{X: 5 * labelOffsetScale / labelScale, Y: -5 * labelOffsetScale / labelScale},
+		{X: -5 * labelOffsetScale / labelScale, Y: 5 * labelOffsetScale / labelScale},
+		{X: 5 * labelOffsetScale / labelScale, Y: 5 * labelOffsetScale / labelScale},
+		{X: -3 * labelOffsetScale / labelScale, Y: -6 * labelOffsetScale / labelScale},
+		{X: 3 * labelOffsetScale / labelScale, Y: -6 * labelOffsetScale / labelScale},
+		{X: -3 * labelOffsetScale / labelScale, Y: 6 * labelOffsetScale / labelScale},
+		{X: 3 * labelOffsetScale / labelScale, Y: 6 * labelOffsetScale / labelScale},
 	} {
 		drawTextImage(dst, scaled, x+off.X, y+off.Y, halo)
 	}
@@ -328,7 +336,6 @@ func drawMeterTrack(dst *image.RGBA) {
 	end := meterAngleForFraction(1)
 	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR, meterActualInnerR-2), ringHalfWidth(meterActualOuterR, meterActualInnerR-2), color.NRGBA{R: 0, G: 0, B: 0, A: 58})
 	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR-1.2, meterActualInnerR), ringHalfWidth(meterActualOuterR-1.2, meterActualInnerR), color.NRGBA{R: 37, G: 43, B: 51, A: 54})
-	drawOriginSeam(dst)
 }
 
 func drawActualUsageBand(dst *image.RGBA, meter MeterState) {
@@ -351,6 +358,8 @@ func drawActualUsageBand(dst *image.RGBA, meter MeterState) {
 	if usage > expected {
 		drawUsageSegment(dst, expected, overPaceRenderEnd(usage, expected), meterColor(meter))
 	}
+	drawExpectedPaceMarker(dst, expected)
+	drawUsageHeadMarker(dst, usage, expected)
 }
 
 func drawUsageShadow(dst *image.RGBA, startFraction, endFraction float64) {
@@ -369,6 +378,30 @@ func drawUsageSegment(dst *image.RGBA, startFraction, endFraction float64, c col
 	start := meterAngleForFraction(startFraction)
 	end := meterAngleForFraction(endFraction)
 	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR, meterActualInnerR), ringHalfWidth(meterActualOuterR, meterActualInnerR), c)
+}
+
+func drawExpectedPaceMarker(dst *image.RGBA, fraction float64) {
+	if fraction <= 0 {
+		return
+	}
+	drawMeterEndpointMarker(dst, fraction, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+}
+
+func drawUsageHeadMarker(dst *image.RGBA, usage, expected float64) {
+	if usage <= 0 {
+		return
+	}
+	fill := color.NRGBA{R: 52, G: 177, B: 93, A: 255}
+	if usage > expected {
+		fill = color.NRGBA{R: 210, G: 31, B: 43, A: 255}
+	}
+	drawMeterEndpointMarker(dst, usage, fill)
+}
+
+func drawMeterEndpointMarker(dst *image.RGBA, fraction float64, fill color.NRGBA) {
+	x, y := pointOnMeter(fraction, ringCenterR(meterActualOuterR, meterActualInnerR))
+	drawCircle(dst, int(math.Round(x))+1, int(math.Round(y))+1, meterEndpointMarkerOutlineR, color.NRGBA{R: 0, G: 0, B: 0, A: 170})
+	drawCircle(dst, int(math.Round(x)), int(math.Round(y)), meterEndpointMarkerRadius, fill)
 }
 
 func overPaceRenderEnd(usage, expected float64) float64 {
@@ -427,17 +460,6 @@ func normalizeAngleToStart(angle, start float64) float64 {
 	return angle
 }
 
-func drawOriginSeam(dst *image.RGBA) {
-	points := radialMarkerPolygon(meterAngleForFraction(0), meterOuterR+4, meterInnerR-4, 3.0, 1.8)
-	shadow := append([]image.Point(nil), points...)
-	for i := range shadow {
-		shadow[i].X++
-		shadow[i].Y++
-	}
-	drawPolygon(dst, shadow, color.NRGBA{R: 0, G: 0, B: 0, A: 150})
-	drawPolygon(dst, points, color.NRGBA{R: 255, G: 255, B: 255, A: 150})
-}
-
 func meterAngleForFraction(fraction float64) float64 {
 	if fraction < 0 {
 		fraction = 0
@@ -448,21 +470,9 @@ func meterAngleForFraction(fraction float64) float64 {
 	return (meterStartDeg + meterSweepDeg*fraction) * math.Pi / 180
 }
 
-func radialMarkerPolygon(angle, outerR, innerR, outerHalf, innerHalf float64) []image.Point {
-	ca := math.Cos(angle)
-	sa := math.Sin(angle)
-	tx := -sa
-	ty := ca
-	ox := meterCenterX + outerR*ca
-	oy := meterCenterY + outerR*sa
-	ix := meterCenterX + innerR*ca
-	iy := meterCenterY + innerR*sa
-	return []image.Point{
-		{X: int(math.Round(ox + outerHalf*tx)), Y: int(math.Round(oy + outerHalf*ty))},
-		{X: int(math.Round(ix + innerHalf*tx)), Y: int(math.Round(iy + innerHalf*ty))},
-		{X: int(math.Round(ix - innerHalf*tx)), Y: int(math.Round(iy - innerHalf*ty))},
-		{X: int(math.Round(ox - outerHalf*tx)), Y: int(math.Round(oy - outerHalf*ty))},
-	}
+func pointOnMeter(fraction, radius float64) (float64, float64) {
+	angle := meterAngleForFraction(fraction)
+	return meterCenterX + radius*math.Cos(angle), meterCenterY + radius*math.Sin(angle)
 }
 
 func logoNeedsContrastPlate(providerLogo []byte) bool {
