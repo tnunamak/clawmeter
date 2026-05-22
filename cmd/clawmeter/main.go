@@ -25,6 +25,10 @@ func main() {
 }
 
 func run() int {
+	if handled, code := update.HandleRestartHelper(os.Args[1:]); handled {
+		return code
+	}
+
 	update.CleanupOld()
 
 	if len(os.Args) < 2 {

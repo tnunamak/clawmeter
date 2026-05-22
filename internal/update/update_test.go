@@ -141,6 +141,33 @@ func TestCheck_serverError(t *testing.T) {
 	}
 }
 
+func TestParseRestartHelperArgs(t *testing.T) {
+	parentPID, exe, err := parseRestartHelperArgs([]string{"--parent-pid", "123", "--exe", "/tmp/clawmeter"})
+	if err != nil {
+		t.Fatalf("parseRestartHelperArgs error: %v", err)
+	}
+	if parentPID != 123 {
+		t.Fatalf("parentPID = %d, want 123", parentPID)
+	}
+	if exe != "/tmp/clawmeter" {
+		t.Fatalf("exe = %q, want /tmp/clawmeter", exe)
+	}
+}
+
+func TestParseRestartHelperArgsRejectsBadInput(t *testing.T) {
+	tests := [][]string{
+		{"--parent-pid"},
+		{"--parent-pid", "nope"},
+		{"--exe"},
+		{"--unknown"},
+	}
+	for _, tt := range tests {
+		if _, _, err := parseRestartHelperArgs(tt); err == nil {
+			t.Fatalf("parseRestartHelperArgs(%v) expected error", tt)
+		}
+	}
+}
+
 // TestCheck_live is gated behind CLAWMETER_LIVE_UPDATE_CHECK=1 so normal
 // unit runs don't hit the real GitHub API.
 func TestCheck_live(t *testing.T) {

@@ -261,13 +261,24 @@ func onReady() {
 		mUpdate.Disable()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if err := update.Apply(ctx, rel.URL); err != nil {
+		exe, err := update.ExecutablePath()
+		if err != nil {
+			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
+			mUpdate.Enable()
+			return
+		}
+		if err := update.ApplyTo(ctx, rel.URL, exe); err != nil {
 			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
 			mUpdate.Enable()
 			return
 		}
 		notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", rel.Version), "low")
-		update.Restart()
+		if err := update.Restart(exe); err != nil {
+			mUpdate.SetTitle("Updated — restart Clawmeter")
+			mUpdate.Enable()
+			notify("Clawmeter", "Updated, but restart failed. Restart Clawmeter manually.", "normal")
+			return
+		}
 		systray.Quit()
 	}
 

@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +21,8 @@ const (
 	defaultAPIURL   = "https://api.github.com/repos/" + repo + "/releases/latest"
 	defaultDLPrefix = "https://github.com/" + repo + "/releases/download"
 	httpTimeout     = 15 * time.Second
+	restartHelper   = "__restart-tray"
+	restartDelay    = 750 * time.Millisecond
 )
 
 // apiURL and dlPrefix are overridable by tests via the package-level
@@ -105,26 +109,39 @@ func assetNameFor(goos, goarch string) string {
 
 // CleanupOld removes leftover .old files from a previous update (Windows).
 func CleanupOld() {
-	exe, err := os.Executable()
+	exe, err := ExecutablePath()
 	if err != nil {
 		return
 	}
-	exe, _ = filepath.EvalSymlinks(exe)
 	os.Remove(exe + ".old")
+}
+
+func ExecutablePath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlinks: %w", err)
+	}
+	return exe, nil
 }
 
 // Apply downloads the binary from url, verifies it, and replaces the
 // currently running executable. The caller should restart after Apply returns.
 func Apply(ctx context.Context, url string) error {
-	exe, err := os.Executable()
+	exe, err := ExecutablePath()
 	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
+		return err
 	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return fmt.Errorf("resolve symlinks: %w", err)
-	}
+	return ApplyTo(ctx, url, exe)
+}
 
+func ApplyTo(ctx context.Context, url, exe string) error {
+	if exe == "" {
+		return errors.New("executable path is empty")
+	}
 	tmpDir, err := os.MkdirTemp("", "clawmeter-update-*")
 	if err != nil {
 		return fmt.Errorf("create temp dir: %w", err)
@@ -207,17 +224,72 @@ func Apply(ctx context.Context, url string) error {
 	return nil
 }
 
-// Restart launches a new tray process and returns. The caller should
-// exit after calling this.
-func Restart() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
+// Restart launches a detached helper from the updated binary and returns.
+// The helper starts the replacement tray after the current process exits, so
+// the desktop tray watcher sees a clean unregister/register sequence.
+func Restart(exe string) error {
+	if exe == "" {
+		return errors.New("executable path is empty")
 	}
-	cmd := exec.Command(exe, "tray")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := exec.Command(exe, restartHelper, "--parent-pid", strconv.Itoa(os.Getpid()), "--exe", exe)
+	detachRestartCommand(cmd)
 	return cmd.Start()
+}
+
+// HandleRestartHelper runs the hidden restart helper command. It returns
+// handled=false when args do not name the helper command.
+func HandleRestartHelper(args []string) (handled bool, code int) {
+	if len(args) == 0 || args[0] != restartHelper {
+		return false, 0
+	}
+	parentPID, exe, err := parseRestartHelperArgs(args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: restart helper: %v\n", err)
+		return true, 2
+	}
+	if exe == "" {
+		exe, err = os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: restart helper: %v\n", err)
+			return true, 1
+		}
+	}
+
+	waitForRestartParent(parentPID, 5*time.Second)
+	time.Sleep(250 * time.Millisecond)
+
+	cmd := exec.Command(exe, "tray")
+	detachRestartCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: restart tray: %v\n", err)
+		return true, 1
+	}
+	return true, 0
+}
+
+func parseRestartHelperArgs(args []string) (parentPID int, exe string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--parent-pid":
+			i++
+			if i >= len(args) {
+				return 0, "", errors.New("--parent-pid requires a value")
+			}
+			parentPID, err = strconv.Atoi(args[i])
+			if err != nil || parentPID < 0 {
+				return 0, "", fmt.Errorf("invalid --parent-pid %q", args[i])
+			}
+		case "--exe":
+			i++
+			if i >= len(args) {
+				return 0, "", errors.New("--exe requires a value")
+			}
+			exe = args[i]
+		default:
+			return 0, "", fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	return parentPID, exe, nil
 }
 
 func copyFile(src, dst string) error {
