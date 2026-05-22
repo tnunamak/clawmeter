@@ -197,11 +197,21 @@ clawmeter version                  # show version
 
 Launch the tray manually with `clawmeter tray`, or pass `--start` to `install.sh`.
 
-- Color-coded icon: green (on pace), yellow (tight), red (projected to exceed), gray (expired)
-- Hover tooltip shows usage for all providers
-- Polls every 5 minutes with "Refresh Now" for immediate update
-- Desktop notifications at 80% and 95% thresholds
-- "Launch at login" toggle in the menu
+![Clawmeter tray menu showing Claude and OpenAI quota windows](assets/readme/tray-menu.png)
+
+The tray icon uses the active provider logo as the base identity, then overlays a compact quota code and pace meter:
+
+<p>
+  <img src="assets/readme/tray-openai-5h.png" alt="OpenAI 5H tray icon" width="48" height="48">
+  <img src="assets/readme/tray-openai-7d.png" alt="OpenAI 7D tray icon" width="48" height="48">
+</p>
+
+- Provider logo stays visible; the overlaid `5H`, `7D`, `7A`, `7S`, or `MO` code tells you which quota window the icon is showing.
+- The radial meter compares current usage against expected pace for the reset window. Green is within pace; red means projected overrun.
+- Left-click the tray icon to cycle through active provider/quota windows. Double-click the tray icon to return to Auto.
+- Right-click opens the full menu with all active providers, reset timing, projected usage, update status, and launch-at-login control.
+- Polls every 5 minutes with "Refresh Now" for immediate update.
+- Desktop notifications still fire at 80% and 95% thresholds.
 
 ```bash
 clawmeter tray --install    # enable launch at login
