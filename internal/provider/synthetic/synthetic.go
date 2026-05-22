@@ -28,10 +28,13 @@ func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{cfg: cfg}
 }
 
-func (p *Provider) Name() string        { return "synthetic" }
+func (p *Provider) Name() string         { return "synthetic" }
 func (p *Provider) DisplayName() string  { return "Synthetic" }
 func (p *Provider) Description() string  { return "Synthetic (via SYNTHETIC_API_KEY)" }
 func (p *Provider) DashboardURL() string { return "https://synthetic.new" }
+func (p *Provider) AutoPollByDefault() bool {
+	return false
+}
 
 func (p *Provider) IsConfigured() bool {
 	_, err := p.getAPIKey()

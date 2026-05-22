@@ -1,11 +1,26 @@
 package cli
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+type cliStubProvider struct {
+	name string
+}
+
+func (p cliStubProvider) Name() string         { return p.name }
+func (p cliStubProvider) DisplayName() string  { return p.name }
+func (p cliStubProvider) Description() string  { return "" }
+func (p cliStubProvider) DashboardURL() string { return "" }
+func (p cliStubProvider) IsConfigured() bool   { return true }
+func (p cliStubProvider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
+	return nil, nil
+}
 
 func TestClassifyProvider(t *testing.T) {
 	now := time.Now()
@@ -217,4 +232,31 @@ func TestSortProvidersByUrgency(t *testing.T) {
 			t.Errorf("expected 'beta' second (stable), got %q", providers[1].Name)
 		}
 	})
+}
+
+func TestHideUnavailable_HidesAutoDetectedErrorsButKeepsExplicit(t *testing.T) {
+	registry := provider.NewRegistry()
+	if err := registry.Register(cliStubProvider{name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	result := &provider.MultiFetchResult{
+		Results: map[string]*provider.UsageData{
+			"alpha": {Provider: "alpha", Error: "forbidden"},
+		},
+	}
+
+	autoCfg := config.DefaultConfig()
+	autoOutput := buildOutputFromResult(registry, autoCfg, result, nil)
+	autoOutput.HideUnavailable()
+	if len(autoOutput.Providers) != 0 {
+		t.Fatalf("auto-detected error should be hidden, got %d providers", len(autoOutput.Providers))
+	}
+
+	explicitCfg := config.DefaultConfig()
+	explicitCfg.EnsureProvider("alpha", true)
+	explicitOutput := buildOutputFromResult(registry, explicitCfg, result, nil)
+	explicitOutput.HideUnavailable()
+	if len(explicitOutput.Providers) != 1 {
+		t.Fatalf("explicitly enabled error should remain visible, got %d providers", len(explicitOutput.Providers))
+	}
 }

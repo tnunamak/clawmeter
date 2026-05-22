@@ -140,10 +140,10 @@ func TestGuessWindowType(t *testing.T) {
 		{"7d", SevenDayWindow},
 		{"7d-opus", SevenDayWindow},
 		{"7d_oauth_apps", SevenDayWindow},
-		{"session", 24 * time.Hour},    // default
-		{"credits", 24 * time.Hour},    // default
-		{"monthly", 24 * time.Hour},    // default
-		{"", 24 * time.Hour},           // default
+		{"session", 24 * time.Hour}, // default
+		{"credits", 24 * time.Hour}, // default
+		{"monthly", 24 * time.Hour}, // default
+		{"", 24 * time.Hour},        // default
 	}
 
 	for _, tt := range tests {
@@ -208,6 +208,16 @@ func TestProjection_PaceIndicator(t *testing.T) {
 			want: "3% behind",
 		},
 		{
+			name: "projected over limit wins over small delta",
+			proj: Projection{ProjectedPct: 104, Delta: 0.6, WillLastToReset: false, RunsOutIn: 5 * time.Hour},
+			want: "projects 104%",
+		},
+		{
+			name: "near limit wins over small delta",
+			proj: Projection{ProjectedPct: 98, Delta: 0.2, WillLastToReset: true},
+			want: "projects 98%",
+		},
+		{
 			name: "runs out includes duration",
 			proj: Projection{Delta: 10, WillLastToReset: false, RunsOutIn: 90 * time.Minute},
 			want: "runs out in 1h30m",
@@ -228,13 +238,14 @@ func TestPaceIndicatorAlignment(t *testing.T) {
 	// The left part of every PaceIndicator must be exactly paceWidth chars
 	// so columns align in CLI output.
 	cases := []Projection{
-		{Delta: 0, WillLastToReset: true},       // "on pace"
-		{Delta: -3, WillLastToReset: true},       // "3% ahead"
-		{Delta: -28, WillLastToReset: true},      // "28% ahead"
-		{Delta: -100, WillLastToReset: true},     // "100% ahead"
-		{Delta: 5, WillLastToReset: true},        // "5% behind"
-		{Delta: 50, WillLastToReset: true},       // "50% behind"
-		{Delta: 100, WillLastToReset: true},      // "100% behind"
+		{Delta: 0, WillLastToReset: true},          // "on pace"
+		{Delta: -3, WillLastToReset: true},         // "3% ahead"
+		{Delta: -28, WillLastToReset: true},        // "28% ahead"
+		{Delta: -100, WillLastToReset: true},       // "100% ahead"
+		{Delta: 5, WillLastToReset: true},          // "5% behind"
+		{Delta: 50, WillLastToReset: true},         // "50% behind"
+		{Delta: 100, WillLastToReset: true},        // "100% behind"
+		{ProjectedPct: 104, WillLastToReset: true}, // "projects 104%"
 	}
 
 	for _, proj := range cases {

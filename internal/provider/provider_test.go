@@ -10,6 +10,7 @@ import (
 type stubProvider struct {
 	name       string
 	configured bool
+	autoPoll   *bool
 }
 
 func (s *stubProvider) Name() string         { return s.name }
@@ -17,6 +18,12 @@ func (s *stubProvider) DisplayName() string  { return s.name }
 func (s *stubProvider) Description() string  { return "" }
 func (s *stubProvider) DashboardURL() string { return "" }
 func (s *stubProvider) IsConfigured() bool   { return s.configured }
+func (s *stubProvider) AutoPollByDefault() bool {
+	if s.autoPoll == nil {
+		return true
+	}
+	return *s.autoPoll
+}
 func (s *stubProvider) FetchUsage(ctx context.Context) (*UsageData, error) {
 	return &UsageData{Provider: s.name, FetchedAt: time.Now()}, nil
 }
@@ -25,6 +32,19 @@ func (s *stubProvider) FetchUsage(ctx context.Context) (*UsageData, error) {
 type disabledSet map[string]bool
 
 func (d disabledSet) IsProviderDisabled(name string) bool { return d[name] }
+
+type enablementSet struct {
+	disabled map[string]bool
+	explicit map[string]bool
+}
+
+func (e enablementSet) IsProviderDisabled(name string) bool {
+	return e.disabled != nil && e.disabled[name]
+}
+
+func (e enablementSet) IsProviderExplicitlyEnabled(name string) bool {
+	return e.explicit != nil && e.explicit[name]
+}
 
 func TestGetConfigured_RespectsEnabledFilter(t *testing.T) {
 	r := NewRegistry()
@@ -72,6 +92,24 @@ func TestFetchAllParallel_SkipsDisabledProvider(t *testing.T) {
 	}
 	if _, ok := result.Results["beta"]; ok {
 		t.Error("beta is disabled and must not be fetched")
+	}
+}
+
+func TestGetConfigured_RequiresExplicitEnablementForOptInProviders(t *testing.T) {
+	noAuto := false
+	r := NewRegistry()
+	_ = r.Register(&stubProvider{name: "default", configured: true})
+	_ = r.Register(&stubProvider{name: "optin", configured: true, autoPoll: &noAuto})
+
+	names := providerNames(r.GetConfigured())
+	if want := []string{"default"}; !equalSlice(names, want) {
+		t.Fatalf("without explicit opt-in: got %v, want %v", names, want)
+	}
+
+	r.SetEnabledFilter(enablementSet{explicit: map[string]bool{"optin": true}})
+	names = providerNames(r.GetConfigured())
+	if want := []string{"default", "optin"}; !equalSlice(names, want) {
+		t.Fatalf("with explicit opt-in: got %v, want %v", names, want)
 	}
 }
 
@@ -148,11 +186,11 @@ func TestFailureGate_PerProvider(t *testing.T) {
 func TestFailureGate_BackoffGrows(t *testing.T) {
 	g := NewFailureGate()
 
-	g.ShouldSurfaceError("claude", true)  // backoff = 5m
-	g.ShouldSurfaceError("claude", true)  // backoff = 10m
-	g.ShouldSurfaceError("claude", true)  // backoff = 20m
-	g.ShouldSurfaceError("claude", true)  // backoff = 30m (cap)
-	g.ShouldSurfaceError("claude", true)  // backoff = 30m (stays capped)
+	g.ShouldSurfaceError("claude", true) // backoff = 5m
+	g.ShouldSurfaceError("claude", true) // backoff = 10m
+	g.ShouldSurfaceError("claude", true) // backoff = 20m
+	g.ShouldSurfaceError("claude", true) // backoff = 30m (cap)
+	g.ShouldSurfaceError("claude", true) // backoff = 30m (stays capped)
 
 	if g.backoffs["claude"] != maxBackoff {
 		t.Errorf("backoff = %v, want %v", g.backoffs["claude"], maxBackoff)
@@ -192,5 +230,102 @@ func TestFailureGate_SuccessResetsBackoff(t *testing.T) {
 
 	if g.InBackoff("claude") {
 		t.Error("backoff should be cleared after success")
+	}
+}
+
+func TestShouldShowInPrimaryUI(t *testing.T) {
+	healthy := &UsageData{
+		Windows: []UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}},
+	}
+	errorOnly := &UsageData{Error: "forbidden"}
+	expired := &UsageData{IsExpired: true, Error: "reauth"}
+	cachedWithError := &UsageData{
+		Error:   "timeout (showing cached)",
+		Windows: []UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}},
+	}
+
+	tests := []struct {
+		name      string
+		data      *UsageData
+		prior     bool
+		explicit  bool
+		wantShown bool
+	}{
+		{"auto nil hidden", nil, false, false, false},
+		{"auto healthy shown", healthy, false, false, true},
+		{"auto error without history hidden", errorOnly, false, false, false},
+		{"auto expired without history hidden", expired, false, false, false},
+		{"auto expired with history shown", expired, true, false, true},
+		{"auto cached windows shown", cachedWithError, false, false, true},
+		{"explicit nil shown", nil, false, true, true},
+		{"explicit error shown", errorOnly, false, true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ShouldShowInPrimaryUI(tt.data, tt.prior, tt.explicit)
+			if got != tt.wantShown {
+				t.Fatalf("ShouldShowInPrimaryUI() = %v, want %v", got, tt.wantShown)
+			}
+		})
+	}
+}
+
+func TestUsageDataCloneCopiesWindows(t *testing.T) {
+	original := &UsageData{
+		Provider: "openai",
+		Windows:  []UsageWindow{{Name: "5h", Utilization: 12}},
+	}
+
+	clone := original.Clone()
+	clone.Error = "showing cached"
+	clone.Windows[0].Utilization = 99
+
+	if original.Error != "" {
+		t.Fatalf("Clone mutated original error: %q", original.Error)
+	}
+	if original.Windows[0].Utilization != 12 {
+		t.Fatalf("Clone mutated original window utilization: %.0f", original.Windows[0].Utilization)
+	}
+}
+
+func TestIsTransientFetchError(t *testing.T) {
+	tests := []struct {
+		msg  string
+		want bool
+	}{
+		{"read rateLimits response: no response received", true},
+		{"codex app-server exited without a response", true},
+		{"Post \"https://example\": context deadline exceeded", true},
+		{"write |1: broken pipe", true},
+		{"API returned 403: forbidden", false},
+		{"authentication required", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.msg, func(t *testing.T) {
+			if got := IsTransientFetchError(tt.msg); got != tt.want {
+				t.Fatalf("IsTransientFetchError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterUsageDataByNames(t *testing.T) {
+	data := map[string]*UsageData{
+		"claude":     {Provider: "claude"},
+		"openrouter": {Provider: "openrouter"},
+		"gemini":     {Provider: "gemini"},
+	}
+
+	filtered := FilterUsageDataByNames(data, []string{"claude", "gemini"})
+
+	if _, ok := filtered["claude"]; !ok {
+		t.Fatal("claude should remain")
+	}
+	if _, ok := filtered["gemini"]; !ok {
+		t.Fatal("gemini should remain")
+	}
+	if _, ok := filtered["openrouter"]; ok {
+		t.Fatal("openrouter should have been filtered out")
 	}
 }

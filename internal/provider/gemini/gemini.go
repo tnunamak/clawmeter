@@ -38,17 +38,61 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "gemini" }
+func (p *Provider) Name() string         { return "gemini" }
 func (p *Provider) DisplayName() string  { return "Gemini" }
 func (p *Provider) Description() string  { return "Google Gemini (via OAuth credentials)" }
 func (p *Provider) DashboardURL() string { return "https://aistudio.google.com" }
 
 func (p *Provider) IsConfigured() bool {
+	return p.SetupStatus().IsReady()
+}
+
+func (p *Provider) SetupStatus() provider.SetupStatus {
 	if p.cfg.OAuthToken != "" {
-		return true
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "OAuth token configured"}
 	}
-	_, err := p.readCredentials()
-	return err == nil
+
+	_, installedErr := exec.LookPath("gemini")
+	installed := installedErr == nil
+
+	creds, err := p.readCredentials()
+	if err != nil {
+		if installed {
+			return provider.SetupStatus{
+				State:  provider.SetupNeedsAuth,
+				Detail: "Gemini CLI installed, sign in needed",
+			}
+		}
+		return provider.SetupStatus{State: provider.SetupUnavailable, Detail: "no OAuth credentials"}
+	}
+
+	if !p.isOAuthEnabled() {
+		return provider.SetupStatus{
+			State:  provider.SetupNeedsAuth,
+			Detail: "Gemini is not using Google account OAuth",
+		}
+	}
+
+	if creds.AccessToken == "" && creds.RefreshToken == "" {
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "Gemini credentials are empty"}
+	}
+
+	if creds.isExpired() {
+		if creds.RefreshToken == "" {
+			return provider.SetupStatus{
+				State:  provider.SetupNeedsAuth,
+				Detail: "Gemini token expired; sign in again",
+			}
+		}
+		if _, err := discoverOAuthCredentials(); err != nil {
+			return provider.SetupStatus{
+				State:  provider.SetupNeedsAuth,
+				Detail: "Gemini token expired and cannot be refreshed",
+			}
+		}
+	}
+
+	return provider.SetupStatus{State: provider.SetupReady, Detail: "OAuth credentials found"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
@@ -215,9 +259,9 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 	}
 
 	type tierInfo struct {
-		worst    float64
-		resetAt  time.Time
-		found    bool
+		worst   float64
+		resetAt time.Time
+		found   bool
 	}
 	pro := tierInfo{worst: 1.0}
 	flash := tierInfo{worst: 1.0}

@@ -12,11 +12,14 @@ import (
 	"path/filepath"
 
 	"fyne.io/systray"
+	xdraw "golang.org/x/image/draw"
 
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 )
 
 var currentIconName string
+
+const dynamicIconVersion = 31
 
 var iconSet = map[string][]byte{
 	"green":  icons.Green,
@@ -63,12 +66,11 @@ func setIconByName(name string, _ []byte) {
 	systray.SetIconNameWithPixmap(iconName, pixmaps)
 }
 
-func setIconDynamic(providerName string, pct float64, data128 []byte) {
-	// Use a unique icon name per provider so KDE picks up the change
-	iconName := fmt.Sprintf("clawmeter-dyn-%s", providerName)
-	if providerName == "" {
-		iconName = "clawmeter-dyn-none"
-	}
+func setIconDynamic(providerName string, meter icons.MeterState, data128 []byte) {
+	// KDE can keep resolving a stale themed icon for stable dynamic names. Use
+	// a versioned, bucketed name so visual rendering changes and severity
+	// changes force a fresh tray icon lookup.
+	iconName := dynamicIconName(providerName, meter)
 
 	// Write to icon theme at multiple sizes
 	home, err := os.UserHomeDir()
@@ -78,7 +80,7 @@ func setIconDynamic(providerName string, pct float64, data128 []byte) {
 			dir := filepath.Join(base, fmt.Sprintf("%dx%d", size, size), "status")
 			os.MkdirAll(dir, 0755)
 			os.WriteFile(filepath.Join(dir, iconName+".png"),
-				icons.GenerateIcon(icons.ProviderLogos[providerName], pct, size), 0644)
+				dynamicIconData(providerName, meter, data128, size), 0644)
 		}
 	}
 
@@ -86,7 +88,7 @@ func setIconDynamic(providerName string, pct float64, data128 []byte) {
 		// Same provider — force pixmap update (icon name unchanged so KDE won't re-read theme)
 		pixmaps := make([][]byte, 0, 3)
 		for _, size := range []int{16, 32, 64} {
-			pixmaps = append(pixmaps, icons.GenerateIcon(icons.ProviderLogos[providerName], pct, size))
+			pixmaps = append(pixmaps, dynamicIconData(providerName, meter, data128, size))
 		}
 		systray.SetIconNameWithPixmap(iconName, pixmaps)
 		return
@@ -95,9 +97,40 @@ func setIconDynamic(providerName string, pct float64, data128 []byte) {
 	currentIconName = iconName
 	pixmaps := make([][]byte, 0, 3)
 	for _, size := range []int{16, 32, 64} {
-		pixmaps = append(pixmaps, icons.GenerateIcon(icons.ProviderLogos[providerName], pct, size))
+		pixmaps = append(pixmaps, dynamicIconData(providerName, meter, data128, size))
 	}
 	systray.SetIconNameWithPixmap(iconName, pixmaps)
+}
+
+func dynamicIconName(providerName string, meter icons.MeterState) string {
+	if providerName == "" {
+		providerName = "none"
+	}
+	usageBucket := iconPctBucket(meter.UsagePct)
+	expectedBucket := iconPctBucket(meter.ExpectedPct)
+	riskBucket := iconPctBucket(meter.RiskPct)
+	return fmt.Sprintf("clawmeter-dyn-v%d-%s-u%03d-e%03d-r%03d", dynamicIconVersion, providerName, usageBucket, expectedBucket, riskBucket)
+}
+
+func iconPctBucket(pct float64) int {
+	bucket := int(pct + 0.5)
+	if bucket < 0 {
+		bucket = 0
+	}
+	if bucket > 100 {
+		bucket = 100
+	}
+	return bucket
+}
+
+func dynamicIconData(providerName string, meter icons.MeterState, data128 []byte, size int) []byte {
+	if size == 128 && len(data128) > 0 {
+		return data128
+	}
+	if len(data128) > 0 {
+		return resizePNG(data128, size)
+	}
+	return icons.GenerateProviderIconWithMeter(providerName, meter, size)
 }
 
 func resizePNG(data []byte, size int) []byte {
@@ -108,16 +141,7 @@ func resizePNG(data []byte, size int) []byte {
 
 	dst := image.NewRGBA(image.Rect(0, 0, size, size))
 	srcBounds := src.Bounds()
-	srcW := srcBounds.Dx()
-	srcH := srcBounds.Dy()
-
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			srcX := x * srcW / size
-			srcY := y * srcH / size
-			dst.Set(x, y, src.At(srcBounds.Min.X+srcX, srcBounds.Min.Y+srcY))
-		}
-	}
+	xdraw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, srcBounds, xdraw.Over, nil)
 
 	var buf bytes.Buffer
 	png.Encode(&buf, dst)

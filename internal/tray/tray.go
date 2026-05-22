@@ -18,11 +18,11 @@ import (
 	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
-	"github.com/tnunamak/clawmeter/internal/shellpath"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
+	"github.com/tnunamak/clawmeter/internal/shellpath"
 	"github.com/tnunamak/clawmeter/internal/status"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 	"github.com/tnunamak/clawmeter/internal/update"
@@ -33,13 +33,15 @@ const (
 )
 
 type state struct {
-	mu             sync.Mutex
-	lastResults    map[string]*provider.UsageData
-	statuses       map[string]*status.ProviderStatus
-	failureGate    *provider.FailureGate
-	currentTitle   string
-	currentTooltip string
-	lastRefreshAt  time.Time
+	mu                   sync.Mutex
+	lastResults          map[string]*provider.UsageData
+	statuses             map[string]*status.ProviderStatus
+	failureGate          *provider.FailureGate
+	currentTitle         string
+	currentTooltip       string
+	lastRefreshAt        time.Time
+	iconProviderOverride string
+	iconProviderChoices  []string
 }
 
 var (
@@ -87,20 +89,23 @@ func onReady() {
 	// Provider menu items - dynamically created based on configured providers
 	providerMenus := make(map[string]*providerMenuItems)
 
-	for _, p := range registry.GetAll() {
-		if !p.IsConfigured() {
-			continue
+	for _, p := range registry.GetConfigured() {
+		explicit := cfg.IsProviderExplicitlyEnabled(p.Name())
+		menu := createProviderMenuItems(p, explicit)
+		if !explicit {
+			hideProviderMenu(menu)
 		}
-		providerMenus[p.Name()] = createProviderMenuItems(p)
+		providerMenus[p.Name()] = menu
 	}
 
 	if len(providerMenus) == 0 {
-		systray.AddMenuItem("No providers configured", "").Disable()
+		systray.AddMenuItem("No active providers", "").Disable()
 	}
 
 	systray.AddSeparator()
 
 	// Global menu items
+	mIconProvider := systray.AddMenuItem("Icon: Auto", "")
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	systray.AddSeparator()
 
@@ -120,13 +125,10 @@ func onReady() {
 	var refreshing sync.Mutex
 
 	// Collect configured provider names once
-	var configuredNames []string
-	for _, p := range registry.GetConfigured() {
-		configuredNames = append(configuredNames, p.Name())
-	}
+	configuredNames := providerNames(registry.GetConfigured())
 
 	// Refresh usage only (lightweight, runs every poll cycle)
-	refresh := func() {
+	refresh := func(force bool) {
 		if !refreshing.TryLock() {
 			return // already refreshing
 		}
@@ -140,9 +142,9 @@ func onReady() {
 		var toFetch []provider.Provider
 		skipped := make(map[string]*provider.UsageData)
 		for _, p := range registry.GetConfigured() {
-			if s.failureGate.InBackoff(p.Name()) {
+			if !force && s.failureGate.InBackoff(p.Name()) {
 				if prev, ok := s.lastResults[p.Name()]; ok && prev != nil {
-					skipped[p.Name()] = prev
+					skipped[p.Name()] = prev.Clone()
 				}
 			} else {
 				toFetch = append(toFetch, p)
@@ -175,14 +177,20 @@ func onReady() {
 			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.IsHealthy() {
 				hasPrior = true
 			}
-			if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
-				// First transient failure with prior data — keep showing cache silently
+			if hasPrior && len(data.Windows) == 0 && provider.IsTransientFetchError(data.Error) {
+				// Codex/OpenAI transport blip — keep showing the last good windows.
 				if prev, ok := s.lastResults[name]; ok && prev != nil {
-					result.Results[name] = prev
+					result.Results[name] = prev.Clone()
+				}
+				_ = s.failureGate.ShouldSurfaceError(name, true)
+			} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
+				// First failure with prior data — keep showing cache silently.
+				if prev, ok := s.lastResults[name]; ok && prev != nil {
+					result.Results[name] = prev.Clone()
 				}
 			} else if hasPrior && len(data.Windows) == 0 {
 				// Persistent failure — fall back to cache but show the error
-				prev := s.lastResults[name]
+				prev := s.lastResults[name].Clone()
 				prev.Error = data.Error + " (showing cached)"
 				result.Results[name] = prev
 			}
@@ -198,7 +206,7 @@ func onReady() {
 		statuses := s.statuses // reuse last known statuses
 		s.mu.Unlock()
 
-		updateUI(result.Results, statuses, providerMenus, mReauth)
+		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider)
 		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
 	}
 
@@ -215,7 +223,7 @@ func onReady() {
 		s.mu.Unlock()
 
 		if lastResults != nil {
-			updateUI(lastResults, statuses, providerMenus, mReauth)
+			updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider)
 		}
 	}
 
@@ -253,15 +261,16 @@ func onReady() {
 
 	// Show cached data immediately while fetching fresh data
 	if cached, err := cache.Read(); err == nil && cached != nil {
+		filtered := provider.FilterUsageDataByNames(cached.ProviderData, configuredNames)
 		s.mu.Lock()
-		s.lastResults = cached.ProviderData
+		s.lastResults = filtered
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
-		updateUI(cached.ProviderData, nil, providerMenus, mReauth)
+		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider)
 	}
 
 	// Initial refresh in background (don't block tray UI)
-	go refresh()
+	go refresh(false)
 	go refreshStatus()
 
 	// Check for updates on startup
@@ -281,13 +290,20 @@ func onReady() {
 		for {
 			select {
 			case <-ticker.C:
-				go refresh()
+				go refresh(false)
 			case <-statusTicker.C:
 				go refreshStatus()
 			case <-updateTicker.C:
 				go checkUpdate()
 			case <-mRefresh.ClickedCh:
-				go refresh()
+				go refresh(true)
+			case <-mIconProvider.ClickedCh:
+				cycleIconProviderOverride()
+				s.mu.Lock()
+				lastResults := s.lastResults
+				statuses := s.statuses
+				s.mu.Unlock()
+				updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider)
 			case <-mUpdate.ClickedCh:
 				applyUpdate()
 			case <-mReauth.ClickedCh:
@@ -304,17 +320,18 @@ func onReady() {
 
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
-	provider      provider.Provider
-	headerItem    *systray.MenuItem
-	statusItem    *systray.MenuItem
-	windowItems   []*systray.MenuItem
-	dashboardItem *systray.MenuItem
-	everHealthy   bool // true once we've seen a successful fetch
+	provider          provider.Provider
+	headerItem        *systray.MenuItem
+	statusItem        *systray.MenuItem
+	windowItems       []*systray.MenuItem
+	dashboardItem     *systray.MenuItem
+	everHealthy       bool // true once we've seen useful quota data
+	explicitlyEnabled bool
 }
 
 const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
 
-func createProviderMenuItems(p provider.Provider) *providerMenuItems {
+func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *providerMenuItems {
 	// Provider header (disabled)
 	header := systray.AddMenuItem(p.DisplayName(), "")
 	header.Disable()
@@ -343,72 +360,81 @@ func createProviderMenuItems(p provider.Provider) *providerMenuItems {
 	systray.AddSeparator()
 
 	return &providerMenuItems{
-		provider:      p,
-		headerItem:    header,
-		statusItem:    statusItem,
-		windowItems:   windowItems,
-		dashboardItem: dashboardItem,
+		provider:          p,
+		headerItem:        header,
+		statusItem:        statusItem,
+		windowItems:       windowItems,
+		dashboardItem:     dashboardItem,
+		explicitlyEnabled: explicitlyEnabled,
 	}
 }
 
 func hideProviderMenu(menu *providerMenuItems) {
 	menu.headerItem.Hide()
 	menu.statusItem.Hide()
+	hideProviderWindows(menu)
+	menu.dashboardItem.Hide()
+}
+
+func hideProviderWindows(menu *providerMenuItems) {
 	for _, w := range menu.windowItems {
 		w.Hide()
 	}
-	menu.dashboardItem.Hide()
 }
 
 func showProviderHeader(menu *providerMenuItems) {
 	menu.headerItem.Show()
 }
 
-func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem) {
+func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem) {
 	hasExpiredClaude := false
-	highestUsage := 0.0
+	displayNames := make(map[string]string, len(menus))
+	activeResults := make(map[string]*provider.UsageData, len(results))
 
-	for name, data := range results {
-		menu, ok := menus[name]
-		if !ok {
+	for name, menu := range menus {
+		displayNames[name] = menu.provider.DisplayName()
+		data := results[name]
+
+		if data != nil && data.EstablishesPrimaryUIHistory() {
+			menu.everHealthy = true
+		}
+
+		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) {
+			hideProviderMenu(menu)
 			continue
+		}
+		if data != nil {
+			activeResults[name] = data
 		}
 
 		if data == nil {
 			showProviderHeader(menu)
 			menu.statusItem.SetTitle("No data")
 			menu.statusItem.Show()
+			hideProviderWindows(menu)
+			menu.dashboardItem.Show()
 			continue
 		}
 
-		// Track providers that have worked at least once
-		if data.IsHealthy() {
-			menu.everHealthy = true
-		}
-
 		if data.IsExpired {
-			// Hide providers that have never worked (e.g. credentials on disk
-			// but no active subscription). Only show expired state for providers
-			// the user has actually used successfully before.
-			if !menu.everHealthy {
-				hideProviderMenu(menu)
-				continue
-			}
 			if name == "claude" {
 				hasExpiredClaude = true
 			}
 			showProviderHeader(menu)
+			hideProviderWindows(menu)
 			expiredMsg := "Token expired"
 			if data.Error != "" {
 				expiredMsg = format.HumanizeError(data.Error)
 			}
 			menu.statusItem.SetTitle(expiredMsg)
 			menu.statusItem.Show()
+			menu.dashboardItem.Show()
 			continue
 		}
 
 		if data.Error != "" {
 			showProviderHeader(menu)
+			hideProviderWindows(menu)
 			menu.statusItem.SetTitle(format.HumanizeError(data.Error))
 			menu.statusItem.Show()
 			menu.dashboardItem.Show()
@@ -430,9 +456,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 				window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
 			menu.windowItems[i].Show()
 
-			if window.Utilization > highestUsage {
-				highestUsage = window.Utilization
-			}
 		}
 
 		for i := len(data.Windows); i < len(menu.windowItems); i++ {
@@ -449,15 +472,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		mReauth.Hide()
 	}
 
-	// Build display names map and filtered results (exclude never-healthy providers)
-	displayNames := make(map[string]string, len(menus))
-	activeResults := make(map[string]*provider.UsageData, len(results))
-	for name, menu := range menus {
-		displayNames[name] = menu.provider.DisplayName()
-		if menu.everHealthy {
-			activeResults[name] = results[name]
-		}
-	}
+	updateIconProviderSelector(activeResults, displayNames, mIconProvider)
 
 	// Update icon and title based on worst usage (only active providers)
 	updateTrayIcon(activeResults)
@@ -465,82 +480,191 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	updateTrayTooltip(activeResults, statuses, displayNames)
 
 	// Check notification thresholds
-	checkThresholds(results, displayNames)
+	checkThresholds(activeResults, displayNames)
 }
 
-func updateTrayIcon(results map[string]*provider.UsageData) {
-	worstProjected := 0.0
-	worstProvider := ""
-	worstUtilization := 0.0
+func updateIconProviderSelector(results map[string]*provider.UsageData, displayNames map[string]string, item *systray.MenuItem) {
+	if item == nil {
+		return
+	}
+	choices := activeIconProviderChoices(results)
 
-	for name, data := range results {
-		if data == nil || data.Error != "" || data.IsExpired {
+	s.mu.Lock()
+	if s.iconProviderOverride != "" && !containsString(choices, s.iconProviderOverride) {
+		s.iconProviderOverride = ""
+	}
+	s.iconProviderChoices = choices
+	override := s.iconProviderOverride
+	s.mu.Unlock()
+
+	if len(choices) == 0 {
+		item.SetTitle("Icon: Auto")
+		item.Disable()
+		return
+	}
+
+	item.Enable()
+	if override == "" {
+		item.SetTitle("Icon: Auto")
+		return
+	}
+	item.SetTitle("Icon: " + providerDisplayName(override, displayNames))
+}
+
+func cycleIconProviderOverride() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.iconProviderOverride = nextIconProviderOverride(s.iconProviderOverride, s.iconProviderChoices)
+}
+
+func nextIconProviderOverride(current string, choices []string) string {
+	if len(choices) == 0 {
+		return ""
+	}
+	if current == "" {
+		return choices[0]
+	}
+	for i, choice := range choices {
+		if choice != current {
 			continue
 		}
+		if i == len(choices)-1 {
+			return ""
+		}
+		return choices[i+1]
+	}
+	return ""
+}
 
-		for _, window := range data.Windows {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			if proj.ProjectedPct > worstProjected {
-				worstProjected = proj.ProjectedPct
-				worstProvider = name
-				worstUtilization = window.Utilization
-			}
+func activeIconProviderChoices(results map[string]*provider.UsageData) []string {
+	choices := make([]string, 0, len(results))
+	for name, data := range results {
+		if data != nil {
+			choices = append(choices, name)
+		}
+	}
+	sort.Strings(choices)
+	return choices
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func providerDisplayName(name string, displayNames map[string]string) string {
+	if displayNames != nil && displayNames[name] != "" {
+		return displayNames[name]
+	}
+	if name == "" {
+		return "clawmeter"
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+func selectedTrayProvider(results map[string]*provider.UsageData) (string, *provider.UsageData, bool) {
+	s.mu.Lock()
+	override := s.iconProviderOverride
+	s.mu.Unlock()
+
+	if override != "" {
+		if data := results[override]; data != nil {
+			return override, data, true
 		}
 	}
 
-	// Generate a dynamic icon: provider logo inside crawfish gauge
-	logo := icons.ProviderLogos[worstProvider]
-	iconData := icons.GenerateIcon(logo, worstUtilization, 128)
-	setIconDynamic(worstProvider, worstUtilization, iconData)
+	for _, name := range sortedKeys(results) {
+		data := results[name]
+		if data != nil {
+			return name, data, true
+		}
+	}
+	return "", nil, false
+}
+
+func updateTrayIcon(results map[string]*provider.UsageData) {
+	// Pick the icon's provider using the same severity ordering as the title
+	// and tooltip so an expired/error state never hides behind a healthier
+	// provider's icon. Expired/error map to a red full meter even though
+	// there's no real utilization number.
+	worstProvider := ""
+	meter := icons.MeterState{}
+
+	if name, data, ok := selectedTrayProvider(results); ok {
+		meter = iconMeterState(data)
+		worstProvider = name
+	}
+
+	iconData := icons.GenerateProviderIconWithMeter(worstProvider, meter, 128)
+	setIconDynamic(worstProvider, meter, iconData)
+}
+
+// iconMeterState maps provider usage into the tray icon's three visual
+// channels: actual usage, expected usage by this point in the reset window, and
+// projected risk. The popup keeps exact text; the icon carries the comparison.
+func iconMeterState(data *provider.UsageData) icons.MeterState {
+	if data == nil {
+		return icons.MeterState{}
+	}
+	if data.IsExpired {
+		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
+	}
+	if data.Error != "" && len(data.Windows) == 0 {
+		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
+	}
+
+	var state icons.MeterState
+	worstRisk := -1.0
+	for _, window := range data.Windows {
+		windowLen := forecast.GuessWindowType(window.Name)
+		proj := forecast.Project(window.Utilization, window.ResetsAt, windowLen)
+		if proj.ProjectedPct > worstRisk {
+			worstRisk = proj.ProjectedPct
+			state = icons.MeterState{
+				UsagePct:     window.Utilization,
+				ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
+				RiskPct:      proj.ProjectedPct,
+				ShowExpected: true,
+			}
+		}
+	}
+	return state
+}
+
+func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
+	if windowLen <= 0 {
+		return 0
+	}
+	elapsed := windowLen - time.Until(resetsAt)
+	if elapsed <= 0 {
+		return 0
+	}
+	if elapsed >= windowLen {
+		return 100
+	}
+	return elapsed.Seconds() / windowLen.Seconds() * 100
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
 	var title string
-	worstPct := 0.0
-	worstProvider := ""
-
-	for _, name := range sortedKeys(results) {
-		data := results[name]
-		if data == nil {
-			continue
-		}
-
-		display := name
-		// Capitalize first letter for display
-		if len(display) > 0 {
-			display = strings.ToUpper(display[:1]) + display[1:]
-		}
+	name, data, ok := selectedTrayProvider(results)
+	if ok {
+		display := providerDisplayName(name, nil)
 
 		if data.IsExpired {
-			// Expired always takes priority as the "worst"
 			title = display + " expired"
-			break
-		}
-
-		if data.Error != "" && len(data.Windows) == 0 {
-			// Track error but keep looking for expired (higher priority)
-			if title == "" {
-				title = display + " error"
-			}
-			continue
-		}
-
-		for _, window := range data.Windows {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			if proj.ProjectedPct > worstPct {
-				worstPct = proj.ProjectedPct
-				worstProvider = display
-			}
+		} else if data.Error != "" && len(data.Windows) == 0 {
+			title = display + " error"
+		} else {
+			title = fmt.Sprintf("%s %.0f%%", display, providerProjectedPct(data))
 		}
 	}
-
-	// If no expired/error took priority, show the worst provider by projected usage
 	if title == "" {
-		if worstProvider != "" {
-			title = fmt.Sprintf("%s %.0f%%", worstProvider, worstPct)
-		} else {
-			title = "clawmeter"
-		}
+		title = "clawmeter"
 	}
 
 	s.mu.Lock()
@@ -552,6 +676,20 @@ func updateTrayTitle(results map[string]*provider.UsageData) {
 	if changed {
 		systray.SetTitle(title)
 	}
+}
+
+func providerProjectedPct(data *provider.UsageData) float64 {
+	if data == nil {
+		return 0
+	}
+	worst := 0.0
+	for _, window := range data.Windows {
+		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+		if proj.ProjectedPct > worst {
+			worst = proj.ProjectedPct
+		}
+	}
+	return worst
 }
 
 func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, displayNames map[string]string) {
@@ -612,7 +750,7 @@ func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[stri
 			tooltip += "\n\nUpdated " + format.FormatDuration(time.Since(refreshTime)) + " ago"
 		}
 	} else {
-		tooltip = "Clawmeter — no providers configured"
+		tooltip = "Clawmeter — no active providers"
 	}
 	s.mu.Lock()
 	changed := tooltip != s.currentTooltip
@@ -749,6 +887,14 @@ func notify(title, body, urgency string) {
 	}
 }
 
+func providerNames(providers []provider.Provider) []string {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Name())
+	}
+	return names
+}
+
 // sortedKeys returns provider names sorted by severity (worst first).
 // Expired > error > highest projected usage > alphabetical.
 func sortedKeys(m map[string]*provider.UsageData) []string {
@@ -779,13 +925,5 @@ func providerSeverity(data *provider.UsageData) float64 {
 	if data.Error != "" && len(data.Windows) == 0 {
 		return 9000 // error next
 	}
-	worst := 0.0
-	for _, w := range data.Windows {
-		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
-		if proj.ProjectedPct > worst {
-			worst = proj.ProjectedPct
-		}
-	}
-	return worst
+	return providerProjectedPct(data)
 }
-

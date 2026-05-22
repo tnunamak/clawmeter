@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -41,16 +42,140 @@ type UsageWindow struct {
 
 // UsageData contains usage information for a provider.
 type UsageData struct {
-	Provider  string        `json:"provider"`            // Provider name
-	FetchedAt time.Time     `json:"fetched_at"`          // When this data was fetched
-	Windows   []UsageWindow `json:"windows"`             // Usage windows (providers may have 1 or more)
+	Provider  string        `json:"provider"`             // Provider name
+	FetchedAt time.Time     `json:"fetched_at"`           // When this data was fetched
+	Windows   []UsageWindow `json:"windows"`              // Usage windows (providers may have 1 or more)
 	IsExpired bool          `json:"is_expired,omitempty"` // True if credentials are expired
-	Error     string        `json:"error,omitempty"`     // Error message if fetch failed
+	Error     string        `json:"error,omitempty"`      // Error message if fetch failed
+}
+
+// Clone returns a deep-enough copy for UI/cache fallback paths.
+func (u *UsageData) Clone() *UsageData {
+	if u == nil {
+		return nil
+	}
+	clone := *u
+	if u.Windows != nil {
+		clone.Windows = append([]UsageWindow(nil), u.Windows...)
+	}
+	return &clone
 }
 
 // IsHealthy returns true if the usage data was fetched successfully.
 func (u *UsageData) IsHealthy() bool {
 	return u.Error == "" && !u.IsExpired
+}
+
+// HasUsageWindows reports whether the data contains useful quota readings.
+func (u *UsageData) HasUsageWindows() bool {
+	return u != nil && len(u.Windows) > 0 && !u.IsExpired
+}
+
+// EstablishesPrimaryUIHistory reports whether this data proves the provider
+// has produced useful quota data before.
+func (u *UsageData) EstablishesPrimaryUIHistory() bool {
+	return u.HasUsageWindows()
+}
+
+// ShouldShowInPrimaryUI decides whether a provider belongs in the main tray
+// or default status output. Auto-detected providers must prove usefulness
+// before they take visual space; explicitly enabled providers remain visible
+// so their setup errors are actionable.
+func ShouldShowInPrimaryUI(data *UsageData, hadPriorUsefulData, explicitlyEnabled bool) bool {
+	if explicitlyEnabled {
+		return true
+	}
+	if data == nil {
+		return false
+	}
+	if data.IsHealthy() && data.HasUsageWindows() {
+		return true
+	}
+	if data.HasUsageWindows() {
+		return true
+	}
+	return hadPriorUsefulData && (data.IsExpired || data.Error != "")
+}
+
+// IsTransientFetchError reports whether an error is likely to be a temporary
+// transport/subprocess failure rather than an auth, quota, or setup issue.
+func IsTransientFetchError(errMsg string) bool {
+	lowered := strings.ToLower(errMsg)
+	if lowered == "" {
+		return false
+	}
+	transientNeedles := []string{
+		"no response received",
+		"without a response",
+		"context deadline exceeded",
+		"connection timed out",
+		"client.timeout",
+		"i/o timeout",
+		"connection reset",
+		"broken pipe",
+		"unexpected eof",
+	}
+	for _, needle := range transientNeedles {
+		if strings.Contains(lowered, needle) {
+			return true
+		}
+	}
+	if lowered == "eof" {
+		return true
+	}
+	return false
+}
+
+// FilterUsageDataByNames returns a copy of data containing only current names.
+func FilterUsageDataByNames(data map[string]*UsageData, names []string) map[string]*UsageData {
+	filtered := make(map[string]*UsageData, len(names))
+	allowed := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		allowed[name] = struct{}{}
+	}
+	for name, usage := range data {
+		if _, ok := allowed[name]; ok {
+			filtered[name] = usage
+		}
+	}
+	return filtered
+}
+
+// SetupState describes whether a provider can be polled or needs setup.
+type SetupState string
+
+const (
+	SetupReady       SetupState = "ready"
+	SetupNeedsAuth   SetupState = "needs_auth"
+	SetupUnavailable SetupState = "unavailable"
+)
+
+// SetupStatus is a lightweight setup/discovery status for provider listings.
+type SetupStatus struct {
+	State  SetupState
+	Detail string
+}
+
+// IsReady reports whether the provider has enough local setup to be polled.
+func (s SetupStatus) IsReady() bool {
+	return s.State == SetupReady
+}
+
+// SetupReporter can be implemented by providers that can distinguish
+// installed-but-not-authenticated from fully unavailable.
+type SetupReporter interface {
+	SetupStatus() SetupStatus
+}
+
+// GetSetupStatus returns a provider's setup status.
+func GetSetupStatus(p Provider) SetupStatus {
+	if reporter, ok := p.(SetupReporter); ok {
+		return reporter.SetupStatus()
+	}
+	if p.IsConfigured() {
+		return SetupStatus{State: SetupReady, Detail: "credentials found"}
+	}
+	return SetupStatus{State: SetupUnavailable, Detail: "no credentials"}
 }
 
 // GetWindow retrieves a specific window by name.
@@ -128,6 +253,27 @@ type EnabledFilter interface {
 	IsProviderDisabled(name string) bool
 }
 
+// ExplicitEnablementFilter is implemented by config filters that can
+// distinguish explicit opt-in from zero-config auto-detection.
+type ExplicitEnablementFilter interface {
+	IsProviderExplicitlyEnabled(name string) bool
+}
+
+// AutoPollController can be implemented by providers whose credentials should
+// be discoverable but not polled by default.
+type AutoPollController interface {
+	AutoPollByDefault() bool
+}
+
+// AutoPollByDefault reports whether credentials alone should opt a provider
+// into default polling.
+func AutoPollByDefault(p Provider) bool {
+	if controller, ok := p.(AutoPollController); ok {
+		return controller.AutoPollByDefault()
+	}
+	return true
+}
+
 // GetConfigured returns providers that should be polled: those with
 // credentials AND not explicitly disabled by the registry's configured
 // EnabledFilter. Order is deterministic.
@@ -138,6 +284,13 @@ func (r *Registry) GetConfigured() []Provider {
 			continue
 		}
 		if r.filter != nil && r.filter.IsProviderDisabled(p.Name()) {
+			continue
+		}
+		explicitlyEnabled := false
+		if explicitFilter, ok := r.filter.(ExplicitEnablementFilter); ok {
+			explicitlyEnabled = explicitFilter.IsProviderExplicitlyEnabled(p.Name())
+		}
+		if !explicitlyEnabled && !AutoPollByDefault(p) {
 			continue
 		}
 		result = append(result, p)
@@ -152,9 +305,9 @@ func (r *Registry) GetConfigured() []Provider {
 // errors when prior cached data is available, and backs off polling for
 // persistently failing providers. Modeled after CodexBar's ConsecutiveFailureGate.
 type FailureGate struct {
-	streaks   map[string]int
-	backoffs  map[string]time.Duration
-	nextPoll  map[string]time.Time
+	streaks  map[string]int
+	backoffs map[string]time.Duration
+	nextPoll map[string]time.Time
 }
 
 const (

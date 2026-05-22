@@ -5,16 +5,26 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
-const timeout = 15 * time.Second
+const (
+	timeout          = 15 * time.Second
+	maxFetchAttempts = 2
+	retryDelay       = 150 * time.Millisecond
+	maxStderrBytes   = 4096
+)
+
+var errNoResponse = errors.New("no response received")
 
 // Provider implements the provider.Provider interface for OpenAI/Codex.
 type Provider struct {
@@ -28,7 +38,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "openai" }
+func (p *Provider) Name() string         { return "openai" }
 func (p *Provider) DisplayName() string  { return "OpenAI" }
 func (p *Provider) Description() string  { return "OpenAI/Codex (via codex CLI)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
@@ -46,6 +56,26 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("codex not found on PATH")
 	}
 
+	var lastErr error
+	for attempt := 1; attempt <= maxFetchAttempts; attempt++ {
+		data, err := p.fetchUsageOnce(ctx, codexPath)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if attempt == maxFetchAttempts || !isRetryableAppServerError(err) || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-time.After(retryDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+func (p *Provider) fetchUsageOnce(ctx context.Context, codexPath string) (*provider.UsageData, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -60,15 +90,48 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	stderrCh := collectStderr(stderr)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
-	defer func() {
+	finished := false
+	cleanup := func(kill bool) (string, error) {
 		stdin.Close()
-		cmd.Process.Kill()
-		cmd.Wait()
+		killed := false
+		if kill && cmd.Process != nil {
+			if err := cmd.Process.Kill(); err == nil {
+				killed = true
+			}
+		}
+		waitErr := cmd.Wait()
+		if killed {
+			waitErr = nil
+		}
+		return <-stderrCh, waitErr
+	}
+	defer func() {
+		if !finished {
+			_, _ = cleanup(true)
+		}
 	}()
+	fail := func(stage string, err error) (*provider.UsageData, error) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
+		stderrText, waitErr := cleanup(true)
+		finished = true
+		return nil, &appServerError{
+			stage:   stage,
+			err:     err,
+			waitErr: waitErr,
+			stderr:  stderrText,
+		}
+	}
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
@@ -84,11 +147,11 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			},
 		},
 	}); err != nil {
-		return nil, fmt.Errorf("send initialize: %w", err)
+		return fail("send initialize", err)
 	}
 
 	if _, err := readResponse(scanner); err != nil {
-		return nil, fmt.Errorf("read initialize response: %w", err)
+		return fail("read initialize response", err)
 	}
 
 	// Step 2: initialized notification
@@ -96,7 +159,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		"method": "initialized",
 		"params": map[string]interface{}{},
 	}); err != nil {
-		return nil, fmt.Errorf("send initialized: %w", err)
+		return fail("send initialized", err)
 	}
 
 	// Step 3: account/read — check auth type
@@ -105,12 +168,12 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		"method": "account/read",
 		"params": map[string]interface{}{},
 	}); err != nil {
-		return nil, fmt.Errorf("send account/read: %w", err)
+		return fail("send account/read", err)
 	}
 
 	acctData, err := readResponse(scanner)
 	if err != nil {
-		return nil, fmt.Errorf("read account response: %w", err)
+		return fail("read account response", err)
 	}
 
 	acct, err := parseAccountResponse(acctData)
@@ -124,22 +187,31 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		"method": "account/rateLimits/read",
 		"params": map[string]interface{}{},
 	}); err != nil {
-		return nil, fmt.Errorf("send rateLimits: %w", err)
+		return fail("send rateLimits", err)
 	}
 
 	respData, err := readResponse(scanner)
 	if err != nil {
-		return nil, fmt.Errorf("read rateLimits response: %w", err)
+		return fail("read rateLimits response", err)
 	}
 
-	return p.parseRateLimits(respData, acct)
+	data, err := p.parseRateLimits(respData, acct)
+	stderrText, waitErr := cleanup(true)
+	finished = true
+	if err != nil {
+		return nil, err
+	}
+	if waitErr != nil && data == nil {
+		return nil, &appServerError{stage: "codex app-server", err: waitErr, stderr: stderrText}
+	}
+	return data, nil
 }
 
 // Account response types
 
 type accountResponse struct {
-	Account           *accountDetails `json:"account"`
-	RequiresOpenAIAuth bool           `json:"requiresOpenaiAuth"`
+	Account            *accountDetails `json:"account"`
+	RequiresOpenAIAuth bool            `json:"requiresOpenaiAuth"`
 }
 
 type accountDetails struct {
@@ -282,7 +354,89 @@ func readResponse(scanner *bufio.Scanner) ([]byte, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("no response received")
+	return nil, errNoResponse
+}
+
+type appServerError struct {
+	stage   string
+	err     error
+	waitErr error
+	stderr  string
+}
+
+func (e *appServerError) Error() string {
+	msg := e.err.Error()
+	if errors.Is(e.err, errNoResponse) {
+		msg = "codex app-server exited without a response"
+	}
+	if e.stage != "" {
+		msg = e.stage + ": " + msg
+	}
+	if e.waitErr != nil {
+		msg += fmt.Sprintf(" (%v)", e.waitErr)
+	}
+	if e.stderr != "" {
+		msg += ": " + truncateDiagnostic(redactDiagnostic(e.stderr), 160)
+	}
+	return msg
+}
+
+func (e *appServerError) Unwrap() error {
+	return e.err
+}
+
+func isRetryableAppServerError(err error) bool {
+	if errors.Is(err, errNoResponse) || provider.IsTransientFetchError(err.Error()) {
+		return true
+	}
+	return false
+}
+
+func collectStderr(r io.Reader) <-chan string {
+	ch := make(chan string, 1)
+	go func() {
+		defer close(ch)
+		buf := make([]byte, 1024)
+		var out strings.Builder
+		for {
+			n, err := r.Read(buf)
+			if n > 0 && out.Len() < maxStderrBytes {
+				remaining := maxStderrBytes - out.Len()
+				if n > remaining {
+					n = remaining
+				}
+				out.Write(buf[:n])
+			}
+			if err != nil {
+				break
+			}
+		}
+		ch <- strings.TrimSpace(out.String())
+	}()
+	return ch
+}
+
+func redactDiagnostic(s string) string {
+	words := strings.Fields(s)
+	for i, word := range words {
+		if strings.HasPrefix(word, "sk-") {
+			words[i] = "[REDACTED]"
+		}
+	}
+	if len(words) == 0 {
+		return ""
+	}
+	return strings.Join(words, " ")
+}
+
+func truncateDiagnostic(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // Register registers the OpenAI provider with the registry.

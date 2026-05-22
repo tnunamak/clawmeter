@@ -13,7 +13,7 @@ import (
 type Config struct {
 	// Providers configuration - keys are provider names (claude, openai, etc.)
 	Providers map[string]ProviderConfig `yaml:"providers,omitempty"`
-	
+
 	// Global settings
 	Settings GlobalSettings `yaml:"settings,omitempty"`
 }
@@ -22,13 +22,13 @@ type Config struct {
 type ProviderConfig struct {
 	// Enabled determines if this provider is active
 	Enabled bool `yaml:"enabled"`
-	
+
 	// APIKey for services that use API key authentication
 	APIKey string `yaml:"api_key,omitempty"`
-	
+
 	// OAuthToken for services that use OAuth
 	OAuthToken string `yaml:"oauth_token,omitempty"`
-	
+
 	// Extra holds provider-specific configuration
 	Extra map[string]interface{} `yaml:"extra,omitempty"`
 }
@@ -37,7 +37,7 @@ type ProviderConfig struct {
 type GlobalSettings struct {
 	// PollInterval for the tray (in seconds)
 	PollInterval int `yaml:"poll_interval,omitempty"`
-	
+
 	// NotificationThresholds for usage warnings
 	NotificationThresholds NotificationConfig `yaml:"notification_thresholds,omitempty"`
 }
@@ -77,6 +77,13 @@ func (c *Config) IsProviderDisabled(name string) bool {
 		return false
 	}
 	return !pc.Enabled
+}
+
+// IsProviderExplicitlyEnabled reports whether the user has explicitly opted a
+// provider into polling in config.
+func (c *Config) IsProviderExplicitlyEnabled(name string) bool {
+	pc, ok := c.Providers[name]
+	return ok && pc.Enabled
 }
 
 // configPath returns the path to the config file.

@@ -50,10 +50,11 @@ func bar(pct float64) string {
 
 // ProviderFormatter handles formatting for a single provider's output.
 type ProviderFormatter struct {
-	Name    string
-	Display string
-	Data    *provider.UsageData
-	Status  *status.ProviderStatus
+	Name              string
+	Display           string
+	Data              *provider.UsageData
+	Status            *status.ProviderStatus
+	ExplicitlyEnabled bool
 }
 
 // FormatColor returns colorized multi-line output for a provider (legacy, unaligned).
@@ -161,12 +162,13 @@ type MultiProviderOutput struct {
 	Providers []ProviderFormatter
 }
 
-// HideUnavailable removes providers that are expired and have never returned
-// healthy data (e.g. credentials on disk but no active subscription).
+// HideUnavailable removes auto-detected providers that have not produced
+// useful usage data. Explicitly enabled providers remain visible so setup
+// errors are actionable.
 func (m *MultiProviderOutput) HideUnavailable() {
 	filtered := make([]ProviderFormatter, 0, len(m.Providers))
 	for _, pf := range m.Providers {
-		if pf.Data != nil && pf.Data.IsExpired {
+		if !provider.ShouldShowInPrimaryUI(pf.Data, false, pf.ExplicitlyEnabled) {
 			continue
 		}
 		filtered = append(filtered, pf)
@@ -331,7 +333,7 @@ func Status(jsonMode, plainMode, showAll bool) int {
 
 	// Try cache first
 	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() {
-		output := buildOutputFromCache(registry, cacheEntry)
+		output := buildOutputFromCache(registry, cfg, cacheEntry)
 		if !showAll {
 			output.HideUnavailable()
 		}
@@ -356,7 +358,10 @@ func Status(jsonMode, plainMode, showAll bool) int {
 			for name, data := range result.Results {
 				if data != nil && data.Error != "" && len(data.Windows) == 0 {
 					if cached, ok := cacheEntry.GetProvider(name); ok && cached.IsHealthy() {
-						cached.Error = data.Error + " (showing cached)"
+						cached = cached.Clone()
+						if !provider.IsTransientFetchError(data.Error) {
+							cached.Error = data.Error + " (showing cached)"
+						}
 						result.Results[name] = cached
 					}
 				}
@@ -378,7 +383,7 @@ func Status(jsonMode, plainMode, showAll bool) int {
 	<-done
 
 	// Build output
-	output := buildOutputFromResult(registry, result, statuses)
+	output := buildOutputFromResult(registry, cfg, result, statuses)
 	if !showAll {
 		output.HideUnavailable()
 	}
@@ -406,13 +411,18 @@ func Check() int {
 	// Try cache first
 	var output *MultiProviderOutput
 	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() {
-		output = buildOutputFromCache(registry, cacheEntry)
+		output = buildOutputFromCache(registry, cfg, cacheEntry)
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		result := provider.FetchAllParallel(ctx, registry)
 		_ = cache.Write(result)
-		output = buildOutputFromResult(registry, result, nil)
+		output = buildOutputFromResult(registry, cfg, result, nil)
+	}
+	output.HideUnavailable()
+	if len(output.Providers) == 0 {
+		fmt.Fprintf(os.Stderr, "clawmeter: no active providers\n")
+		return 2
 	}
 
 	worstTier := 4
@@ -435,7 +445,7 @@ func Check() int {
 }
 
 // buildOutputFromCache creates output from cached data.
-func buildOutputFromCache(registry *provider.Registry, cacheEntry *cache.Entry) *MultiProviderOutput {
+func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cacheEntry *cache.Entry) *MultiProviderOutput {
 	output := &MultiProviderOutput{
 		Providers: make([]ProviderFormatter, 0),
 	}
@@ -444,9 +454,10 @@ func buildOutputFromCache(registry *provider.Registry, cacheEntry *cache.Entry) 
 	for _, p := range registry.GetConfigured() {
 		data, _ := cacheEntry.GetProvider(p.Name())
 		output.Providers = append(output.Providers, ProviderFormatter{
-			Name:    p.Name(),
-			Display: p.DisplayName(),
-			Data:    data,
+			Name:              p.Name(),
+			Display:           p.DisplayName(),
+			Data:              data,
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
 		})
 	}
 
@@ -454,7 +465,7 @@ func buildOutputFromCache(registry *provider.Registry, cacheEntry *cache.Entry) 
 }
 
 // buildOutputFromResult creates output from fetch results.
-func buildOutputFromResult(registry *provider.Registry, result *provider.MultiFetchResult, statuses map[string]*status.ProviderStatus) *MultiProviderOutput {
+func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, result *provider.MultiFetchResult, statuses map[string]*status.ProviderStatus) *MultiProviderOutput {
 	output := &MultiProviderOutput{
 		Providers: make([]ProviderFormatter, 0),
 	}
@@ -466,10 +477,11 @@ func buildOutputFromResult(registry *provider.Registry, result *provider.MultiFe
 			continue
 		}
 		output.Providers = append(output.Providers, ProviderFormatter{
-			Name:    p.Name(),
-			Display: p.DisplayName(),
-			Data:    data,
-			Status:  statuses[p.Name()],
+			Name:              p.Name(),
+			Display:           p.DisplayName(),
+			Data:              data,
+			Status:            statuses[p.Name()],
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
 		})
 	}
 
@@ -608,16 +620,7 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			rest = summaryCounts(healthy-1, warning, critical, errored, expired)
 		}
 
-		absDelta := math.Abs(worstU.delta)
-		var paceWord string
-		switch {
-		case absDelta <= 2:
-			paceWord = "on pace"
-		case worstU.delta > 0:
-			paceWord = fmt.Sprintf("%.0f%% behind", absDelta)
-		default:
-			paceWord = fmt.Sprintf("%.0f%% ahead", absDelta)
-		}
+		paceWord := forecast.PaceLabel(worstU.maxProjectedPct, worstU.delta)
 		line = fmt.Sprintf("⚠ %s %s%s", windowLabel, paceWord, etaStr)
 		if rest != "" {
 			line += " — " + rest
@@ -666,9 +669,9 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 	// Check if no providers are configured
 	if len(output.Providers) == 0 {
 		if jsonMode {
-			fmt.Println(`{"error": "no providers configured"}`)
+			fmt.Println(`{"error": "no active providers"}`)
 		} else {
-			fmt.Println("no providers configured")
+			fmt.Println("no active providers")
 		}
 		return
 	}

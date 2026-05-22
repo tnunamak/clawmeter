@@ -335,6 +335,8 @@ func providersCmd(args []string) int {
 	fmt.Println("Legend:")
 	fmt.Println("  detected      credentials found, will be polled")
 	fmt.Println("  enabled       explicitly enabled in config, will be polled")
+	fmt.Println("  available     credentials found; enable to poll")
+	fmt.Println("  setup needed  installed or enabled, but missing usable auth")
 	fmt.Println("  disabled      explicitly disabled in config, will NOT be polled")
 	fmt.Println("  no credentials  no credentials detected; nothing to poll")
 	fmt.Println()
@@ -348,16 +350,27 @@ func providersCmd(args []string) int {
 // user-facing summary of how a provider will be treated.
 func describeProviderState(p provider.Provider, cfg *config.Config) string {
 	pc, hasEntry := cfg.Providers[p.Name()]
-	configured := p.IsConfigured()
+	setup := provider.GetSetupStatus(p)
+	autoPoll := provider.AutoPollByDefault(p)
 	switch {
 	case hasEntry && !pc.Enabled:
 		return "disabled"
-	case hasEntry && pc.Enabled && configured:
+	case hasEntry && pc.Enabled && setup.IsReady():
 		return "enabled"
-	case hasEntry && pc.Enabled && !configured:
-		return "enabled but no credentials"
-	case configured:
+	case hasEntry && pc.Enabled:
+		if setup.Detail != "" {
+			return "enabled, setup needed: " + setup.Detail
+		}
+		return "enabled, setup needed"
+	case setup.IsReady() && autoPoll:
 		return "detected"
+	case setup.IsReady():
+		return "available, enable to poll"
+	case setup.State == provider.SetupNeedsAuth:
+		if setup.Detail != "" {
+			return "setup needed: " + setup.Detail
+		}
+		return "setup needed"
 	default:
 		return "no credentials"
 	}

@@ -13,9 +13,9 @@ const (
 	FiveHourWindow = 5 * time.Hour
 	SevenDayWindow = 7 * 24 * time.Hour
 
-	// paceWidth is the fixed column width for the pace label (e.g. "100% behind").
+	// paceWidth is the fixed column width for the pace label (e.g. "projects 100%").
 	// Must be >= the longest output of the pace switch in PaceIndicator.
-	paceWidth = 11
+	paceWidth = 16
 )
 
 type Projection struct {
@@ -78,23 +78,13 @@ func (p Projection) Indicator() string {
 
 // PaceIndicator returns a human-readable pace summary like CodexBar.
 func (p Projection) PaceIndicator() string {
-	absDelta := math.Abs(p.Delta)
-
-	var left string
-	switch {
-	case absDelta <= 2:
-		left = "on pace"
-	case p.Delta > 0:
-		left = fmt.Sprintf("%.0f%% behind", absDelta)
-	default:
-		left = fmt.Sprintf("%.0f%% ahead", absDelta)
-	}
+	left := PaceLabel(p.ProjectedPct, p.Delta)
 	left = fmt.Sprintf("%-*s", paceWidth, left)
 
 	var right string
 	if p.WillLastToReset {
 		right = "lasts to reset"
-	} else if p.RunsOutIn > 0 && absDelta > 2 {
+	} else if p.RunsOutIn > 0 {
 		right = "runs out " + shortDuration(p.RunsOutIn)
 	}
 
@@ -102,6 +92,22 @@ func (p Projection) PaceIndicator() string {
 		return left + " · " + right
 	}
 	return left
+}
+
+// PaceLabel summarizes the usage rate. Projected limit pressure wins over
+// absolute delta because early-window percentage-point deltas can look tiny
+// while still projecting over the reset-window limit.
+func PaceLabel(projectedPct, delta float64) string {
+	switch {
+	case projectedPct >= 90:
+		return fmt.Sprintf("projects %.0f%%", projectedPct)
+	case math.Abs(delta) <= 2:
+		return "on pace"
+	case delta > 0:
+		return fmt.Sprintf("%.0f%% behind", math.Abs(delta))
+	default:
+		return fmt.Sprintf("%.0f%% ahead", math.Abs(delta))
+	}
 }
 
 // ColorIndicator returns an ANSI-colored indicator with pace info.
