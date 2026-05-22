@@ -28,9 +28,12 @@ func TestIconMeterStateUsesActualExpectedAndProjectedRiskSeparately(t *testing.T
 		},
 	}
 
-	meter := iconMeterState(data)
+	meter := iconMeterState(data, "")
 	if !meter.ShowExpected {
 		t.Fatal("meter should show expected pace for healthy usage windows")
+	}
+	if meter.Label != "7D" {
+		t.Fatalf("meter.Label = %q, want 7D", meter.Label)
 	}
 	if meter.UsagePct != 50 {
 		t.Fatalf("UsagePct = %.1f, want actual utilization from worst projected window", meter.UsagePct)
@@ -70,24 +73,106 @@ func TestProviderSeverityUsesHighestProjectedUsage(t *testing.T) {
 	}
 }
 
-func TestIconProviderOverrideCyclesThroughAutoAndActiveProviders(t *testing.T) {
-	choices := []string{"claude", "openai"}
+func TestIconTargetOverrideCyclesThroughAutoProvidersAndQuotaWindows(t *testing.T) {
+	choices := []iconTarget{
+		{Provider: "claude", Window: "5h"},
+		{Provider: "claude", Window: "7d All"},
+		{Provider: "openai", Window: "5h"},
+		{Provider: "openai", Window: "7d"},
+	}
 
-	if got := nextIconProviderOverride("", choices); got != "claude" {
-		t.Fatalf("next from auto = %q, want claude", got)
+	if got := nextIconTargetOverride(iconTarget{}, choices); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+		t.Fatalf("next from auto = %+v, want claude/5h", got)
 	}
-	if got := nextIconProviderOverride("claude", choices); got != "openai" {
-		t.Fatalf("next from claude = %q, want openai", got)
+	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
+		t.Fatalf("next from claude 5h = %+v, want claude/7d All", got)
 	}
-	if got := nextIconProviderOverride("openai", choices); got != "" {
-		t.Fatalf("next from openai = %q, want auto", got)
+	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices); got != (iconTarget{}) {
+		t.Fatalf("next from final target = %+v, want auto", got)
 	}
-	if got := nextIconProviderOverride("missing", choices); got != "" {
-		t.Fatalf("next from missing override = %q, want auto", got)
+	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices); got != (iconTarget{}) {
+		t.Fatalf("next from missing override = %+v, want auto", got)
 	}
 }
 
-func TestSelectedTrayProviderHonorsIconOverride(t *testing.T) {
+func TestIconCycleMenuTitleMentionsDoubleClickAutoReset(t *testing.T) {
+	displayNames := map[string]string{"claude": "Claude"}
+	if got := iconCycleMenuTitle(iconTarget{}, displayNames); got != "Icon: Auto (click to cycle)" {
+		t.Fatalf("auto title = %q", got)
+	}
+	got := iconCycleMenuTitle(iconTarget{Provider: "claude", Window: "7d All"}, displayNames)
+	want := "Icon: Claude 7A (double-click tray for Auto)"
+	if got != want {
+		t.Fatalf("pinned title = %q, want %q", got, want)
+	}
+}
+
+func TestTrayClickDispatcherSingleClickCyclesAfterWindow(t *testing.T) {
+	ch := make(chan iconClickAction, 2)
+	dispatcher := newTrayClickDispatcher(ch, 5*time.Millisecond)
+
+	dispatcher.tapped()
+
+	if got := waitIconClickAction(t, ch, 100*time.Millisecond); got != iconClickCycle {
+		t.Fatalf("single click action = %v, want cycle", got)
+	}
+}
+
+func TestTrayClickDispatcherDoubleClickResetsAutoWithoutCycle(t *testing.T) {
+	ch := make(chan iconClickAction, 2)
+	dispatcher := newTrayClickDispatcher(ch, 50*time.Millisecond)
+
+	dispatcher.tapped()
+	dispatcher.tapped()
+
+	if got := waitIconClickAction(t, ch, 100*time.Millisecond); got != iconClickResetAuto {
+		t.Fatalf("double click action = %v, want reset auto", got)
+	}
+	select {
+	case got := <-ch:
+		t.Fatalf("double click emitted extra action %v", got)
+	case <-time.After(80 * time.Millisecond):
+	}
+}
+
+func TestActiveIconTargetsIncludesEveryProviderWindow(t *testing.T) {
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "5h"},
+				{Name: "7d"},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				{Name: "5h"},
+				{Name: "7d All"},
+				{Name: "7d Sonnet"},
+			},
+		},
+	}
+
+	got := activeIconTargets(results)
+	want := []iconTarget{
+		{Provider: "claude", Window: "5h"},
+		{Provider: "claude", Window: "7d All"},
+		{Provider: "claude", Window: "7d Sonnet"},
+		{Provider: "openai", Window: "5h"},
+		{Provider: "openai", Window: "7d"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSelectedTrayTargetHonorsQuotaOverride(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -105,20 +190,36 @@ func TestSelectedTrayProviderHonorsIconOverride(t *testing.T) {
 	}
 
 	s.mu.Lock()
-	s.iconProviderOverride = "claude"
+	s.iconTargetOverride = iconTarget{Provider: "claude", Window: "5h"}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		s.iconProviderOverride = ""
+		s.iconTargetOverride = iconTarget{}
 		s.mu.Unlock()
 	}()
 
-	name, _, ok := selectedTrayProvider(results)
+	name, _, windowName, ok := selectedTrayTarget(results)
 	if !ok {
-		t.Fatal("selectedTrayProvider returned no provider")
+		t.Fatal("selectedTrayTarget returned no provider")
 	}
-	if name != "claude" {
-		t.Fatalf("selected provider = %q, want override claude", name)
+	if name != "claude" || windowName != "5h" {
+		t.Fatalf("selected target = %s/%s, want claude/5h", name, windowName)
+	}
+}
+
+func TestWindowBadgeLabelUsesTwoCharacterQuotaCode(t *testing.T) {
+	tests := map[string]string{
+		"7d All":     "7A",
+		"5h":         "5H",
+		"monthly":    "MO",
+		"???":        "--",
+		"7d Sonnet":  "7S",
+		"daily-soft": "DA",
+	}
+	for input, want := range tests {
+		if got := windowBadgeLabel(input); got != want {
+			t.Fatalf("windowBadgeLabel(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -129,6 +230,17 @@ func TestExpectedUsagePctClampsToResetWindow(t *testing.T) {
 	if got := expectedUsagePct(time.Now().Add(-time.Hour), forecast.SevenDayWindow); got != 100 {
 		t.Fatalf("past-reset expected usage = %.1f, want 100", got)
 	}
+}
+
+func waitIconClickAction(t *testing.T, ch <-chan iconClickAction, timeout time.Duration) iconClickAction {
+	t.Helper()
+	select {
+	case action := <-ch:
+		return action
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for icon click action")
+	}
+	return iconClickCycle
 }
 
 func absFloat(n float64) float64 {

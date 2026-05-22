@@ -19,7 +19,7 @@ import (
 
 var currentIconName string
 
-const dynamicIconVersion = 31
+const dynamicIconVersion = 33
 
 var iconSet = map[string][]byte{
 	"green":  icons.Green,
@@ -59,68 +59,29 @@ func setIconByName(name string, _ []byte) {
 	// Provide multiple pixmap sizes as fallback for DEs that can't resolve
 	// the icon name (e.g. user hicolor dir without index.theme).
 	data := iconSet[name]
-	pixmaps := make([][]byte, 0, 3)
-	for _, size := range []int{16, 32, 64} {
+	pixmaps := make([][]byte, 0, 4)
+	for _, size := range []int{16, 32, 64, 128} {
 		pixmaps = append(pixmaps, resizePNG(data, size))
 	}
 	systray.SetIconNameWithPixmap(iconName, pixmaps)
 }
 
 func setIconDynamic(providerName string, meter icons.MeterState, data128 []byte) {
-	// KDE can keep resolving a stale themed icon for stable dynamic names. Use
-	// a versioned, bucketed name so visual rendering changes and severity
-	// changes force a fresh tray icon lookup.
-	iconName := dynamicIconName(providerName, meter)
-
-	// Write to icon theme at multiple sizes
-	home, err := os.UserHomeDir()
-	if err == nil {
-		base := filepath.Join(home, ".local", "share", "icons", "hicolor")
-		for _, size := range []int{16, 22, 24, 32, 48, 64, 128} {
-			dir := filepath.Join(base, fmt.Sprintf("%dx%d", size, size), "status")
-			os.MkdirAll(dir, 0755)
-			os.WriteFile(filepath.Join(dir, iconName+".png"),
-				dynamicIconData(providerName, meter, data128, size), 0644)
-		}
-	}
-
-	if iconName == currentIconName {
-		// Same provider — force pixmap update (icon name unchanged so KDE won't re-read theme)
-		pixmaps := make([][]byte, 0, 3)
-		for _, size := range []int{16, 32, 64} {
-			pixmaps = append(pixmaps, dynamicIconData(providerName, meter, data128, size))
-		}
-		systray.SetIconNameWithPixmap(iconName, pixmaps)
-		return
-	}
-
+	// Keep the visible tray identity stable by relying on IconPixmap instead of
+	// a themed IconName. KDE can cache a stable themed name and ignore/delay
+	// pixel updates, which makes the toast and icon disagree after cycling.
+	iconName := dynamicIconName()
 	currentIconName = iconName
-	pixmaps := make([][]byte, 0, 3)
-	for _, size := range []int{16, 32, 64} {
+
+	pixmaps := make([][]byte, 0, 4)
+	for _, size := range []int{16, 32, 64, 128} {
 		pixmaps = append(pixmaps, dynamicIconData(providerName, meter, data128, size))
 	}
-	systray.SetIconNameWithPixmap(iconName, pixmaps)
+	systray.SetIconNameWithPixmap("", pixmaps)
 }
 
-func dynamicIconName(providerName string, meter icons.MeterState) string {
-	if providerName == "" {
-		providerName = "none"
-	}
-	usageBucket := iconPctBucket(meter.UsagePct)
-	expectedBucket := iconPctBucket(meter.ExpectedPct)
-	riskBucket := iconPctBucket(meter.RiskPct)
-	return fmt.Sprintf("clawmeter-dyn-v%d-%s-u%03d-e%03d-r%03d", dynamicIconVersion, providerName, usageBucket, expectedBucket, riskBucket)
-}
-
-func iconPctBucket(pct float64) int {
-	bucket := int(pct + 0.5)
-	if bucket < 0 {
-		bucket = 0
-	}
-	if bucket > 100 {
-		bucket = 100
-	}
-	return bucket
+func dynamicIconName() string {
+	return fmt.Sprintf("clawmeter-dyn-v%d", dynamicIconVersion)
 }
 
 func dynamicIconData(providerName string, meter icons.MeterState, data128 []byte, size int) []byte {

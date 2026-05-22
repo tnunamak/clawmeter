@@ -33,25 +33,33 @@ const (
 )
 
 type state struct {
-	mu                   sync.Mutex
-	lastResults          map[string]*provider.UsageData
-	statuses             map[string]*status.ProviderStatus
-	failureGate          *provider.FailureGate
-	currentTitle         string
-	currentTooltip       string
-	lastRefreshAt        time.Time
-	iconProviderOverride string
-	iconProviderChoices  []string
+	mu                 sync.Mutex
+	lastResults        map[string]*provider.UsageData
+	statuses           map[string]*status.ProviderStatus
+	failureGate        *provider.FailureGate
+	currentTitle       string
+	currentTooltip     string
+	lastRefreshAt      time.Time
+	iconTargetOverride iconTarget
+	iconTargetChoices  []iconTarget
+}
+
+type iconTarget struct {
+	Provider string
+	Window   string
 }
 
 var (
-	s       state
-	version string
-	cfg     *config.Config
+	s                state
+	version          string
+	cfg              *config.Config
+	iconClickActions chan iconClickAction
 )
 
 func Run(ver string) int {
 	version = ver
+	iconClickActions = make(chan iconClickAction, 1)
+	installTrayClickHandlers(iconClickActions)
 	shellpath.Init()
 	setupIconTheme()
 	systray.Run(onReady, func() {
@@ -74,8 +82,8 @@ func onReady() {
 	// Do not silently persist anything on first run.
 
 	setIconByName("gray", icons.Gray)
-	systray.SetTitle("clawmeter")
-	systray.SetTooltip("Clawmeter — loading...")
+	systray.SetTitle("Clawmeter")
+	systray.SetTooltip("")
 
 	// Build header
 	mHeader := systray.AddMenuItem(fmt.Sprintf("Clawmeter %s", version), "")
@@ -105,9 +113,13 @@ func onReady() {
 	systray.AddSeparator()
 
 	// Global menu items
-	mIconProvider := systray.AddMenuItem("Icon: Auto", "")
+	mIconProvider := systray.AddMenuItem("Icon: Auto (click to cycle)", "")
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	systray.AddSeparator()
+	iconActionCh := iconClickActions
+	if iconActionCh == nil {
+		iconActionCh = make(chan iconClickAction, 1)
+	}
 
 	mReauth := systray.AddMenuItem("Run `claude` to reauth", "")
 	mReauth.Hide()
@@ -321,13 +333,14 @@ func onReady() {
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
 				go checkUpdate()
+			case action := <-iconActionCh:
+				if action == iconClickResetAuto {
+					resetIconSelection(providerMenus, mIconProvider)
+				} else {
+					cycleIconSelection(providerMenus, mIconProvider)
+				}
 			case <-mIconProvider.ClickedCh:
-				cycleIconProviderOverride()
-				s.mu.Lock()
-				lastResults := s.lastResults
-				statuses := s.statuses
-				s.mu.Unlock()
-				updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider)
+				cycleIconSelection(providerMenus, mIconProvider)
 			case <-mUpdate.ClickedCh:
 				applyUpdate()
 			case <-mReauth.ClickedCh:
@@ -496,56 +509,97 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		mReauth.Hide()
 	}
 
-	updateIconProviderSelector(activeResults, displayNames, mIconProvider)
+	updateIconTargetSelector(activeResults, displayNames, mIconProvider)
 
 	// Update icon and title based on worst usage (only active providers)
 	updateTrayIcon(activeResults)
 	updateTrayTitle(activeResults)
-	updateTrayTooltip(activeResults, statuses, displayNames)
+	updateTrayTooltip()
 
 	// Check notification thresholds
 	checkThresholds(activeResults, displayNames)
 }
 
-func updateIconProviderSelector(results map[string]*provider.UsageData, displayNames map[string]string, item *systray.MenuItem) {
-	if item == nil {
-		return
-	}
-	choices := activeIconProviderChoices(results)
+func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem) {
+	displayNames := providerDisplayNames(menus)
 
 	s.mu.Lock()
-	if s.iconProviderOverride != "" && !containsString(choices, s.iconProviderOverride) {
-		s.iconProviderOverride = ""
+	results := s.lastResults
+	choices := activeIconTargets(results)
+	s.iconTargetChoices = choices
+	if !targetInChoices(s.iconTargetOverride, choices) {
+		s.iconTargetOverride = iconTarget{}
 	}
-	s.iconProviderChoices = choices
-	override := s.iconProviderOverride
+	s.iconTargetOverride = nextIconTargetOverride(s.iconTargetOverride, choices)
+	s.mu.Unlock()
+
+	updateIconTargetSelector(results, displayNames, item)
+	updateTrayIcon(results)
+	updateTrayTitle(results)
+	updateTrayTooltip()
+}
+
+func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem) {
+	displayNames := providerDisplayNames(menus)
+
+	s.mu.Lock()
+	results := s.lastResults
+	choices := activeIconTargets(results)
+	s.iconTargetChoices = choices
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+
+	updateIconTargetSelector(results, displayNames, item)
+	updateTrayIcon(results)
+	updateTrayTitle(results)
+	updateTrayTooltip()
+}
+
+func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string {
+	displayNames := make(map[string]string, len(menus))
+	for name, menu := range menus {
+		displayNames[name] = menu.provider.DisplayName()
+	}
+	return displayNames
+}
+
+func updateIconTargetSelector(results map[string]*provider.UsageData, displayNames map[string]string, item *systray.MenuItem) {
+	choices := activeIconTargets(results)
+
+	s.mu.Lock()
+	if !targetInChoices(s.iconTargetOverride, choices) {
+		s.iconTargetOverride = iconTarget{}
+	}
+	s.iconTargetChoices = choices
+	override := s.iconTargetOverride
 	s.mu.Unlock()
 
 	if len(choices) == 0 {
-		item.SetTitle("Icon: Auto")
-		item.Disable()
+		if item != nil {
+			item.SetTitle("Icon: Auto")
+			item.Disable()
+		}
 		return
 	}
 
-	item.Enable()
-	if override == "" {
-		item.SetTitle("Icon: Auto")
-		return
+	if item != nil {
+		item.Enable()
+		item.SetTitle(iconCycleMenuTitle(override, displayNames))
 	}
-	item.SetTitle("Icon: " + providerDisplayName(override, displayNames))
 }
 
-func cycleIconProviderOverride() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.iconProviderOverride = nextIconProviderOverride(s.iconProviderOverride, s.iconProviderChoices)
+func iconCycleMenuTitle(target iconTarget, displayNames map[string]string) string {
+	if target.Provider == "" {
+		return "Icon: Auto (click to cycle)"
+	}
+	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (double-click tray for Auto)"
 }
 
-func nextIconProviderOverride(current string, choices []string) string {
+func nextIconTargetOverride(current iconTarget, choices []iconTarget) iconTarget {
 	if len(choices) == 0 {
-		return ""
+		return iconTarget{}
 	}
-	if current == "" {
+	if current.Provider == "" {
 		return choices[0]
 	}
 	for i, choice := range choices {
@@ -553,31 +607,58 @@ func nextIconProviderOverride(current string, choices []string) string {
 			continue
 		}
 		if i == len(choices)-1 {
-			return ""
+			return iconTarget{}
 		}
 		return choices[i+1]
 	}
-	return ""
+	return iconTarget{}
 }
 
-func activeIconProviderChoices(results map[string]*provider.UsageData) []string {
-	choices := make([]string, 0, len(results))
-	for name, data := range results {
-		if data != nil {
-			choices = append(choices, name)
+func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
+	if len(results) == 0 {
+		return nil
+	}
+	providerNames := make([]string, 0, len(results))
+	for name := range results {
+		providerNames = append(providerNames, name)
+	}
+	sort.Strings(providerNames)
+
+	choices := make([]iconTarget, 0, len(results))
+	for _, name := range providerNames {
+		data := results[name]
+		if data == nil {
+			continue
+		}
+		if len(data.Windows) == 0 {
+			choices = append(choices, iconTarget{Provider: name})
+			continue
+		}
+		for _, window := range data.Windows {
+			choices = append(choices, iconTarget{Provider: name, Window: window.Name})
 		}
 	}
-	sort.Strings(choices)
 	return choices
 }
 
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
+func targetInChoices(target iconTarget, choices []iconTarget) bool {
+	if target.Provider == "" {
+		return true
+	}
+	for _, choice := range choices {
+		if choice == target {
 			return true
 		}
 	}
 	return false
+}
+
+func iconTargetDisplayName(target iconTarget, displayNames map[string]string) string {
+	display := providerDisplayName(target.Provider, displayNames)
+	if target.Window == "" {
+		return display
+	}
+	return display + " " + windowBadgeLabel(target.Window)
 }
 
 func providerDisplayName(name string, displayNames map[string]string) string {
@@ -590,24 +671,31 @@ func providerDisplayName(name string, displayNames map[string]string) string {
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 
-func selectedTrayProvider(results map[string]*provider.UsageData) (string, *provider.UsageData, bool) {
+func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provider.UsageData, string, bool) {
 	s.mu.Lock()
-	override := s.iconProviderOverride
+	override := s.iconTargetOverride
 	s.mu.Unlock()
 
-	if override != "" {
-		if data := results[override]; data != nil {
-			return override, data, true
+	if override.Provider != "" {
+		if data := results[override.Provider]; data != nil {
+			_, hasWindow := data.GetWindow(override.Window)
+			if override.Window == "" || hasWindow {
+				return override.Provider, data, override.Window, true
+			}
 		}
 	}
 
 	for _, name := range sortedKeys(results) {
 		data := results[name]
 		if data != nil {
-			return name, data, true
+			window, _, ok := selectedIconWindow(data, "")
+			if ok {
+				return name, data, window.Name, true
+			}
+			return name, data, "", true
 		}
 	}
-	return "", nil, false
+	return "", nil, "", false
 }
 
 func updateTrayIcon(results map[string]*provider.UsageData) {
@@ -618,8 +706,8 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 	worstProvider := ""
 	meter := icons.MeterState{}
 
-	if name, data, ok := selectedTrayProvider(results); ok {
-		meter = iconMeterState(data)
+	if name, data, windowName, ok := selectedTrayTarget(results); ok {
+		meter = iconMeterState(data, windowName)
 		worstProvider = name
 	}
 
@@ -630,7 +718,7 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 // iconMeterState maps provider usage into the tray icon's three visual
 // channels: actual usage, expected usage by this point in the reset window, and
 // projected risk. The popup keeps exact text; the icon carries the comparison.
-func iconMeterState(data *provider.UsageData) icons.MeterState {
+func iconMeterState(data *provider.UsageData, windowName string) icons.MeterState {
 	if data == nil {
 		return icons.MeterState{}
 	}
@@ -641,22 +729,18 @@ func iconMeterState(data *provider.UsageData) icons.MeterState {
 		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
 	}
 
-	var state icons.MeterState
-	worstRisk := -1.0
-	for _, window := range data.Windows {
-		windowLen := forecast.GuessWindowType(window.Name)
-		proj := forecast.Project(window.Utilization, window.ResetsAt, windowLen)
-		if proj.ProjectedPct > worstRisk {
-			worstRisk = proj.ProjectedPct
-			state = icons.MeterState{
-				UsagePct:     window.Utilization,
-				ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
-				RiskPct:      proj.ProjectedPct,
-				ShowExpected: true,
-			}
-		}
+	window, proj, ok := selectedIconWindow(data, windowName)
+	if !ok {
+		return icons.MeterState{}
 	}
-	return state
+	windowLen := forecast.GuessWindowType(window.Name)
+	return icons.MeterState{
+		UsagePct:     window.Utilization,
+		ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
+		RiskPct:      proj.ProjectedPct,
+		ShowExpected: true,
+		Label:        windowBadgeLabel(window.Name),
+	}
 }
 
 func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
@@ -674,23 +758,7 @@ func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
-	var title string
-	name, data, ok := selectedTrayProvider(results)
-	if ok {
-		display := providerDisplayName(name, nil)
-
-		if data.IsExpired {
-			title = display + " expired"
-		} else if data.Error != "" && len(data.Windows) == 0 {
-			title = display + " error"
-		} else {
-			title = fmt.Sprintf("%s %.0f%%", display, providerProjectedPct(data))
-		}
-	}
-	if title == "" {
-		title = "clawmeter"
-	}
-
+	title := "Clawmeter"
 	s.mu.Lock()
 	changed := title != s.currentTitle
 	if changed {
@@ -702,80 +770,67 @@ func updateTrayTitle(results map[string]*provider.UsageData) {
 	}
 }
 
-func providerProjectedPct(data *provider.UsageData) float64 {
+func selectedIconWindow(data *provider.UsageData, windowName string) (provider.UsageWindow, forecast.Projection, bool) {
+	var selected provider.UsageWindow
+	var selectedProj forecast.Projection
 	if data == nil {
-		return 0
+		return selected, selectedProj, false
 	}
-	worst := 0.0
+	if windowName != "" {
+		if window, ok := data.GetWindow(windowName); ok {
+			windowLen := forecast.GuessWindowType(window.Name)
+			return *window, forecast.Project(window.Utilization, window.ResetsAt, windowLen), true
+		}
+		return selected, selectedProj, false
+	}
+	worst := -1.0
 	for _, window := range data.Windows {
 		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 		if proj.ProjectedPct > worst {
 			worst = proj.ProjectedPct
+			selected = window
+			selectedProj = proj
 		}
 	}
-	return worst
+	return selected, selectedProj, worst >= 0
 }
 
-func updateTrayTooltip(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, displayNames map[string]string) {
-	var blocks []string
-
-	for _, name := range sortedKeys(results) {
-		data := results[name]
-		if data == nil {
-			continue
-		}
-
-		display := displayNames[name]
-		if display == "" {
-			display = name
-		}
-
-		if data.IsExpired {
-			msg := data.Error
-			if msg == "" {
-				msg = "token expired"
-			}
-			blocks = append(blocks, fmt.Sprintf("%s: %s", display, format.HumanizeError(msg)))
-			continue
-		}
-
-		if data.Error != "" && len(data.Windows) == 0 {
-			blocks = append(blocks, fmt.Sprintf("%s: error — %s", display, format.HumanizeError(data.Error)))
-			continue
-		}
-
-		var windowLines []string
-		for _, window := range data.Windows {
-			remaining := time.Until(window.ResetsAt)
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			var line string
-			if remaining <= 0 {
-				line = fmt.Sprintf("  %s: %.0f%%  just reset", window.Name, window.Utilization)
-			} else {
-				line = fmt.Sprintf("  %s: %.0f%%  resets %s", window.Name, window.Utilization, format.FormatDuration(remaining))
-				if window.Utilization > 0 {
-					line += "  " + proj.PaceIndicator()
-				}
-			}
-			windowLines = append(windowLines, line)
-		}
-
-		block := display + "\n" + strings.Join(windowLines, "\n")
-		blocks = append(blocks, block)
+func providerProjectedPct(data *provider.UsageData) float64 {
+	_, proj, ok := selectedIconWindow(data, "")
+	if !ok {
+		return 0
 	}
+	return proj.ProjectedPct
+}
 
-	var tooltip string
-	if len(blocks) > 0 {
-		tooltip = strings.Join(blocks, "\n\n")
-		s.mu.Lock()
-		refreshTime := s.lastRefreshAt
-		s.mu.Unlock()
-		if !refreshTime.IsZero() {
-			tooltip += "\n\nUpdated " + format.FormatDuration(time.Since(refreshTime)) + " ago"
+func windowBadgeLabel(name string) string {
+	label := strings.ToUpper(strings.TrimSpace(name))
+	parts := strings.FieldsFunc(label, func(r rune) bool {
+		return !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+	})
+	if len(parts) > 0 && len(parts[0]) >= 2 && parts[0][0] >= '0' && parts[0][0] <= '9' {
+		if len(parts) > 1 && len(parts[1]) > 0 {
+			return string([]byte{parts[0][0], parts[1][0]})
 		}
-	} else {
-		tooltip = "Clawmeter — no active providers"
+		return parts[0][:2]
 	}
+	var b strings.Builder
+	for _, r := range label {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() >= 2 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "--"
+	}
+	return b.String()
+}
+
+func updateTrayTooltip() {
+	tooltip := ""
 	s.mu.Lock()
 	changed := tooltip != s.currentTooltip
 	if changed {
@@ -842,8 +897,8 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 
 func setErrorState(msg string) {
 	setIconByName("gray", icons.Gray)
-	systray.SetTitle("error")
-	systray.SetTooltip(fmt.Sprintf("Clawmeter — %s", msg))
+	systray.SetTitle("Clawmeter")
+	systray.SetTooltip("")
 }
 
 func updateAutostartLabel(m *systray.MenuItem) {

@@ -107,6 +107,34 @@ func TestProviderIconsIncludeClawmeterOverlayAtTraySize(t *testing.T) {
 	}
 }
 
+func TestProviderIconsIncludeQuotaLabelAtTraySize(t *testing.T) {
+	base := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct:     44,
+		ExpectedPct:  20,
+		RiskPct:      131,
+		ShowExpected: true,
+	}, 22))
+	labeled := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct:     44,
+		ExpectedPct:  20,
+		RiskPct:      131,
+		ShowExpected: true,
+		Label:        "7D",
+	}, 22))
+	if countVisiblyDifferentPixels(base, labeled) < 14 {
+		t.Fatal("quota label is not visible at tray size")
+	}
+}
+
+func TestNormalizeMeterLabelKeepsTwoAlphanumericCharacters(t *testing.T) {
+	if got := normalizeMeterLabel("7d all"); got != "7D" {
+		t.Fatalf("normalizeMeterLabel = %q, want 7D", got)
+	}
+	if got := normalizeMeterLabel("monthly"); got != "MO" {
+		t.Fatalf("normalizeMeterLabel = %q, want MO", got)
+	}
+}
+
 func TestLowUsageMeterRemainsLegibleAtTraySize(t *testing.T) {
 	img := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
 		UsagePct:     9,

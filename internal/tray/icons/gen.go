@@ -8,8 +8,13 @@ import (
 	"image/draw"
 	"image/png"
 	"math"
+	"strings"
+	"unicode"
 
 	xdraw "golang.org/x/image/draw"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/inconsolata"
+	"golang.org/x/image/math/fixed"
 )
 
 // Provider logo PNGs. Source assets are intentionally mixed: some are full-color
@@ -88,6 +93,7 @@ type MeterState struct {
 	ExpectedPct  float64
 	RiskPct      float64
 	ShowExpected bool
+	Label        string
 }
 
 // GenerateProviderIcon composites a provider logo with the Clawmeter overlay.
@@ -165,6 +171,7 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 	// 3. Separate Clawmeter overlay. The provider logo is not baked into the
 	// meter artwork; this is the same layer order as the original compositor.
 	drawClawMeterOverlay(dst, meter, workSize)
+	drawMeterLabel(dst, meter.Label)
 
 	return encodePNG(resize(dst, size))
 }
@@ -196,6 +203,94 @@ func crawfishForPct(usagePct float64) []byte {
 func drawClawMeterOverlay(dst *image.RGBA, meter MeterState, workSize int) {
 	meter = normalizeMeterState(meter)
 	drawActualUsageBand(dst, meter)
+}
+
+func drawMeterLabel(dst *image.RGBA, label string) {
+	label = normalizeMeterLabel(label)
+	if label == "" {
+		return
+	}
+
+	face := inconsolata.Bold8x16
+	textW := font.MeasureString(face, label).Ceil()
+	textH := face.Metrics().Height.Ceil()
+	src := image.NewRGBA(image.Rect(0, 0, textW+2, textH+2))
+	drawer := font.Drawer{
+		Dst:  src,
+		Src:  image.NewUniform(color.NRGBA{R: 255, G: 255, B: 255, A: 255}),
+		Face: face,
+		Dot:  fixed.P(1, face.Metrics().Ascent.Ceil()+1),
+	}
+	drawer.DrawString(label)
+
+	scale := 6
+	scaled := image.NewRGBA(image.Rect(0, 0, src.Bounds().Dx()*scale, src.Bounds().Dy()*scale))
+	xdraw.NearestNeighbor.Scale(scaled, scaled.Bounds(), src, src.Bounds(), draw.Over, nil)
+
+	x := dst.Bounds().Min.X + (dst.Bounds().Dx()-scaled.Bounds().Dx())/2
+	y := dst.Bounds().Min.Y + (dst.Bounds().Dy()-scaled.Bounds().Dy())/2
+	halo := color.NRGBA{R: 255, G: 255, B: 255, A: 150}
+	for _, off := range []image.Point{
+		{X: -7, Y: 0},
+		{X: 7, Y: 0},
+		{X: 0, Y: -7},
+		{X: 0, Y: 7},
+		{X: -5, Y: -5},
+		{X: 5, Y: -5},
+		{X: -5, Y: 5},
+		{X: 5, Y: 5},
+		{X: -3, Y: -6},
+		{X: 3, Y: -6},
+		{X: -3, Y: 6},
+		{X: 3, Y: 6},
+	} {
+		drawTextImage(dst, scaled, x+off.X, y+off.Y, halo)
+	}
+	ink := color.NRGBA{R: 0, G: 0, B: 0, A: 250}
+	for _, off := range []image.Point{
+		{X: -1, Y: 0},
+		{X: 1, Y: 0},
+		{X: 0, Y: -1},
+		{X: 0, Y: 1},
+	} {
+		drawTextImage(dst, scaled, x+off.X, y+off.Y, ink)
+	}
+	drawTextImage(dst, scaled, x, y, color.NRGBA{R: 0, G: 0, B: 0, A: 255})
+}
+
+func normalizeMeterLabel(label string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(label)) {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() >= 2 {
+			break
+		}
+	}
+	return b.String()
+}
+
+func drawTextImage(dst *image.RGBA, src *image.RGBA, offX, offY int, c color.NRGBA) {
+	bounds := dst.Bounds()
+	srcBounds := src.Bounds()
+	for y := srcBounds.Min.Y; y < srcBounds.Max.Y; y++ {
+		for x := srcBounds.Min.X; x < srcBounds.Max.X; x++ {
+			_, _, _, a := src.At(x, y).RGBA()
+			if a == 0 {
+				continue
+			}
+			dx := offX + x
+			dy := offY + y
+			if dx < bounds.Min.X || dy < bounds.Min.Y || dx >= bounds.Max.X || dy >= bounds.Max.Y {
+				continue
+			}
+			ink := c
+			ink.A = uint8(uint32(c.A) * (a >> 8) / 255)
+			blendNRGBA(dst, dx, dy, ink)
+		}
+	}
 }
 
 func normalizeMeterState(meter MeterState) MeterState {
