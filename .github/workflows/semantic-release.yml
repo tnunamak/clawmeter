@@ -30,6 +30,10 @@ jobs:
       - run: go test ./...
       - run: go test -tags tray ./...
 
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: '[scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null'
+
   release:
     needs: test
     runs-on: ubuntu-latest

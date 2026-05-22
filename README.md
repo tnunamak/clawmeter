@@ -13,13 +13,20 @@ brew install tnunamak/clawmeter/clawmeter
 brew services start clawmeter   # start tray
 ```
 
+The Homebrew formula also installs a local app wrapper. To make it visible in Applications/Launchpad:
+
+```bash
+mkdir -p ~/Applications
+ln -sfn "$(brew --prefix clawmeter)/Clawmeter.app" ~/Applications/Clawmeter.app
+```
+
 ### Linux
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh
 ```
 
-Default behavior: download the binary to `~/.local/bin` and ensure that directory is on `PATH`. The tray is NOT started, launch-at-login is NOT enabled, and no system packages are installed. On Linux, the tray dependency `libayatana-appindicator3` is installed only when you pass `--start` or `--autostart` (and only if passwordless `sudo` is already available — the script never prompts for a password).
+Default behavior: download the binary to `~/.local/bin`, ensure that directory is on `PATH`, and create a normal app-launcher entry. The tray is NOT started, launch-at-login is NOT enabled, and no system packages are installed. On Linux, the tray dependency `libayatana-appindicator3` is installed only when you pass `--start` or `--autostart` (and only if passwordless `sudo` is already available — the script never prompts for a password).
 
 To install and start the tray for this session (does not enable launch-at-login):
 
@@ -55,7 +62,7 @@ Flags:
 | `--autostart` | Enable launch-at-login via `clawmeter tray --install`. Combine with `--start` to also launch the tray now. |
 | `--dry-run` | Print what would happen — no downloads, no installs, no file writes, no tray launch. Combine with any other flag (e.g. `--uninstall --dry-run`). |
 | `--no-modify-path` | Do not edit shell rc files to add `INSTALL_DIR` to `PATH`. Same as `NO_MODIFY_PATH=1`. |
-| `--uninstall` | Remove the binary, autostart entries, cache, and installer-added `PATH` lines. |
+| `--uninstall` | Remove the binary, app-launcher entry, autostart entries, cache, and installer-added `PATH` lines. |
 | `--help`, `-h` | Print usage and exit. |
 
 #### .deb / .rpm
@@ -70,11 +77,25 @@ sudo dpkg -i clawmeter_*.deb
 sudo rpm -i clawmeter-*.rpm
 ```
 
-Installs to `/usr/bin/clawmeter`. Start the tray with `clawmeter tray`.
+Installs to `/usr/bin/clawmeter` and adds a system app-launcher entry. Start the tray with `clawmeter tray`.
 
 ### Windows
 
-Download `clawmeter-windows-amd64.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), rename to `clawmeter.exe`, and place it somewhere on your PATH.
+Install for the current user and add a Start Menu shortcut:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.ps1 -OutFile $env:TEMP\install-clawmeter.ps1; & $env:TEMP\install-clawmeter.ps1"
+```
+
+Install and start the tray now:
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.ps1 -OutFile $env:TEMP\install-clawmeter.ps1; & $env:TEMP\install-clawmeter.ps1 -Start"
+```
+
+Add `-Startup` to create a Startup shortcut for launch-at-login.
+
+You can still download `clawmeter-windows-amd64.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), rename to `clawmeter.exe`, and place it somewhere on your PATH. Manual downloads do not create a Start Menu shortcut.
 
 To run the system tray:
 
@@ -106,6 +127,9 @@ brew uninstall clawmeter
 
 # Linux
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --uninstall
+
+# Windows
+powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.ps1 -OutFile $env:TEMP\install-clawmeter.ps1; & $env:TEMP\install-clawmeter.ps1 -Uninstall"
 ```
 
 ## Providers

@@ -57,6 +57,7 @@ OUT="$(sh "$INSTALLER" --dry-run 2>&1)"
 echo "$OUT" | grep -qi 'dry run' || fail "--dry-run did not announce itself"
 echo "$OUT" | grep -q 'would resolve latest release' || fail "--dry-run missing resolve message"
 echo "$OUT" | grep -q 'would install to' || fail "--dry-run missing install message"
+echo "$OUT" | grep -q 'would create app launcher' || fail "--dry-run missing app launcher message"
 echo "$OUT" | grep -q 'would NOT start the tray' || fail "--dry-run should default to no start"
 echo "$OUT" | grep -q 'would NOT enable launch-at-login' || fail "--dry-run should default to no autostart"
 [ ! -f "$INSTALL_DIR/clawmeter" ] || fail "--dry-run created binary"
@@ -113,13 +114,20 @@ echo "$OUT" | grep -q 'install system' \
   || fail "--help should mention the no-system-package default"
 echo "$OUT" | grep -q 'libayatana-appindicator3' \
   || fail "--help should explain the Linux tray dep gating"
+echo "$OUT" | grep -q 'app-launcher entry' \
+  || fail "--help should mention the default app launcher"
 pass "--help documents the no-system-package default"
 
 # --- Test 5: --uninstall --dry-run reports but does not remove ---
 # Plant fake state that real uninstall would remove
-mkdir -p "$INSTALL_DIR" "$HOME/.config/autostart" "$HOME/.cache/clawmeter"
+mkdir -p "$INSTALL_DIR" "$HOME/.config/autostart" "$HOME/.cache/clawmeter" \
+  "$HOME/.local/share/applications" "$HOME/.local/share/pixmaps" \
+  "$HOME/.local/share/icons/hicolor/1024x1024/apps"
 echo 'fake binary' > "$INSTALL_DIR/clawmeter"
 echo 'fake desktop' > "$HOME/.config/autostart/clawmeter.desktop"
+echo 'fake launcher' > "$HOME/.local/share/applications/clawmeter.desktop"
+echo 'fake icon' > "$HOME/.local/share/pixmaps/clawmeter.png"
+echo 'old fake icon' > "$HOME/.local/share/icons/hicolor/1024x1024/apps/clawmeter.png"
 echo 'cached data' > "$HOME/.cache/clawmeter/usage.json"
 cat >> "$SENTINEL_RC" <<'EOF'
 
@@ -130,10 +138,14 @@ EOF
 BEFORE2="$(snapshot)"
 OUT="$(sh "$INSTALLER" --uninstall --dry-run 2>&1)"
 echo "$OUT" | grep -q 'would remove .*clawmeter' || fail "--uninstall --dry-run missing remove message"
+echo "$OUT" | grep -q 'would remove app launcher' || fail "--uninstall --dry-run missing app launcher remove message"
 echo "$OUT" | grep -q 'would remove PATH entry' || fail "--uninstall --dry-run missing PATH remove message"
 # Files must still exist
 [ -f "$INSTALL_DIR/clawmeter" ] || fail "--uninstall --dry-run removed binary"
 [ -f "$HOME/.config/autostart/clawmeter.desktop" ] || fail "--uninstall --dry-run removed autostart"
+[ -f "$HOME/.local/share/applications/clawmeter.desktop" ] || fail "--uninstall --dry-run removed app launcher"
+[ -f "$HOME/.local/share/pixmaps/clawmeter.png" ] || fail "--uninstall --dry-run removed app icon"
+[ -f "$HOME/.local/share/icons/hicolor/1024x1024/apps/clawmeter.png" ] || fail "--uninstall --dry-run removed old app icon"
 [ -f "$HOME/.cache/clawmeter/usage.json" ] || fail "--uninstall --dry-run removed cache"
 grep -q '# Added by clawmeter installer' "$SENTINEL_RC" || fail "--uninstall --dry-run removed PATH line"
 AFTER2="$(snapshot)"

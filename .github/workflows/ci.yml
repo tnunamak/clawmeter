@@ -41,3 +41,7 @@ jobs:
 
       - name: Build smoke (tray)
         run: go build -tags tray ./cmd/clawmeter
+
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: '[scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null'

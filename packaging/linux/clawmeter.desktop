@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Clawmeter
+Comment=AI usage monitor
+Exec=clawmeter tray
+Icon=clawmeter
+Terminal=false
+Categories=System;Monitor;
+StartupNotify=false

@@ -43,11 +43,12 @@ Usage: install.sh [options]
 Install or uninstall clawmeter.
 
 By default this script downloads the latest clawmeter release binary into
-\$INSTALL_DIR (default: ~/.local/bin) and ensures that directory is on PATH.
-It does NOT launch the tray, enable launch-at-login, or install system
-packages unless you ask for it. On Linux, the tray dependency
-(libayatana-appindicator3) is only installed when --start or --autostart
-is passed, and only when passwordless sudo is already available.
+\$INSTALL_DIR (default: ~/.local/bin), ensures that directory is on PATH,
+and creates a normal app-launcher entry. It does NOT launch the tray,
+enable launch-at-login, or install system packages unless you ask for it.
+On Linux, the tray dependency (libayatana-appindicator3) is only installed
+when --start or --autostart is passed, and only when passwordless sudo is
+already available.
 
 Options:
   --help                  Show this help and exit.
@@ -62,9 +63,9 @@ Options:
                           --start to also launch the tray now.
   --no-modify-path        Do not edit shell rc files to add INSTALL_DIR to
                           PATH. Equivalent to setting NO_MODIFY_PATH=1.
-  --uninstall             Remove the binary, autostart entries, cache, and
-                          installer-added PATH lines. Combine with --dry-run
-                          to preview the removals.
+  --uninstall             Remove the binary, app-launcher entry, autostart
+                          entries, cache, and installer-added PATH lines.
+                          Combine with --dry-run to preview the removals.
   -h                      Alias for --help.
 
 Environment variables:
@@ -164,6 +165,42 @@ if [ "$DO_UNINSTALL" = "1" ]; then
     fi
   fi
 
+  # Remove Linux app launcher and icon
+  _desktop="${HOME}/.local/share/applications/clawmeter.desktop"
+  if [ -f "$_desktop" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would remove app launcher ${_desktop}"
+    else
+      rm -f "$_desktop"
+      say "Removed app launcher"
+    fi
+  fi
+  for _icon in \
+    "${HOME}/.local/share/pixmaps/clawmeter.png" \
+    "${HOME}/.local/share/icons/hicolor/1024x1024/apps/clawmeter.png"
+  do
+    if [ ! -f "$_icon" ]; then
+      continue
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would remove app icon ${_icon}"
+    else
+      rm -f "$_icon"
+      say "Removed app icon"
+    fi
+  done
+
+  # Remove macOS app launcher
+  _app="${HOME}/Applications/Clawmeter.app"
+  if [ -d "$_app" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      say "[dry-run] would remove app launcher ${_app}"
+    else
+      rm -rf "$_app"
+      say "Removed app launcher"
+    fi
+  fi
+
   # Remove PATH entry from shell rc files
   for _f in .bashrc .bash_profile .zshrc .zprofile .profile; do
     _rc="${HOME}/${_f}"
@@ -222,6 +259,95 @@ download() {
   fi
 }
 
+try_download() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$1" -o "$2"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$2" "$1"
+  else
+    return 1
+  fi
+}
+
+desktop_exec_quote() {
+  _escaped="$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/`/\\`/g' -e 's/\$/\\$/g')"
+  printf '"%s"' "$_escaped"
+}
+
+shell_single_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+install_app_launcher() {
+  case "$OS" in
+    linux)
+      _app_dir="${HOME}/.local/share/applications"
+      _icon_dir="${HOME}/.local/share/pixmaps"
+      _desktop="${_app_dir}/clawmeter.desktop"
+      _icon="${_icon_dir}/clawmeter.png"
+      _icon_url="https://raw.githubusercontent.com/${REPO}/${LATEST}/assets/icon-green-1024.png"
+
+      ensure mkdir -p "$_app_dir" "$_icon_dir"
+      if try_download "$_icon_url" "$_icon"; then
+        say "Installed app icon to ${_icon}"
+      else
+        warn "could not install app icon; launcher will use desktop fallback"
+        rm -f "$_icon"
+      fi
+
+      _exec="$(desktop_exec_quote "${INSTALL_DIR}/${BINARY}")"
+      cat > "$_desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Clawmeter
+Comment=AI usage monitor
+Exec=${_exec} tray
+Icon=${_icon}
+Terminal=false
+Categories=System;Monitor;
+StartupNotify=false
+EOF
+      say "Installed app launcher to ${_desktop}"
+
+      if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$_app_dir" >/dev/null 2>&1 || true
+      fi
+      ;;
+    darwin)
+      _app="${HOME}/Applications/Clawmeter.app"
+      _contents="${_app}/Contents"
+      _macos="${_contents}/MacOS"
+      _launcher="${_macos}/Clawmeter"
+      ensure mkdir -p "$_macos"
+      _exec="$(shell_single_quote "${INSTALL_DIR}/${BINARY}")"
+      cat > "$_launcher" <<EOF
+#!/bin/sh
+exec ${_exec} tray
+EOF
+      chmod +x "$_launcher"
+      cat > "${_contents}/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Clawmeter</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.clawmeter.app</string>
+    <key>CFBundleName</key>
+    <string>Clawmeter</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+EOF
+      say "Installed app launcher to ${_app}"
+      ;;
+  esac
+}
+
 # --- Detect OS ---
 
 OS="$(uname -s)"
@@ -254,6 +380,12 @@ if [ "$DRY_RUN" = "1" ]; then
     say "[dry-run] would NOT modify PATH (NO_MODIFY_PATH set / --no-modify-path)"
   else
     say "[dry-run] would ensure ${INSTALL_DIR} is on PATH via shell rc file"
+  fi
+  if [ "$OS" = "linux" ]; then
+    say "[dry-run] would create app launcher ${HOME}/.local/share/applications/clawmeter.desktop"
+    say "[dry-run] would install app icon ${HOME}/.local/share/pixmaps/clawmeter.png"
+  elif [ "$OS" = "darwin" ]; then
+    say "[dry-run] would create app launcher ${HOME}/Applications/Clawmeter.app"
   fi
   if [ "$OS" = "linux" ]; then
     if [ "$DO_START" = "1" ] || [ "$DO_AUTOSTART" = "1" ]; then
@@ -421,6 +553,10 @@ add_to_path() {
 
 add_to_path
 
+# --- App launcher entry ---
+
+install_app_launcher
+
 # --- Install tray dependency on Linux ---
 # Only runs when the user asked for tray-related side effects (--start or
 # --autostart). A default install touches no system packages and never
@@ -469,7 +605,7 @@ fi
 # --- Closing guidance ---
 
 if [ "$DO_START" != "1" ] && [ "$DO_AUTOSTART" != "1" ]; then
-  say "Binary installed. To start the tray now, run: ${BINARY} tray"
+  say "Binary and app launcher installed. To start the tray now, run: ${BINARY} tray"
   say "To enable launch-at-login, run: ${BINARY} tray --install"
   say "Or re-run this installer with --start and/or --autostart."
 elif [ "$DO_START" = "1" ] && [ "$DO_AUTOSTART" != "1" ]; then
