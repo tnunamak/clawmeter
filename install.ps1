@@ -4,6 +4,7 @@ param(
     [switch]$Start,
     [switch]$Startup,
     [switch]$Uninstall,
+    [switch]$NoModifyPath,
     [switch]$DryRun
 )
 
@@ -79,6 +80,83 @@ function Remove-IfExists([string]$Path, [string]$Label) {
     }
 }
 
+# PATH-modification helpers.
+# We edit the User PATH via the .NET Environment API rather than `setx`,
+# because `setx` silently truncates at 1024 characters. We then broadcast
+# WM_SETTINGCHANGE so already-open shells pick the change up.
+$Script:PathBroadcasterAdded = $false
+function Add-PathBroadcasterType {
+    if ($Script:PathBroadcasterAdded) { return }
+    $signature = @'
+using System;
+using System.Runtime.InteropServices;
+public static class ClawmeterPathBroadcaster {
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+        uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+    public static void Broadcast() {
+        UIntPtr result;
+        SendMessageTimeout((IntPtr)0xffff, 0x1A, UIntPtr.Zero, "Environment",
+            0x2, 5000, out result);
+    }
+}
+'@
+    Add-Type -TypeDefinition $signature -ErrorAction SilentlyContinue | Out-Null
+    $Script:PathBroadcasterAdded = $true
+}
+
+function Get-UserPathEntries {
+    $raw = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return @()
+    }
+    return $raw.Split(';') | Where-Object { $_ -ne "" }
+}
+
+function Set-UserPath([string[]]$Entries) {
+    $value = ($Entries -join ';')
+    [Environment]::SetEnvironmentVariable("Path", $value, "User")
+    Add-PathBroadcasterType
+    try { [ClawmeterPathBroadcaster]::Broadcast() } catch { }
+}
+
+function Test-PathContains([string[]]$Entries, [string]$Candidate) {
+    $normalized = $Candidate.TrimEnd('\').ToLowerInvariant()
+    foreach ($entry in $Entries) {
+        if ($entry.TrimEnd('\').ToLowerInvariant() -eq $normalized) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Add-UserPathEntry([string]$Dir) {
+    $entries = Get-UserPathEntries
+    if (Test-PathContains $entries $Dir) {
+        Say "PATH already contains $Dir"
+        return
+    }
+    $newEntries = @($entries) + $Dir
+    DoStep "add $Dir to user PATH" {
+        Set-UserPath $newEntries
+        Say "Added $Dir to user PATH (open a new terminal to use ``clawmeter``)"
+    }.GetNewClosure()
+}
+
+function Remove-UserPathEntry([string]$Dir) {
+    $entries = Get-UserPathEntries
+    if (-not (Test-PathContains $entries $Dir)) {
+        return
+    }
+    $normalized = $Dir.TrimEnd('\').ToLowerInvariant()
+    $filtered = @($entries | Where-Object { $_.TrimEnd('\').ToLowerInvariant() -ne $normalized })
+    DoStep "remove $Dir from user PATH" {
+        Set-UserPath $filtered
+        Say "Removed $Dir from user PATH"
+    }.GetNewClosure()
+}
+
 if ($Uninstall) {
     Say "Uninstalling clawmeter..."
     DoStep "stop running clawmeter processes" { Stop-Clawmeter }
@@ -86,6 +164,9 @@ if ($Uninstall) {
     Remove-IfExists $StartupShortcut "Startup shortcut"
     Remove-IfExists $ExePath "binary"
     Remove-IfExists $IconPath "icon"
+    if (-not $NoModifyPath) {
+        Remove-UserPathEntry $InstallDir
+    }
     if ((Test-Path $InstallDir) -and -not (Get-ChildItem -Force $InstallDir | Select-Object -First 1)) {
         Remove-IfExists $InstallDir "install directory"
     }
@@ -123,6 +204,12 @@ try {
 
     DoStep "install binary to $ExePath" {
         Move-Item -Force $tmpExe $ExePath
+    }
+
+    if ($NoModifyPath) {
+        Say "Skipping PATH modification (-NoModifyPath)."
+    } else {
+        Add-UserPathEntry $InstallDir
     }
 
     $iconUrls = @(
