@@ -43,12 +43,6 @@ func (p *Provider) DisplayName() string  { return "OpenAI" }
 func (p *Provider) Description() string  { return "OpenAI/Codex (via codex CLI)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
 
-// IsConfigured returns true if the codex CLI is available on PATH.
-func (p *Provider) IsConfigured() bool {
-	_, err := exec.LookPath("codex")
-	return err == nil
-}
-
 // FetchUsage retrieves rate limit data by launching codex as a JSON-RPC subprocess.
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	codexPath, err := exec.LookPath("codex")

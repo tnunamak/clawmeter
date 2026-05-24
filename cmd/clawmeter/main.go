@@ -309,6 +309,22 @@ func configEnableCmd(args []string, enable bool) int {
 		verb = "Disabled"
 	}
 	fmt.Printf("%s provider: %s\n", verb, providerName)
+
+	if enable {
+		if p, ok := newRegistry().Get(providerName); ok {
+			st := provider.GetSetupStatus(p)
+			if !st.IsReady() {
+				if st.Detail != "" {
+					fmt.Printf("! %s: %s\n", providerName, st.Detail)
+				} else {
+					fmt.Printf("! %s: setup needed\n", providerName)
+				}
+				if url := p.DashboardURL(); url != "" {
+					fmt.Printf("  dashboard: %s\n", url)
+				}
+			}
+		}
+	}
 	return 0
 }
 
