@@ -57,6 +57,7 @@ var (
 )
 
 func Run(ver string) int {
+	redirectLogToFile()
 	version = ver
 	iconClickActions = make(chan iconClickAction, 1)
 	installTrayClickHandlers(iconClickActions)
@@ -94,21 +95,25 @@ func onReady() {
 	registry := provider.NewRegistry()
 	all.Register(registry, cfg)
 
-	// Provider menu items - dynamically created based on configured providers
+	// Build a menu group for every registered provider, ordered
+	// deterministically. The systray library can't insert menu items between
+	// existing ones, so we must pre-allocate every slot. updateUI() shows or
+	// hides each group based on the provider's current state (configured,
+	// has data, errored, etc.) — meaning a provider that becomes available
+	// after launch (e.g. user runs `codex login` after starting the tray)
+	// appears on the next refresh without needing a restart.
 	providerMenus := make(map[string]*providerMenuItems)
-
-	for _, p := range registry.GetConfigured() {
+	for _, p := range registry.GetAll() {
 		explicit := cfg.IsProviderExplicitlyEnabled(p.Name())
 		menu := createProviderMenuItems(p, explicit)
-		if !explicit {
-			hideProviderMenu(menu)
-		}
+		hideProviderMenu(menu)
 		providerMenus[p.Name()] = menu
 	}
 
-	if len(providerMenus) == 0 {
-		systray.AddMenuItem("No active providers", "").Disable()
-	}
+	// Placeholder shown when no provider is in the primary UI; updateUI
+	// toggles its visibility based on whether any menu has data to render.
+	mEmpty := systray.AddMenuItem("No active providers", "")
+	mEmpty.Disable()
 
 	systray.AddSeparator()
 
@@ -138,8 +143,21 @@ func onReady() {
 	// Guard against concurrent refreshes
 	var refreshing sync.Mutex
 
-	// Collect configured provider names once
-	configuredNames := providerNames(registry.GetConfigured())
+	// reloadConfig re-reads config.yaml from disk and propagates changes
+	// to the registry filter and per-provider menu state. This is what
+	// makes `clawmeter config enable <provider>` (or any other out-of-band
+	// edit) reflect in the running tray without a restart.
+	reloadConfig := func() {
+		newCfg, err := config.Load()
+		if err != nil {
+			return
+		}
+		cfg = newCfg
+		registry.SetEnabledFilter(cfg)
+		for name, menu := range providerMenus {
+			menu.explicitlyEnabled = cfg.IsProviderExplicitlyEnabled(name)
+		}
+	}
 
 	// Refresh usage only (lightweight, runs every poll cycle)
 	refresh := func(force bool) {
@@ -147,6 +165,8 @@ func onReady() {
 			return // already refreshing
 		}
 		defer refreshing.Unlock()
+
+		reloadConfig()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -209,7 +229,7 @@ func onReady() {
 		statuses := s.statuses // reuse last known statuses
 		s.mu.Unlock()
 
-		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider)
+		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider, mEmpty)
 		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
 	}
 
@@ -218,7 +238,7 @@ func onReady() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		statuses := status.FetchAll(ctx, configuredNames)
+		statuses := status.FetchAll(ctx, providerNames(registry.GetConfigured()))
 
 		s.mu.Lock()
 		s.statuses = statuses
@@ -226,7 +246,7 @@ func onReady() {
 		s.mu.Unlock()
 
 		if lastResults != nil {
-			updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider)
+			updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider, mEmpty)
 		}
 	}
 
@@ -285,12 +305,12 @@ func onReady() {
 
 	// Show cached data immediately while fetching fresh data
 	if cached, err := cache.Read(); err == nil && cached != nil {
-		filtered := provider.FilterUsageDataByNames(cached.ProviderData, configuredNames)
+		filtered := provider.FilterUsageDataByNames(cached.ProviderData, providerNames(registry.GetConfigured()))
 		s.mu.Lock()
 		s.lastResults = filtered
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
-		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider)
+		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider, mEmpty)
 	}
 
 	// Initial refresh in background (don't block tray UI)
@@ -375,15 +395,16 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *provi
 		windowItems[i] = item
 	}
 
-	// Dashboard item (clickable)
+	// Dashboard item (clickable). The disabled-header of the next provider
+	// (or the global separator after the provider block) acts as the visual
+	// divider; we don't add a per-provider separator because there's no way
+	// to hide a separator and the provider block has variable membership.
 	dashboardItem := systray.AddMenuItem(fmt.Sprintf("Open %s Dashboard", p.DisplayName()), p.DashboardURL())
 	go func() {
 		for range dashboardItem.ClickedCh {
 			openURL(p.DashboardURL())
 		}
 	}()
-
-	systray.AddSeparator()
 
 	return &providerMenuItems{
 		provider:          p,
@@ -412,10 +433,11 @@ func showProviderHeader(menu *providerMenuItems) {
 	menu.headerItem.Show()
 }
 
-func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem) {
+func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem) {
 	hasExpiredClaude := false
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
+	visibleProviderCount := 0
 
 	for name, menu := range menus {
 		displayNames[name] = menu.provider.DisplayName()
@@ -429,6 +451,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			hideProviderMenu(menu)
 			continue
 		}
+		visibleProviderCount++
 		if data != nil {
 			activeResults[name] = data
 		}
@@ -496,6 +519,16 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		mReauth.Show()
 	} else {
 		mReauth.Hide()
+	}
+
+	// Show the "No active providers" placeholder only when no provider is
+	// visible. This keeps the tray useful for a fresh install (where it
+	// reads as a hint that the user needs to configure something) without
+	// adding clutter once at least one provider is showing data.
+	if visibleProviderCount == 0 {
+		mEmpty.Show()
+	} else {
+		mEmpty.Hide()
 	}
 
 	updateIconTargetSelector(activeResults, displayNames, mIconProvider)
@@ -928,6 +961,10 @@ func openURL(url string) {
 		exec.Command("xdg-open", url).Start()
 	case "darwin":
 		exec.Command("open", url).Start()
+	case "windows":
+		// rundll32 url.dll,FileProtocolHandler avoids the brief console
+		// flash that `cmd /c start` produces from a GUI-subsystem parent.
+		exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	}
 }
 

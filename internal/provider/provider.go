@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -189,8 +190,13 @@ func (u *UsageData) GetWindow(name string) (*UsageWindow, bool) {
 }
 
 // Registry holds all registered providers.
+//
+// providers is populated once at startup via Register and read-only afterward;
+// filter may change at runtime (e.g. when the tray reloads config) and is
+// guarded by filterMu.
 type Registry struct {
 	providers map[string]Provider
+	filterMu  sync.RWMutex
 	filter    EnabledFilter
 }
 
@@ -204,9 +210,18 @@ func NewRegistry() *Registry {
 // SetEnabledFilter records an optional filter consulted by GetConfigured to
 // exclude providers the user has explicitly disabled. Without a filter,
 // GetConfigured returns all providers reporting credentials. Calling with
-// nil clears any previously-set filter.
+// nil clears any previously-set filter. Safe to call concurrently.
 func (r *Registry) SetEnabledFilter(f EnabledFilter) {
+	r.filterMu.Lock()
 	r.filter = f
+	r.filterMu.Unlock()
+}
+
+// enabledFilter returns the current filter, taking a read lock.
+func (r *Registry) enabledFilter() EnabledFilter {
+	r.filterMu.RLock()
+	defer r.filterMu.RUnlock()
+	return r.filter
 }
 
 // Register adds a provider to the registry.
@@ -246,6 +261,17 @@ func (r *Registry) Has(name string) bool {
 	return ok
 }
 
+// ConfiguredNames returns the names of providers GetConfigured would return,
+// in the same deterministic order.
+func (r *Registry) ConfiguredNames() []string {
+	configured := r.GetConfigured()
+	names := make([]string, 0, len(configured))
+	for _, p := range configured {
+		names = append(names, p.Name())
+	}
+	return names
+}
+
 // EnabledFilter decides whether a provider has been explicitly disabled by
 // the user. Providers with no config entry are treated as auto-enabled when
 // detected, preserving the zero-config UX.
@@ -278,16 +304,17 @@ func AutoPollByDefault(p Provider) bool {
 // credentials AND not explicitly disabled by the registry's configured
 // EnabledFilter. Order is deterministic.
 func (r *Registry) GetConfigured() []Provider {
+	filter := r.enabledFilter()
 	result := make([]Provider, 0)
 	for _, p := range r.providers {
 		if !p.IsConfigured() {
 			continue
 		}
-		if r.filter != nil && r.filter.IsProviderDisabled(p.Name()) {
+		if filter != nil && filter.IsProviderDisabled(p.Name()) {
 			continue
 		}
 		explicitlyEnabled := false
-		if explicitFilter, ok := r.filter.(ExplicitEnablementFilter); ok {
+		if explicitFilter, ok := filter.(ExplicitEnablementFilter); ok {
 			explicitlyEnabled = explicitFilter.IsProviderExplicitlyEnabled(p.Name())
 		}
 		if !explicitlyEnabled && !AutoPollByDefault(p) {
