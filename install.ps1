@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "Programs\Clawmeter"),
+    [string]$LocalBinary,
     [switch]$Start,
     [switch]$Startup,
     [switch]$Uninstall,
@@ -178,8 +179,16 @@ if ($DryRun) {
     Say "Dry run: no files will be written, no commands executed, no downloads made."
 }
 
-$release = Get-LatestReleaseAsset
-Say "Installing clawmeter $($release.Version) (windows/amd64)..."
+if ($LocalBinary) {
+    if (-not (Test-Path $LocalBinary)) {
+        throw "Local binary not found: $LocalBinary"
+    }
+    Say "Installing clawmeter from local binary $LocalBinary (windows/amd64)..."
+    $release = [pscustomobject]@{ Version = "local"; Url = $null }
+} else {
+    $release = Get-LatestReleaseAsset
+    Say "Installing clawmeter $($release.Version) (windows/amd64)..."
+}
 
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("clawmeter-" + [Guid]::NewGuid().ToString("N"))
 $tmpExe = Join-Path $tmp "clawmeter.exe"
@@ -190,8 +199,14 @@ DoStep "create temporary directory $tmp" {
 }
 
 try {
-    DoStep "download $AssetName to $tmpExe" {
-        Invoke-WebRequest -Uri $release.Url -OutFile $tmpExe
+    if ($LocalBinary) {
+        DoStep "copy $LocalBinary to $tmpExe" {
+            Copy-Item -Force $LocalBinary $tmpExe
+        }
+    } else {
+        DoStep "download $AssetName to $tmpExe" {
+            Invoke-WebRequest -Uri $release.Url -OutFile $tmpExe
+        }
     }
 
     DoStep "create install directory $InstallDir" {
@@ -212,10 +227,14 @@ try {
         Add-UserPathEntry $InstallDir
     }
 
-    $iconUrls = @(
-        "https://raw.githubusercontent.com/$Repo/$($release.Version)/assets/clawmeter.ico",
-        "https://raw.githubusercontent.com/$Repo/main/assets/clawmeter.ico"
-    )
+    if ($LocalBinary) {
+        $iconUrls = @("https://raw.githubusercontent.com/$Repo/main/assets/clawmeter.ico")
+    } else {
+        $iconUrls = @(
+            "https://raw.githubusercontent.com/$Repo/$($release.Version)/assets/clawmeter.ico",
+            "https://raw.githubusercontent.com/$Repo/main/assets/clawmeter.ico"
+        )
+    }
     $iconInstalled = $false
     foreach ($iconUrl in $iconUrls) {
         if ($DryRun) {
