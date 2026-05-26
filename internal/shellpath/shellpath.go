@@ -1,13 +1,17 @@
-// Package shellpath captures the user's login shell PATH so that tray/GUI
-// processes can find binaries installed via nvm, fnm, mise, homebrew, etc.
+// Package shellpath ensures the tray process sees the user's full PATH,
+// not the stale snapshot it inherits from its launcher.
 //
-// On Linux/macOS the desktop-entry or LaunchAgent that starts the tray does
-// not source .zshrc/.bashrc, so tools like codex and gemini (installed via
-// npm) are invisible. We fix this by running `$SHELL -l -i -c 'echo $PATH'`
-// once and merging the result into the process environment.
+// On Linux/macOS the .desktop / LaunchAgent that starts the tray does not
+// source .zshrc/.bashrc, so tools installed via nvm, fnm, mise, homebrew,
+// or npm-global (codex, gemini) are invisible. We fix this by running the
+// login shell once and merging the result into the process environment.
 //
-// On Windows PATH is set via the registry and inherited by all processes,
-// so this is a no-op.
+// On Windows, Explorer (which spawns the tray when the user double-clicks
+// the Start Menu shortcut or via the HKCU\...\Run autostart key) caches
+// its environment at login. Apps installed *after* login — winget, scoop,
+// or our own installer's PATH edit — don't take effect for tray processes
+// until the user logs out and back in. We fix this by reading the user
+// PATH directly from the registry and merging it into the process env.
 package shellpath
 
 import (
@@ -16,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -29,13 +32,10 @@ var (
 	captured []string
 )
 
-// Init captures the login shell PATH and merges it into os.Environ().
-// Safe to call multiple times — only the first call does work.
-// No-op on Windows.
+// Init captures the authoritative PATH (login-shell on Unix, registry on
+// Windows) and merges it into os.Environ(). Safe to call multiple times —
+// only the first call does work.
 func Init() {
-	if runtime.GOOS == "windows" {
-		return
-	}
 	once.Do(func() {
 		captured = capture()
 		if len(captured) > 0 {
@@ -44,8 +44,8 @@ func Init() {
 	})
 }
 
-// capture runs the user's login shell to get PATH.
-func capture() []string {
+// captureLoginShell runs the user's login shell to get PATH.
+func captureLoginShell() []string {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
@@ -85,31 +85,29 @@ func capture() []string {
 		return nil
 	}
 
-	return strings.Split(pathStr, ":")
+	return strings.Split(pathStr, string(os.PathListSeparator))
 }
 
-// merge adds login shell PATH entries to the current process PATH,
+// merge adds captured PATH entries to the current process PATH,
 // deduplicating and preserving order (existing entries first).
-func merge(loginPaths []string) {
+func merge(extra []string) {
 	existing := os.Getenv("PATH")
 	seen := make(map[string]bool)
 	var parts []string
 
-	// Keep existing entries first.
-	for _, p := range strings.Split(existing, ":") {
+	for _, p := range strings.Split(existing, string(os.PathListSeparator)) {
 		if p != "" && !seen[p] {
 			seen[p] = true
 			parts = append(parts, p)
 		}
 	}
 
-	// Append new entries from the login shell.
-	for _, p := range loginPaths {
+	for _, p := range extra {
 		if p != "" && !seen[p] {
 			seen[p] = true
 			parts = append(parts, p)
 		}
 	}
 
-	os.Setenv("PATH", strings.Join(parts, ":"))
+	os.Setenv("PATH", strings.Join(parts, string(os.PathListSeparator)))
 }
