@@ -1,4 +1,4 @@
-//go:build tray && !linux
+//go:build tray && darwin
 
 package tray
 
