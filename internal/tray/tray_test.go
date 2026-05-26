@@ -3,6 +3,7 @@
 package tray
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -172,6 +173,82 @@ func TestActiveIconTargetsIncludesEveryProviderWindow(t *testing.T) {
 	}
 }
 
+func TestBackedOffProviderWithoutPriorWindowsStillFetches(t *testing.T) {
+	gate := provider.NewFailureGate()
+	_ = gate.ShouldSurfaceError("openai", false)
+
+	toFetch, skipped := splitProvidersForRefresh(
+		[]provider.Provider{trayStubProvider{name: "openai"}},
+		gate,
+		map[string]*provider.UsageData{},
+		false,
+	)
+
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", skipped)
+	}
+	if got := providerNames(toFetch); len(got) != 1 || got[0] != "openai" {
+		t.Fatalf("toFetch = %v, want [openai]", got)
+	}
+}
+
+func TestBackedOffProviderWithPriorWindowsUsesClone(t *testing.T) {
+	gate := provider.NewFailureGate()
+	_ = gate.ShouldSurfaceError("openai", true)
+	prev := &provider.UsageData{
+		Provider: "openai",
+		Windows: []provider.UsageWindow{
+			{Name: "7d", Utilization: 25, ResetsAt: time.Now().Add(24 * time.Hour)},
+		},
+	}
+
+	toFetch, skipped := splitProvidersForRefresh(
+		[]provider.Provider{trayStubProvider{name: "openai"}},
+		gate,
+		map[string]*provider.UsageData{"openai": prev},
+		false,
+	)
+
+	if len(toFetch) != 0 {
+		t.Fatalf("toFetch = %v, want none", providerNames(toFetch))
+	}
+	got := skipped["openai"]
+	if got == nil {
+		t.Fatal("skipped[openai] is nil, want cached usage")
+	}
+	if got == prev {
+		t.Fatal("skipped data aliases prior result, want clone")
+	}
+	got.Windows[0].Utilization = 99
+	if prev.Windows[0].Utilization != 25 {
+		t.Fatalf("mutating skipped clone changed prior result to %.0f", prev.Windows[0].Utilization)
+	}
+}
+
+func TestForceRefreshIgnoresBackoff(t *testing.T) {
+	gate := provider.NewFailureGate()
+	_ = gate.ShouldSurfaceError("openai", true)
+
+	toFetch, skipped := splitProvidersForRefresh(
+		[]provider.Provider{trayStubProvider{name: "openai"}},
+		gate,
+		map[string]*provider.UsageData{
+			"openai": {
+				Provider: "openai",
+				Windows:  []provider.UsageWindow{{Name: "7d", ResetsAt: time.Now().Add(24 * time.Hour)}},
+			},
+		},
+		true,
+	)
+
+	if len(skipped) != 0 {
+		t.Fatalf("skipped = %v, want none", skipped)
+	}
+	if got := providerNames(toFetch); len(got) != 1 || got[0] != "openai" {
+		t.Fatalf("toFetch = %v, want [openai]", got)
+	}
+}
+
 func TestSelectedTrayTargetHonorsQuotaOverride(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
@@ -248,4 +325,32 @@ func absFloat(n float64) float64 {
 		return -n
 	}
 	return n
+}
+
+type trayStubProvider struct {
+	name string
+}
+
+func (p trayStubProvider) Name() string {
+	return p.name
+}
+
+func (p trayStubProvider) DisplayName() string {
+	return p.name
+}
+
+func (p trayStubProvider) Description() string {
+	return ""
+}
+
+func (p trayStubProvider) DashboardURL() string {
+	return ""
+}
+
+func (p trayStubProvider) IsConfigured() bool {
+	return true
+}
+
+func (p trayStubProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return &provider.UsageData{Provider: p.name}, nil
 }

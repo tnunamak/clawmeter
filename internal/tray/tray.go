@@ -151,19 +151,8 @@ func onReady() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// Split providers: fetch active ones, use cache for backed-off ones
 		s.mu.Lock()
-		var toFetch []provider.Provider
-		skipped := make(map[string]*provider.UsageData)
-		for _, p := range registry.GetConfigured() {
-			if !force && s.failureGate.InBackoff(p.Name()) {
-				if prev, ok := s.lastResults[p.Name()]; ok && prev != nil {
-					skipped[p.Name()] = prev.Clone()
-				}
-			} else {
-				toFetch = append(toFetch, p)
-			}
-		}
+		toFetch, skipped := splitProvidersForRefresh(registry.GetConfigured(), s.failureGate, s.lastResults, force)
 		s.mu.Unlock()
 
 		result := provider.FetchProvidersParallel(ctx, toFetch)
@@ -972,6 +961,21 @@ func providerNames(providers []provider.Provider) []string {
 		names = append(names, p.Name())
 	}
 	return names
+}
+
+func splitProvidersForRefresh(providers []provider.Provider, gate *provider.FailureGate, lastResults map[string]*provider.UsageData, force bool) ([]provider.Provider, map[string]*provider.UsageData) {
+	toFetch := make([]provider.Provider, 0, len(providers))
+	skipped := make(map[string]*provider.UsageData)
+	for _, p := range providers {
+		name := p.Name()
+		prev := lastResults[name]
+		if !force && gate != nil && gate.InBackoff(name) && prev != nil && prev.EstablishesPrimaryUIHistory() {
+			skipped[name] = prev.Clone()
+			continue
+		}
+		toFetch = append(toFetch, p)
+	}
+	return toFetch, skipped
 }
 
 // sortedKeys returns provider names sorted by severity (worst first).
