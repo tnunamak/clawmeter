@@ -101,8 +101,14 @@ jobs:
         shell: bash
         run: |
           EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          go build -tags tray -trimpath -ldflags='-s -w -X main.Version=${{ needs.release.outputs.tag }}' -o "clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" ./cmd/clawmeter
+          LDFLAGS="-s -w -X main.Version=${{ needs.release.outputs.tag }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+            # -H windowsgui suppresses the console window for the tray binary;
+            # logs are redirected to %LOCALAPPDATA%\clawmeter\tray.log instead.
+            LDFLAGS="$LDFLAGS -H windowsgui"
+          fi
+          go build -tags tray -trimpath -ldflags="$LDFLAGS" -o "clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" ./cmd/clawmeter
 
       - name: Package .deb and .rpm
         if: matrix.goos == 'linux'

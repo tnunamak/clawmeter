@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -135,14 +136,39 @@ type notifyIconData struct {
 
 func (nid *notifyIconData) add() error {
 	const NIM_ADD = 0x00000000
-	res, _, err := pShellNotifyIcon.Call(
-		uintptr(NIM_ADD),
-		uintptr(unsafe.Pointer(nid)),
-	)
-	if res == 0 {
-		return err
+	const NIM_MODIFY = 0x00000001
+	// On Win11 25H2 (build 26100+), Shell_TrayWnd can be slow to initialize at
+	// user login, causing NIM_ADD to race and fail with no last-error set
+	// (surfaces as "Unspecified error"). Retry with backoff totalling ~8s, and
+	// fall back to NIM_MODIFY for the case where a stale icon is still
+	// registered. See fyne-io/systray#101, wxWidgets#18588, OpenHardwareMonitor#1092.
+	delays := []time.Duration{
+		0,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		400 * time.Millisecond,
+		800 * time.Millisecond,
+		1500 * time.Millisecond,
+		2500 * time.Millisecond,
+		2500 * time.Millisecond,
 	}
-	return nil
+	var lastErr error
+	for i, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		res, _, err := pShellNotifyIcon.Call(uintptr(NIM_ADD), uintptr(unsafe.Pointer(nid)))
+		if res != 0 {
+			return nil
+		}
+		lastErr = err
+		if i >= 3 {
+			if res2, _, _ := pShellNotifyIcon.Call(uintptr(NIM_MODIFY), uintptr(unsafe.Pointer(nid))); res2 != 0 {
+				return nil
+			}
+		}
+	}
+	return lastErr
 }
 
 func (nid *notifyIconData) modify() error {
