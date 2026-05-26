@@ -21,6 +21,8 @@ Type=Application
 Name=Clawmeter
 Comment=AI usage monitor
 Exec=%s tray
+Icon=clawmeter
+Categories=Utility;Network;
 Terminal=false
 X-GNOME-Autostart-enabled=true
 `

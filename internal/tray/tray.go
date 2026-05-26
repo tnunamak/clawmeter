@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -128,7 +126,13 @@ func onReady() {
 		iconActionCh = make(chan iconClickAction, 1)
 	}
 
-	mReauth := systray.AddMenuItem("Run `claude` to reauth", "")
+	// Hint shown only when Claude's OAuth token has expired. We don't try
+	// to launch a terminal for the user — Windows has no obvious "default
+	// terminal" we can rely on, and the macOS/Linux versions of that flow
+	// saved at most one keystroke. A disabled menu item is the same
+	// outcome with zero platform-specific code.
+	mReauth := systray.AddMenuItem("Claude token expired — run `claude` to reauth", "")
+	mReauth.Disable()
 	mReauth.Hide()
 
 	var pendingRelease *update.Release
@@ -354,8 +358,6 @@ func onReady() {
 				cycleIconSelection(providerMenus, mIconProvider)
 			case <-mUpdate.ClickedCh:
 				applyUpdate()
-			case <-mReauth.ClickedCh:
-				openTerminalWithClaude()
 			case <-mAutostart.ClickedCh:
 				toggleAutostart(mAutostart)
 			case <-mQuit.ClickedCh:
@@ -959,20 +961,6 @@ func toggleAutostart(m *systray.MenuItem) {
 
 func openURL(url string) {
 	_ = browser.OpenURL(url)
-}
-
-func openTerminalWithClaude() {
-	switch runtime.GOOS {
-	case "linux":
-		for _, term := range []string{"konsole", "gnome-terminal", "xterm"} {
-			if path, err := exec.LookPath(term); err == nil {
-				exec.Command(path, "-e", "claude").Start()
-				return
-			}
-		}
-	case "darwin":
-		exec.Command("open", "-a", "Terminal", "claude").Start()
-	}
 }
 
 // notify delivers a desktop notification using beeep, which natively wraps
