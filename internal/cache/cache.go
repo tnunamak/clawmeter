@@ -20,13 +20,15 @@ type Entry struct {
 	FetchedAt    time.Time                      `json:"fetched_at"`
 }
 
-// cachePath returns the path to the cache file.
+// cachePath returns the path to the cache file: the platform's user cache
+// dir plus clawmeter/usage.json. On Linux this is $XDG_CACHE_HOME (typically
+// ~/.cache); on macOS, ~/Library/Caches; on Windows, %LOCALAPPDATA%.
 func cachePath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := cacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cache", "clawmeter", "usage.json"), nil
+	return filepath.Join(dir, "usage.json"), nil
 }
 
 // Read loads cached usage data from disk.
@@ -49,6 +51,20 @@ func Read() (*Entry, error) {
 // IsValid returns true if the cache entry is fresh (within TTL).
 func (e *Entry) IsValid() bool {
 	return time.Since(e.FetchedAt) < defaultTTL
+}
+
+// Covers reports whether the cache contains an entry — error or data — for
+// every name in want. Callers use this in addition to IsValid to avoid
+// serving a stale cache that pre-dates a provider becoming configured:
+// e.g. the user runs `codex login` after a stale cache was written; without
+// this check, status would return empty until the TTL expired.
+func (e *Entry) Covers(want []string) bool {
+	for _, name := range want {
+		if _, ok := e.ProviderData[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // GetProvider retrieves usage data for a specific provider.
@@ -90,9 +106,9 @@ func Write(result *provider.MultiFetchResult) error {
 }
 
 func cacheDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".cache", "clawmeter"), nil
+	return filepath.Join(dir, "clawmeter"), nil
 }
