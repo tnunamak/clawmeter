@@ -160,9 +160,18 @@ function Remove-UserPathEntry([string]$Dir) {
 
 if ($Uninstall) {
     Say "Uninstalling clawmeter..."
+    # Disable launch-at-login before removing the binary, so the binary's
+    # own autostart cleanup (registry edit) runs while it's still on disk.
+    # We also remove the legacy .lnk that older installers left behind,
+    # for users upgrading from before the registry-based autostart.
+    if (Test-Path $ExePath) {
+        DoStep "disable launch at login" {
+            & $ExePath tray --uninstall | Out-Null
+        }
+    }
+    Remove-IfExists $StartupShortcut "legacy Startup shortcut"
     DoStep "stop running clawmeter processes" { Stop-Clawmeter }
     Remove-IfExists $StartMenuShortcut "Start Menu shortcut"
-    Remove-IfExists $StartupShortcut "Startup shortcut"
     Remove-IfExists $ExePath "binary"
     Remove-IfExists $IconPath "icon"
     if (-not $NoModifyPath) {
@@ -262,9 +271,12 @@ try {
     }
 
     if ($Startup) {
-        DoStep "create Startup shortcut $StartupShortcut" {
-            New-ClawmeterShortcut -Path $StartupShortcut -TargetPath $ExePath -Arguments "tray"
-            Say "Enabled launch-at-login with $StartupShortcut"
+        DoStep "enable launch at login" {
+            # Defer to the binary's own autostart logic (registry Run key)
+            # so this matches what the tray's "Launch at login" toggle does.
+            # Single mechanism, two entry points.
+            & $ExePath tray --install | Out-Null
+            Say "Enabled launch-at-login"
         }
     } else {
         Say "Launch-at-login is NOT enabled. Re-run with -Startup to enable it."
