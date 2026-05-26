@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"github.com/gen2brain/beeep"
+	"github.com/pkg/browser"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cache"
@@ -956,16 +958,7 @@ func toggleAutostart(m *systray.MenuItem) {
 }
 
 func openURL(url string) {
-	switch runtime.GOOS {
-	case "linux":
-		exec.Command("xdg-open", url).Start()
-	case "darwin":
-		exec.Command("open", url).Start()
-	case "windows":
-		// rundll32 url.dll,FileProtocolHandler avoids the brief console
-		// flash that `cmd /c start` produces from a GUI-subsystem parent.
-		exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	}
+	_ = browser.OpenURL(url)
 }
 
 func openTerminalWithClaude() {
@@ -982,14 +975,17 @@ func openTerminalWithClaude() {
 	}
 }
 
+// notify delivers a desktop notification using beeep, which natively wraps
+// each platform's notification system (Windows toast, macOS Notification
+// Center, Linux D-Bus org.freedesktop.Notifications). The "critical"
+// urgency maps to beeep.Alert, which renders with the highest-priority
+// visual treatment each platform offers; everything else uses beeep.Notify.
 func notify(title, body, urgency string) {
-	switch runtime.GOOS {
-	case "linux":
-		exec.Command("notify-send", "-u", urgency, title, body).Run()
-	case "darwin":
-		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
-		exec.Command("osascript", "-e", script).Run()
+	if urgency == "critical" {
+		_ = beeep.Alert(title, body, "")
+		return
 	}
+	_ = beeep.Notify(title, body, "")
 }
 
 func providerNames(providers []provider.Provider) []string {
