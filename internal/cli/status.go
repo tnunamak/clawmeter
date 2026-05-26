@@ -331,8 +331,12 @@ func Status(jsonMode, plainMode, showAll bool) int {
 
 	all.Register(registry, cfg)
 
-	// Try cache first
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() {
+	// Try cache first — but only if it covers everything currently
+	// configured. Otherwise (e.g., a provider became configured via
+	// `codex login` after the last fetch) we'd return stale-by-membership
+	// data and the user would see nothing for ~60s.
+	configuredNames := registry.ConfiguredNames()
+	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) {
 		output := buildOutputFromCache(registry, cfg, cacheEntry)
 		if !showAll {
 			output.HideUnavailable()
@@ -408,9 +412,11 @@ func Check() int {
 		return 2
 	}
 
-	// Try cache first
+	// Try cache first — but skip if a newly-configured provider has no
+	// cached entry yet (same stale-by-membership concern as Status()).
+	configuredNames := registry.ConfiguredNames()
 	var output *MultiProviderOutput
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() {
+	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) {
 		output = buildOutputFromCache(registry, cfg, cacheEntry)
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
