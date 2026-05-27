@@ -904,15 +904,13 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 			if display == "" {
 				display = name
 			}
+			proj := forecast.Project(pct, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			message := fmt.Sprintf("%s window at %.0f%% — %s", window.Name, pct, proj.PaceIndicator())
 
 			if pct >= criticalThreshold && oldPct < criticalThreshold {
-				notify(fmt.Sprintf("%s usage critical", display),
-					fmt.Sprintf("%s window at %.0f%% — rate limiting likely before reset", window.Name, pct),
-					"critical")
+				notify(fmt.Sprintf("%s usage critical", display), message, "critical")
 			} else if pct >= warningThreshold && oldPct < warningThreshold {
-				notify(fmt.Sprintf("%s usage warning", display),
-					fmt.Sprintf("%s window at %.0f%% — on pace to reach limit", window.Name, pct),
-					"normal")
+				notify(fmt.Sprintf("%s usage warning", display), message, "normal")
 			}
 		}
 	}

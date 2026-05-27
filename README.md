@@ -7,7 +7,7 @@
 
 Clawmeter is a system tray and CLI quota meter for AI coding tools.
 
-It answers the questions that matter while you are working: am I on pace, what is most likely to run out, and when does it reset?
+It answers the questions that matter while you are working: am I on track, what is most likely to run out, and when does it reset?
 
 ## Install
 
@@ -59,9 +59,9 @@ clawmeter
 
 ```text
 PROVIDER   WINDOW    USAGE                 PCT  resets IN      PACE
-Claude     5h        ██░░░░░░░░░░░░░░░░░░  11%  resets 4h00m   9% ahead    · lasts to reset
-           7d All    ██████████████████░░  88%  resets 1d10h   8% behind   · runs out in 18h
-           7d Sonnet ░░░░░░░░░░░░░░░░░░░░   2%  resets 4d23h   27% ahead   · lasts to reset
+Claude     5h        ██░░░░░░░░░░░░░░░░░░  11%  resets 4h00m   est. 55% at reset
+           7d All    ██████████████████░░  89%  resets 1d10h   est. 112% at reset · runs out 18h early
+           7d Sonnet ░░░░░░░░░░░░░░░░░░░░   2%  resets 4d23h   est. 7% at reset
 ```
 
 Useful commands:

@@ -24,9 +24,10 @@ func TestProject(t *testing.T) {
 		wantProjectedLo     float64 // projected pct lower bound (inclusive)
 		wantProjectedHi     float64 // projected pct upper bound (inclusive)
 		wantRunsOutPositive bool    // true if RunsOutIn should be > 0
+		wantRunsOutEarly    bool    // true if RunsOutEarlyBy should be > 0
 	}{
 		{
-			name:                "0% usage, 3h remaining of 5h window → on pace",
+			name:                "0% usage, 3h remaining of 5h window → no projected spend",
 			currentPct:          0,
 			resetsAt:            now.Add(3 * time.Hour),
 			windowLen:           FiveHourWindow,
@@ -46,7 +47,7 @@ func TestProject(t *testing.T) {
 			wantProjectedHi:     51,
 		},
 		{
-			name:                "95% usage, 2h remaining of 5h window → ahead of pace",
+			name:                "95% usage, 2h remaining of 5h window → projected to run out",
 			currentPct:          95,
 			resetsAt:            now.Add(2 * time.Hour),
 			windowLen:           FiveHourWindow,
@@ -55,6 +56,7 @@ func TestProject(t *testing.T) {
 			wantProjectedLo:     155,
 			wantProjectedHi:     160,
 			wantRunsOutPositive: true,
+			wantRunsOutEarly:    true,
 		},
 		{
 			name:                "100% usage, 1h remaining of 5h window → maxed out",
@@ -65,6 +67,18 @@ func TestProject(t *testing.T) {
 			wantWillLastToReset: false, // at 100%, secsToExhaust=0 which is < remaining
 			wantProjectedLo:     124,
 			wantProjectedHi:     126,
+			wantRunsOutEarly:    true,
+		},
+		{
+			name:                "over 100% usage clamps run-out to now",
+			currentPct:          105,
+			resetsAt:            now.Add(1 * time.Hour),
+			windowLen:           FiveHourWindow,
+			wantOnTrack:         false,
+			wantWillLastToReset: false,
+			wantProjectedLo:     130,
+			wantProjectedHi:     132,
+			wantRunsOutEarly:    true,
 		},
 		{
 			name:                "0% usage, 0h remaining — just reset edge case",
@@ -127,6 +141,12 @@ func TestProject(t *testing.T) {
 			if !tt.wantRunsOutPositive && proj.RunsOutIn != 0 {
 				t.Errorf("RunsOutIn = %v, want 0", proj.RunsOutIn)
 			}
+			if tt.wantRunsOutEarly && proj.RunsOutEarlyBy <= 0 {
+				t.Errorf("RunsOutEarlyBy = %v, want > 0", proj.RunsOutEarlyBy)
+			}
+			if !tt.wantRunsOutEarly && proj.RunsOutEarlyBy != 0 {
+				t.Errorf("RunsOutEarlyBy = %v, want 0", proj.RunsOutEarlyBy)
+			}
 		})
 	}
 }
@@ -153,6 +173,32 @@ func TestGuessWindowType(t *testing.T) {
 				t.Errorf("GuessWindowType(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestProject_RunOutEarlyByIsRelativeToReset(t *testing.T) {
+	now := time.Now()
+	proj := Project(75, now.Add(time.Hour), 2*time.Hour)
+
+	if proj.WillLastToReset {
+		t.Fatal("WillLastToReset = true, want false")
+	}
+	if proj.RunsOutIn < 19*time.Minute || proj.RunsOutIn > 21*time.Minute {
+		t.Errorf("RunsOutIn = %v, want about 20m from now", proj.RunsOutIn)
+	}
+	if proj.RunsOutEarlyBy < 39*time.Minute || proj.RunsOutEarlyBy > 41*time.Minute {
+		t.Errorf("RunsOutEarlyBy = %v, want about 40m before reset", proj.RunsOutEarlyBy)
+	}
+}
+
+func TestProject_CurrentPctOverLimitDoesNotProduceNegativeRunOut(t *testing.T) {
+	proj := Project(105, time.Now().Add(time.Hour), FiveHourWindow)
+
+	if proj.RunsOutIn != 0 {
+		t.Errorf("RunsOutIn = %v, want 0 because quota is already exhausted", proj.RunsOutIn)
+	}
+	if proj.RunsOutEarlyBy < 59*time.Minute || proj.RunsOutEarlyBy > time.Hour {
+		t.Errorf("RunsOutEarlyBy = %v, want about the full remaining time", proj.RunsOutEarlyBy)
 	}
 }
 
@@ -183,44 +229,34 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		want string // substring match
 	}{
 		{
-			name: "on pace and lasts",
-			proj: Projection{Delta: 1.0, WillLastToReset: true},
-			want: "on pace",
+			name: "under limit estimate",
+			proj: Projection{ProjectedPct: 70, WillLastToReset: true},
+			want: "est. 70% at reset",
 		},
 		{
-			name: "behind with runs out",
-			proj: Projection{Delta: 15, WillLastToReset: false, RunsOutIn: 2 * time.Hour},
-			want: "15% behind",
+			name: "over limit estimate with run-out note",
+			proj: Projection{ProjectedPct: 139, WillLastToReset: false, RunsOutEarlyBy: 2 * time.Hour},
+			want: "est. 139% at reset · runs out 2h00m early",
 		},
 		{
-			name: "ahead and lasts",
-			proj: Projection{Delta: -20, WillLastToReset: true},
-			want: "20% ahead",
+			name: "zero usage estimate",
+			proj: Projection{ProjectedPct: 0, WillLastToReset: true},
+			want: "est. 0% at reset",
 		},
 		{
-			name: "on pace boundary (delta=2)",
-			proj: Projection{Delta: 2, WillLastToReset: true},
-			want: "on pace",
+			name: "near limit estimate",
+			proj: Projection{ProjectedPct: 98, WillLastToReset: true},
+			want: "est. 98% at reset",
 		},
 		{
-			name: "just beyond on pace (delta=3)",
-			proj: Projection{Delta: 3, WillLastToReset: true},
-			want: "3% behind",
-		},
-		{
-			name: "projected over limit wins over small delta",
-			proj: Projection{ProjectedPct: 104, Delta: 0.6, WillLastToReset: false, RunsOutIn: 5 * time.Hour},
-			want: "projects 104%",
-		},
-		{
-			name: "near limit wins over small delta",
-			proj: Projection{ProjectedPct: 98, Delta: 0.2, WillLastToReset: true},
-			want: "projects 98%",
+			name: "over limit estimate",
+			proj: Projection{ProjectedPct: 104, WillLastToReset: false},
+			want: "est. 104% at reset",
 		},
 		{
 			name: "runs out includes duration",
-			proj: Projection{Delta: 10, WillLastToReset: false, RunsOutIn: 90 * time.Minute},
-			want: "runs out in 1h30m",
+			proj: Projection{ProjectedPct: 128, WillLastToReset: false, RunsOutEarlyBy: 90 * time.Minute},
+			want: "runs out 1h30m early",
 		},
 	}
 
@@ -235,46 +271,31 @@ func TestProjection_PaceIndicator(t *testing.T) {
 }
 
 func TestPaceIndicatorAlignment(t *testing.T) {
-	// The left part of every PaceIndicator must be exactly paceWidth chars
-	// so columns align in CLI output.
+	// Run-out notes keep a fixed-width estimate before the extra note so
+	// columns align in CLI output.
 	cases := []Projection{
-		{Delta: 0, WillLastToReset: true},          // "on pace"
-		{Delta: -3, WillLastToReset: true},         // "3% ahead"
-		{Delta: -28, WillLastToReset: true},        // "28% ahead"
-		{Delta: -100, WillLastToReset: true},       // "100% ahead"
-		{Delta: 5, WillLastToReset: true},          // "5% behind"
-		{Delta: 50, WillLastToReset: true},         // "50% behind"
-		{Delta: 100, WillLastToReset: true},        // "100% behind"
-		{ProjectedPct: 104, WillLastToReset: true}, // "projects 104%"
+		{ProjectedPct: 99, WillLastToReset: false, RunsOutEarlyBy: 5 * time.Minute},
+		{ProjectedPct: 104, WillLastToReset: false, RunsOutEarlyBy: 2 * time.Hour},
+		{ProjectedPct: 139, WillLastToReset: false, RunsOutEarlyBy: 18 * time.Hour},
 	}
 
 	for _, proj := range cases {
 		got := proj.PaceIndicator()
-		// With "lasts to reset", format is "<left> · lasts to reset"
 		parts := strings.SplitN(got, " · ", 2)
+		if len(parts) != 2 {
+			t.Fatalf("PaceIndicator() = %q, want a run-out note", got)
+		}
 		left := parts[0]
 		if len(left) != paceWidth {
-			t.Errorf("PaceIndicator() left %q has len %d, want %d (delta=%.0f)",
-				left, len(left), paceWidth, proj.Delta)
+			t.Errorf("PaceIndicator() left %q has len %d, want %d",
+				left, len(left), paceWidth)
 		}
 	}
 }
 
-func TestShortDuration(t *testing.T) {
-	tests := []struct {
-		d    time.Duration
-		want string
-	}{
-		{5 * time.Minute, "in 5m"},
-		{90 * time.Minute, "in 1h30m"},
-		{25 * time.Hour, "in 1d1h"},
-		{7 * 24 * time.Hour, "in 7d0h"},
-	}
-
-	for _, tt := range tests {
-		got := shortDuration(tt.d)
-		if got != tt.want {
-			t.Errorf("shortDuration(%v) = %q, want %q", tt.d, got, tt.want)
-		}
+func TestPaceIndicatorNoLastsToResetFiller(t *testing.T) {
+	got := (Projection{ProjectedPct: 70, WillLastToReset: true}).PaceIndicator()
+	if strings.Contains(got, "lasts to reset") || strings.Contains(got, " · ") {
+		t.Errorf("PaceIndicator() = %q, want only the reset estimate", got)
 	}
 }

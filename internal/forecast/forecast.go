@@ -2,7 +2,6 @@ package forecast
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -13,9 +12,9 @@ const (
 	FiveHourWindow = 5 * time.Hour
 	SevenDayWindow = 7 * 24 * time.Hour
 
-	// paceWidth is the fixed column width for the pace label (e.g. "projects 100%").
-	// Must be >= the longest output of the pace switch in PaceIndicator.
-	paceWidth = 16
+	// paceWidth is the fixed column width before an extra run-out note.
+	// Must be >= the longest output of PaceLabel.
+	paceWidth = 18
 )
 
 type Projection struct {
@@ -23,12 +22,12 @@ type Projection struct {
 	ProjectedPct float64
 	// OnTrack is true if projected usage stays under 100% at reset.
 	OnTrack bool
-	// Delta is the difference between actual and expected usage (positive = behind pace).
-	Delta float64
 	// WillLastToReset is true if current rate won't exhaust quota before reset.
 	WillLastToReset bool
 	// RunsOutIn is how long until quota is exhausted at current rate (zero if WillLastToReset).
 	RunsOutIn time.Duration
+	// RunsOutEarlyBy is how long before reset the quota is exhausted at current rate.
+	RunsOutEarlyBy time.Duration
 }
 
 // Project estimates where utilization will be at window reset.
@@ -48,26 +47,29 @@ func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Pr
 
 	rate := currentPct / elapsed.Seconds()
 	projected := rate * windowLen.Seconds()
-	expected := (elapsed.Seconds() / windowLen.Seconds()) * 100
-	delta := currentPct - expected
 
 	// ETA: how long until 100% at current rate
 	willLast := true
 	var runsOutIn time.Duration
-	if rate > 0 {
+	var runsOutEarlyBy time.Duration
+	if currentPct >= 100 {
+		willLast = false
+		runsOutEarlyBy = remaining
+	} else if rate > 0 {
 		secsToExhaust := (100 - currentPct) / rate
 		if secsToExhaust < remaining.Seconds() {
 			willLast = false
 			runsOutIn = time.Duration(secsToExhaust * float64(time.Second))
+			runsOutEarlyBy = remaining - runsOutIn
 		}
 	}
 
 	return Projection{
 		ProjectedPct:    projected,
 		OnTrack:         projected < 100,
-		Delta:           delta,
 		WillLastToReset: willLast,
 		RunsOutIn:       runsOutIn,
+		RunsOutEarlyBy:  runsOutEarlyBy,
 	}
 }
 
@@ -76,38 +78,19 @@ func (p Projection) Indicator() string {
 	return fmt.Sprintf("%.0f%%", p.ProjectedPct)
 }
 
-// PaceIndicator returns a human-readable pace summary like CodexBar.
+// PaceIndicator returns a human-readable usage estimate for the reset window.
 func (p Projection) PaceIndicator() string {
-	left := PaceLabel(p.ProjectedPct, p.Delta)
-	left = fmt.Sprintf("%-*s", paceWidth, left)
-
-	var right string
-	if p.WillLastToReset {
-		right = "lasts to reset"
-	} else if p.RunsOutIn > 0 {
-		right = "runs out " + shortDuration(p.RunsOutIn)
-	}
-
-	if right != "" {
-		return left + " · " + right
+	left := PaceLabel(p.ProjectedPct)
+	if !p.WillLastToReset && p.RunsOutEarlyBy > 0 {
+		return fmt.Sprintf("%-*s · runs out %s early", paceWidth, left, format.FormatDuration(p.RunsOutEarlyBy))
 	}
 	return left
 }
 
-// PaceLabel summarizes the usage rate. Projected limit pressure wins over
-// absolute delta because early-window percentage-point deltas can look tiny
-// while still projecting over the reset-window limit.
-func PaceLabel(projectedPct, delta float64) string {
-	switch {
-	case projectedPct >= 90:
-		return fmt.Sprintf("projects %.0f%%", projectedPct)
-	case math.Abs(delta) <= 2:
-		return "on pace"
-	case delta > 0:
-		return fmt.Sprintf("%.0f%% behind", math.Abs(delta))
-	default:
-		return fmt.Sprintf("%.0f%% ahead", math.Abs(delta))
-	}
+// PaceLabel summarizes the projected usage at reset. This is the same value
+// Auto uses to choose the tray icon target.
+func PaceLabel(projectedPct float64) string {
+	return fmt.Sprintf("est. %.0f%% at reset", projectedPct)
 }
 
 // ColorIndicator returns an ANSI-colored indicator with pace info.
@@ -135,8 +118,4 @@ func GuessWindowType(name string) time.Duration {
 	default:
 		return 24 * time.Hour // default to daily
 	}
-}
-
-func shortDuration(d time.Duration) string {
-	return "in " + format.FormatDuration(d)
 }
