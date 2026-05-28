@@ -79,9 +79,9 @@ func TestHumanizeError(t *testing.T) {
 			want:  "unexpected status 500 from",
 		},
 		{
-			name:  "showing cached suffix preserved",
-			input: "connection timed out (showing cached)",
-			want:  "connection timed out (showing cached)",
+			name:  "parenthetical suffix preserved",
+			input: "connection timed out (retry later)",
+			want:  "connection timed out (retry later)",
 		},
 		{
 			name:  "long error truncated to 80 chars",

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
@@ -59,18 +60,19 @@ func TestClassifyProvider(t *testing.T) {
 			wantTier: 1,
 		},
 		{
-			name: "errored with windows → classifies by windows not error",
+			name: "stale windows → tier 3",
 			pf: ProviderFormatter{
 				Name: "test",
 				Data: &provider.UsageData{
-					Error: "showing cached",
+					Stale:   true,
+					Warning: "usage unavailable",
 					Windows: []provider.UsageWindow{
 						// 10% with 4h remaining of 5h: elapsed=1h, rate=10/3600, projected=50
 						{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
 					},
 				},
 			},
-			wantTier:        4, // healthy: projected ~50%
+			wantTier:        3, // stale-but-readable data should be visible as a warning
 			wantProjectedLo: 45,
 			wantProjectedHi: 55,
 		},
@@ -258,5 +260,34 @@ func TestHideUnavailable_HidesAutoDetectedErrorsButKeepsExplicit(t *testing.T) {
 	explicitOutput.HideUnavailable()
 	if len(explicitOutput.Providers) != 1 {
 		t.Fatalf("explicitly enabled error should remain visible, got %d providers", len(explicitOutput.Providers))
+	}
+}
+
+func TestStaleFallbackMarksLastGoodDataAndDropsResetlessWindows(t *testing.T) {
+	entry := &cache.Entry{
+		ProviderData: map[string]*provider.UsageData{
+			"claude": {
+				Provider:  "claude",
+				FetchedAt: time.Date(2026, 5, 28, 15, 4, 0, 0, time.Local),
+				Windows: []provider.UsageWindow{
+					{Name: "7d Sonnet", Utilization: 0},
+					{Name: "7d All", Utilization: 12, ResetsAt: time.Now().Add(24 * time.Hour)},
+				},
+			},
+		},
+	}
+
+	got, ok := staleFallback(entry, "claude", "usage unavailable")
+	if !ok {
+		t.Fatal("staleFallback() ok = false, want true")
+	}
+	if !got.Stale || got.Warning != "usage unavailable" || got.Error != "" {
+		t.Fatalf("fallback state = stale:%v warning:%q error:%q", got.Stale, got.Warning, got.Error)
+	}
+	if len(got.Windows) != 1 || got.Windows[0].Name != "7d All" {
+		t.Fatalf("fallback windows = %+v, want only usable last-good window", got.Windows)
+	}
+	if entry.ProviderData["claude"].Stale {
+		t.Fatal("staleFallback mutated cache entry")
 	}
 }

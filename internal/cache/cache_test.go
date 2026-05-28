@@ -68,3 +68,22 @@ func TestCoversTreatsNilEntryAsCovered(t *testing.T) {
 		t.Fatal("Covers should return true when openai key exists, even if value is nil")
 	}
 }
+
+func TestHasStaleData(t *testing.T) {
+	entry := Entry{
+		ProviderData: map[string]*provider.UsageData{
+			"openai": {Provider: "openai"},
+			"claude": {Provider: "claude", Stale: true},
+		},
+	}
+
+	if !entry.HasStaleData([]string{"claude"}) {
+		t.Fatal("HasStaleData(claude) = false, want true")
+	}
+	if entry.HasStaleData([]string{"openai"}) {
+		t.Fatal("HasStaleData(openai) = true, want false")
+	}
+	if entry.HasStaleData([]string{"gemini"}) {
+		t.Fatal("HasStaleData(missing) = true, want false")
+	}
+}

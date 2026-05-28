@@ -48,6 +48,17 @@ func TestIconMeterStateUsesActualExpectedAndProjectedRiskSeparately(t *testing.T
 	}
 }
 
+func TestIconMeterStateKeepsUnavailableDataNeutral(t *testing.T) {
+	meter := iconMeterState(&provider.UsageData{
+		Provider: "claude",
+		Error:    "usage unavailable",
+	}, "")
+
+	if meter.UsagePct != 0 || meter.ExpectedPct != 0 || meter.RiskPct != 0 || meter.ShowExpected {
+		t.Fatalf("meter = %+v, want neutral provider icon without red failure gauge", meter)
+	}
+}
+
 func TestProviderSeverityUsesHighestProjectedUsage(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
@@ -137,20 +148,21 @@ func TestTrayClickDispatcherDoubleClickResetsAutoWithoutCycle(t *testing.T) {
 }
 
 func TestActiveIconTargetsIncludesEveryProviderWindow(t *testing.T) {
+	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
 			Provider: "openai",
 			Windows: []provider.UsageWindow{
-				{Name: "5h"},
-				{Name: "7d"},
+				{Name: "5h", ResetsAt: now.Add(time.Hour)},
+				{Name: "7d", ResetsAt: now.Add(24 * time.Hour)},
 			},
 		},
 		"claude": {
 			Provider: "claude",
 			Windows: []provider.UsageWindow{
-				{Name: "5h"},
-				{Name: "7d All"},
-				{Name: "7d Sonnet"},
+				{Name: "5h", ResetsAt: now.Add(time.Hour)},
+				{Name: "7d All", ResetsAt: now.Add(24 * time.Hour)},
+				{Name: "7d Sonnet", ResetsAt: now.Add(24 * time.Hour)},
 			},
 		},
 	}

@@ -48,6 +48,8 @@ type UsageData struct {
 	Windows   []UsageWindow `json:"windows"`              // Usage windows (providers may have 1 or more)
 	IsExpired bool          `json:"is_expired,omitempty"` // True if credentials are expired
 	Error     string        `json:"error,omitempty"`      // Error message if fetch failed
+	Stale     bool          `json:"stale,omitempty"`      // True if showing last good data after refresh failed
+	Warning   string        `json:"warning,omitempty"`    // Short non-blocking data quality note
 }
 
 // Clone returns a deep-enough copy for UI/cache fallback paths.
@@ -69,7 +71,34 @@ func (u *UsageData) IsHealthy() bool {
 
 // HasUsageWindows reports whether the data contains useful quota readings.
 func (u *UsageData) HasUsageWindows() bool {
-	return u != nil && len(u.Windows) > 0 && !u.IsExpired
+	return u != nil && len(u.UsableWindows()) > 0 && !u.IsExpired
+}
+
+// UsableWindows returns quota windows that can be compared against a reset.
+func (u *UsageData) UsableWindows() []UsageWindow {
+	if u == nil || len(u.Windows) == 0 {
+		return nil
+	}
+	windows := make([]UsageWindow, 0, len(u.Windows))
+	for _, window := range u.Windows {
+		if window.ResetsAt.IsZero() {
+			continue
+		}
+		windows = append(windows, window)
+	}
+	return windows
+}
+
+// MarkStale annotates a cloned last-good reading when the live refresh could
+// not produce trustworthy data.
+func (u *UsageData) MarkStale(reason string) {
+	if u == nil {
+		return
+	}
+	u.Stale = true
+	u.Warning = reason
+	u.Error = ""
+	u.Windows = u.UsableWindows()
 }
 
 // EstablishesPrimaryUIHistory reports whether this data proves the provider

@@ -67,6 +67,16 @@ func (e *Entry) Covers(want []string) bool {
 	return true
 }
 
+// HasStaleData reports whether any requested provider is cached fallback data.
+func (e *Entry) HasStaleData(want []string) bool {
+	for _, name := range want {
+		if data := e.ProviderData[name]; data != nil && data.Stale {
+			return true
+		}
+	}
+	return false
+}
+
 // GetProvider retrieves usage data for a specific provider.
 func (e *Entry) GetProvider(name string) (*provider.UsageData, bool) {
 	data, ok := e.ProviderData[name]

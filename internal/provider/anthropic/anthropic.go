@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	usageURL        = "https://api.anthropic.com/api/oauth/usage"
-	tokenURL        = "https://platform.claude.com/v1/oauth/token"
-	oauthClientID   = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	betaHeader      = "oauth-2025-04-20"
-	timeout         = 15 * time.Second
+	usageURL      = "https://api.anthropic.com/api/oauth/usage"
+	tokenURL      = "https://platform.claude.com/v1/oauth/token"
+	oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	betaHeader    = "oauth-2025-04-20"
+	timeout       = 15 * time.Second
 )
 
 // Provider implements the provider.Provider interface for Anthropic/Claude.
@@ -133,34 +133,21 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
+	if apiResp.usageUnavailable() {
+		return &provider.UsageData{
+			Provider:  p.Name(),
+			FetchedAt: time.Now(),
+			Error:     "usage unavailable",
+		}, nil
+	}
+
 	data := &provider.UsageData{
 		Provider:  p.Name(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
-	// Add all non-nil windows
-	type namedWindow struct {
-		name, display string
-		w             *usageWindow
-	}
-	for _, nw := range []namedWindow{
-		{"5h", "5 hours", apiResp.FiveHour},
-		{"7d All", "7 days (all models)", apiResp.SevenDay},
-		{"7d OAuth", "7 days (OAuth apps)", apiResp.SevenDayOAuthApps},
-		{"7d Opus", "7 days (Opus)", apiResp.SevenDayOpus},
-		{"7d Sonnet", "7 days (Sonnet)", apiResp.SevenDaySonnet},
-		{"bonus", "Bonus", apiResp.IguanaNecktie},
-	} {
-		if nw.w != nil && nw.w.Utilization >= 0 {
-			data.Windows = append(data.Windows, provider.UsageWindow{
-				Name:        nw.name,
-				DisplayName: nw.display,
-				Utilization: nw.w.Utilization,
-				ResetsAt:    nw.w.ResetsAt,
-			})
-		}
-	}
+	addUsageWindows(data, apiResp)
 
 	// Extra usage (overage) — only show if enabled
 	if apiResp.ExtraUsage != nil && apiResp.ExtraUsage.IsEnabled {
@@ -174,6 +161,30 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	return data, nil
+}
+
+func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
+	type namedWindow struct {
+		name, display string
+		w             *usageWindow
+	}
+	for _, nw := range []namedWindow{
+		{"5h", "5 hours", apiResp.FiveHour},
+		{"7d All", "7 days (all models)", apiResp.SevenDay},
+		{"7d OAuth", "7 days (OAuth apps)", apiResp.SevenDayOAuthApps},
+		{"7d Opus", "7 days (Opus)", apiResp.SevenDayOpus},
+		{"7d Sonnet", "7 days (Sonnet)", apiResp.SevenDaySonnet},
+		{"bonus", "Bonus", apiResp.IguanaNecktie},
+	} {
+		if nw.w != nil && nw.w.Utilization >= 0 && !nw.w.ResetsAt.IsZero() {
+			data.Windows = append(data.Windows, provider.UsageWindow{
+				Name:        nw.name,
+				DisplayName: nw.display,
+				Utilization: nw.w.Utilization,
+				ResetsAt:    nw.w.ResetsAt,
+			})
+		}
+	}
 }
 
 // Credentials holds OAuth credentials for Anthropic.
@@ -362,13 +373,34 @@ func (p *Provider) writeCredentials(creds *Credentials) error {
 
 // Internal API response types.
 type usageResponse struct {
-	FiveHour         *usageWindow `json:"five_hour,omitempty"`
-	SevenDay         *usageWindow `json:"seven_day,omitempty"`
-	SevenDayOAuthApps *usageWindow `json:"seven_day_oauth_apps,omitempty"`
-	SevenDayOpus     *usageWindow `json:"seven_day_opus,omitempty"`
-	SevenDaySonnet   *usageWindow `json:"seven_day_sonnet,omitempty"`
-	IguanaNecktie    *usageWindow `json:"iguana_necktie,omitempty"`
-	ExtraUsage       *extraUsageWindow `json:"extra_usage,omitempty"`
+	FiveHour          *usageWindow      `json:"five_hour,omitempty"`
+	SevenDay          *usageWindow      `json:"seven_day,omitempty"`
+	SevenDayOAuthApps *usageWindow      `json:"seven_day_oauth_apps,omitempty"`
+	SevenDayOpus      *usageWindow      `json:"seven_day_opus,omitempty"`
+	SevenDaySonnet    *usageWindow      `json:"seven_day_sonnet,omitempty"`
+	IguanaNecktie     *usageWindow      `json:"iguana_necktie,omitempty"`
+	ExtraUsage        *extraUsageWindow `json:"extra_usage,omitempty"`
+}
+
+func (r usageResponse) usageUnavailable() bool {
+	return r.FiveHour != nil &&
+		r.SevenDay != nil &&
+		r.FiveHour.Utilization == 0 &&
+		r.SevenDay.Utilization == 0 &&
+		hasResetlessModelWindow(r)
+}
+
+func hasResetlessModelWindow(r usageResponse) bool {
+	for _, w := range []*usageWindow{
+		r.SevenDayOAuthApps,
+		r.SevenDayOpus,
+		r.SevenDaySonnet,
+	} {
+		if w != nil && w.ResetsAt.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 type usageWindow struct {
@@ -377,7 +409,7 @@ type usageWindow struct {
 }
 
 type extraUsageWindow struct {
-	IsEnabled   bool    `json:"is_enabled"`
+	IsEnabled    bool    `json:"is_enabled"`
 	MonthlyLimit float64 `json:"monthly_limit"`
 	UsedCredits  float64 `json:"used_credits"`
 	Utilization  float64 `json:"utilization"`

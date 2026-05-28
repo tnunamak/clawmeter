@@ -201,27 +201,24 @@ func onReady() {
 				s.failureGate.RecordSuccess(name)
 				continue
 			}
-			// Provider errored — check if we should suppress it
+			// Provider errored — keep showing last good windows, but label them
+			// stale so the tray never turns unavailable data into a clean 0%.
 			hasPrior := false
-			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.IsHealthy() {
+			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.HasUsageWindows() {
 				hasPrior = true
 			}
-			if hasPrior && len(data.Windows) == 0 && provider.IsTransientFetchError(data.Error) {
-				// Codex/OpenAI transport blip — keep showing the last good windows.
-				if prev, ok := s.lastResults[name]; ok && prev != nil {
-					result.Results[name] = prev.Clone()
-				}
+			if hasPrior && !data.HasUsageWindows() {
+				prev := s.lastResults[name].Clone()
+				prev.MarkStale(data.Error)
+				result.Results[name] = prev
 				_ = s.failureGate.ShouldSurfaceError(name, true)
 			} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
 				// First failure with prior data — keep showing cache silently.
 				if prev, ok := s.lastResults[name]; ok && prev != nil {
-					result.Results[name] = prev.Clone()
+					cached := prev.Clone()
+					cached.MarkStale(data.Error)
+					result.Results[name] = cached
 				}
-			} else if hasPrior && len(data.Windows) == 0 {
-				// Persistent failure — fall back to cache but show the error
-				prev := s.lastResults[name].Clone()
-				prev.Error = data.Error + " (showing cached)"
-				result.Results[name] = prev
 			}
 		}
 		s.mu.Unlock()
@@ -494,11 +491,16 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			continue
 		}
 
-		// Hide status, show window items
 		showProviderHeader(menu)
-		menu.statusItem.Hide()
+		if data.Stale {
+			menu.statusItem.SetTitle(fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
+			menu.statusItem.Show()
+		} else {
+			menu.statusItem.Hide()
+		}
 
-		for i, window := range data.Windows {
+		windows := data.UsableWindows()
+		for i, window := range windows {
 			if i >= len(menu.windowItems) {
 				break
 			}
@@ -511,7 +513,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		}
 
-		for i := len(data.Windows); i < len(menu.windowItems); i++ {
+		for i := len(windows); i < len(menu.windowItems); i++ {
 			menu.windowItems[i].Hide()
 		}
 
@@ -656,11 +658,12 @@ func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
 		if data == nil {
 			continue
 		}
-		if len(data.Windows) == 0 {
+		windows := data.UsableWindows()
+		if len(windows) == 0 {
 			choices = append(choices, iconTarget{Provider: name})
 			continue
 		}
-		for _, window := range data.Windows {
+		for _, window := range windows {
 			choices = append(choices, iconTarget{Provider: name, Window: window.Name})
 		}
 	}
@@ -751,8 +754,8 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 	if data.IsExpired {
 		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
 	}
-	if data.Error != "" && len(data.Windows) == 0 {
-		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
+	if data.Error != "" && !data.HasUsageWindows() {
+		return icons.MeterState{}
 	}
 
 	window, proj, ok := selectedIconWindow(data, windowName)
@@ -803,14 +806,17 @@ func selectedIconWindow(data *provider.UsageData, windowName string) (provider.U
 		return selected, selectedProj, false
 	}
 	if windowName != "" {
-		if window, ok := data.GetWindow(windowName); ok {
+		for _, window := range data.UsableWindows() {
+			if window.Name != windowName {
+				continue
+			}
 			windowLen := forecast.GuessWindowType(window.Name)
-			return *window, forecast.Project(window.Utilization, window.ResetsAt, windowLen), true
+			return window, forecast.Project(window.Utilization, window.ResetsAt, windowLen), true
 		}
 		return selected, selectedProj, false
 	}
 	worst := -1.0
-	for _, window := range data.Windows {
+	for _, window := range data.UsableWindows() {
 		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 		if proj.ProjectedPct > worst {
 			worst = proj.ProjectedPct
@@ -884,13 +890,13 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 	}
 
 	for name, data := range results {
-		if data == nil || data.Error != "" {
+		if data == nil || data.Error != "" || data.Stale {
 			continue
 		}
 
 		oldData, hadOld := s.lastResults[name]
 
-		for _, window := range data.Windows {
+		for _, window := range data.UsableWindows() {
 			pct := window.Utilization
 			oldPct := 0.0
 
@@ -1024,7 +1030,7 @@ func providerSeverity(data *provider.UsageData) float64 {
 	if data.IsExpired {
 		return 10000 // expired always on top
 	}
-	if data.Error != "" && len(data.Windows) == 0 {
+	if data.Error != "" && !data.HasUsageWindows() {
 		return 9000 // error next
 	}
 	return providerProjectedPct(data)

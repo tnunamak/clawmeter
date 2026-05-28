@@ -68,6 +68,9 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
 		statusLine = pf.Status.FormatCLI()
 	}
+	if pf.Data != nil && pf.Data.Stale {
+		statusLine = staleSummary(pf.Data)
+	}
 
 	pad := fmt.Sprintf("%%-%ds", providerWidth)
 
@@ -102,8 +105,9 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		return []string{line}
 	}
 
-	lines := make([]string, 0, len(pf.Data.Windows)+1)
-	for i, window := range pf.Data.Windows {
+	windows := pf.Data.UsableWindows()
+	lines := make([]string, 0, len(windows)+1)
+	for i, window := range windows {
 		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 		resetStr := format.FormatDuration(time.Until(window.ResetsAt))
 
@@ -146,15 +150,20 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		return fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix)
 	}
 
-	parts := make([]string, 0, len(pf.Data.Windows))
-	for _, window := range pf.Data.Windows {
+	windows := pf.Data.UsableWindows()
+	parts := make([]string, 0, len(windows))
+	for _, window := range windows {
 		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 		resetStr := format.FormatDuration(time.Until(window.ResetsAt))
 		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)",
 			window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
 	}
 
-	return fmt.Sprintf("%s: %s%s", pf.Display, strings.Join(parts, "  "), suffix)
+	prefix := ""
+	if pf.Data.Stale {
+		prefix = fmt.Sprintf("stale (updated %s) - ", pf.Data.FetchedAt.Format("15:04"))
+	}
+	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
 }
 
 // MultiProviderOutput handles displaying data from multiple providers.
@@ -187,7 +196,7 @@ func (m *MultiProviderOutput) PrintColor() {
 			providerWidth = len(pf.Display)
 		}
 		if pf.Data != nil {
-			for _, w := range pf.Data.Windows {
+			for _, w := range pf.Data.UsableWindows() {
 				hasWindows = true
 				if len(w.Name) > windowWidth {
 					windowWidth = len(w.Name)
@@ -290,11 +299,12 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 		}
 
 		// Add forecasts for each window
-		if len(pf.Data.Windows) > 0 {
+		windows := pf.Data.UsableWindows()
+		if len(windows) > 0 {
 			providerOut.Forecast = &JSONForecast{
 				Windows: make(map[string]JSONProjection),
 			}
-			for _, window := range pf.Data.Windows {
+			for _, window := range windows {
 				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 				providerOut.Forecast.Windows[window.Name] = JSONProjection{
 					ProjectedPct: math.Round(proj.ProjectedPct),
@@ -336,7 +346,7 @@ func Status(jsonMode, plainMode, showAll bool) int {
 	// `codex login` after the last fetch) we'd return stale-by-membership
 	// data and the user would see nothing for ~60s.
 	configuredNames := registry.ConfiguredNames()
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) {
+	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) && !cacheEntry.HasStaleData(configuredNames) {
 		output := buildOutputFromCache(registry, cfg, cacheEntry)
 		if !showAll {
 			output.HideUnavailable()
@@ -360,12 +370,8 @@ func Status(jsonMode, plainMode, showAll bool) int {
 		// For providers that errored, fall back to cached data if available
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
-				if data != nil && data.Error != "" && len(data.Windows) == 0 {
-					if cached, ok := cacheEntry.GetProvider(name); ok && cached.IsHealthy() {
-						cached = cached.Clone()
-						if !provider.IsTransientFetchError(data.Error) {
-							cached.Error = data.Error + " (showing cached)"
-						}
+				if data != nil && data.Error != "" && !data.HasUsageWindows() {
+					if cached, ok := staleFallback(cacheEntry, name, data.Error); ok {
 						result.Results[name] = cached
 					}
 				}
@@ -396,6 +402,31 @@ func Status(jsonMode, plainMode, showAll bool) int {
 	return 0
 }
 
+func staleFallback(cacheEntry *cache.Entry, name, reason string) (*provider.UsageData, bool) {
+	cached, ok := cacheEntry.GetProvider(name)
+	if !ok || cached == nil || !cached.HasUsageWindows() {
+		return nil, false
+	}
+	cached = cached.Clone()
+	cached.MarkStale(reason)
+	return cached, true
+}
+
+func staleReason(data *provider.UsageData) string {
+	if data == nil || data.Warning == "" {
+		return "usage unavailable"
+	}
+	return format.HumanizeError(data.Warning)
+}
+
+func staleSummary(data *provider.UsageData) string {
+	reason := staleReason(data)
+	if reason == "" || reason == "usage unavailable" {
+		return "stale: showing last good data"
+	}
+	return "stale: showing last good data (" + reason + ")"
+}
+
 // Check fetches usage and returns an exit code: 0=healthy, 1=warning, 2=critical/expired/error.
 func Check() int {
 	cfg, err := config.Load()
@@ -416,12 +447,21 @@ func Check() int {
 	// cached entry yet (same stale-by-membership concern as Status()).
 	configuredNames := registry.ConfiguredNames()
 	var output *MultiProviderOutput
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) {
+	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) && !cacheEntry.HasStaleData(configuredNames) {
 		output = buildOutputFromCache(registry, cfg, cacheEntry)
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		result := provider.FetchAllParallel(ctx, registry)
+		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
+			for name, data := range result.Results {
+				if data != nil && data.Error != "" && !data.HasUsageWindows() {
+					if cached, ok := staleFallback(cacheEntry, name, data.Error); ok {
+						result.Results[name] = cached
+					}
+				}
+			}
+		}
 		_ = cache.Write(result)
 		output = buildOutputFromResult(registry, cfg, result, nil)
 	}
@@ -509,14 +549,14 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	if pf.Data.IsExpired {
 		return providerUrgency{tier: 0, maxProjectedPct: 100}
 	}
-	if pf.Data.Error != "" && len(pf.Data.Windows) == 0 {
+	if pf.Data.Error != "" && !pf.Data.HasUsageWindows() {
 		return providerUrgency{tier: 1}
 	}
 
 	var maxPct float64
 	var worstWindow string
 	var runsOutEarlyBy time.Duration
-	for _, w := range pf.Data.Windows {
+	for _, w := range pf.Data.UsableWindows() {
 		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
 		if proj.ProjectedPct > maxPct {
 			maxPct = proj.ProjectedPct
@@ -529,7 +569,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	switch {
 	case maxPct >= 100:
 		tier = 2
-	case maxPct >= 90:
+	case maxPct >= 90 || pf.Data.Stale:
 		tier = 3
 	}
 
@@ -741,6 +781,13 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 	if fetchErr != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", fetchErr)
 		return 1
+	}
+	if data != nil && data.Error != "" && !data.HasUsageWindows() {
+		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
+			if cached, ok := staleFallback(cacheEntry, p.Name(), data.Error); ok {
+				data = cached
+			}
+		}
 	}
 
 	pf := ProviderFormatter{

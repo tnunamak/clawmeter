@@ -239,8 +239,9 @@ func TestShouldShowInPrimaryUI(t *testing.T) {
 	}
 	errorOnly := &UsageData{Error: "forbidden"}
 	expired := &UsageData{IsExpired: true, Error: "reauth"}
-	cachedWithError := &UsageData{
-		Error:   "timeout (showing cached)",
+	staleWithWindows := &UsageData{
+		Stale:   true,
+		Warning: "usage unavailable",
 		Windows: []UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}},
 	}
 
@@ -256,7 +257,7 @@ func TestShouldShowInPrimaryUI(t *testing.T) {
 		{"auto error without history hidden", errorOnly, false, false, false},
 		{"auto expired without history hidden", expired, false, false, false},
 		{"auto expired with history shown", expired, true, false, true},
-		{"auto cached windows shown", cachedWithError, false, false, true},
+		{"auto stale windows shown", staleWithWindows, false, false, true},
 		{"explicit nil shown", nil, false, true, true},
 		{"explicit error shown", errorOnly, false, true, true},
 	}
@@ -278,7 +279,7 @@ func TestUsageDataCloneCopiesWindows(t *testing.T) {
 	}
 
 	clone := original.Clone()
-	clone.Error = "showing cached"
+	clone.Error = "timeout"
 	clone.Windows[0].Utilization = 99
 
 	if original.Error != "" {
@@ -286,6 +287,47 @@ func TestUsageDataCloneCopiesWindows(t *testing.T) {
 	}
 	if original.Windows[0].Utilization != 12 {
 		t.Fatalf("Clone mutated original window utilization: %.0f", original.Windows[0].Utilization)
+	}
+}
+
+func TestUsageDataHasUsageWindowsRequiresReset(t *testing.T) {
+	data := &UsageData{
+		Provider: "claude",
+		Windows: []UsageWindow{
+			{Name: "7d Sonnet", Utilization: 0},
+			{Name: "7d All", Utilization: 12, ResetsAt: time.Now().Add(24 * time.Hour)},
+		},
+	}
+
+	if !data.HasUsageWindows() {
+		t.Fatal("HasUsageWindows() = false, want true when at least one window has a reset")
+	}
+	got := data.UsableWindows()
+	if len(got) != 1 || got[0].Name != "7d All" {
+		t.Fatalf("UsableWindows() = %+v, want only reset-backed window", got)
+	}
+}
+
+func TestUsageDataMarkStaleKeepsOnlyUsableWindows(t *testing.T) {
+	data := &UsageData{
+		Provider: "claude",
+		Error:    "usage unavailable",
+		Windows: []UsageWindow{
+			{Name: "7d Sonnet", Utilization: 0},
+			{Name: "7d All", Utilization: 12, ResetsAt: time.Now().Add(24 * time.Hour)},
+		},
+	}
+
+	data.MarkStale("usage unavailable")
+
+	if !data.Stale {
+		t.Fatal("MarkStale did not set Stale")
+	}
+	if data.Error != "" {
+		t.Fatalf("Error = %q, want cleared for stale last-good data", data.Error)
+	}
+	if len(data.Windows) != 1 || data.Windows[0].Name != "7d All" {
+		t.Fatalf("Windows = %+v, want only reset-backed window", data.Windows)
 	}
 }
 
