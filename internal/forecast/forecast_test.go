@@ -235,8 +235,8 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		},
 		{
 			name: "over limit estimate with run-out note",
-			proj: Projection{ProjectedPct: 139, WillLastToReset: false, RunsOutEarlyBy: 2 * time.Hour},
-			want: "est. 139% at reset · runs out 2h00m early",
+			proj: Projection{ProjectedPct: 139, WillLastToReset: false, RunsOutIn: 2 * time.Hour, RunsOutEarlyBy: time.Hour},
+			want: "est. 139% at reset · runs out in 2h00m",
 		},
 		{
 			name: "zero usage estimate",
@@ -255,8 +255,13 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		},
 		{
 			name: "runs out includes duration",
-			proj: Projection{ProjectedPct: 128, WillLastToReset: false, RunsOutEarlyBy: 90 * time.Minute},
-			want: "runs out 1h30m early",
+			proj: Projection{ProjectedPct: 128, WillLastToReset: false, RunsOutIn: 90 * time.Minute, RunsOutEarlyBy: time.Hour},
+			want: "runs out in 1h30m",
+		},
+		{
+			name: "already out",
+			proj: Projection{ProjectedPct: 128, WillLastToReset: false, RunsOutEarlyBy: time.Hour},
+			want: "out now",
 		},
 	}
 
@@ -274,9 +279,9 @@ func TestPaceIndicatorAlignment(t *testing.T) {
 	// Run-out notes keep a fixed-width estimate before the extra note so
 	// columns align in CLI output.
 	cases := []Projection{
-		{ProjectedPct: 99, WillLastToReset: false, RunsOutEarlyBy: 5 * time.Minute},
-		{ProjectedPct: 104, WillLastToReset: false, RunsOutEarlyBy: 2 * time.Hour},
-		{ProjectedPct: 139, WillLastToReset: false, RunsOutEarlyBy: 18 * time.Hour},
+		{ProjectedPct: 99, WillLastToReset: false, RunsOutIn: 5 * time.Minute, RunsOutEarlyBy: 5 * time.Minute},
+		{ProjectedPct: 104, WillLastToReset: false, RunsOutIn: 2 * time.Hour, RunsOutEarlyBy: time.Hour},
+		{ProjectedPct: 139, WillLastToReset: false, RunsOutIn: 18 * time.Hour, RunsOutEarlyBy: time.Hour},
 	}
 
 	for _, proj := range cases {

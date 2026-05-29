@@ -4,6 +4,7 @@ package tray
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,16 +94,19 @@ func TestIconTargetOverrideCyclesOnlyThroughProviderQuotaWindows(t *testing.T) {
 		{Provider: "openai", Window: "7d"},
 	}
 
-	if got := nextIconTargetOverride(iconTarget{}, choices); got != (iconTarget{Provider: "claude", Window: "5h"}) {
-		t.Fatalf("next from auto = %+v, want claude/5h", got)
+	if got := nextIconTargetOverride(iconTarget{}, choices, false); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+		t.Fatalf("next from auto without skip = %+v, want claude/5h", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
+	if got := nextIconTargetOverride(iconTarget{}, choices, true); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
+		t.Fatalf("next from auto with skip = %+v, want claude/7d All", got)
+	}
+	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices, true); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
 		t.Fatalf("next from claude 5h = %+v, want claude/7d All", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
 		t.Fatalf("next from final target = %+v, want claude/5h", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
 		t.Fatalf("next from missing override = %+v, want claude/5h", got)
 	}
 }
@@ -147,33 +151,33 @@ func TestTrayClickDispatcherDoubleClickResetsAutoWithoutCycle(t *testing.T) {
 	}
 }
 
-func TestActiveIconTargetsIncludesEveryProviderWindow(t *testing.T) {
+func TestActiveIconTargetsOrdersEveryProviderWindowByProjectedRisk(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
 			Provider: "openai",
 			Windows: []provider.UsageWindow{
-				{Name: "5h", ResetsAt: now.Add(time.Hour)},
-				{Name: "7d", ResetsAt: now.Add(24 * time.Hour)},
+				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
+				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
 			},
 		},
 		"claude": {
 			Provider: "claude",
 			Windows: []provider.UsageWindow{
-				{Name: "5h", ResetsAt: now.Add(time.Hour)},
-				{Name: "7d All", ResetsAt: now.Add(24 * time.Hour)},
-				{Name: "7d Sonnet", ResetsAt: now.Add(24 * time.Hour)},
+				{Name: "5h", Utilization: 77, ResetsAt: now.Add(87 * time.Minute)},
+				{Name: "7d All", Utilization: 5, ResetsAt: now.Add(8 * time.Hour)},
+				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
 			},
 		},
 	}
 
 	got := activeIconTargets(results)
 	want := []iconTarget{
-		{Provider: "claude", Window: "5h"},
-		{Provider: "claude", Window: "7d All"},
 		{Provider: "claude", Window: "7d Sonnet"},
-		{Provider: "openai", Window: "5h"},
 		{Provider: "openai", Window: "7d"},
+		{Provider: "claude", Window: "5h"},
+		{Provider: "openai", Window: "5h"},
+		{Provider: "claude", Window: "7d All"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
@@ -293,6 +297,77 @@ func TestSelectedTrayTargetHonorsQuotaOverride(t *testing.T) {
 	}
 	if name != "claude" || windowName != "5h" {
 		t.Fatalf("selected target = %s/%s, want claude/5h", name, windowName)
+	}
+}
+
+func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
+			},
+		},
+	}
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+
+	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "OpenAI"})
+
+	if strings.Contains(got, "Claude") || strings.Contains(got, "7S") {
+		t.Fatalf("trayTooltip() = %q, want no target label because icon already shows it", got)
+	}
+	if !strings.HasPrefix(got, "Runs out in ") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
+		t.Fatalf("trayTooltip() = %q, want run-out, reset, and estimate", got)
+	}
+	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 2 {
+		t.Fatalf("trayTooltip() = %q, want three newline-separated lines", got)
+	}
+}
+
+func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
+			},
+		},
+	}
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{Provider: "openai", Window: "5h"}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.iconTargetOverride = iconTarget{}
+		s.mu.Unlock()
+	}()
+
+	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "OpenAI"})
+
+	if strings.Contains(got, "OpenAI") || strings.Contains(got, "5H") {
+		t.Fatalf("trayTooltip() = %q, want no target label because icon already shows it", got)
+	}
+	if !strings.HasPrefix(got, "Won't run out") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
+		t.Fatalf("trayTooltip() = %q, want run-out state, reset, and estimate", got)
+	}
+	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 2 {
+		t.Fatalf("trayTooltip() = %q, want three newline-separated lines", got)
 	}
 }
 

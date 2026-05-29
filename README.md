@@ -60,7 +60,7 @@ clawmeter
 ```text
 PROVIDER   WINDOW    USAGE                 PCT  resets IN      PACE
 Claude     5h        ██░░░░░░░░░░░░░░░░░░  11%  resets 4h00m   est. 55% at reset
-           7d All    ██████████████████░░  89%  resets 1d10h   est. 112% at reset · runs out 18h early
+           7d All    ██████████████████░░  89%  resets 1d10h   est. 112% at reset · runs out in 16h
            7d Sonnet ░░░░░░░░░░░░░░░░░░░░   2%  resets 4d23h   est. 7% at reset
 ```
 

@@ -542,7 +542,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	// Update icon and title based on worst usage (only active providers)
 	updateTrayIcon(activeResults)
 	updateTrayTitle(activeResults)
-	updateTrayTooltip()
+	updateTrayTooltip(activeResults, displayNames)
 
 	// Check notification thresholds
 	checkThresholds(activeResults, displayNames)
@@ -558,13 +558,13 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	if !targetInChoices(s.iconTargetOverride, choices) {
 		s.iconTargetOverride = iconTarget{}
 	}
-	s.iconTargetOverride = nextIconTargetOverride(s.iconTargetOverride, choices)
+	s.iconTargetOverride = nextIconTargetOverride(s.iconTargetOverride, choices, true)
 	s.mu.Unlock()
 
 	updateIconTargetSelector(results, displayNames, item)
 	updateTrayIcon(results)
 	updateTrayTitle(results)
-	updateTrayTooltip()
+	updateTrayTooltip(results, displayNames)
 }
 
 func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem) {
@@ -580,7 +580,7 @@ func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	updateIconTargetSelector(results, displayNames, item)
 	updateTrayIcon(results)
 	updateTrayTitle(results)
-	updateTrayTooltip()
+	updateTrayTooltip(results, displayNames)
 }
 
 func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string {
@@ -623,11 +623,14 @@ func iconCycleMenuTitle(target iconTarget, displayNames map[string]string) strin
 	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (click for next, double-click for Auto)"
 }
 
-func nextIconTargetOverride(current iconTarget, choices []iconTarget) iconTarget {
+func nextIconTargetOverride(current iconTarget, choices []iconTarget, skipAutoCurrent bool) iconTarget {
 	if len(choices) == 0 {
 		return iconTarget{}
 	}
 	if current.Provider == "" {
+		if skipAutoCurrent && len(choices) > 1 {
+			return choices[1]
+		}
 		return choices[0]
 	}
 	for i, choice := range choices {
@@ -646,13 +649,18 @@ func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
 	if len(results) == 0 {
 		return nil
 	}
+	type rankedTarget struct {
+		target iconTarget
+		risk   float64
+	}
+
 	providerNames := make([]string, 0, len(results))
 	for name := range results {
 		providerNames = append(providerNames, name)
 	}
 	sort.Strings(providerNames)
 
-	choices := make([]iconTarget, 0, len(results))
+	ranked := make([]rankedTarget, 0, len(results))
 	for _, name := range providerNames {
 		data := results[name]
 		if data == nil {
@@ -660,14 +668,48 @@ func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
 		}
 		windows := data.UsableWindows()
 		if len(windows) == 0 {
-			choices = append(choices, iconTarget{Provider: name})
+			target := iconTarget{Provider: name}
+			ranked = append(ranked, rankedTarget{target: target, risk: iconTargetRisk(data, target)})
 			continue
 		}
 		for _, window := range windows {
-			choices = append(choices, iconTarget{Provider: name, Window: window.Name})
+			target := iconTarget{Provider: name, Window: window.Name}
+			ranked = append(ranked, rankedTarget{target: target, risk: windowProjectedPct(window)})
 		}
 	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].risk > ranked[j].risk
+	})
+
+	choices := make([]iconTarget, 0, len(ranked))
+	for _, choice := range ranked {
+		choices = append(choices, choice.target)
+	}
 	return choices
+}
+
+func iconTargetRisk(data *provider.UsageData, target iconTarget) float64 {
+	if data == nil {
+		return -1
+	}
+	if data.IsExpired {
+		return 10000
+	}
+	if data.Error != "" && !data.HasUsageWindows() {
+		return 9000
+	}
+	if target.Window == "" {
+		return providerProjectedPct(data)
+	}
+	if window, _, ok := selectedIconWindow(data, target.Window); ok {
+		return windowProjectedPct(window)
+	}
+	return -1
+}
+
+func windowProjectedPct(window provider.UsageWindow) float64 {
+	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+	return proj.ProjectedPct
 }
 
 func targetInChoices(target iconTarget, choices []iconTarget) bool {
@@ -861,8 +903,8 @@ func windowBadgeLabel(name string) string {
 	return b.String()
 }
 
-func updateTrayTooltip() {
-	tooltip := ""
+func updateTrayTooltip(results map[string]*provider.UsageData, displayNames map[string]string) {
+	tooltip := trayTooltip(results, displayNames)
 	s.mu.Lock()
 	changed := tooltip != s.currentTooltip
 	if changed {
@@ -872,6 +914,57 @@ func updateTrayTooltip() {
 	if changed {
 		systray.SetTooltip(tooltip)
 	}
+}
+
+func trayTooltip(results map[string]*provider.UsageData, displayNames map[string]string) string {
+	name, data, windowName, ok := selectedTrayTarget(results)
+	if !ok || data == nil {
+		return ""
+	}
+	display := providerDisplayName(name, displayNames)
+	if data.IsExpired {
+		msg := "token expired"
+		if data.Error != "" {
+			msg = format.HumanizeError(data.Error)
+		}
+		return fmt.Sprintf("%s: %s", display, msg)
+	}
+	if data.Error != "" && !data.HasUsageWindows() {
+		return fmt.Sprintf("%s: %s", display, format.HumanizeError(data.Error))
+	}
+
+	window, proj, ok := selectedIconWindow(data, windowName)
+	if !ok {
+		return display
+	}
+	prefix := ""
+	if data.Stale {
+		prefix = "stale · "
+	}
+	return prefix + compactIconTooltip(window, proj)
+}
+
+func compactIconTooltip(window provider.UsageWindow, proj forecast.Projection) string {
+	parts := make([]string, 0, 3)
+	switch {
+	case proj.RunsOutIn > 0:
+		parts = append(parts, "Runs out in "+format.FormatDuration(proj.RunsOutIn))
+	case !proj.WillLastToReset:
+		parts = append(parts, "Out now")
+	default:
+		parts = append(parts, "Won't run out")
+	}
+	parts = append(parts, "Resets in "+format.FormatDuration(time.Until(window.ResetsAt)))
+	parts = append(parts, compactProjectionEstimate(proj))
+	return strings.Join(parts, "\n")
+}
+
+func compactProjectionEstimate(proj forecast.Projection) string {
+	estimate := forecast.PaceLabel(proj.ProjectedPct)
+	if strings.HasPrefix(estimate, "est.") {
+		return "Est." + strings.TrimPrefix(estimate, "est.")
+	}
+	return estimate
 }
 
 func checkThresholds(results map[string]*provider.UsageData, displayNames map[string]string) {

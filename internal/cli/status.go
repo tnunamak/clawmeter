@@ -539,6 +539,7 @@ type providerUrgency struct {
 	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
 	maxProjectedPct float64
 	worstWindow     string
+	runsOutIn       time.Duration
 	runsOutEarlyBy  time.Duration
 }
 
@@ -555,12 +556,14 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 
 	var maxPct float64
 	var worstWindow string
+	var runsOutIn time.Duration
 	var runsOutEarlyBy time.Duration
 	for _, w := range pf.Data.UsableWindows() {
 		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
 		if proj.ProjectedPct > maxPct {
 			maxPct = proj.ProjectedPct
 			worstWindow = w.Name
+			runsOutIn = proj.RunsOutIn
 			runsOutEarlyBy = proj.RunsOutEarlyBy
 		}
 	}
@@ -573,7 +576,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 		tier = 3
 	}
 
-	return providerUrgency{tier: tier, maxProjectedPct: maxPct, worstWindow: worstWindow, runsOutEarlyBy: runsOutEarlyBy}
+	return providerUrgency{tier: tier, maxProjectedPct: maxPct, worstWindow: worstWindow, runsOutIn: runsOutIn, runsOutEarlyBy: runsOutEarlyBy}
 }
 
 // sortProvidersByUrgency sorts providers so the most urgent appear first.
@@ -648,8 +651,10 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			windowLabel += " " + worstU.worstWindow
 		}
 		etaStr := ""
-		if worstU.runsOutEarlyBy > 0 {
-			etaStr = fmt.Sprintf(" (runs out %s early)", format.FormatDuration(worstU.runsOutEarlyBy))
+		if worstU.runsOutIn > 0 {
+			etaStr = fmt.Sprintf(" (runs out in %s)", format.FormatDuration(worstU.runsOutIn))
+		} else if worstU.runsOutEarlyBy > 0 {
+			etaStr = " (out now)"
 		}
 
 		// Subtract worst from its own category for the rest count

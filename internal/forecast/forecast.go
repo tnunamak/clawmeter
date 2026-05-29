@@ -81,8 +81,13 @@ func (p Projection) Indicator() string {
 // PaceIndicator returns a human-readable usage estimate for the reset window.
 func (p Projection) PaceIndicator() string {
 	left := PaceLabel(p.ProjectedPct)
-	if !p.WillLastToReset && p.RunsOutEarlyBy > 0 {
-		return fmt.Sprintf("%-*s · runs out %s early", paceWidth, left, format.FormatDuration(p.RunsOutEarlyBy))
+	if !p.WillLastToReset {
+		if p.RunsOutIn > 0 {
+			return fmt.Sprintf("%-*s · runs out in %s", paceWidth, left, format.FormatDuration(p.RunsOutIn))
+		}
+		if p.RunsOutEarlyBy > 0 {
+			return fmt.Sprintf("%-*s · out now", paceWidth, left)
+		}
 	}
 	return left
 }
