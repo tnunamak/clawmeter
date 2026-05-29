@@ -45,7 +45,7 @@ func (p *Provider) DashboardURL() string { return "https://platform.openai.com/u
 
 // FetchUsage retrieves rate limit data by launching codex as a JSON-RPC subprocess.
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
-	codexPath, err := exec.LookPath("codex")
+	codexPath, err := codexExecutablePath()
 	if err != nil {
 		return nil, fmt.Errorf("codex not found on PATH")
 	}

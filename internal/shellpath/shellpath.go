@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
 	"sync"
 	"time"
@@ -46,11 +48,15 @@ func Init() {
 
 // captureLoginShell runs the user's login shell to get PATH.
 func captureLoginShell() []string {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+	for _, shell := range loginShellCandidates() {
+		if path := capturePathFromShell(shell); len(path) > 0 {
+			return path
+		}
 	}
+	return nil
+}
 
+func capturePathFromShell(shell string) []string {
 	// Use a marker to extract PATH cleanly from any shell noise.
 	marker := "__CLAWMETER_PATH__"
 	cmd := fmt.Sprintf(`printf '%s%%s%s' "$PATH"`, marker, marker)
@@ -61,12 +67,11 @@ func captureLoginShell() []string {
 	proc := exec.CommandContext(ctx, shell, "-l", "-i", "-c", cmd)
 	proc.Stdin = nil
 	// Suppress stderr (shell init may print warnings/motd)
-	proc.Stderr = nil
+	proc.Stderr = io.Discard
 
-	out, err := proc.Output()
-	if err != nil {
-		return nil
-	}
+	// Some shell init files print the marker and then exit nonzero because
+	// interactive-only commands failed. Keep stdout if it contains the PATH.
+	out, _ := proc.Output()
 
 	// Extract the PATH between markers.
 	markerBytes := []byte(marker)
@@ -86,6 +91,69 @@ func captureLoginShell() []string {
 	}
 
 	return strings.Split(pathStr, string(os.PathListSeparator))
+}
+
+func loginShellCandidates() []string {
+	candidates := []string{
+		os.Getenv("SHELL"),
+		passwdLoginShell(),
+		"/bin/zsh",
+		"/usr/bin/zsh",
+		"/opt/homebrew/bin/zsh",
+		"/bin/bash",
+		"/usr/bin/bash",
+		"/bin/sh",
+	}
+	return existingUniqueShells(candidates)
+}
+
+func existingUniqueShells(candidates []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(candidates))
+	for _, shell := range candidates {
+		shell = strings.TrimSpace(shell)
+		if shell == "" || seen[shell] {
+			continue
+		}
+		if info, err := os.Stat(shell); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		seen[shell] = true
+		out = append(out, shell)
+	}
+	return out
+}
+
+func passwdLoginShell() string {
+	u, err := user.Current()
+	if err != nil || u == nil {
+		return ""
+	}
+	data, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	return loginShellFromPasswd(u.Uid, u.Username, string(data))
+}
+
+func loginShellFromPasswd(uid, username, passwd string) string {
+	shortName := username
+	if i := strings.LastIndexAny(shortName, `\/`); i >= 0 {
+		shortName = shortName[i+1:]
+	}
+	for _, line := range strings.Split(passwd, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) < 7 {
+			continue
+		}
+		if parts[2] == uid || parts[0] == username || parts[0] == shortName {
+			return parts[6]
+		}
+	}
+	return ""
 }
 
 // merge adds captured PATH entries to the current process PATH,

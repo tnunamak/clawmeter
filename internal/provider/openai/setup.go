@@ -10,7 +10,10 @@ import (
 	"strings"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/shellpath"
 )
+
+var initShellPath = shellpath.Init
 
 // authFile mirrors the schema codex CLI writes to $CODEX_HOME/auth.json
 // (or ~/.codex/auth.json by default). The CLI accepts either a top-level
@@ -30,7 +33,7 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	if _, err := exec.LookPath("codex"); err != nil {
+	if _, err := codexExecutablePath(); err != nil {
 		return provider.SetupStatus{
 			State:  provider.SetupUnavailable,
 			Detail: "codex CLI not installed — see https://github.com/openai/codex",
@@ -61,6 +64,15 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 		State:  provider.SetupNeedsAuth,
 		Detail: "codex auth file has no credentials — run `codex login`",
 	}
+}
+
+func codexExecutablePath() (string, error) {
+	path, err := exec.LookPath("codex")
+	if err == nil {
+		return path, nil
+	}
+	initShellPath()
+	return exec.LookPath("codex")
 }
 
 func codexHome() string {

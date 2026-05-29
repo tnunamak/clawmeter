@@ -24,11 +24,11 @@ func makeFakeCodex(t *testing.T) {
 
 func TestSetupStatus(t *testing.T) {
 	cases := []struct {
-		name     string
-		fakeCLI  bool
-		auth     string // file contents; empty string means do not create file
+		name      string
+		fakeCLI   bool
+		auth      string // file contents; empty string means do not create file
 		wantState provider.SetupState
-		wantSub  string // substring expected in Detail
+		wantSub   string // substring expected in Detail
 	}{
 		{
 			name:      "no codex CLI on PATH",
@@ -81,6 +81,10 @@ func TestSetupStatus(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			oldInitShellPath := initShellPath
+			initShellPath = func() {}
+			t.Cleanup(func() { initShellPath = oldInitShellPath })
+
 			if tc.fakeCLI {
 				makeFakeCodex(t)
 			} else {
@@ -107,7 +111,34 @@ func TestSetupStatus(t *testing.T) {
 	}
 }
 
+func TestCodexExecutablePathRecoversShellPath(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "codex")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+
+	oldInitShellPath := initShellPath
+	initShellPath = func() {
+		t.Setenv("PATH", dir)
+	}
+	t.Cleanup(func() { initShellPath = oldInitShellPath })
+
+	got, err := codexExecutablePath()
+	if err != nil {
+		t.Fatalf("codexExecutablePath() error = %v", err)
+	}
+	if got != exe {
+		t.Fatalf("codexExecutablePath() = %q, want %q", got, exe)
+	}
+}
+
 func TestIsConfiguredMatchesSetupStatus(t *testing.T) {
+	oldInitShellPath := initShellPath
+	initShellPath = func() {}
+	t.Cleanup(func() { initShellPath = oldInitShellPath })
+
 	makeFakeCodex(t)
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

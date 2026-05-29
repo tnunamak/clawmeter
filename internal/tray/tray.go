@@ -459,7 +459,13 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		if data == nil {
 			showProviderHeader(menu)
-			menu.statusItem.SetTitle("No data")
+			statusTitle := "No data"
+			if menu.explicitlyEnabled {
+				if setup := provider.GetSetupStatus(menu.provider); !setup.IsReady() && setup.Detail != "" {
+					statusTitle = setup.Detail
+				}
+			}
+			menu.statusItem.SetTitle(statusTitle)
 			menu.statusItem.Show()
 			hideProviderWindows(menu)
 			menu.dashboardItem.Show()
