@@ -322,14 +322,14 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 
 	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "OpenAI"})
 
-	if strings.Contains(got, "Claude") || strings.Contains(got, "7S") {
-		t.Fatalf("trayTooltip() = %q, want no target label because icon already shows it", got)
+	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nRuns out in ") {
+		t.Fatalf("trayTooltip() = %q, want full title followed by run-out line", got)
 	}
-	if !strings.HasPrefix(got, "Runs out in ") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
+	if strings.Contains(got, "7S") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
 		t.Fatalf("trayTooltip() = %q, want run-out, reset, and estimate", got)
 	}
-	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 2 {
-		t.Fatalf("trayTooltip() = %q, want three newline-separated lines", got)
+	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 3 {
+		t.Fatalf("trayTooltip() = %q, want four newline-separated lines", got)
 	}
 }
 
@@ -360,14 +360,50 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 
 	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "OpenAI"})
 
-	if strings.Contains(got, "OpenAI") || strings.Contains(got, "5H") {
-		t.Fatalf("trayTooltip() = %q, want no target label because icon already shows it", got)
+	if !strings.HasPrefix(got, "OpenAI 5-Hour\nWon't run out") {
+		t.Fatalf("trayTooltip() = %q, want full title followed by run-out state", got)
 	}
-	if !strings.HasPrefix(got, "Won't run out") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
+	if strings.Contains(got, "5H") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
 		t.Fatalf("trayTooltip() = %q, want run-out state, reset, and estimate", got)
 	}
-	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 2 {
-		t.Fatalf("trayTooltip() = %q, want three newline-separated lines", got)
+	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 3 {
+		t.Fatalf("trayTooltip() = %q, want four newline-separated lines", got)
+	}
+}
+
+func TestHumanWindowLabelUsesReadableQuotaNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		window provider.UsageWindow
+		want   string
+	}{
+		{
+			name:   "five hour",
+			window: provider.UsageWindow{Name: "5h", DisplayName: "5 hours"},
+			want:   "5-Hour",
+		},
+		{
+			name:   "seven day openai",
+			window: provider.UsageWindow{Name: "7d", DisplayName: "7 days"},
+			want:   "7-Day",
+		},
+		{
+			name:   "seven day sonnet",
+			window: provider.UsageWindow{Name: "7d Sonnet", DisplayName: "7 days (Sonnet)"},
+			want:   "7-Day Sonnet",
+		},
+		{
+			name:   "provider display name fallback",
+			window: provider.UsageWindow{Name: "monthly", DisplayName: "Monthly Credits"},
+			want:   "Monthly Credits",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := humanWindowLabel(tt.window); got != tt.want {
+				t.Fatalf("humanWindowLabel(%+v) = %q, want %q", tt.window, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -937,15 +937,18 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 	if !ok {
 		return display
 	}
-	prefix := ""
+	title := iconTooltipTitle(display, window)
 	if data.Stale {
-		prefix = "stale · "
+		title += " (stale)"
 	}
-	return prefix + compactIconTooltip(window, proj)
+	return compactIconTooltip(title, window, proj)
 }
 
-func compactIconTooltip(window provider.UsageWindow, proj forecast.Projection) string {
-	parts := make([]string, 0, 3)
+func compactIconTooltip(title string, window provider.UsageWindow, proj forecast.Projection) string {
+	parts := make([]string, 0, 4)
+	if title != "" {
+		parts = append(parts, title)
+	}
 	switch {
 	case proj.RunsOutIn > 0:
 		parts = append(parts, "Runs out in "+format.FormatDuration(proj.RunsOutIn))
@@ -957,6 +960,54 @@ func compactIconTooltip(window provider.UsageWindow, proj forecast.Projection) s
 	parts = append(parts, "Resets in "+format.FormatDuration(time.Until(window.ResetsAt)))
 	parts = append(parts, compactProjectionEstimate(proj))
 	return strings.Join(parts, "\n")
+}
+
+func iconTooltipTitle(display string, window provider.UsageWindow) string {
+	windowLabel := humanWindowLabel(window)
+	if windowLabel == "" {
+		return display
+	}
+	if display == "" {
+		return windowLabel
+	}
+	return display + " " + windowLabel
+}
+
+func humanWindowLabel(window provider.UsageWindow) string {
+	switch strings.TrimSpace(window.Name) {
+	case "5h":
+		return "5-Hour"
+	case "7d":
+		return "7-Day"
+	case "7d All":
+		return "7-Day All Models"
+	case "7d OAuth":
+		return "7-Day OAuth Apps"
+	case "7d Opus":
+		return "7-Day Opus"
+	case "7d Sonnet":
+		return "7-Day Sonnet"
+	}
+
+	label := strings.TrimSpace(window.DisplayName)
+	if label == "" {
+		label = strings.TrimSpace(window.Name)
+	}
+	switch strings.ToLower(label) {
+	case "5 hours":
+		return "5-Hour"
+	case "7 days":
+		return "7-Day"
+	case "7 days (all models)":
+		return "7-Day All Models"
+	case "7 days (oauth apps)":
+		return "7-Day OAuth Apps"
+	case "7 days (opus)":
+		return "7-Day Opus"
+	case "7 days (sonnet)":
+		return "7-Day Sonnet"
+	}
+	return label
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {
