@@ -1,0 +1,647 @@
+name: Platform Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Linux ─────────────────────────────────────────────────────────────────
+  linux:
+    name: Linux verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install OS deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libayatana-appindicator3-dev xvfb dbus-x11
+
+      - name: Build tray binary
+        run: go build -tags tray -o /tmp/clawmeter ./cmd/clawmeter
+
+      # ── Autostart roundtrip ──────────────────────────────────────────────
+      - name: Autostart roundtrip (install / assert / uninstall)
+        run: |
+          set -u
+          TMPHOME=$(mktemp -d)
+          # Unset XDG_CONFIG_HOME so os.UserConfigDir() falls back to $HOME/.config
+          unset XDG_CONFIG_HOME
+
+          echo "--- install ---"
+          HOME="$TMPHOME" /tmp/clawmeter tray --install
+          DESKTOP="$TMPHOME/.config/autostart/clawmeter.desktop"
+
+          if [ -f "$DESKTOP" ]; then
+            echo "PASS: .desktop file created at $DESKTOP"
+          else
+            echo "FAIL: .desktop file not found at $DESKTOP"
+            exit 1
+          fi
+
+          if grep -q "Icon=clawmeter" "$DESKTOP"; then
+            echo "PASS: Icon=clawmeter present"
+          else
+            echo "FAIL: Icon=clawmeter missing from .desktop file"
+            grep "Icon" "$DESKTOP" || true
+            exit 1
+          fi
+
+          if grep -q "Categories=Utility;Network;" "$DESKTOP"; then
+            echo "PASS: Categories=Utility;Network; present"
+          else
+            echo "FAIL: Categories=Utility;Network; missing from .desktop file"
+            grep "Categories" "$DESKTOP" || true
+            exit 1
+          fi
+
+          if grep -E "^Exec=.*clawmeter" "$DESKTOP" | grep -q "tray"; then
+            echo "PASS: Exec= line references binary and tray subcommand"
+          else
+            echo "FAIL: Exec= line malformed"
+            grep "Exec" "$DESKTOP" || true
+            exit 1
+          fi
+
+          echo "--- uninstall ---"
+          HOME="$TMPHOME" /tmp/clawmeter tray --uninstall
+
+          if [ ! -f "$DESKTOP" ]; then
+            echo "PASS: .desktop file removed after --uninstall"
+          else
+            echo "FAIL: .desktop file still exists after --uninstall"
+            exit 1
+          fi
+
+          rm -rf "$TMPHOME"
+
+      # ── Install/uninstall idempotency ────────────────────────────────────
+      - name: Autostart idempotency (double install / double uninstall)
+        run: |
+          set -u
+          TMPHOME=$(mktemp -d)
+          unset XDG_CONFIG_HOME
+          DESKTOP="$TMPHOME/.config/autostart/clawmeter.desktop"
+
+          echo "--- install #1 ---"
+          if HOME="$TMPHOME" /tmp/clawmeter tray --install; then
+            echo "PASS: first --install succeeded"
+          else
+            echo "FAIL: first --install returned non-zero"
+            exit 1
+          fi
+
+          echo "--- install #2 ---"
+          if HOME="$TMPHOME" /tmp/clawmeter tray --install; then
+            echo "PASS: second --install succeeded (idempotent)"
+          else
+            echo "FAIL: second --install returned non-zero"
+            exit 1
+          fi
+
+          if [ -f "$DESKTOP" ]; then
+            echo "PASS: .desktop file present after double install"
+          else
+            echo "FAIL: .desktop file missing after double install"
+            exit 1
+          fi
+
+          echo "--- uninstall #1 ---"
+          if HOME="$TMPHOME" /tmp/clawmeter tray --uninstall; then
+            echo "PASS: first --uninstall succeeded"
+          else
+            echo "FAIL: first --uninstall returned non-zero"
+            exit 1
+          fi
+
+          echo "--- uninstall #2 ---"
+          if HOME="$TMPHOME" /tmp/clawmeter tray --uninstall; then
+            echo "PASS: second --uninstall succeeded (idempotent)"
+          else
+            echo "FAIL: second --uninstall returned non-zero"
+            exit 1
+          fi
+
+          if [ ! -f "$DESKTOP" ]; then
+            echo "PASS: .desktop file gone after double uninstall"
+          else
+            echo "FAIL: .desktop file still present after double uninstall"
+            exit 1
+          fi
+
+          rm -rf "$TMPHOME"
+
+      # ── Config migration (Linux: no-op, canonical == legacy path) ────────
+      - name: Config migration (Linux no-op path)
+        run: |
+          set -u
+          TMPHOME=$(mktemp -d)
+          unset XDG_CONFIG_HOME
+
+          CONFIG_DIR="$TMPHOME/.config/clawmeter"
+          mkdir -p "$CONFIG_DIR"
+          printf 'providers:\n  openai:\n    enabled: true\n' > "$CONFIG_DIR/config.yaml"
+
+          # On Linux with no XDG_CONFIG_HOME, legacy == canonical, so this
+          # is a straight read — migration is skipped. The point is that the
+          # file is readable and openai shows as enabled.
+          OUTPUT=$(HOME="$TMPHOME" /tmp/clawmeter providers 2>&1)
+
+          if echo "$OUTPUT" | grep -q "openai"; then
+            echo "PASS: openai appears in providers output"
+          else
+            echo "FAIL: openai not found in providers output"
+            echo "$OUTPUT"
+            exit 1
+          fi
+
+          if [ -f "$CONFIG_DIR/config.yaml" ]; then
+            echo "PASS: config file still exists after providers command"
+          else
+            echo "FAIL: config file was deleted"
+            exit 1
+          fi
+
+          rm -rf "$TMPHOME"
+
+      # ── Tray smoke test (xvfb-run, 8 seconds) ────────────────────────────
+      - name: Tray smoke test
+        run: |
+          set -u
+          TMPHOME=$(mktemp -d)
+          LOG="$TMPHOME/tray-stderr.log"
+
+          echo "Launching tray under xvfb-run + dbus-run-session for 8 seconds..."
+          HOME="$TMPHOME" XDG_CACHE_HOME="$TMPHOME/.cache" \
+            xvfb-run --auto-servernum dbus-run-session -- /tmp/clawmeter tray 2>"$LOG" &
+          TRAY_PID=$!
+
+          # Give the tray up to 8 seconds to run; if it exits early that's a crash.
+          CRASHED=0
+          for i in $(seq 1 8); do
+            sleep 1
+            if ! kill -0 "$TRAY_PID" 2>/dev/null; then
+              CRASHED=1
+              break
+            fi
+          done
+
+          # Terminate gracefully.
+          kill -TERM "$TRAY_PID" 2>/dev/null || true
+          wait "$TRAY_PID" 2>/dev/null || true
+
+          if [ "$CRASHED" -eq 0 ]; then
+            echo "PASS: tray process stayed alive for 8 seconds"
+          else
+            echo "FAIL: tray process exited before 8 seconds"
+            cat "$LOG" || true
+            exit 1
+          fi
+
+          # Check captured stderr for fatal error strings.
+          BAD_PATTERNS="systray error|panic:|fatal:|unable to init"
+          if grep -qE "$BAD_PATTERNS" "$LOG" 2>/dev/null; then
+            echo "FAIL: fatal error string found in tray stderr log"
+            grep -E "$BAD_PATTERNS" "$LOG"
+            exit 1
+          else
+            echo "PASS: no fatal error strings in tray stderr"
+          fi
+
+          # Also check XDG_CACHE_HOME/clawmeter/tray.log if it was created.
+          TRAY_LOG_DIR="$TMPHOME/.cache/clawmeter"
+          if [ -f "$TRAY_LOG_DIR/tray.log" ]; then
+            if grep -qE "$BAD_PATTERNS" "$TRAY_LOG_DIR/tray.log" 2>/dev/null; then
+              echo "FAIL: fatal error string found in $TRAY_LOG_DIR/tray.log"
+              grep -E "$BAD_PATTERNS" "$TRAY_LOG_DIR/tray.log"
+              exit 1
+            else
+              echo "PASS: no fatal error strings in tray.log"
+            fi
+          else
+            echo "INFO: $TRAY_LOG_DIR/tray.log not found (not written by tray on this run)"
+          fi
+
+          rm -rf "$TMPHOME"
+
+  # ── macOS ─────────────────────────────────────────────────────────────────
+  macos:
+    name: macOS verification
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build tray binary
+        run: go build -tags tray -o /tmp/clawmeter ./cmd/clawmeter
+
+      # ── Autostart roundtrip ──────────────────────────────────────────────
+      - name: Autostart roundtrip (install / validate plist / uninstall)
+        run: |
+          set -u
+          TMPHOME=$(mktemp -d)
+          PLIST="$TMPHOME/Library/LaunchAgents/com.clawmeter.tray.plist"
+
+          echo "--- install ---"
+          # macOS plistPath() uses os.UserHomeDir() which honours $HOME.
+          # The install() function writes the plist BEFORE calling launchctl,
+          # so the file exists even if launchctl bootstrap fails (e.g., on
+          # headless GHA runners where the gui/<uid> domain is unavailable).
+          # We allow a non-zero exit here and verify the plist file directly.
+          HOME="$TMPHOME" /tmp/clawmeter tray --install || true
+
+          if [ -f "$PLIST" ]; then
+            echo "PASS: plist created at $PLIST"
+          else
+            echo "FAIL: plist not found at $PLIST"
+            exit 1
+          fi
+
+          echo "--- plutil lint ---"
+          if plutil -lint "$PLIST"; then
+            echo "PASS: plist is valid XML (plutil -lint passed)"
+          else
+            echo "FAIL: plist failed plutil -lint"
+            cat "$PLIST"
+            exit 1
+          fi
+
+          echo "--- plist key checks ---"
+          # plutil -p prints a human-readable tree; grep for expected values.
+          PLUTIL_OUT=$(plutil -p "$PLIST")
+
+          check_plist_key() {
+            local label="$1"
+            local pattern="$2"
+            if echo "$PLUTIL_OUT" | grep -q "$pattern"; then
+              echo "PASS: $label"
+            else
+              echo "FAIL: $label"
+              echo "  Expected pattern: $pattern"
+              echo "  plutil -p output:"
+              echo "$PLUTIL_OUT" | sed 's/^/    /'
+              exit 1
+            fi
+          }
+
+          check_plist_key 'Label = com.clawmeter.tray'   '"com\.clawmeter\.tray"'
+          check_plist_key 'RunAtLoad = 1'                '"RunAtLoad" => 1'
+          check_plist_key 'AbandonProcessGroup = 1'      '"AbandonProcessGroup" => 1'
+          check_plist_key 'ProcessType = Interactive'    '"ProcessType" => "Interactive"'
+
+          # ProgramArguments[0] should end with "clawmeter"
+          if plutil -p "$PLIST" | grep -A5 '"ProgramArguments"' | grep -q 'clawmeter'; then
+            echo "PASS: ProgramArguments[0] references clawmeter"
+          else
+            echo "FAIL: ProgramArguments[0] does not reference clawmeter"
+            plutil -p "$PLIST" | grep -A5 '"ProgramArguments"' || true
+            exit 1
+          fi
+
+          # ProgramArguments[1] should be "tray"
+          if plutil -p "$PLIST" | grep -A5 '"ProgramArguments"' | grep -q '"tray"'; then
+            echo "PASS: ProgramArguments[1] = \"tray\""
+          else
+            echo "FAIL: ProgramArguments[1] is not \"tray\""
+            plutil -p "$PLIST" | grep -A5 '"ProgramArguments"' || true
+            exit 1
+          fi
+
+          echo "--- uninstall ---"
+          # uninstall() ignores launchctl errors and always removes the plist;
+          # it returns 0 regardless of launchctl's exit status.
+          HOME="$TMPHOME" /tmp/clawmeter tray --uninstall
+
+          if [ ! -f "$PLIST" ]; then
+            echo "PASS: plist removed after --uninstall"
+          else
+            echo "FAIL: plist still exists after --uninstall"
+            exit 1
+          fi
+
+          rm -rf "$TMPHOME"
+
+      # ── Config migration (macOS: legacy ~/.config → ~/Library/App Support) ─
+      - name: Config migration (macOS path migration)
+        run: |
+          set -u
+          TMPHOME=$(mktemp -d)
+
+          # Write config to legacy path (~/.config/clawmeter/config.yaml).
+          LEGACY_DIR="$TMPHOME/.config/clawmeter"
+          LEGACY_CFG="$LEGACY_DIR/config.yaml"
+          mkdir -p "$LEGACY_DIR"
+          printf 'providers:\n  openai:\n    enabled: true\n' > "$LEGACY_CFG"
+
+          # On macOS, os.UserConfigDir() returns $HOME/Library/Application Support.
+          # Since $HOME is redirected to $TMPHOME, the canonical path is:
+          CANONICAL_CFG="$TMPHOME/Library/Application Support/clawmeter/config.yaml"
+
+          echo "--- run providers to trigger migration ---"
+          HOME="$TMPHOME" /tmp/clawmeter providers 2>&1 || true
+
+          if [ -f "$CANONICAL_CFG" ]; then
+            echo "PASS: canonical config created at $CANONICAL_CFG"
+          else
+            echo "FAIL: canonical config not found at $CANONICAL_CFG"
+            echo "      (migration from $LEGACY_CFG did not run)"
+            exit 1
+          fi
+
+          if diff "$LEGACY_CFG" "$CANONICAL_CFG" > /dev/null 2>&1; then
+            echo "PASS: canonical config contents match legacy config"
+          else
+            echo "FAIL: canonical config contents differ from legacy config"
+            diff "$LEGACY_CFG" "$CANONICAL_CFG" || true
+            exit 1
+          fi
+
+          if [ -f "$LEGACY_CFG" ]; then
+            echo "PASS: legacy config still exists after migration (not deleted)"
+          else
+            echo "FAIL: legacy config was deleted during migration"
+            exit 1
+          fi
+
+          rm -rf "$TMPHOME"
+
+  # ── Windows ──────────────────────────────────────────────────────────────
+  windows:
+    name: Windows verification
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Create temp dir
+        run: New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
+
+      - name: Build tray binary (windowsgui)
+        run: go build -tags tray -ldflags '-H windowsgui' -o C:\temp\clawmeter.exe ./cmd/clawmeter
+
+      - name: Build CLI binary (for autostart + config tests)
+        run: go build -o C:\temp\clawmeter-cli.exe ./cmd/clawmeter
+
+      # ── Autostart roundtrip ──────────────────────────────────────────────
+      - name: Autostart roundtrip (registry Run key)
+        run: |
+          $RunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          $ValueName = "Clawmeter"
+
+          Write-Host "--- install ---"
+          $result = & C:\temp\clawmeter-cli.exe tray --install 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: tray --install returned exit code $LASTEXITCODE"
+            Write-Host $result
+            exit 1
+          }
+          Write-Host "PASS: tray --install exited 0"
+
+          $regValue = (Get-ItemProperty -Path $RunKey -Name $ValueName -ErrorAction SilentlyContinue).$ValueName
+          if ($null -eq $regValue) {
+            Write-Error "FAIL: registry value $ValueName not found under $RunKey"
+            exit 1
+          }
+          Write-Host "PASS: registry value exists: $regValue"
+
+          # Data must start with the exe path in quotes and end with "tray"
+          if (-not $regValue.StartsWith('"')) {
+            Write-Error "FAIL: registry value does not start with a quoted path: $regValue"
+            exit 1
+          }
+          Write-Host "PASS: registry value starts with a quoted path"
+
+          if (-not $regValue.TrimEnd().EndsWith("tray")) {
+            Write-Error "FAIL: registry value does not end with 'tray': $regValue"
+            exit 1
+          }
+          Write-Host "PASS: registry value ends with 'tray'"
+
+          Write-Host "--- uninstall ---"
+          $result = & C:\temp\clawmeter-cli.exe tray --uninstall 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: tray --uninstall returned exit code $LASTEXITCODE"
+            Write-Host $result
+            exit 1
+          }
+          Write-Host "PASS: tray --uninstall exited 0"
+
+          $regValueAfter = (Get-ItemProperty -Path $RunKey -Name $ValueName -ErrorAction SilentlyContinue).$ValueName
+          if ($null -ne $regValueAfter) {
+            Write-Error "FAIL: registry value still present after --uninstall: $regValueAfter"
+            exit 1
+          }
+          Write-Host "PASS: registry value gone after --uninstall"
+
+      # ── install.ps1 roundtrip ─────────────────────────────────────────────
+      - name: install.ps1 dry-run
+        run: |
+          pwsh ./install.ps1 -LocalBinary C:\temp\clawmeter.exe -DryRun
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: install.ps1 -DryRun returned exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "PASS: install.ps1 -DryRun succeeded"
+
+      - name: install.ps1 real install + verify + uninstall
+        run: |
+          $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Clawmeter"
+          $ExePath    = Join-Path $InstallDir "clawmeter.exe"
+          $StartMenu  = Join-Path ([Environment]::GetFolderPath("Programs")) "Clawmeter.lnk"
+
+          Write-Host "--- real install ---"
+          # Use default PATH modification so we can verify the registry PATH entry.
+          pwsh ./install.ps1 -LocalBinary C:\temp\clawmeter.exe
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: install.ps1 returned exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "PASS: install.ps1 exited 0"
+
+          if (Test-Path $ExePath) {
+            Write-Host "PASS: binary installed at $ExePath"
+          } else {
+            Write-Error "FAIL: binary not found at $ExePath"
+            exit 1
+          }
+
+          if (Test-Path $StartMenu) {
+            Write-Host "PASS: Start Menu shortcut at $StartMenu"
+          } else {
+            Write-Error "FAIL: Start Menu shortcut not found at $StartMenu"
+            exit 1
+          }
+
+          # Verify user PATH registry entry was added.
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          $installDirNorm = $InstallDir.TrimEnd('\').ToLowerInvariant()
+          $pathContains = ($userPath -split ';') | Where-Object {
+            $_.TrimEnd('\').ToLowerInvariant() -eq $installDirNorm
+          }
+          if ($pathContains) {
+            Write-Host "PASS: user PATH registry contains $InstallDir"
+          } else {
+            Write-Error "FAIL: user PATH registry does not contain $InstallDir"
+            Write-Host "  User PATH: $userPath"
+            exit 1
+          }
+
+          Write-Host "--- uninstall ---"
+          pwsh ./install.ps1 -Uninstall
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: install.ps1 -Uninstall returned exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "PASS: install.ps1 -Uninstall exited 0"
+
+          if (-not (Test-Path $ExePath)) {
+            Write-Host "PASS: binary removed after uninstall"
+          } else {
+            Write-Error "FAIL: binary still present at $ExePath after uninstall"
+            exit 1
+          }
+
+          if (-not (Test-Path $StartMenu)) {
+            Write-Host "PASS: Start Menu shortcut removed after uninstall"
+          } else {
+            Write-Error "FAIL: Start Menu shortcut still present after uninstall"
+            exit 1
+          }
+
+          # Verify user PATH registry entry was removed.
+          $userPathAfter = [Environment]::GetEnvironmentVariable("Path", "User")
+          $pathContainsAfter = ($userPathAfter -split ';') | Where-Object {
+            $_.TrimEnd('\').ToLowerInvariant() -eq $installDirNorm
+          }
+          if (-not $pathContainsAfter) {
+            Write-Host "PASS: user PATH no longer contains $InstallDir after uninstall"
+          } else {
+            Write-Error "FAIL: user PATH still contains $InstallDir after uninstall"
+            Write-Host "  User PATH: $userPathAfter"
+            exit 1
+          }
+
+      # ── install.ps1 with -Startup ─────────────────────────────────────────
+      - name: install.ps1 -Startup roundtrip (registry Run key)
+        run: |
+          $RunKey    = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+          $ValueName = "Clawmeter"
+          $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Clawmeter"
+
+          # Pre-condition: ensure registry value is absent.
+          Remove-ItemProperty -Path $RunKey -Name $ValueName -ErrorAction SilentlyContinue
+
+          Write-Host "--- install with -Startup ---"
+          pwsh ./install.ps1 -LocalBinary C:\temp\clawmeter.exe -Startup -NoModifyPath
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: install.ps1 -Startup returned exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "PASS: install.ps1 -Startup exited 0"
+
+          $regValue = (Get-ItemProperty -Path $RunKey -Name $ValueName -ErrorAction SilentlyContinue).$ValueName
+          if ($null -ne $regValue) {
+            Write-Host "PASS: registry Run entry created: $regValue"
+          } else {
+            Write-Error "FAIL: registry Run entry not found after -Startup install"
+            exit 1
+          }
+
+          Write-Host "--- uninstall ---"
+          pwsh ./install.ps1 -Uninstall -NoModifyPath
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "FAIL: install.ps1 -Uninstall returned exit code $LASTEXITCODE"
+            exit 1
+          }
+          Write-Host "PASS: install.ps1 -Uninstall exited 0"
+
+          $regValueAfter = (Get-ItemProperty -Path $RunKey -Name $ValueName -ErrorAction SilentlyContinue).$ValueName
+          if ($null -eq $regValueAfter) {
+            Write-Host "PASS: registry Run entry removed after uninstall"
+          } else {
+            Write-Error "FAIL: registry Run entry still present after uninstall: $regValueAfter"
+            exit 1
+          }
+
+          # Clean up install dir if still present (belt-and-suspenders).
+          Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
+
+      # ── Config migration (Windows: %USERPROFILE%\.config → %APPDATA%) ────
+      - name: Config migration (Windows path migration)
+        run: |
+          $TmpHome   = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+          New-Item -ItemType Directory -Force -Path $TmpHome | Out-Null
+          $LegacyDir = Join-Path $TmpHome ".config\clawmeter"
+          $LegacyCfg = Join-Path $LegacyDir "config.yaml"
+          New-Item -ItemType Directory -Force -Path $LegacyDir | Out-Null
+          "providers:`n  openai:`n    enabled: true" | Out-File -FilePath $LegacyCfg -Encoding utf8NoBOM
+
+          # On Windows, os.UserConfigDir() uses %AppData%; os.UserHomeDir() uses %USERPROFILE%.
+          # Point both at our temp tree so the binary writes to a sandboxed location.
+          $FakeAppData = Join-Path $TmpHome "AppData\Roaming"
+          New-Item -ItemType Directory -Force -Path $FakeAppData | Out-Null
+
+          $CanonicalCfg = Join-Path $FakeAppData "clawmeter\config.yaml"
+
+          Write-Host "--- run providers to trigger migration ---"
+          # Each GHA step runs in its own process, so env changes here don't
+          # bleed into other steps. We set both USERPROFILE (for os.UserHomeDir)
+          # and APPDATA (for os.UserConfigDir) to redirect paths into our sandbox.
+          $env:USERPROFILE = $TmpHome
+          $env:APPDATA     = $FakeAppData
+          $output = & C:\temp\clawmeter-cli.exe providers 2>&1
+
+          if (Test-Path $CanonicalCfg) {
+            Write-Host "PASS: canonical config created at $CanonicalCfg"
+          } else {
+            Write-Error "FAIL: canonical config not found at $CanonicalCfg"
+            Write-Host "providers output: $output"
+            exit 1
+          }
+
+          $legacyContent   = Get-Content -Raw $LegacyCfg
+          $canonicalContent = Get-Content -Raw $CanonicalCfg
+          if ($legacyContent -eq $canonicalContent) {
+            Write-Host "PASS: canonical config contents match legacy config"
+          } else {
+            Write-Error "FAIL: canonical config contents differ from legacy config"
+            Write-Host "Legacy:    $legacyContent"
+            Write-Host "Canonical: $canonicalContent"
+            exit 1
+          }
+
+          if (Test-Path $LegacyCfg) {
+            Write-Host "PASS: legacy config still exists after migration (not deleted)"
+          } else {
+            Write-Error "FAIL: legacy config was deleted during migration"
+            exit 1
+          }
+
+          # Verify openai appears enabled in providers output.
+          if ($output -match "openai") {
+            Write-Host "PASS: openai appears in providers output"
+          } else {
+            Write-Error "FAIL: openai not found in providers output"
+            Write-Host $output
+            exit 1
+          }
+
+          Remove-Item -Recurse -Force $TmpHome -ErrorAction SilentlyContinue
