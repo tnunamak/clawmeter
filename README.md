@@ -1,8 +1,10 @@
 # Clawmeter
 
 <p align="center">
-  <img src="assets/readme/tray-claude-5h.png" alt="Claude 5H tray icon" width="48" height="48">
-  <img src="assets/readme/tray-openai-7d.png" alt="OpenAI 7D tray icon" width="48" height="48">
+  <img src="assets/readme/tray-openai-5h-32.png" alt="OpenAI 5H tray icon" width="32" height="32">
+  <img src="assets/readme/tray-openai-7d-32.png" alt="OpenAI 7D tray icon" width="32" height="32">
+  <img src="assets/readme/tray-claude-7a-32.png" alt="Claude 7A tray icon" width="32" height="32">
+  <img src="assets/readme/tray-claude-7s-32.png" alt="Claude 7S tray icon" width="32" height="32">
 </p>
 
 Clawmeter is a system tray and CLI quota meter for AI coding tools.
@@ -41,9 +43,9 @@ Or download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest 
 
 ## Read The Icon
 
-The provider logo stays visible. The text names the quota window: `5H`, `7D`, `7A`, `7S`, or `MO`.
+The provider logo stays in the circular center chip. The text names the quota window: `5H`, `7D`, `7A`, `7S`, or `MO`.
 
-The radial meter compares actual burn with expected pace. The white dot marks expected pace; the green or red dot marks current usage depending on whether you are under or over pace.
+The radial meter compares actual burn with expected pace. Gray shows the shared baseline; a solid green segment means you are under pace, and a solid red segment means you are over pace.
 
 - Left-click the tray icon to cycle through active provider/quota windows.
 - Double-click the tray icon to return to Auto.
