@@ -340,22 +340,10 @@ func drawPaceDeltaRing(dst *image.RGBA, meter MeterState) {
 }
 
 func paceDeltaColor(delta float64) color.NRGBA {
-	strength := min(1, math.Abs(delta)/0.35)
-	neutral := color.NRGBA{R: 186, G: 194, B: 202, A: 214}
 	if delta > 0 {
-		return mixColor(neutral, color.NRGBA{R: 232, G: 48, B: 58, A: 255}, strength)
+		return color.NRGBA{R: 232, G: 48, B: 58, A: 255}
 	}
-	return mixColor(neutral, color.NRGBA{R: 64, G: 211, B: 112, A: 255}, strength)
-}
-
-func mixColor(a, b color.NRGBA, t float64) color.NRGBA {
-	t = max(0, min(1, t))
-	return color.NRGBA{
-		R: uint8(float64(a.R) + (float64(b.R)-float64(a.R))*t),
-		G: uint8(float64(a.G) + (float64(b.G)-float64(a.G))*t),
-		B: uint8(float64(a.B) + (float64(b.B)-float64(a.B))*t),
-		A: uint8(float64(a.A) + (float64(b.A)-float64(a.A))*t),
-	}
+	return color.NRGBA{R: 64, G: 211, B: 112, A: 255}
 }
 
 func ringCenterR(outerR, innerR float64) float64 {
