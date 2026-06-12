@@ -140,12 +140,24 @@ The enlarged sheet is for concept comparison only. It should not be used to judg
 
    Research documented: this comes from the design review feedback in this thread, which compared the icon to common tray/battery-indicator semantics: recognizable center mark, minimal status overlay, detailed magnitude in hover/menu.
 
+12. **Circular logo + centered label + solid pace segment**
+
+   Concept: keep the simplified circular provider chip and no-claw/no-marker architecture, but restore the old centered quota label and bring back red/green bar segments. The ring now has a faint empty track, a neutral gray segment, and one solid colored delta segment between actual usage and expected pace. The colored segment is always green when under pace and always red when over pace.
+
+   Commits: prototype work after `3269aed`; see the next implementation commit.
+
+   Images: current `*-22.png`, `*-32.png`, and contact sheets regenerated from this version.
+
+   Feedback / issue: this directly follows the next design direction: circular logos for all providers, centered old-style labels, and a gray/empty/solid-color ring rather than projection-only gray/amber/red or desaturated proportional colors. The trade-off is that the centered label again competes with provider identity, especially at 22px, but this version avoids the previous white marker/bookend clutter.
+
+   Research documented: no new external research; this is a directed iteration from user feedback after reviewing the simplified projection prototype.
+
 ## Open Design Questions For Review
 
 1. What is the best single-glance visual hierarchy: provider identity first, quota-window label second, pacing status third, or a different order?
-2. Does the simplified projection arc preserve enough urgency/magnitude without red/green delta markers?
-3. Is the corner badge legible enough at 22px, or does it still cover too much provider identity?
-4. Should safe projected usage be nearly invisible neutral, or does the user need more visible “safe” confirmation?
+2. Does the restored centered label cost too much provider identity at 22px, or is the quota identity worth that trade-off?
+3. Does the solid red/green segment communicate ahead/behind better than projection-only gray/amber/red?
+4. Should the neutral gray segment represent actual usage, expected allowance, or the lower of actual/expected as implemented here?
 5. Should the claw metaphor stay out of the tray icon permanently and live only in the app icon / README?
 
 ## Research Notes Found
