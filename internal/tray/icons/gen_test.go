@@ -236,6 +236,20 @@ func TestPaceDeltaRingDoesNotDependOnClippedBounds(t *testing.T) {
 	}
 }
 
+func TestRingSegmentsUseFlatRadialEnds(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 128, 128))
+	centerR := ringCenterR(meterArcOuterR, meterArcInnerR)
+	halfWidth := ringHalfWidth(meterArcOuterR, meterArcInnerR)
+	drawArcStroke(img, meterAngleForFraction(0), meterAngleForFraction(0.25), centerR, halfWidth, color.NRGBA{R: 232, G: 48, B: 58, A: 255})
+
+	if hasOpaquePixelNearFractionAtRadius(img, 0.985, centerR, 2) {
+		t.Fatal("ring segment has a rounded cap before the origin cut")
+	}
+	if hasOpaquePixelNearFractionAtRadius(img, 0.265, centerR, 2) {
+		t.Fatal("ring segment has a rounded cap after the end cut")
+	}
+}
+
 // The Clawmeter overlay must be visibly different between low and high risk so a
 // glanceable user can tell safe pressure from dangerous pressure at tray size.
 func TestClawmeterOverlayChangesBetweenLowAndHighUsage(t *testing.T) {
@@ -400,6 +414,23 @@ func countGreenDominantPixels(img image.Image) int {
 		}
 	}
 	return n
+}
+
+func hasOpaquePixelNearFractionAtRadius(img image.Image, fraction, radius, tolerance float64) bool {
+	x, y := pointOnMeter(fraction, radius)
+	bounds := img.Bounds()
+	for py := bounds.Min.Y; py < bounds.Max.Y; py++ {
+		for px := bounds.Min.X; px < bounds.Max.X; px++ {
+			if math.Hypot(float64(px)-x, float64(py)-y) > tolerance {
+				continue
+			}
+			_, _, _, a := img.At(px, py).RGBA()
+			if a > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func redDominantRadiusRange(img image.Image) (float64, float64, int) {

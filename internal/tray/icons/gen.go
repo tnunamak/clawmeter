@@ -364,11 +364,6 @@ func drawArcStroke(dst *image.RGBA, startAngle, endAngle, centerR, halfWidth flo
 	maxX := min(bounds.Max.X-1, int(math.Ceil(meterCenterX+maxR)))
 	minY := max(bounds.Min.Y, int(math.Floor(meterCenterY-maxR)))
 	maxY := min(bounds.Max.Y-1, int(math.Ceil(meterCenterY+maxR)))
-	startX := meterCenterX + centerR*math.Cos(startAngle)
-	startY := meterCenterY + centerR*math.Sin(startAngle)
-	endX := meterCenterX + centerR*math.Cos(endAngle)
-	endY := meterCenterY + centerR*math.Sin(endAngle)
-
 	for y := minY; y <= maxY; y++ {
 		for x := minX; x <= maxX; x++ {
 			px := float64(x)
@@ -378,9 +373,7 @@ func drawArcStroke(dst *image.RGBA, startAngle, endAngle, centerR, halfWidth flo
 			r := math.Hypot(dx, dy)
 			angle := normalizeAngleToStart(math.Atan2(dy, dx), startAngle)
 			onArc := angle >= startAngle && angle <= endAngle && math.Abs(r-centerR) <= halfWidth
-			onStartCap := math.Hypot(px-startX, py-startY) <= halfWidth
-			onEndCap := math.Hypot(px-endX, py-endY) <= halfWidth
-			if onArc || onStartCap || onEndCap {
+			if onArc {
 				blendNRGBA(dst, x, y, c)
 			}
 		}
