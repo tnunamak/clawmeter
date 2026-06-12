@@ -211,6 +211,31 @@ func TestPaceDeltaRingUsesOuterTrayEdge(t *testing.T) {
 	}
 }
 
+func TestPaceDeltaRingDoesNotDependOnClippedBounds(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 128, 128))
+	drawClawMeterOverlay(img, MeterState{
+		UsagePct:     90,
+		ExpectedPct:  40,
+		ShowExpected: true,
+	}, 128)
+
+	bounds := img.Bounds()
+	for x := bounds.Min.X; x < bounds.Max.X; x++ {
+		for _, y := range []int{bounds.Min.Y, bounds.Max.Y - 1} {
+			if _, _, _, a := img.At(x, y).RGBA(); a != 0 {
+				t.Fatal("pace delta ring touches the top or bottom icon edge")
+			}
+		}
+	}
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for _, x := range []int{bounds.Min.X, bounds.Max.X - 1} {
+			if _, _, _, a := img.At(x, y).RGBA(); a != 0 {
+				t.Fatal("pace delta ring touches the left or right icon edge")
+			}
+		}
+	}
+}
+
 // The Clawmeter overlay must be visibly different between low and high risk so a
 // glanceable user can tell safe pressure from dangerous pressure at tray size.
 func TestClawmeterOverlayChangesBetweenLowAndHighUsage(t *testing.T) {

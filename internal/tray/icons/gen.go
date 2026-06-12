@@ -76,9 +76,9 @@ const (
 	meterCenterY   = 64.0
 	meterStartDeg  = -90.0
 	meterSweepDeg  = 360.0
-	meterArcOuterR = 63.0
-	meterArcInnerR = 49.0
-	meterChipR     = 45
+	meterArcOuterR = 61.0
+	meterArcInnerR = 40.0
+	meterChipR     = 40
 )
 
 // MeterState is the provider-agnostic state rendered by the Clawmeter overlay.
@@ -143,9 +143,9 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 
 	// 2. Provider mark as the base identity layer. The gauge must adapt to
 	// this layer, not force provider logos to shrink.
-	logoScale := 0.68
+	logoScale := 0.62
 	if treatment.contrastPlate {
-		logoScale = 0.62
+		logoScale = 0.56
 	}
 	logoBoxW := int(float64(logoArea.Dx()) * logoScale)
 	logoBoxH := int(float64(logoArea.Dy()) * logoScale)
