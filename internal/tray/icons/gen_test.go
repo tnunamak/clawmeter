@@ -131,53 +131,49 @@ func TestProviderIconsIncludeQuotaLabelAtTraySize(t *testing.T) {
 	}
 }
 
-func TestNormalizeMeterLabelUsesCornerBadgeTextForTraySize(t *testing.T) {
-	if got := normalizeMeterLabel("7d all", 32); got != "7D" {
+func TestNormalizeMeterLabelKeepsTwoAlphanumericCharacters(t *testing.T) {
+	if got := normalizeMeterLabel("7d all"); got != "7D" {
 		t.Fatalf("normalizeMeterLabel = %q, want 7D", got)
 	}
-	if got := normalizeMeterLabel("7d all", 22); got != "D" {
-		t.Fatalf("normalizeMeterLabel = %q, want D", got)
-	}
-	if got := normalizeMeterLabel("monthly", 32); got != "MO" {
+	if got := normalizeMeterLabel("monthly"); got != "MO" {
 		t.Fatalf("normalizeMeterLabel = %q, want MO", got)
 	}
 }
 
-func TestProjectionRingUsesRedOnlyForProjectedOverage(t *testing.T) {
+func TestPaceDeltaRingUsesRedWhenAhead(t *testing.T) {
 	img := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct:    15,
-		ExpectedPct: 3,
-		RiskPct:     110,
+		UsagePct:     65,
+		ExpectedPct:  30,
+		ShowExpected: true,
 	}, 22))
 	if countRedDominantPixels(img) < 4 {
-		t.Fatal("projected overage ring is too thin to read at tray size")
+		t.Fatal("ahead-of-pace segment is too thin to read at tray size")
 	}
 	if countVisiblyDifferentPixels(img, decodePNG(t, GenerateProviderIcon("openai", 0, 22))) < 24 {
 		t.Fatal("meter track does not add enough visible context at tray size")
 	}
 }
 
-func TestProjectionRingStaysQuietWhenSafe(t *testing.T) {
-	safe := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct: 60,
-		RiskPct:  60,
+func TestPaceDeltaRingUsesGreenWhenBehind(t *testing.T) {
+	behind := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct:     25,
+		ExpectedPct:  70,
+		ShowExpected: true,
 	}, 64))
-	risky := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct: 60,
-		RiskPct:  110,
+	ahead := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct:     70,
+		ExpectedPct:  25,
+		ShowExpected: true,
 	}, 64))
-	if countRedDominantPixels(safe) != 0 {
-		t.Fatal("safe projected usage should not render red alert pixels")
+	if countGreenDominantPixels(behind) <= countRedDominantPixels(behind) {
+		t.Fatal("behind-pace usage should render a green delta segment")
 	}
-	if countGreenDominantPixels(safe) != 0 {
-		t.Fatal("safe projected usage should not render green status pixels")
-	}
-	if countRedDominantPixels(risky) <= countRedDominantPixels(safe) {
-		t.Fatal("risky projected usage should be visibly redder than safe usage")
+	if countRedDominantPixels(ahead) <= countGreenDominantPixels(ahead) {
+		t.Fatal("ahead-of-pace usage should render a red delta segment")
 	}
 }
 
-func TestProjectionRingIgnoresExpectedPaceMarkerState(t *testing.T) {
+func TestExpectedPaceChangesDeltaRing(t *testing.T) {
 	early := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
 		UsagePct:     50,
 		ExpectedPct:  15,
@@ -190,26 +186,28 @@ func TestProjectionRingIgnoresExpectedPaceMarkerState(t *testing.T) {
 		RiskPct:      100,
 		ShowExpected: true,
 	}, 64))
-	if countVisiblyDifferentPixels(early, late) > 4 {
-		t.Fatal("expected pace should not add a separate tray marker")
+	if countVisiblyDifferentPixels(early, late) < 20 {
+		t.Fatal("expected pace should change the red/green delta segment")
 	}
 }
 
-func TestProjectionRingUsesOuterTrayEdge(t *testing.T) {
+func TestPaceDeltaRingUsesOuterTrayEdge(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 128, 128))
 	drawClawMeterOverlay(img, MeterState{
-		RiskPct: 100,
+		UsagePct:     90,
+		ExpectedPct:  40,
+		ShowExpected: true,
 	}, 128)
 
 	_, bandMaxR, bandCount := redDominantRadiusRange(img)
 	if bandCount == 0 {
-		t.Fatal("projection ring is missing")
+		t.Fatal("pace delta ring is missing")
 	}
 	if bandMaxR < meterArcOuterR-1 {
-		t.Fatalf("projection ring does not use the outer tray-icon edge: max radius %.1f", bandMaxR)
+		t.Fatalf("pace delta ring does not use the outer tray-icon edge: max radius %.1f", bandMaxR)
 	}
 	if bandCount < 900 {
-		t.Fatalf("projection ring is too small to read as a continuous band: %d red pixels", bandCount)
+		t.Fatalf("pace delta ring is too small to read as a continuous band: %d red pixels", bandCount)
 	}
 }
 

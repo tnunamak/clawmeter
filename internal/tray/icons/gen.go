@@ -154,12 +154,12 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 	ly := logoArea.Min.Y + (logoArea.Dy()-logoResized.Bounds().Dy())/2
 	draw.Draw(logoLayer, image.Rect(lx, ly, lx+logoResized.Bounds().Dx(), ly+logoResized.Bounds().Dy()),
 		logoResized, image.Point{}, draw.Over)
-	draw.Draw(dst, dst.Bounds(), logoLayer, image.Point{}, draw.Over)
+	drawLayerClippedToCircle(dst, logoLayer, meterCenterX, meterCenterY, float64(meterChipR))
 
 	// 3. Separate Clawmeter overlay. The provider logo is not baked into the
 	// meter artwork; it stays as the recognizable center mark.
 	drawClawMeterOverlay(dst, meter, workSize)
-	drawMeterLabel(dst, meter.Label, size)
+	drawMeterLabel(dst, meter.Label)
 
 	return encodePNG(resize(dst, size))
 }
@@ -190,11 +190,11 @@ func crawfishForPct(usagePct float64) []byte {
 
 func drawClawMeterOverlay(dst *image.RGBA, meter MeterState, workSize int) {
 	meter = normalizeMeterState(meter)
-	drawProjectionRing(dst, meter.RiskPct)
+	drawPaceDeltaRing(dst, meter)
 }
 
-func drawMeterLabel(dst *image.RGBA, label string, finalSize int) {
-	label = normalizeMeterLabel(label, finalSize)
+func drawMeterLabel(dst *image.RGBA, label string) {
+	label = normalizeMeterLabel(label)
 	if label == "" {
 		return
 	}
@@ -211,28 +211,32 @@ func drawMeterLabel(dst *image.RGBA, label string, finalSize int) {
 	}
 	drawer.DrawString(label)
 
-	const labelScale = 4
-	labelScalePct := 92
-	if len(label) == 1 {
-		labelScalePct = 105
-	}
+	const (
+		labelScale    = 6
+		labelScalePct = 90
+	)
 	labelOffsetScale := labelScale * labelScalePct / 100
 	scaledW := max(1, src.Bounds().Dx()*labelScale*labelScalePct/100)
 	scaledH := max(1, src.Bounds().Dy()*labelScale*labelScalePct/100)
 	scaled := image.NewRGBA(image.Rect(0, 0, scaledW, scaledH))
 	xdraw.NearestNeighbor.Scale(scaled, scaled.Bounds(), src, src.Bounds(), draw.Over, nil)
 
-	pad := 8
-	x := dst.Bounds().Max.X - scaled.Bounds().Dx() - pad
-	y := dst.Bounds().Max.Y - scaled.Bounds().Dy() - pad
-	drawLabelPill(dst, x-5, y-3, scaled.Bounds().Dx()+10, scaled.Bounds().Dy()+6)
-
-	halo := color.NRGBA{R: 255, G: 255, B: 255, A: 180}
+	x := dst.Bounds().Min.X + (dst.Bounds().Dx()-scaled.Bounds().Dx())/2
+	y := dst.Bounds().Min.Y + (dst.Bounds().Dy()-scaled.Bounds().Dy())/2
+	halo := color.NRGBA{R: 255, G: 255, B: 255, A: 150}
 	for _, off := range []image.Point{
-		{X: -2 * labelOffsetScale / labelScale, Y: 0},
-		{X: 2 * labelOffsetScale / labelScale, Y: 0},
-		{X: 0, Y: -2 * labelOffsetScale / labelScale},
-		{X: 0, Y: 2 * labelOffsetScale / labelScale},
+		{X: -7 * labelOffsetScale / labelScale, Y: 0},
+		{X: 7 * labelOffsetScale / labelScale, Y: 0},
+		{X: 0, Y: -7 * labelOffsetScale / labelScale},
+		{X: 0, Y: 7 * labelOffsetScale / labelScale},
+		{X: -5 * labelOffsetScale / labelScale, Y: -5 * labelOffsetScale / labelScale},
+		{X: 5 * labelOffsetScale / labelScale, Y: -5 * labelOffsetScale / labelScale},
+		{X: -5 * labelOffsetScale / labelScale, Y: 5 * labelOffsetScale / labelScale},
+		{X: 5 * labelOffsetScale / labelScale, Y: 5 * labelOffsetScale / labelScale},
+		{X: -3 * labelOffsetScale / labelScale, Y: -6 * labelOffsetScale / labelScale},
+		{X: 3 * labelOffsetScale / labelScale, Y: -6 * labelOffsetScale / labelScale},
+		{X: -3 * labelOffsetScale / labelScale, Y: 6 * labelOffsetScale / labelScale},
+		{X: 3 * labelOffsetScale / labelScale, Y: 6 * labelOffsetScale / labelScale},
 	} {
 		drawTextImage(dst, scaled, x+off.X, y+off.Y, halo)
 	}
@@ -248,7 +252,7 @@ func drawMeterLabel(dst *image.RGBA, label string, finalSize int) {
 	drawTextImage(dst, scaled, x, y, color.NRGBA{R: 0, G: 0, B: 0, A: 255})
 }
 
-func normalizeMeterLabel(label string, finalSize int) string {
+func normalizeMeterLabel(label string) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(strings.TrimSpace(label)) {
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
@@ -259,11 +263,7 @@ func normalizeMeterLabel(label string, finalSize int) string {
 			break
 		}
 	}
-	out := b.String()
-	if finalSize <= 22 && len(out) == 2 {
-		return out[1:]
-	}
-	return out
+	return b.String()
 }
 
 func drawTextImage(dst *image.RGBA, src *image.RGBA, offX, offY int, c color.NRGBA) {
@@ -306,22 +306,9 @@ func clampPct(pct float64) float64 {
 	return pct
 }
 
-func projectionRingColor(riskPct float64) color.NRGBA {
-	switch {
-	case riskPct >= 100:
-		return color.NRGBA{R: 225, G: 39, B: 49, A: 255}
-	case riskPct >= 85:
-		return color.NRGBA{R: 236, G: 168, B: 53, A: 245}
-	default:
-		return color.NRGBA{R: 232, G: 238, B: 244, A: 170}
-	}
-}
-
-func drawProjectionRing(dst *image.RGBA, riskPct float64) {
-	fill := clampPct(riskPct) / 100
-	if riskPct >= 100 {
-		fill = 1
-	}
+func drawPaceDeltaRing(dst *image.RGBA, meter MeterState) {
+	usage := clampPct(meter.UsagePct) / 100
+	expected := clampPct(meter.ExpectedPct) / 100
 	centerR := ringCenterR(meterArcOuterR, meterArcInnerR)
 	halfWidth := ringHalfWidth(meterArcOuterR, meterArcInnerR)
 	start := meterAngleForFraction(0)
@@ -329,10 +316,46 @@ func drawProjectionRing(dst *image.RGBA, riskPct float64) {
 
 	drawArcStroke(dst, start, end, centerR, halfWidth+1.8, color.NRGBA{R: 0, G: 0, B: 0, A: 100})
 	drawArcStroke(dst, start, end, centerR, halfWidth, color.NRGBA{R: 245, G: 248, B: 252, A: 58})
-	if fill <= 0 {
+
+	if usage <= 0 && expected <= 0 {
 		return
 	}
-	drawArcStroke(dst, start, meterAngleForFraction(fill), centerR, halfWidth, projectionRingColor(riskPct))
+
+	neutralEnd := usage
+	if meter.ShowExpected && expected > 0 {
+		neutralEnd = min(usage, expected)
+	}
+	if neutralEnd > 0 {
+		drawArcStroke(dst, start, meterAngleForFraction(neutralEnd), centerR, halfWidth, color.NRGBA{R: 214, G: 221, B: 228, A: 210})
+	}
+	if !meter.ShowExpected || expected <= 0 || usage == expected {
+		return
+	}
+	from := min(usage, expected)
+	to := max(usage, expected)
+	if to <= from {
+		return
+	}
+	drawArcStroke(dst, meterAngleForFraction(from), meterAngleForFraction(to), centerR, halfWidth, paceDeltaColor(usage-expected))
+}
+
+func paceDeltaColor(delta float64) color.NRGBA {
+	strength := min(1, math.Abs(delta)/0.35)
+	neutral := color.NRGBA{R: 186, G: 194, B: 202, A: 214}
+	if delta > 0 {
+		return mixColor(neutral, color.NRGBA{R: 232, G: 48, B: 58, A: 255}, strength)
+	}
+	return mixColor(neutral, color.NRGBA{R: 64, G: 211, B: 112, A: 255}, strength)
+}
+
+func mixColor(a, b color.NRGBA, t float64) color.NRGBA {
+	t = max(0, min(1, t))
+	return color.NRGBA{
+		R: uint8(float64(a.R) + (float64(b.R)-float64(a.R))*t),
+		G: uint8(float64(a.G) + (float64(b.G)-float64(a.G))*t),
+		B: uint8(float64(a.B) + (float64(b.B)-float64(a.B))*t),
+		A: uint8(float64(a.A) + (float64(b.A)-float64(a.A))*t),
+	}
 }
 
 func ringCenterR(outerR, innerR float64) float64 {
