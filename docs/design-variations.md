@@ -128,14 +128,25 @@ The enlarged sheet is for concept comparison only. It should not be used to judg
 
    Research documented: no external research notes found. This was a direct implementation response to your “bookend, not overlay” critique.
 
+11. **Simplified provider chip + projection arc prototype**
+
+   Concept: keep variation 7/8's architecture but delete the overloaded marker system. The provider logo sits centered on a permanent light circular chip, a single outer ring shows projected usage at reset, and the quota window moves to a bottom-right badge. At 22px the badge uses one glyph (`H`, `D`, `S`, `A`); at 32px and above it uses two glyphs (`5H`, `7D`, `7S`, `7A`). The claw is removed from the tray icon entirely.
+
+   Commits: prototype work after `f2dff46`; see the next implementation commit.
+
+   Images: `current-openai-7d-over.png`, `current-openai-5h-under.png`, `current-claude-7s-under.png`, `current-claude-7a-over.png`, plus generated `-22.png` and `-32.png` final-size variants. The real-size contact sheets now use those final-size outputs for the current prototype.
+
+   Feedback / issue: this implements the outside design feedback: “provider logo as base, radial gauge around it, quota label” is retained, but white markers/bookends, green safe ring, and claw remnants are deleted. Remaining thing to judge visually: whether the corner badge still covers too much of the provider logo at true tray size.
+
+   Research documented: this comes from the design review feedback in this thread, which compared the icon to common tray/battery-indicator semantics: recognizable center mark, minimal status overlay, detailed magnitude in hover/menu.
+
 ## Open Design Questions For Review
 
 1. What is the best single-glance visual hierarchy: provider identity first, quota-window label second, pacing status third, or a different order?
-2. Should the red/green deviation be a full radial band, a short delta segment, or a separate marker that does not compete with provider logo/text?
-3. Is the expected pace marker necessary in the tray icon, or should the tray icon show only projected outcome while hover/menu explains pace and reset?
-4. If a marker is necessary, should it be radial, tangential, notched, cut out of the ring, or placed outside the ring entirely?
-5. Is the `5H` / `7D` text too expensive in pixel budget, or is it required because cycling multiple quotas otherwise becomes ambiguous?
-6. Should the claw metaphor remain literal, or should the final tray icon prioritize a clearer system-meter metaphor and reserve claw branding for the app icon / README?
+2. Does the simplified projection arc preserve enough urgency/magnitude without red/green delta markers?
+3. Is the corner badge legible enough at 22px, or does it still cover too much provider identity?
+4. Should safe projected usage be nearly invisible neutral, or does the user need more visible “safe” confirmation?
+5. Should the claw metaphor stay out of the tray icon permanently and live only in the app icon / README?
 
 ## Research Notes Found
 

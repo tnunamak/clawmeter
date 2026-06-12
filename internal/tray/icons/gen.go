@@ -72,19 +72,13 @@ var providerLogoTreatments = map[string]logoTreatment{
 }
 
 const (
-	meterCenterX      = 64.0
-	meterCenterY      = 64.0
-	meterOuterR       = 63.0
-	meterInnerR       = 25.5
-	meterStartDeg     = -90.0
-	meterSweepDeg     = 342.0
-	meterActualOuterR = 64.0
-	meterActualInnerR = meterActualOuterR - 16
-	// Keep a small minimum visible warning wedge so a just-over-pace state
-	// survives downscaling instead of becoming a one-pixel fleck.
-	meterMinimumOverPaceVisibleDeg = 14.0
-	meterEndpointMarkerRadius      = 13
-	meterEndpointMarkerOutlineR    = 15
+	meterCenterX   = 64.0
+	meterCenterY   = 64.0
+	meterStartDeg  = -90.0
+	meterSweepDeg  = 360.0
+	meterArcOuterR = 63.0
+	meterArcInnerR = 49.0
+	meterChipR     = 45
 )
 
 // MeterState is the provider-agnostic state rendered by the Clawmeter overlay.
@@ -140,40 +134,32 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 	// Work at a high resolution then downscale at the end.
 	workSize := 128
 	dst := image.NewRGBA(image.Rect(0, 0, workSize, workSize))
+	logoLayer := image.NewRGBA(dst.Bounds())
 	logoArea := image.Rect(0, 0, workSize, workSize)
 
-	// 1. Optional light plate behind dark monochrome marks. Sized to roughly
-	// match the logo footprint so it reads as intentional artwork rather than
-	// a stray circle.
-	if treatment.contrastPlate {
-		cx := logoArea.Dx() / 2
-		cy := logoArea.Dy() / 2
-		radius := int(float64(logoArea.Dx()) * 0.46)
-		drawContrastPlate(dst, cx, cy, radius)
-	}
-
-	if meter.ShowExpected {
-		drawMeterTrack(dst)
-	}
+	// 1. A permanent light chip keeps dark marks legible on dark trays and
+	// gives colorful marks a stable silhouette without modifying the source art.
+	drawLogoChip(logoLayer, logoArea.Dx()/2, logoArea.Dy()/2, meterChipR)
 
 	// 2. Provider mark as the base identity layer. The gauge must adapt to
 	// this layer, not force provider logos to shrink.
-	logoScale := 0.95
+	logoScale := 0.68
 	if treatment.contrastPlate {
-		logoScale = 0.74
+		logoScale = 0.62
 	}
 	logoBoxW := int(float64(logoArea.Dx()) * logoScale)
 	logoBoxH := int(float64(logoArea.Dy()) * logoScale)
 	logoResized := resizeToFit(logoImg, logoBoxW, logoBoxH)
 	lx := logoArea.Min.X + (logoArea.Dx()-logoResized.Bounds().Dx())/2
 	ly := logoArea.Min.Y + (logoArea.Dy()-logoResized.Bounds().Dy())/2
-	draw.Draw(dst, image.Rect(lx, ly, lx+logoResized.Bounds().Dx(), ly+logoResized.Bounds().Dy()),
+	draw.Draw(logoLayer, image.Rect(lx, ly, lx+logoResized.Bounds().Dx(), ly+logoResized.Bounds().Dy()),
 		logoResized, image.Point{}, draw.Over)
+	draw.Draw(dst, dst.Bounds(), logoLayer, image.Point{}, draw.Over)
 
 	// 3. Separate Clawmeter overlay. The provider logo is not baked into the
-	// meter artwork; this is the same layer order as the original compositor.
+	// meter artwork; it stays as the recognizable center mark.
 	drawClawMeterOverlay(dst, meter, workSize)
-	drawMeterLabel(dst, meter.Label)
+	drawMeterLabel(dst, meter.Label, size)
 
 	return encodePNG(resize(dst, size))
 }
@@ -204,11 +190,11 @@ func crawfishForPct(usagePct float64) []byte {
 
 func drawClawMeterOverlay(dst *image.RGBA, meter MeterState, workSize int) {
 	meter = normalizeMeterState(meter)
-	drawActualUsageBand(dst, meter)
+	drawProjectionRing(dst, meter.RiskPct)
 }
 
-func drawMeterLabel(dst *image.RGBA, label string) {
-	label = normalizeMeterLabel(label)
+func drawMeterLabel(dst *image.RGBA, label string, finalSize int) {
+	label = normalizeMeterLabel(label, finalSize)
 	if label == "" {
 		return
 	}
@@ -225,32 +211,28 @@ func drawMeterLabel(dst *image.RGBA, label string) {
 	}
 	drawer.DrawString(label)
 
-	const (
-		labelScale       = 6
-		labelScalePct    = 90
-		labelOffsetScale = labelScale * labelScalePct / 100
-	)
+	const labelScale = 4
+	labelScalePct := 92
+	if len(label) == 1 {
+		labelScalePct = 105
+	}
+	labelOffsetScale := labelScale * labelScalePct / 100
 	scaledW := max(1, src.Bounds().Dx()*labelScale*labelScalePct/100)
 	scaledH := max(1, src.Bounds().Dy()*labelScale*labelScalePct/100)
 	scaled := image.NewRGBA(image.Rect(0, 0, scaledW, scaledH))
 	xdraw.NearestNeighbor.Scale(scaled, scaled.Bounds(), src, src.Bounds(), draw.Over, nil)
 
-	x := dst.Bounds().Min.X + (dst.Bounds().Dx()-scaled.Bounds().Dx())/2
-	y := dst.Bounds().Min.Y + (dst.Bounds().Dy()-scaled.Bounds().Dy())/2
-	halo := color.NRGBA{R: 255, G: 255, B: 255, A: 150}
+	pad := 8
+	x := dst.Bounds().Max.X - scaled.Bounds().Dx() - pad
+	y := dst.Bounds().Max.Y - scaled.Bounds().Dy() - pad
+	drawLabelPill(dst, x-5, y-3, scaled.Bounds().Dx()+10, scaled.Bounds().Dy()+6)
+
+	halo := color.NRGBA{R: 255, G: 255, B: 255, A: 180}
 	for _, off := range []image.Point{
-		{X: -7 * labelOffsetScale / labelScale, Y: 0},
-		{X: 7 * labelOffsetScale / labelScale, Y: 0},
-		{X: 0, Y: -7 * labelOffsetScale / labelScale},
-		{X: 0, Y: 7 * labelOffsetScale / labelScale},
-		{X: -5 * labelOffsetScale / labelScale, Y: -5 * labelOffsetScale / labelScale},
-		{X: 5 * labelOffsetScale / labelScale, Y: -5 * labelOffsetScale / labelScale},
-		{X: -5 * labelOffsetScale / labelScale, Y: 5 * labelOffsetScale / labelScale},
-		{X: 5 * labelOffsetScale / labelScale, Y: 5 * labelOffsetScale / labelScale},
-		{X: -3 * labelOffsetScale / labelScale, Y: -6 * labelOffsetScale / labelScale},
-		{X: 3 * labelOffsetScale / labelScale, Y: -6 * labelOffsetScale / labelScale},
-		{X: -3 * labelOffsetScale / labelScale, Y: 6 * labelOffsetScale / labelScale},
-		{X: 3 * labelOffsetScale / labelScale, Y: 6 * labelOffsetScale / labelScale},
+		{X: -2 * labelOffsetScale / labelScale, Y: 0},
+		{X: 2 * labelOffsetScale / labelScale, Y: 0},
+		{X: 0, Y: -2 * labelOffsetScale / labelScale},
+		{X: 0, Y: 2 * labelOffsetScale / labelScale},
 	} {
 		drawTextImage(dst, scaled, x+off.X, y+off.Y, halo)
 	}
@@ -266,7 +248,7 @@ func drawMeterLabel(dst *image.RGBA, label string) {
 	drawTextImage(dst, scaled, x, y, color.NRGBA{R: 0, G: 0, B: 0, A: 255})
 }
 
-func normalizeMeterLabel(label string) string {
+func normalizeMeterLabel(label string, finalSize int) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(strings.TrimSpace(label)) {
 		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
@@ -277,7 +259,11 @@ func normalizeMeterLabel(label string) string {
 			break
 		}
 	}
-	return b.String()
+	out := b.String()
+	if finalSize <= 22 && len(out) == 2 {
+		return out[1:]
+	}
+	return out
 }
 
 func drawTextImage(dst *image.RGBA, src *image.RGBA, offX, offY int, c color.NRGBA) {
@@ -320,93 +306,33 @@ func clampPct(pct float64) float64 {
 	return pct
 }
 
-func meterColor(meter MeterState) color.NRGBA {
+func projectionRingColor(riskPct float64) color.NRGBA {
 	switch {
-	case meter.RiskPct >= 100:
-		return color.NRGBA{R: 210, G: 31, B: 43, A: 255}
-	case meter.RiskPct >= 90:
-		return color.NRGBA{R: 245, G: 186, B: 24, A: 255}
+	case riskPct >= 100:
+		return color.NRGBA{R: 225, G: 39, B: 49, A: 255}
+	case riskPct >= 85:
+		return color.NRGBA{R: 236, G: 168, B: 53, A: 245}
 	default:
-		return color.NRGBA{R: 53, G: 184, B: 90, A: 255}
+		return color.NRGBA{R: 232, G: 238, B: 244, A: 170}
 	}
 }
 
-func drawMeterTrack(dst *image.RGBA) {
+func drawProjectionRing(dst *image.RGBA, riskPct float64) {
+	fill := clampPct(riskPct) / 100
+	if riskPct >= 100 {
+		fill = 1
+	}
+	centerR := ringCenterR(meterArcOuterR, meterArcInnerR)
+	halfWidth := ringHalfWidth(meterArcOuterR, meterArcInnerR)
 	start := meterAngleForFraction(0)
 	end := meterAngleForFraction(1)
-	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR, meterActualInnerR-2), ringHalfWidth(meterActualOuterR, meterActualInnerR-2), color.NRGBA{R: 0, G: 0, B: 0, A: 58})
-	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR-1.2, meterActualInnerR), ringHalfWidth(meterActualOuterR-1.2, meterActualInnerR), color.NRGBA{R: 37, G: 43, B: 51, A: 54})
-}
 
-func drawActualUsageBand(dst *image.RGBA, meter MeterState) {
-	usage := clampPct(meter.UsagePct) / 100
-	expected := clampPct(meter.ExpectedPct) / 100
-	if usage <= 0 && (!meter.ShowExpected || expected <= 0) {
+	drawArcStroke(dst, start, end, centerR, halfWidth+1.8, color.NRGBA{R: 0, G: 0, B: 0, A: 100})
+	drawArcStroke(dst, start, end, centerR, halfWidth, color.NRGBA{R: 245, G: 248, B: 252, A: 58})
+	if fill <= 0 {
 		return
 	}
-	if !meter.ShowExpected || expected <= 0 {
-		drawUsageShadow(dst, 0, usage)
-		drawUsageSegment(dst, 0, usage, meterColor(meter))
-		return
-	}
-
-	drawUsageShadow(dst, 0, max(usage, expected))
-	drawUsageSegment(dst, 0, expected, color.NRGBA{R: 243, G: 247, B: 250, A: 246})
-
-	withinPaceEnd := min(usage, expected)
-	drawUsageSegment(dst, 0, withinPaceEnd, color.NRGBA{R: 52, G: 177, B: 93, A: 238})
-	if usage > expected {
-		drawUsageSegment(dst, expected, overPaceRenderEnd(usage, expected), meterColor(meter))
-	}
-	drawExpectedPaceMarker(dst, expected)
-	drawUsageHeadMarker(dst, usage, expected)
-}
-
-func drawUsageShadow(dst *image.RGBA, startFraction, endFraction float64) {
-	if endFraction <= startFraction {
-		return
-	}
-	start := meterAngleForFraction(startFraction)
-	end := meterAngleForFraction(endFraction)
-	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR, meterActualInnerR-2), ringHalfWidth(meterActualOuterR, meterActualInnerR-2), color.NRGBA{R: 0, G: 0, B: 0, A: 150})
-}
-
-func drawUsageSegment(dst *image.RGBA, startFraction, endFraction float64, c color.NRGBA) {
-	if endFraction <= startFraction {
-		return
-	}
-	start := meterAngleForFraction(startFraction)
-	end := meterAngleForFraction(endFraction)
-	drawArcStroke(dst, start, end, ringCenterR(meterActualOuterR, meterActualInnerR), ringHalfWidth(meterActualOuterR, meterActualInnerR), c)
-}
-
-func drawExpectedPaceMarker(dst *image.RGBA, fraction float64) {
-	if fraction <= 0 {
-		return
-	}
-	drawMeterEndpointMarker(dst, fraction, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
-}
-
-func drawUsageHeadMarker(dst *image.RGBA, usage, expected float64) {
-	if usage <= 0 {
-		return
-	}
-	fill := color.NRGBA{R: 52, G: 177, B: 93, A: 255}
-	if usage > expected {
-		fill = color.NRGBA{R: 210, G: 31, B: 43, A: 255}
-	}
-	drawMeterEndpointMarker(dst, usage, fill)
-}
-
-func drawMeterEndpointMarker(dst *image.RGBA, fraction float64, fill color.NRGBA) {
-	x, y := pointOnMeter(fraction, ringCenterR(meterActualOuterR, meterActualInnerR))
-	drawCircle(dst, int(math.Round(x))+1, int(math.Round(y))+1, meterEndpointMarkerOutlineR, color.NRGBA{R: 0, G: 0, B: 0, A: 170})
-	drawCircle(dst, int(math.Round(x)), int(math.Round(y)), meterEndpointMarkerRadius, fill)
-}
-
-func overPaceRenderEnd(usage, expected float64) float64 {
-	minVisible := meterMinimumOverPaceVisibleDeg / meterSweepDeg
-	return min(1, max(usage, expected+minVisible))
+	drawArcStroke(dst, start, meterAngleForFraction(fill), centerR, halfWidth, projectionRingColor(riskPct))
 }
 
 func ringCenterR(outerR, innerR float64) float64 {
@@ -539,6 +465,51 @@ func drawContrastPlate(dst *image.RGBA, cx, cy, radius int) {
 	drawCircle(dst, cx, cy, radius, color.NRGBA{R: 246, G: 248, B: 250, A: 244})
 }
 
+func drawLogoChip(dst *image.RGBA, cx, cy, radius int) {
+	drawCircle(dst, cx+2, cy+3, radius+4, color.NRGBA{R: 0, G: 0, B: 0, A: 82})
+	drawCircle(dst, cx, cy, radius+2, color.NRGBA{R: 35, G: 41, B: 48, A: 68})
+	drawCircle(dst, cx, cy, radius, color.NRGBA{R: 246, G: 248, B: 250, A: 246})
+}
+
+func drawLabelPill(dst *image.RGBA, x, y, w, h int) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	drawRoundedRect(dst, x+1, y+2, w, h, h/2, color.NRGBA{R: 0, G: 0, B: 0, A: 96})
+	drawRoundedRect(dst, x, y, w, h, h/2, color.NRGBA{R: 246, G: 248, B: 250, A: 238})
+}
+
+func drawRoundedRect(dst *image.RGBA, x, y, w, h, radius int, c color.NRGBA) {
+	if radius < 0 {
+		radius = 0
+	}
+	bounds := dst.Bounds()
+	for py := y; py < y+h; py++ {
+		for px := x; px < x+w; px++ {
+			if px < bounds.Min.X || py < bounds.Min.Y || px >= bounds.Max.X || py >= bounds.Max.Y {
+				continue
+			}
+			cx := px
+			if cx < x+radius {
+				cx = x + radius
+			}
+			if cx >= x+w-radius {
+				cx = x + w - radius - 1
+			}
+			cy := py
+			if cy < y+radius {
+				cy = y + radius
+			}
+			if cy >= y+h-radius {
+				cy = y + h - radius - 1
+			}
+			if (px-cx)*(px-cx)+(py-cy)*(py-cy) <= radius*radius {
+				blendNRGBA(dst, px, py, c)
+			}
+		}
+	}
+}
+
 func drawCircle(dst *image.RGBA, cx, cy, radius int, c color.NRGBA) {
 	r2 := radius * radius
 	bounds := dst.Bounds()
@@ -552,6 +523,68 @@ func drawCircle(dst *image.RGBA, cx, cy, radius int, c color.NRGBA) {
 			if dx*dx+dy*dy > r2 {
 				continue
 			}
+			blendNRGBA(dst, x, y, c)
+		}
+	}
+}
+
+func drawThickLine(dst *image.RGBA, x1, y1, x2, y2, halfWidth float64, c color.NRGBA) {
+	if halfWidth <= 0 {
+		return
+	}
+	minX := int(math.Floor(min(x1, x2) - halfWidth - 1))
+	maxX := int(math.Ceil(max(x1, x2) + halfWidth + 1))
+	minY := int(math.Floor(min(y1, y2) - halfWidth - 1))
+	maxY := int(math.Ceil(max(y1, y2) + halfWidth + 1))
+	bounds := dst.Bounds()
+	if minX < bounds.Min.X {
+		minX = bounds.Min.X
+	}
+	if minY < bounds.Min.Y {
+		minY = bounds.Min.Y
+	}
+	if maxX >= bounds.Max.X {
+		maxX = bounds.Max.X - 1
+	}
+	if maxY >= bounds.Max.Y {
+		maxY = bounds.Max.Y - 1
+	}
+
+	dx := x2 - x1
+	dy := y2 - y1
+	len2 := dx*dx + dy*dy
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			px := float64(x)
+			py := float64(y)
+			t := 0.0
+			if len2 > 0 {
+				t = ((px-x1)*dx + (py-y1)*dy) / len2
+				t = max(0, min(1, t))
+			}
+			nearestX := x1 + t*dx
+			nearestY := y1 + t*dy
+			if math.Hypot(px-nearestX, py-nearestY) <= halfWidth {
+				blendNRGBA(dst, x, y, c)
+			}
+		}
+	}
+}
+
+func drawLayerClippedToCircle(dst *image.RGBA, src *image.RGBA, cx, cy, radius float64) {
+	if radius <= 0 {
+		return
+	}
+	bounds := dst.Bounds().Intersect(src.Bounds())
+	r2 := radius * radius
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			dx := float64(x) - cx
+			dy := float64(y) - cy
+			if dx*dx+dy*dy > r2 {
+				continue
+			}
+			c := color.NRGBAModel.Convert(src.At(x, y)).(color.NRGBA)
 			blendNRGBA(dst, x, y, c)
 		}
 	}

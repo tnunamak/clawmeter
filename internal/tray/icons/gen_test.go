@@ -99,7 +99,12 @@ func TestProviderLogoKeepsBaseLayerScale(t *testing.T) {
 func TestProviderIconsIncludeClawmeterOverlayAtTraySize(t *testing.T) {
 	for _, name := range []string{"claude", "openai"} {
 		t.Run(name, func(t *testing.T) {
-			img := decodePNG(t, GenerateProviderIcon(name, 95, 22))
+			img := decodePNG(t, GenerateProviderIconWithMeter(name, MeterState{
+				UsagePct:     95,
+				ExpectedPct:  55,
+				RiskPct:      120,
+				ShowExpected: true,
+			}, 22))
 			if countRedDominantPixels(img) < 3 {
 				t.Fatalf("%q tray icon does not show a visible Clawmeter overlay", name)
 			}
@@ -126,53 +131,53 @@ func TestProviderIconsIncludeQuotaLabelAtTraySize(t *testing.T) {
 	}
 }
 
-func TestNormalizeMeterLabelKeepsTwoAlphanumericCharacters(t *testing.T) {
-	if got := normalizeMeterLabel("7d all"); got != "7D" {
+func TestNormalizeMeterLabelUsesCornerBadgeTextForTraySize(t *testing.T) {
+	if got := normalizeMeterLabel("7d all", 32); got != "7D" {
 		t.Fatalf("normalizeMeterLabel = %q, want 7D", got)
 	}
-	if got := normalizeMeterLabel("monthly"); got != "MO" {
+	if got := normalizeMeterLabel("7d all", 22); got != "D" {
+		t.Fatalf("normalizeMeterLabel = %q, want D", got)
+	}
+	if got := normalizeMeterLabel("monthly", 32); got != "MO" {
 		t.Fatalf("normalizeMeterLabel = %q, want MO", got)
 	}
 }
 
-func TestLowUsageMeterRemainsLegibleAtTraySize(t *testing.T) {
+func TestProjectionRingUsesRedOnlyForProjectedOverage(t *testing.T) {
 	img := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct:     9,
-		ExpectedPct:  3,
-		RiskPct:      100,
-		ShowExpected: true,
+		UsagePct:    15,
+		ExpectedPct: 3,
+		RiskPct:     110,
 	}, 22))
 	if countRedDominantPixels(img) < 4 {
-		t.Fatal("low-usage risk arc is too thin to read at tray size")
+		t.Fatal("projected overage ring is too thin to read at tray size")
 	}
 	if countVisiblyDifferentPixels(img, decodePNG(t, GenerateProviderIcon("openai", 0, 22))) < 24 {
 		t.Fatal("meter track does not add enough visible context at tray size")
 	}
 }
 
-func TestMeterStateSeparatesActualUsageFromRiskColor(t *testing.T) {
-	onTrack := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct:     85,
-		ExpectedPct:  95,
-		RiskPct:      85,
-		ShowExpected: true,
+func TestProjectionRingStaysQuietWhenSafe(t *testing.T) {
+	safe := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct: 60,
+		RiskPct:  60,
 	}, 64))
-	offTrack := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct:     50,
-		ExpectedPct:  15,
-		RiskPct:      200,
-		ShowExpected: true,
+	risky := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct: 60,
+		RiskPct:  110,
 	}, 64))
-
-	if countGreenDominantPixels(onTrack) <= countRedDominantPixels(onTrack) {
-		t.Fatal("on-track high usage should render green actual bits")
+	if countRedDominantPixels(safe) != 0 {
+		t.Fatal("safe projected usage should not render red alert pixels")
 	}
-	if countRedDominantPixels(offTrack) <= countGreenDominantPixels(offTrack) {
-		t.Fatal("off-track moderate usage should render red actual bits")
+	if countGreenDominantPixels(safe) != 0 {
+		t.Fatal("safe projected usage should not render green status pixels")
+	}
+	if countRedDominantPixels(risky) <= countRedDominantPixels(safe) {
+		t.Fatal("risky projected usage should be visibly redder than safe usage")
 	}
 }
 
-func TestExpectedPaceAllowanceChangesIconIndependently(t *testing.T) {
+func TestProjectionRingIgnoresExpectedPaceMarkerState(t *testing.T) {
 	early := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
 		UsagePct:     50,
 		ExpectedPct:  15,
@@ -185,89 +190,26 @@ func TestExpectedPaceAllowanceChangesIconIndependently(t *testing.T) {
 		RiskPct:      100,
 		ShowExpected: true,
 	}, 64))
-	if countVisiblyDifferentPixels(early, late) < 20 {
-		t.Fatal("expected pace allowance did not change the rendered icon")
-	}
-	if countNeutralMarkerPixels(early) == 0 || countNeutralMarkerPixels(late) == 0 {
-		t.Fatal("expected pace allowance is missing")
+	if countVisiblyDifferentPixels(early, late) > 4 {
+		t.Fatal("expected pace should not add a separate tray marker")
 	}
 }
 
-func TestExpectedPaceAllowanceRendersAsWhiteSegment(t *testing.T) {
+func TestProjectionRingUsesOuterTrayEdge(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 128, 128))
 	drawClawMeterOverlay(img, MeterState{
-		UsagePct:     10,
-		ExpectedPct:  40,
-		RiskPct:      100,
-		ShowExpected: true,
+		RiskPct: 100,
 	}, 128)
 
-	minR, maxR, count := neutralMarkerRadiusRange(img)
-	if count == 0 {
-		t.Fatal("expected pace allowance is missing")
+	_, bandMaxR, bandCount := redDominantRadiusRange(img)
+	if bandCount == 0 {
+		t.Fatal("projection ring is missing")
 	}
-	minAllowedR := meterActualInnerR - float64(meterEndpointMarkerRadius-int(ringHalfWidth(meterActualOuterR, meterActualInnerR))) - 1
-	if minR < minAllowedR {
-		t.Fatalf("expected pace marker cuts too far into the provider logo: min radius %.1f", minR)
+	if bandMaxR < meterArcOuterR-1 {
+		t.Fatalf("projection ring does not use the outer tray-icon edge: max radius %.1f", bandMaxR)
 	}
-	maxAllowedR := meterActualOuterR + float64(meterEndpointMarkerRadius-int(ringHalfWidth(meterActualOuterR, meterActualInnerR))) + 1
-	if maxR > maxAllowedR {
-		t.Fatalf("expected pace marker extends too far past the tray edge: max radius %.1f", maxR)
-	}
-	if maxR < meterActualOuterR-3 {
-		t.Fatalf("expected pace allowance is too far inward to read as a meter segment: max radius %.1f", maxR)
-	}
-	if count < 500 {
-		t.Fatalf("expected pace allowance is too small to read at tray size: %d neutral pixels", count)
-	}
-}
-
-func TestUsageHeadMarkerColorTracksPace(t *testing.T) {
-	under := image.NewRGBA(image.Rect(0, 0, 128, 128))
-	drawClawMeterOverlay(under, MeterState{
-		UsagePct:     25,
-		ExpectedPct:  70,
-		RiskPct:      80,
-		ShowExpected: true,
-	}, 128)
-	if !hasGreenDominantPixelNearFraction(under, 0.25, float64(meterEndpointMarkerRadius)+1) {
-		t.Fatal("under-target usage head should render a green marker")
-	}
-
-	over := image.NewRGBA(image.Rect(0, 0, 128, 128))
-	drawClawMeterOverlay(over, MeterState{
-		UsagePct:     80,
-		ExpectedPct:  40,
-		RiskPct:      100,
-		ShowExpected: true,
-	}, 128)
-	if !hasRedDominantPixelNearFraction(over, 0.80, float64(meterEndpointMarkerRadius)+1) {
-		t.Fatal("over-target usage head should render a red marker")
-	}
-}
-
-func TestOverPaceUsageRendersOutsideTargetGate(t *testing.T) {
-	img := image.NewRGBA(image.Rect(0, 0, 128, 128))
-	drawClawMeterOverlay(img, MeterState{
-		UsagePct:     90,
-		ExpectedPct:  50,
-		RiskPct:      100,
-		ShowExpected: true,
-	}, 128)
-
-	redMinR, redMaxR, redCount := redDominantRadiusRange(img)
-	if redCount == 0 {
-		t.Fatal("over-pace usage band is missing")
-	}
-	minAllowedR := meterActualInnerR - float64(meterEndpointMarkerRadius-int(ringHalfWidth(meterActualOuterR, meterActualInnerR))) - 1
-	if redMinR < minAllowedR {
-		t.Fatalf("over-pace usage marker leaked too far inside the pace allowance: min radius %.1f", redMinR)
-	}
-	if redMaxR < meterActualOuterR-1 {
-		t.Fatalf("over-pace usage band does not use the outer tray-icon edge: max radius %.1f", redMaxR)
-	}
-	if redCount < 900 {
-		t.Fatalf("over-pace usage band is too small to read as a continuous band: %d red pixels", redCount)
+	if bandCount < 900 {
+		t.Fatalf("projection ring is too small to read as a continuous band: %d red pixels", bandCount)
 	}
 }
 
@@ -435,86 +377,6 @@ func countGreenDominantPixels(img image.Image) int {
 		}
 	}
 	return n
-}
-
-func hasGreenDominantPixelNearFraction(img image.Image, fraction, radius float64) bool {
-	return hasDominantPixelNearFraction(img, fraction, radius, "green")
-}
-
-func hasRedDominantPixelNearFraction(img image.Image, fraction, radius float64) bool {
-	return hasDominantPixelNearFraction(img, fraction, radius, "red")
-}
-
-func hasDominantPixelNearFraction(img image.Image, fraction, radius float64, want string) bool {
-	cx, cy := pointOnMeter(fraction, ringCenterR(meterActualOuterR, meterActualInnerR))
-	bounds := img.Bounds()
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			if math.Hypot(float64(x)-cx, float64(y)-cy) > radius {
-				continue
-			}
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			if c.A < 200 {
-				continue
-			}
-			r, g, b := int(c.R), int(c.G), int(c.B)
-			switch want {
-			case "green":
-				if g > 140 && g > r+35 && g > b+20 {
-					return true
-				}
-			case "red":
-				if r > 150 && r > g+40 && r > b+40 {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func countNeutralMarkerPixels(img image.Image) int {
-	bounds := img.Bounds()
-	var n int
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			if c.A < 200 {
-				continue
-			}
-			if c.R > 235 && c.G > 235 && c.B > 235 {
-				n++
-			}
-		}
-	}
-	return n
-}
-
-func neutralMarkerRadiusRange(img image.Image) (float64, float64, int) {
-	bounds := img.Bounds()
-	minR := math.Inf(1)
-	maxR := 0.0
-	var n int
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			if c.A < 120 || c.R <= 235 || c.G <= 235 || c.B <= 235 {
-				continue
-			}
-			r := math.Hypot(float64(x)-meterCenterX, float64(y)-meterCenterY)
-			if r < minR {
-				minR = r
-			}
-			if r > maxR {
-				maxR = r
-			}
-			n++
-		}
-	}
-	if n == 0 {
-		return 0, 0, 0
-	}
-	return minR, maxR, n
 }
 
 func redDominantRadiusRange(img image.Image) (float64, float64, int) {
