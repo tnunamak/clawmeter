@@ -162,7 +162,6 @@ func setupCmd(args []string) int {
 	}
 
 	if *allFlag {
-		*tmuxFlag = true
 		*claudeFlag = true
 	}
 	if *tmuxFlag || *claudeFlag {
@@ -185,9 +184,9 @@ func setupCmd(args []string) int {
 	fmt.Println("Install supported local integrations:")
 	fmt.Println("  clawmeter setup --all")
 	fmt.Println()
-	fmt.Println("Install individual integrations:")
-	fmt.Println("  clawmeter setup --tmux")
+	fmt.Println("Install individual or advanced integrations:")
 	fmt.Println("  clawmeter setup --claude-statusline")
+	fmt.Println("  clawmeter setup --tmux")
 	fmt.Println()
 	fmt.Println("Start surfaces:")
 	fmt.Println("  clawmeter tray --install")
@@ -558,7 +557,7 @@ Examples:
   clawmeter status --agent           # Precise agent-readable summary
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
-  clawmeter setup --all              # Install tmux and Claude Code integrations
+  clawmeter setup --all              # Install mainstream local integrations
   clawmeter config enable openai     # Enable OpenAI provider
   clawmeter providers                # List available providers`)
 }

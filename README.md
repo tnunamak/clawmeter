@@ -41,7 +41,7 @@ clawmeter setup --all
 clawmeter doctor
 ```
 
-Setup installs the supported local surfaces it can verify: a tmux status segment when run inside tmux, and a Claude Code statusline. It also leaves every agent with the same cheap pull command: `clawmeter status --agent`.
+Setup installs the mainstream local surface Clawmeter can verify today: a Claude Code statusline. Every agent can also pull the same cheap quota summary with `clawmeter status --agent`.
 
 ## Why Use It
 
@@ -81,9 +81,9 @@ Useful commands:
 clawmeter providers      # detected providers and auth status
 clawmeter claude         # one provider
 clawmeter --json         # machine-readable output
-clawmeter statusline     # compact shell/tmux/Claude statusline segment
+clawmeter statusline     # compact Claude/statusline segment
 clawmeter status --agent # precise, token-efficient summary for AI agents
-clawmeter setup --all    # install tmux and Claude Code integrations
+clawmeter setup --all    # install mainstream local integrations
 clawmeter doctor         # provider and integration readiness
 clawmeter --check        # monitoring exit code
 clawmeter update         # self-update
@@ -108,17 +108,22 @@ Unavailable providers stay hidden by default. Use `clawmeter --all` to see every
 ## Details
 
 <details>
-<summary>Agent and terminal integrations</summary>
+<summary>Agent integrations</summary>
 
 ```bash
 clawmeter setup --all
-clawmeter setup --tmux
 clawmeter setup --claude-statusline
 clawmeter setup --dry-run --all
 clawmeter doctor
 ```
 
-`clawmeter statusline` is cache-only, so tmux and Claude Code can call it frequently without refreshing provider APIs or burning quota. `clawmeter status --agent` is the high-precision pull command for Codex, Claude, Gemini CLI, or any other agent when quota context is useful.
+`clawmeter statusline` is cache-only, so Claude Code can call it frequently without refreshing provider APIs or burning quota. `clawmeter status --agent` is the high-precision pull command for Codex, Claude, Gemini CLI, or any other agent when quota context is useful.
+
+tmux users can opt in explicitly:
+
+```bash
+clawmeter setup --tmux
+```
 
 </details>
 

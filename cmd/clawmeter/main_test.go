@@ -133,3 +133,19 @@ func TestProvidersList_DistinguishesDisabledFromDetected(t *testing.T) {
 		t.Errorf("expected 'disabled' in output: %s", stdout)
 	}
 }
+
+func TestSetupAllDoesNotInstallTmuxByDefault(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+
+	stdout, stderr, code := runWithHome(t, bin, home, "setup", "--dry-run", "--all")
+	if code != 0 {
+		t.Fatalf("setup --all: exit %d (%s)", code, stderr)
+	}
+	if strings.Contains(stdout, "tmux:") {
+		t.Fatalf("setup --all should not include tmux by default: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Claude Code statusline") {
+		t.Fatalf("setup --all should include Claude Code statusline: %s", stdout)
+	}
+}
