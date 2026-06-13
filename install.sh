@@ -598,14 +598,21 @@ fi
 
 if [ "$DO_START" = "1" ]; then
   say "Starting ${BINARY} tray..."
-  nohup "${INSTALL_DIR}/${BINARY}" tray >/dev/null 2>&1 &
+  _tray_log="${XDG_CACHE_HOME:-${HOME}/.cache}/clawmeter/tray.log"
+  mkdir -p "$(dirname "$_tray_log")"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${INSTALL_DIR}/${BINARY}" tray </dev/null >"$_tray_log" 2>&1 &
+  else
+    nohup "${INSTALL_DIR}/${BINARY}" tray </dev/null >"$_tray_log" 2>&1 &
+  fi
   _tray_pid=$!
-  sleep 1
+  sleep 5
   if kill -0 "$_tray_pid" 2>/dev/null; then
     say "Tray started for this session."
   else
-    err "tray exited immediately after launch"
+    err "tray exited after launch"
     err "try running '${INSTALL_DIR}/${BINARY} tray' from a terminal to see the error"
+    err "startup log: ${_tray_log}"
     exit 1
   fi
 fi

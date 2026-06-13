@@ -285,9 +285,9 @@ try {
     if ($Start) {
         DoStep "start clawmeter tray" {
             $proc = Start-Process -FilePath $ExePath -ArgumentList "tray" -WindowStyle Hidden -PassThru
-            Start-Sleep -Seconds 1
+            Start-Sleep -Seconds 5
             if ($proc.HasExited) {
-                throw "tray exited immediately after launch; run `"$ExePath`" tray from PowerShell to see the error"
+                throw "tray exited after launch; run `"$ExePath`" tray from PowerShell to see the error"
             }
             Say "Tray started for this session."
         }
