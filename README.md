@@ -34,6 +34,14 @@ powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://raw.githubus
 
 Or download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest).
 
+Then run:
+
+```bash
+clawmeter setup
+```
+
+It prints the tray, Claude Code statusline, tmux, and agent-readable setup snippets for your machine.
+
 ## Why Use It
 
 - See your riskiest quota without opening provider dashboards.
@@ -72,6 +80,10 @@ Useful commands:
 clawmeter providers      # detected providers and auth status
 clawmeter claude         # one provider
 clawmeter --json         # machine-readable output
+clawmeter statusline     # compact shell/tmux/Claude statusline segment
+clawmeter status --agent # precise, token-efficient summary for AI agents
+clawmeter setup          # integration setup snippets
+clawmeter doctor         # provider and integration readiness
 clawmeter --check        # monitoring exit code
 clawmeter update         # self-update
 clawmeter tray           # run the tray

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,74 @@ func (p cliStubProvider) DashboardURL() string { return "" }
 func (p cliStubProvider) IsConfigured() bool   { return true }
 func (p cliStubProvider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	return nil, nil
+}
+
+func TestAgentSummaryKeepsExactBoundarySeconds(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "openai",
+			Display: "OpenAI",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 99, ResetsAt: now.Add(59 * time.Second)},
+			}},
+		},
+	}}
+
+	got := output.AgentSummary()
+	for _, want := range []string{
+		"Quota: worst=OpenAI 7d",
+		"current=99%",
+		"reset_in_seconds=",
+		"reset_in=59s",
+		"status=tight",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestFormatPrecisePctUsesMoreDecimalsNearBoundaries(t *testing.T) {
+	tests := []struct {
+		pct  float64
+		want string
+	}{
+		{26, "26%"},
+		{67.891, "67.9%"},
+		{89.92, "89.92%"},
+		{99, "99%"},
+		{99.02, "99.02%"},
+		{0.42, "0.42%"},
+	}
+	for _, tt := range tests {
+		if got := formatPrecisePct(tt.pct); got != tt.want {
+			t.Fatalf("formatPrecisePct(%v) = %q, want %q", tt.pct, got, tt.want)
+		}
+	}
+}
+
+func TestStatusLineSummaryIsCompact(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "claude",
+			Display: "Claude",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
+			}},
+		},
+	}}
+
+	got := output.StatusLineSummary()
+	for _, want := range []string{"CM", "Claude", "5h", "est.", "reset"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("StatusLineSummary() = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "reset_in_seconds") {
+		t.Fatalf("StatusLineSummary() should stay human compact, got %q", got)
+	}
 }
 
 func TestClassifyProvider(t *testing.T) {

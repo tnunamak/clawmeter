@@ -43,6 +43,12 @@ func run() int {
 	switch os.Args[1] {
 	case "status":
 		return statusCmd(os.Args[2:])
+	case "statusline":
+		return statuslineCmd(os.Args[2:])
+	case "setup":
+		return setupCmd(os.Args[2:])
+	case "doctor":
+		return doctorCmd(os.Args[2:])
 	case "tray":
 		return trayCmd(os.Args[2:])
 	case "config":
@@ -83,6 +89,7 @@ func statusCmd(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	jsonMode := fs.Bool("json", false, "output JSON")
 	plainMode := fs.Bool("plain", false, "plain text (no color)")
+	agentMode := fs.Bool("agent", false, "token-efficient summary for AI agents")
 	checkMode := fs.Bool("check", false, "exit 0=healthy, 1=warning, 2=critical/expired/error")
 	providerFlag := fs.String("provider", "", "show only specific provider")
 	showAll := fs.Bool("all", false, "show all providers including unavailable ones")
@@ -91,10 +98,20 @@ func statusCmd(args []string) int {
 	if *checkMode {
 		return cli.Check()
 	}
+	if *agentMode {
+		return cli.StatusAgent(*showAll)
+	}
 	if *providerFlag != "" {
 		return cli.SingleProviderStatus(*providerFlag, *jsonMode, *plainMode)
 	}
 	return cli.Status(*jsonMode, *plainMode, *showAll)
+}
+
+func statuslineCmd(args []string) int {
+	fs := flag.NewFlagSet("statusline", flag.ExitOnError)
+	showAll := fs.Bool("all", false, "include unavailable providers")
+	fs.Parse(args)
+	return cli.StatusLine(*showAll)
 }
 
 func providerCmd(providerName string, args []string) int {
@@ -130,6 +147,49 @@ func trayCmd(args []string) int {
 	}
 
 	return tray.Run(Version)
+}
+
+func setupCmd(args []string) int {
+	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	fs.Parse(args)
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "clawmeter: setup does not take arguments yet\n")
+		return 1
+	}
+
+	fmt.Println("Clawmeter setup")
+	fmt.Println()
+	fmt.Println("1. Start the tray")
+	fmt.Println("   clawmeter tray --install")
+	fmt.Println()
+	fmt.Println("2. Add a Claude Code statusline")
+	fmt.Println(`   {"statusLine":{"type":"command","command":"clawmeter statusline"}}`)
+	fmt.Println()
+	fmt.Println("3. Add a tmux status segment")
+	fmt.Println(`   set -g status-right "#(clawmeter statusline)  %H:%M"`)
+	fmt.Println()
+	fmt.Println("4. Give agents a cheap pull command")
+	fmt.Println("   clawmeter status --agent")
+	fmt.Println()
+	fmt.Println("Run `clawmeter doctor` to check provider auth and integration readiness.")
+	return 0
+}
+
+func doctorCmd(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	fs.Parse(args)
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "clawmeter: doctor does not take arguments yet\n")
+		return 1
+	}
+
+	fmt.Println("Clawmeter doctor")
+	fmt.Println()
+	providersCmd(nil)
+	fmt.Println("Integration commands:")
+	fmt.Println("  statusline: clawmeter statusline")
+	fmt.Println("  agent:      clawmeter status --agent")
+	return 0
 }
 
 func configCmd(args []string) int {
@@ -438,8 +498,11 @@ func printHelp(w io.Writer) {
 
 Commands:
   status                    Show usage for all configured providers (default)
+  statusline                Print a compact statusline segment
   <provider>                Show usage for a specific provider
   providers                 List available providers
+  setup                     Show integration setup snippets
+  doctor                    Check provider and integration readiness
   tray                      Run as system tray icon
   config                    Manage configuration
   update                    Self-update to the latest release
@@ -449,6 +512,7 @@ Commands:
 Status flags:
   --json                    Output as JSON
   --plain                   Plain text, no color codes
+  --agent                   Token-efficient summary for AI agents
   --check                   Exit 0=healthy, 1=warning, 2=critical/error
   --provider <name>         Show only specific provider
 
@@ -464,8 +528,11 @@ Tray flags:
 
 Examples:
   clawmeter                          # Show all providers
+  clawmeter statusline               # Compact shell/tmux/statusline segment
+  clawmeter status --agent           # Precise agent-readable summary
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
+  clawmeter setup                    # Show integration snippets
   clawmeter config enable openai     # Enable OpenAI provider
   clawmeter providers                # List available providers`)
 }

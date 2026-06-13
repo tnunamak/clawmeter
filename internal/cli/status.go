@@ -245,6 +245,144 @@ func (m *MultiProviderOutput) PrintPlain() {
 	}
 }
 
+// StatusLineSummary returns a compact, human-facing status segment for shell,
+// tmux, terminal title, and harness statusline integrations.
+func (m *MultiProviderOutput) StatusLineSummary() string {
+	pf, window, proj, ok := m.worstReadableWindow()
+	if !ok {
+		return "CM no quota data"
+	}
+
+	prefix := "CM"
+	if proj.ProjectedPct >= 100 {
+		prefix = "CM!"
+	} else if proj.ProjectedPct >= 90 {
+		prefix = "CM~"
+	}
+
+	resetIn := time.Until(window.ResetsAt)
+	line := fmt.Sprintf("%s %s %s est. %.0f%% reset %s",
+		prefix, pf.Display, window.Name, proj.ProjectedPct, format.FormatDuration(resetIn))
+	if !proj.WillLastToReset && proj.RunsOutIn > 0 {
+		line += " out " + format.FormatDuration(proj.RunsOutIn)
+	}
+	return line
+}
+
+// AgentSummary returns a token-efficient but precise status for AI agents.
+// It keeps exact seconds near boundaries so a tiny slice of a 7-day window is
+// still visible to the agent.
+func (m *MultiProviderOutput) AgentSummary() string {
+	pf, window, proj, ok := m.worstReadableWindow()
+	if !ok {
+		return "Quota: no active quota data. Run `clawmeter providers` if setup may be incomplete."
+	}
+
+	resetIn := clampDuration(time.Until(window.ResetsAt))
+	status := "on_track"
+	if proj.ProjectedPct >= 100 {
+		status = "at_risk"
+	} else if proj.ProjectedPct >= 90 {
+		status = "tight"
+	}
+
+	parts := []string{
+		fmt.Sprintf("Quota: worst=%s %s", pf.Display, window.Name),
+		fmt.Sprintf("current=%s", formatPrecisePct(window.Utilization)),
+		fmt.Sprintf("projected_at_reset=%s", formatPrecisePct(proj.ProjectedPct)),
+		fmt.Sprintf("reset_in_seconds=%d", int64(resetIn.Seconds())),
+		fmt.Sprintf("reset_in=%s", formatExactDuration(resetIn)),
+		"status=" + status,
+	}
+	if !proj.WillLastToReset {
+		if proj.RunsOutIn > 0 {
+			runsOutIn := clampDuration(proj.RunsOutIn)
+			parts = append(parts,
+				fmt.Sprintf("runs_out_in_seconds=%d", int64(runsOutIn.Seconds())),
+				"runs_out_in="+formatExactDuration(runsOutIn),
+			)
+		} else {
+			parts = append(parts, "runs_out=now")
+		}
+	}
+	if pf.Data != nil && pf.Data.Stale {
+		parts = append(parts, "data=stale")
+	}
+
+	return strings.Join(parts, "; ") + "."
+}
+
+func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provider.UsageWindow, forecast.Projection, bool) {
+	if len(m.Providers) == 0 {
+		return nil, provider.UsageWindow{}, forecast.Projection{}, false
+	}
+	sortProvidersByUrgency(m.Providers)
+
+	var bestPF *ProviderFormatter
+	var bestWindow provider.UsageWindow
+	var bestProj forecast.Projection
+	var bestTier = 5
+	var bestPct float64
+
+	for i := range m.Providers {
+		pf := &m.Providers[i]
+		if pf.Data == nil || pf.Data.IsExpired || (pf.Data.Error != "" && !pf.Data.HasUsageWindows()) {
+			continue
+		}
+		tier := classifyProvider(pf).tier
+		for _, window := range pf.Data.UsableWindows() {
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			if bestPF == nil || tier < bestTier || (tier == bestTier && proj.ProjectedPct > bestPct) {
+				bestPF = pf
+				bestWindow = window
+				bestProj = proj
+				bestTier = tier
+				bestPct = proj.ProjectedPct
+			}
+		}
+	}
+
+	if bestPF == nil {
+		return nil, provider.UsageWindow{}, forecast.Projection{}, false
+	}
+	return bestPF, bestWindow, bestProj, true
+}
+
+func clampDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return 0
+	}
+	return d.Round(time.Second)
+}
+
+func formatExactDuration(d time.Duration) string {
+	d = clampDuration(d)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int64(d.Seconds()))
+	}
+	return format.FormatDuration(d)
+}
+
+func formatPrecisePct(pct float64) string {
+	absPct := math.Abs(pct)
+	nearBoundary := math.Abs(pct-90) <= 1 || math.Abs(pct-100) <= 1
+	var s string
+	switch {
+	case absPct > 0 && absPct < 1:
+		s = fmt.Sprintf("%.2f", pct)
+	case nearBoundary:
+		s = fmt.Sprintf("%.2f", pct)
+	default:
+		s = fmt.Sprintf("%.1f", pct)
+	}
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	return s + "%"
+}
+
+func roundPct(pct float64) float64 {
+	return math.Round(pct*100) / 100
+}
+
 // JSONOutput represents the JSON structure for multi-provider output.
 type JSONOutput struct {
 	Providers map[string]*ProviderJSONOutput `json:"providers"`
@@ -307,7 +445,7 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 			for _, window := range windows {
 				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 				providerOut.Forecast.Windows[window.Name] = JSONProjection{
-					ProjectedPct: math.Round(proj.ProjectedPct),
+					ProjectedPct: roundPct(proj.ProjectedPct),
 					Indicator:    proj.Indicator(),
 				}
 			}
@@ -330,10 +468,39 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 
 // Status fetches and displays usage status for all configured providers.
 func Status(jsonMode, plainMode, showAll bool) int {
+	output, cacheEntry, code := loadStatusOutput(showAll)
+	if code != 0 {
+		return code
+	}
+	printOutput(output, jsonMode, plainMode, cacheEntry)
+	return 0
+}
+
+// StatusLine prints one compact line for statusline/prompt/tmux integrations.
+func StatusLine(showAll bool) int {
+	output, _, code := loadStatusOutput(showAll)
+	if code != 0 {
+		return code
+	}
+	fmt.Println(output.StatusLineSummary())
+	return 0
+}
+
+// StatusAgent prints one precise, token-efficient line for AI agents.
+func StatusAgent(showAll bool) int {
+	output, _, code := loadStatusOutput(showAll)
+	if code != 0 {
+		return code
+	}
+	fmt.Println(output.AgentSummary())
+	return 0
+}
+
+func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
-		return 1
+		return nil, nil, 1
 	}
 
 	// Create registry and register providers
@@ -351,8 +518,7 @@ func Status(jsonMode, plainMode, showAll bool) int {
 		if !showAll {
 			output.HideUnavailable()
 		}
-		printOutput(output, jsonMode, plainMode, cacheEntry)
-		return 0
+		return output, cacheEntry, 0
 	}
 
 	// Fetch fresh data from all configured providers
@@ -397,9 +563,8 @@ func Status(jsonMode, plainMode, showAll bool) int {
 	if !showAll {
 		output.HideUnavailable()
 	}
-	printOutput(output, jsonMode, plainMode, nil)
 
-	return 0
+	return output, nil, 0
 }
 
 func staleFallback(cacheEntry *cache.Entry, name, reason string) (*provider.UsageData, bool) {
