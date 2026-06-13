@@ -478,7 +478,7 @@ func Status(jsonMode, plainMode, showAll bool) int {
 
 // StatusLine prints one compact line for statusline/prompt/tmux integrations.
 func StatusLine(showAll bool) int {
-	output, _, code := loadStatusOutput(showAll)
+	output, code := loadCachedStatusOutput(showAll)
 	if code != 0 {
 		return code
 	}
@@ -565,6 +565,28 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 	}
 
 	return output, nil, 0
+}
+
+func loadCachedStatusOutput(showAll bool) (*MultiProviderOutput, int) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return nil, 1
+	}
+
+	registry := provider.NewRegistry()
+	all.Register(registry, cfg)
+
+	cacheEntry, err := cache.Read()
+	if err != nil || cacheEntry == nil {
+		return &MultiProviderOutput{}, 0
+	}
+
+	output := buildOutputFromCache(registry, cfg, cacheEntry)
+	if !showAll {
+		output.HideUnavailable()
+	}
+	return output, 0
 }
 
 func staleFallback(cacheEntry *cache.Entry, name, reason string) (*provider.UsageData, bool) {
