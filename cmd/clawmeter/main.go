@@ -151,27 +151,51 @@ func trayCmd(args []string) int {
 
 func setupCmd(args []string) int {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	allFlag := fs.Bool("all", false, "install supported local integrations")
+	tmuxFlag := fs.Bool("tmux", false, "install tmux status-right integration")
+	claudeFlag := fs.Bool("claude-statusline", false, "install Claude Code statusline integration")
+	dryRun := fs.Bool("dry-run", false, "show changes without writing files or tmux settings")
 	fs.Parse(args)
 	if fs.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "clawmeter: setup does not take arguments yet\n")
+		fmt.Fprintf(os.Stderr, "clawmeter: setup does not take positional arguments\n")
 		return 1
+	}
+
+	if *allFlag {
+		*tmuxFlag = true
+		*claudeFlag = true
+	}
+	if *tmuxFlag || *claudeFlag {
+		fmt.Println("Clawmeter setup")
+		fmt.Println()
+		if *tmuxFlag {
+			printIntegrationResult(setupTmuxIntegration(*dryRun))
+		}
+		if *claudeFlag {
+			printIntegrationResult(setupClaudeStatuslineIntegration(*dryRun))
+		}
+		fmt.Println()
+		fmt.Println("Agent pull command: clawmeter status --agent")
+		fmt.Println("Run `clawmeter doctor` to verify provider auth and integrations.")
+		return 0
 	}
 
 	fmt.Println("Clawmeter setup")
 	fmt.Println()
-	fmt.Println("1. Start the tray")
-	fmt.Println("   clawmeter tray --install")
+	fmt.Println("Install supported local integrations:")
+	fmt.Println("  clawmeter setup --all")
 	fmt.Println()
-	fmt.Println("2. Add a Claude Code statusline")
-	fmt.Println(`   {"statusLine":{"type":"command","command":"clawmeter statusline"}}`)
+	fmt.Println("Install individual integrations:")
+	fmt.Println("  clawmeter setup --tmux")
+	fmt.Println("  clawmeter setup --claude-statusline")
 	fmt.Println()
-	fmt.Println("3. Add a tmux status segment")
-	fmt.Println(`   set -g status-right "#(clawmeter statusline)  %H:%M"`)
+	fmt.Println("Start surfaces:")
+	fmt.Println("  clawmeter tray --install")
+	fmt.Println("  clawmeter statusline")
+	fmt.Println("  clawmeter status --agent")
 	fmt.Println()
-	fmt.Println("4. Give agents a cheap pull command")
-	fmt.Println("   clawmeter status --agent")
-	fmt.Println()
-	fmt.Println("Run `clawmeter doctor` to check provider auth and integration readiness.")
+	fmt.Println("Use `--dry-run` to preview setup writes.")
+	fmt.Println("Run `clawmeter doctor` to verify provider auth and integrations.")
 	return 0
 }
 
@@ -179,16 +203,18 @@ func doctorCmd(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	fs.Parse(args)
 	if fs.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "clawmeter: doctor does not take arguments yet\n")
+		fmt.Fprintf(os.Stderr, "clawmeter: doctor does not take positional arguments\n")
 		return 1
 	}
 
 	fmt.Println("Clawmeter doctor")
 	fmt.Println()
 	providersCmd(nil)
-	fmt.Println("Integration commands:")
-	fmt.Println("  statusline: clawmeter statusline")
-	fmt.Println("  agent:      clawmeter status --agent")
+	fmt.Println("Integrations:")
+	printIntegrationResult(tmuxIntegrationStatus())
+	printIntegrationResult(claudeStatuslineStatus())
+	fmt.Println("  statusline command:      clawmeter statusline")
+	fmt.Println("  agent pull command:      clawmeter status --agent")
 	return 0
 }
 
@@ -501,7 +527,7 @@ Commands:
   statusline                Print a compact statusline segment
   <provider>                Show usage for a specific provider
   providers                 List available providers
-  setup                     Show integration setup snippets
+  setup                     Install or show local integrations
   doctor                    Check provider and integration readiness
   tray                      Run as system tray icon
   config                    Manage configuration
@@ -532,7 +558,7 @@ Examples:
   clawmeter status --agent           # Precise agent-readable summary
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
-  clawmeter setup                    # Show integration snippets
+  clawmeter setup --all              # Install tmux and Claude Code integrations
   clawmeter config enable openai     # Enable OpenAI provider
   clawmeter providers                # List available providers`)
 }

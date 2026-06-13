@@ -37,10 +37,11 @@ Or download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest 
 Then run:
 
 ```bash
-clawmeter setup
+clawmeter setup --all
+clawmeter doctor
 ```
 
-It prints the tray, Claude Code statusline, tmux, and agent-readable setup snippets for your machine.
+Setup installs the supported local surfaces it can verify: a tmux status segment when run inside tmux, and a Claude Code statusline. It also leaves every agent with the same cheap pull command: `clawmeter status --agent`.
 
 ## Why Use It
 
@@ -82,7 +83,7 @@ clawmeter claude         # one provider
 clawmeter --json         # machine-readable output
 clawmeter statusline     # compact shell/tmux/Claude statusline segment
 clawmeter status --agent # precise, token-efficient summary for AI agents
-clawmeter setup          # integration setup snippets
+clawmeter setup --all    # install tmux and Claude Code integrations
 clawmeter doctor         # provider and integration readiness
 clawmeter --check        # monitoring exit code
 clawmeter update         # self-update
@@ -105,6 +106,21 @@ clawmeter tray           # run the tray
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 
 ## Details
+
+<details>
+<summary>Agent and terminal integrations</summary>
+
+```bash
+clawmeter setup --all
+clawmeter setup --tmux
+clawmeter setup --claude-statusline
+clawmeter setup --dry-run --all
+clawmeter doctor
+```
+
+`clawmeter statusline` is cache-only, so tmux and Claude Code can call it frequently without refreshing provider APIs or burning quota. `clawmeter status --agent` is the high-precision pull command for Codex, Claude, Gemini CLI, or any other agent when quota context is useful.
+
+</details>
 
 <details>
 <summary>Install options</summary>
