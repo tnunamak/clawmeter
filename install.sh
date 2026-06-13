@@ -599,7 +599,15 @@ fi
 if [ "$DO_START" = "1" ]; then
   say "Starting ${BINARY} tray..."
   nohup "${INSTALL_DIR}/${BINARY}" tray >/dev/null 2>&1 &
-  say "Tray started for this session."
+  _tray_pid=$!
+  sleep 1
+  if kill -0 "$_tray_pid" 2>/dev/null; then
+    say "Tray started for this session."
+  else
+    err "tray exited immediately after launch"
+    err "try running '${INSTALL_DIR}/${BINARY} tray' from a terminal to see the error"
+    exit 1
+  fi
 fi
 
 # --- Closing guidance ---
