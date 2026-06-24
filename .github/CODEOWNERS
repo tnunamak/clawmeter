@@ -1,0 +1,4 @@
+# SignPath policy and release signing changes require owner review.
+/.signpath/ @tnunamak
+/.github/workflows/semantic-release.yml @tnunamak
+/packaging/windows/ @tnunamak

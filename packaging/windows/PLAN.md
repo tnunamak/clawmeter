@@ -1,32 +1,30 @@
 # Windows Distribution Plan
 
-This is the release path for Windows:
+Windows should feel like a normal desktop product, not a developer script.
 
-1. Direct installer first: `ClawmeterSetup.exe` from the GitHub release.
-2. WinGet second: `winget install --id tnunamak.Clawmeter -e`, installing the same setup exe after Microsoft accepts the package.
-3. Portable fallback: `clawmeter-windows-amd64.exe` for advanced/manual use.
-4. Signing next: Authenticode-sign the portable exe, setup exe, and uninstaller; then build SmartScreen reputation.
+Preferred user journey:
 
-## Product Contract
+1. Direct installer first: download `ClawmeterSetup.exe` from the GitHub release.
+2. WinGet second: `winget install --id tnunamak.Clawmeter -e` after Microsoft accepts the package.
+3. Portable fallback: download `clawmeter-windows-amd64.exe` for locked-down machines and debugging.
+4. Signing next: apply to SignPath Foundation first, then Authenticode-sign Windows release artifacts and build reputation.
 
-`ClawmeterSetup.exe` is the normal Windows product. It must:
+## Installer Requirements
 
-- install per-user into `%LOCALAPPDATA%\Programs\Clawmeter`;
-- create a Start Menu shortcut that launches `clawmeter tray`;
-- put `clawmeter` on the user `PATH`;
-- register a normal uninstall entry;
-- offer launch-at-login as an opt-in installer task;
-- launch the tray after interactive installs only;
-- avoid terminal flashes from tray menu actions;
-- uninstall cleanly, including shortcut, Run key, and PATH cleanup.
+The installer must:
 
-WinGet is a distribution channel for that same installer, not a separate product shape. The portable exe is intentionally less polished and must remain documented as fallback/advanced use.
+- Install per-user into `%LOCALAPPDATA%\Programs\Clawmeter`.
+- Create a Start Menu shortcut for `clawmeter tray`.
+- Put `clawmeter` on the user `PATH`.
+- Register an uninstall entry.
+- Offer launch-at-login as an opt-in installer task.
+- Launch the tray after interactive installs.
+- Avoid terminal flashes for tray actions such as Refresh Now.
+- Clean up the shortcut, Run key, PATH entry, and install directory on uninstall.
 
-## Release Gates
+WinGet is a distribution channel for the same installer, not a separate product shape. The portable exe is intentionally less polished and must stay documented as an advanced fallback.
 
-### 1. Direct Installer
-
-Run on every PR/main build:
+## Local Installer Build
 
 ```powershell
 go build -tags tray -o C:\temp\clawmeter.exe .\cmd\clawmeter
@@ -35,7 +33,9 @@ choco install innosetup --no-progress -y
 .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup
 ```
 
-Before publishing a release, verify the final release asset in a clean Windows VM:
+## Release Verification
+
+Before publishing or updating WinGet, verify the final public release asset in a clean Windows VM:
 
 ```powershell
 $version = "0.22.0"
@@ -44,22 +44,21 @@ Invoke-WebRequest "$base/ClawmeterSetup.exe" -OutFile ClawmeterSetup.exe
 Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile SHA256SUMS.txt
 Get-FileHash .\ClawmeterSetup.exe -Algorithm SHA256
 Select-String -Path .\SHA256SUMS.txt -Pattern "ClawmeterSetup.exe"
-.\ClawmeterSetup.exe
 ```
 
-Interactive VM checklist:
+VM checklist:
 
-- The installer wizard opens without PowerShell/download-command ceremony.
-- The publisher/trust prompt is understood for current unsigned builds.
-- The default install creates `%LOCALAPPDATA%\Programs\Clawmeter\clawmeter.exe`.
-- The Start Menu shortcut launches the tray.
+- Installer wizard opens without a PowerShell download command.
+- Publisher/trust prompt is understandable for unsigned builds, and Authenticode details are visible after signing is active.
+- Default install creates `%LOCALAPPDATA%\Programs\Clawmeter\clawmeter.exe`.
+- Start Menu shortcut launches the tray.
 - A new PowerShell can run `clawmeter providers`.
 - Bare `clawmeter` produces useful output when piped: `clawmeter | Tee-Object clawmeter.log`.
-- `Refresh Now` does not visibly flash a terminal window.
+- Refresh Now does not visibly flash a terminal window.
 - Launch-at-login can be enabled and disabled from the tray.
-- Uninstall removes the install dir executable, Start Menu shortcut, startup Run key, and PATH entry.
+- Uninstall removes install directory executable, Start Menu shortcut, startup Run key, and PATH entry.
 
-### 2. WinGet
+## WinGet
 
 Local rehearsal before or immediately after release upload:
 
@@ -73,15 +72,13 @@ On Windows with local manifest mode:
 ```powershell
 $version = "0.22.0"
 $manifest = ".\packaging\winget\out\manifests\t\tnunamak\Clawmeter\$version"
-winget validate --manifest $manifest --disable-interactivity
-winget settings --enable LocalManifestFiles
-winget install --manifest $manifest --silent --accept-source-agreements --accept-package-agreements
-winget list --id tnunamak.Clawmeter -e
+winget validate --manifest $manifest --disable-interactivity --enable LocalManifestFiles
+winget install --manifest $manifest --silent tnunamak.Clawmeter -e
 clawmeter providers
 winget uninstall --id tnunamak.Clawmeter -e
 ```
 
-Before opening/updating the WinGet PR, CI must verify that the public release URL bytes match the local installer used to generate the manifest hash:
+Before opening or updating the WinGet PR, CI must verify that the public release URL bytes match the installer used to generate the manifest hash:
 
 ```bash
 tag="vX.Y.Z"
@@ -99,14 +96,9 @@ clawmeter providers
 winget uninstall --id tnunamak.Clawmeter -e
 ```
 
-Expected PR behavior:
+PR behavior: the first accepted submission is `New package`; later releases become `New version`. Red closed PRs in `microsoft/winget-pkgs` are rejected, superseded, or abandoned; accepted PRs merge. `wingetbot` validation runs in Azure DevOps, not GitHub Actions, so GitHub may show little beyond CLA status.
 
-- First accepted submission is `New package`.
-- Later releases become `New version`.
-- Red closed PRs in `microsoft/winget-pkgs` are rejected/superseded/abandoned; accepted PRs merge purple.
-- `wingetbot` validation runs in Azure DevOps, not GitHub Actions, so GitHub may show little beyond CLA status.
-
-### 3. Portable Fallback
+## Portable Fallback
 
 The portable exe remains useful for locked-down machines and debugging. It is not the recommended Windows onboarding path.
 
@@ -119,26 +111,42 @@ Get-FileHash .\clawmeter.exe -Algorithm SHA256
 
 Portable verification should prove the exe runs and reads existing credentials, but it does not need Start Menu, PATH, launch-at-login, or uninstall behavior.
 
-### 4. Signing
+## SignPath Foundation Signing
 
-Signing is next after the installer/WinGet path is stable.
+Apply to SignPath Foundation first. Until accepted and configured, Windows artifacts remain unsigned and the release workflow must keep publishing normal unsigned artifacts.
 
-Repo support:
+Repo collateral for the application:
 
-- `packaging/windows/clawmeter.iss` accepts `AppSignTool`.
-- `packaging/windows/build-inno.ps1` accepts `-SignToolName`, `-SignToolCommand`, and `-SignToolParameters`.
-- When signing is enabled, Inno signs the setup exe, the uninstaller, and the bundled `clawmeter.exe`.
+- [Code signing policy](../../docs/code-signing.md)
+- [Privacy policy](../../PRIVACY.md)
+- [Security policy](../../SECURITY.md)
+- [Third-party components](../../docs/third-party-components.md)
+- `.signpath/artifact-configurations/windows-release.xml`
+- `.signpath/policies/clawmeter/release-signing.yml`
+- `.github/CODEOWNERS`
 
-Example local shape, with certificate paths supplied outside the repo:
+GitHub configuration after SignPath acceptance:
 
-```powershell
-.\packaging\windows\build-inno.ps1 `
-  -BinaryPath C:\temp\clawmeter-windows-amd64.exe `
-  -Version vX.Y.Z `
-  -OutputDir C:\temp `
-  -SignToolName clawmeterSignTool `
-  -SignToolCommand 'signtool.exe sign /a $p'
-```
+- Secret: `SIGNPATH_API_TOKEN`
+- Variable: `SIGNPATH_ENABLED=true`
+- Variable: `SIGNPATH_ORGANIZATION_ID`
+- Variable: `SIGNPATH_PROJECT_SLUG`
+- Variable: `SIGNPATH_SIGNING_POLICY_SLUG`
+- Variable: `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG`
+
+The release workflow intentionally requires `SIGNPATH_ENABLED=true`. If that variable is unset or false, releases stay unsigned. If it is true and any required SignPath setting is missing, the release fails instead of silently publishing unsigned Windows artifacts.
+
+Signing flow:
+
+1. Build unsigned `clawmeter-windows-amd64.exe`.
+2. Build unsigned `ClawmeterSetup.exe`.
+3. Upload both files as a GitHub Actions artifact.
+4. Submit that artifact to `SignPath/github-action-submit-signing-request@v2`.
+5. Wait for signing completion and replace the Windows artifacts with signed outputs.
+6. Generate WinGet manifest bundle and `SHA256SUMS.txt` after signing.
+7. Upload final artifacts to the GitHub release.
+
+The SignPath ZIP artifact configuration signs the portable exe and setup exe. The existing Inno Setup signing hooks remain useful if a local or remote signing tool is used later for deeper installer/uninstaller signing; do not claim the SignPath artifact configuration signs the generated Inno uninstaller unless that has been verified.
 
 Signing verification:
 
@@ -150,13 +158,11 @@ signtool verify /pa /tw /v .\ClawmeterSetup.exe
 .\packaging\windows\verify-installer.ps1 -InstallerPath .\ClawmeterSetup.exe -IncludeStartup -ExpectSigned
 ```
 
-Checksums and WinGet manifest generation must happen after signing, because signing mutates artifact bytes.
+SmartScreen verification is separate from signature validity. Test from a clean Windows VM using the public GitHub release URL with Defender SmartScreen enabled. A valid signature proves publisher identity and artifact integrity; reputation improves only after enough signed downloads and installs are trusted by Windows.
 
-SmartScreen verification is separate from signature validity. Test it from a clean Windows VM using the public GitHub release URL with Defender SmartScreen enabled. A valid signature proves identity and file integrity; reputation improves only after enough signed downloads/installs are trusted by Windows.
-
-## Do Not Ship
+## Do Not
 
 - Do not make `install.ps1` the primary Windows install path.
-- Do not advertise WinGet as available until the package is accepted in the default source.
-- Do not publish public issues/comments containing local token, secret, or agent configuration details.
+- Do not advertise WinGet as available until the package is accepted.
+- Do not publish public issues or comments containing local token, secret, or agent configuration details.
 - Do not generate `SHA256SUMS.txt` or WinGet manifests before signing when signing is enabled.

@@ -7,3 +7,6 @@ llm-*.md
 
 # Generated WinGet manifests
 packaging/winget/out/
+
+# Generated Windows version/icon resource
+cmd/clawmeter/rsrc_windows_amd64.syso

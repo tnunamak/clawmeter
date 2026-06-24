@@ -6,6 +6,7 @@ on:
       - main
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
 
@@ -99,6 +100,12 @@ jobs:
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
+      - name: Build Windows version resource
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          .\packaging\windows\build-version-resource.ps1 -Version "${{ needs.release.outputs.tag }}"
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -156,6 +163,82 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Detect SignPath configuration
+        id: signpath
+        env:
+          SIGNPATH_ENABLED: ${{ vars.SIGNPATH_ENABLED }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+        run: |
+          tag="${{ needs.release.outputs.tag }}"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          if [ "${SIGNPATH_ENABLED:-false}" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping SignPath signing because SIGNPATH_ENABLED is not true."
+            exit 0
+          fi
+          missing=()
+          for name in \
+            SIGNPATH_API_TOKEN \
+            SIGNPATH_ORGANIZATION_ID \
+            SIGNPATH_PROJECT_SLUG \
+            SIGNPATH_SIGNING_POLICY_SLUG \
+            SIGNPATH_ARTIFACT_CONFIGURATION_SLUG; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::SIGNPATH_ENABLED is true but required SignPath configuration is missing: ${missing[*]}"
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare SignPath Windows artifact
+        if: steps.signpath.outputs.enabled == 'true'
+        run: |
+          rm -rf signpath-input signpath-output
+          mkdir -p signpath-input
+          cp artifacts/clawmeter-windows-amd64.exe signpath-input/
+          cp artifacts/ClawmeterSetup.exe signpath-input/
+
+      - name: Upload SignPath Windows artifact
+        if: steps.signpath.outputs.enabled == 'true'
+        id: upload-signpath-windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: clawmeter-windows-unsigned
+          path: signpath-input/*
+
+      - name: Submit SignPath signing request
+        if: steps.signpath.outputs.enabled == 'true'
+        uses: SignPath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-signpath-windows.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1800
+          output-artifact-directory: signpath-output
+          parameters: |
+            version: "${{ steps.signpath.outputs.version }}"
+
+      - name: Replace Windows artifacts with SignPath-signed artifacts
+        if: steps.signpath.outputs.enabled == 'true'
+        run: |
+          signed_setup="$(find signpath-output -name ClawmeterSetup.exe -type f -print -quit)"
+          signed_portable="$(find signpath-output -name clawmeter-windows-amd64.exe -type f -print -quit)"
+          test -n "$signed_setup"
+          test -n "$signed_portable"
+          cp "$signed_setup" artifacts/ClawmeterSetup.exe
+          cp "$signed_portable" artifacts/clawmeter-windows-amd64.exe
+
       - name: Generate WinGet manifest bundle
         run: |
           tag="${{ needs.release.outputs.tag }}"
@@ -169,6 +252,28 @@ jobs:
         run: |
           cd artifacts
           sha256sum * > SHA256SUMS.txt
+
+      - name: Add Windows distribution release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes="$(mktemp)"
+          gh release view "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --json body --jq '.body // ""' > "$notes"
+          {
+            echo ""
+            echo "## Windows distribution"
+            echo ""
+            echo "Windows artifacts are built by GitHub Actions from public repository commit \`${{ github.sha }}\`."
+            echo "Verify downloaded artifacts against \`SHA256SUMS.txt\` from this release."
+            if [ "${{ steps.signpath.outputs.enabled }}" = "true" ]; then
+              echo "Windows \`.exe\` artifacts were signed through SignPath before checksums and WinGet metadata were generated."
+            else
+              echo "Windows \`.exe\` artifacts are unsigned in this release; SignPath Foundation signing is not active yet."
+            fi
+            echo "Code signing policy: https://github.com/${{ github.repository }}/blob/main/docs/code-signing.md"
+            echo "Privacy policy: https://github.com/${{ github.repository }}/blob/main/PRIVACY.md"
+          } >> "$notes"
+          gh release edit "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --notes-file "$notes"
 
       - name: Upload release assets
         env:

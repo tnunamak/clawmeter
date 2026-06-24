@@ -30,6 +30,8 @@ Windows:
 
 Download `ClawmeterSetup.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), verify it with `SHA256SUMS.txt`, then run the installer. It creates a Start Menu tray shortcut, adds `clawmeter` to your user `PATH`, and includes an uninstall entry.
 
+Windows code signing is being prepared through SignPath Foundation. See the [Code signing policy](docs/code-signing.md).
+
 ```powershell
 clawmeter providers
 ```
@@ -231,4 +233,4 @@ Tray builds require CGO. Linux also needs `libayatana-appindicator3-dev`.
 
 ## How It Works
 
-Clawmeter reads existing credentials from your AI coding tools and queries their usage APIs. Results are cached at `~/.cache/clawmeter/usage.json` for 60 seconds, so the CLI and tray do not hammer provider APIs.
+Clawmeter reads existing credentials from your AI coding tools and queries their usage APIs. Results are cached at `~/.cache/clawmeter/usage.json` for 60 seconds, so the CLI and tray do not hammer provider APIs. See [Privacy Policy](PRIVACY.md), [Security Policy](SECURITY.md), and [Third-party components](docs/third-party-components.md).

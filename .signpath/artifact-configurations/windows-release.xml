@@ -1,0 +1,23 @@
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="clawmeter-windows-amd64.exe"
+             product-name="Clawmeter"
+             product-version="${version}"
+             file-version="${version}"
+             company-name="Tim Nunamaker"
+             original-filename="clawmeter.exe">
+      <authenticode-sign/>
+    </pe-file>
+    <pe-file path="ClawmeterSetup.exe"
+             product-name="Clawmeter"
+             product-version="${version}"
+             file-version="${version}"
+             company-name="Tim Nunamaker"
+             original-filename="ClawmeterSetup.exe">
+      <authenticode-sign/>
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

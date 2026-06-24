@@ -399,6 +399,9 @@ jobs:
       - name: Create temp dir
         run: New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
 
+      - name: Build Windows version resource
+        run: .\packaging\windows\build-version-resource.ps1 -Version 0.0.0-test
+
       - name: Build release-like Windows binary
         run: go build -tags tray -o C:\temp\clawmeter.exe ./cmd/clawmeter
 
