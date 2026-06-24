@@ -34,6 +34,9 @@ jobs:
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null'
 
+      - name: Validate packaging shell scripts
+        run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh
+
   release:
     needs: test
     runs-on: ubuntu-latest
@@ -174,6 +177,36 @@ jobs:
         run: gh release upload "${{ needs.release.outputs.tag }}" artifacts/* --repo "${{ github.repository }}" --clobber
 
   # Clean up empty release if build fails
+  submit-winget:
+    needs: [release, build, upload]
+    if: needs.release.outputs.new_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate WinGet manifest
+        run: |
+          tag="${{ needs.release.outputs.tag }}"
+          test -f artifacts/ClawmeterSetup.exe
+          WINGET_ASSET_PATH="$PWD/artifacts/ClawmeterSetup.exe" packaging/winget/generate.sh "$tag"
+
+      - name: Submit WinGet PR
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_PR_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::Skipping WinGet PR submission because WINGET_PR_TOKEN is not configured."
+            exit 0
+          fi
+          git config --global user.name "Tim Nunamaker"
+          git config --global user.email "tnunamak@gmail.com"
+          packaging/winget/submit-pr.sh "${{ needs.release.outputs.tag }}"
+
   cleanup:
     needs: [release, build]
     if: always() && needs.release.outputs.new_release == 'true' && needs.build.result == 'failure'

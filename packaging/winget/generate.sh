@@ -79,7 +79,7 @@ PublisherUrl: https://github.com/tnunamak
 PackageName: Clawmeter
 PackageUrl: https://github.com/tnunamak/clawmeter
 License: MIT
-LicenseUrl: https://github.com/tnunamak/clawmeter/blob/main/LICENSE
+LicenseUrl: https://raw.githubusercontent.com/tnunamak/clawmeter/main/LICENSE
 ShortDescription: System tray and CLI quota meter for AI coding tools.
 Description: Clawmeter shows AI coding quota status in a system tray icon and command line interface.
 Moniker: clawmeter
