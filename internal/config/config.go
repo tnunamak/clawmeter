@@ -39,6 +39,9 @@ type GlobalSettings struct {
 	// PollInterval for the tray (in seconds)
 	PollInterval int `yaml:"poll_interval,omitempty"`
 
+	// CheckForUpdates controls automatic GitHub release checks from the tray.
+	CheckForUpdates *bool `yaml:"check_for_updates,omitempty"`
+
 	// NotificationThresholds for usage warnings
 	NotificationThresholds NotificationConfig `yaml:"notification_thresholds,omitempty"`
 }
@@ -94,6 +97,11 @@ func (c *Config) IsProviderExplicitlyEnabled(name string) bool {
 // ~/.config/clawmeter/config.yaml); on macOS it is
 // ~/Library/Application Support/clawmeter/config.yaml; on Windows it is
 // %APPDATA%\clawmeter\config.yaml.
+// ShouldCheckForUpdates reports whether automatic GitHub release checks are enabled.
+func (c *Config) ShouldCheckForUpdates() bool {
+	return c.Settings.CheckForUpdates == nil || *c.Settings.CheckForUpdates
+}
+
 func configPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

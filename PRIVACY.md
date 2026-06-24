@@ -23,6 +23,12 @@ Clawmeter contacts provider-owned APIs only to fetch quota, usage, account, or r
 
 Clawmeter also checks GitHub Releases for application updates. The tray performs periodic update checks, and users can trigger update checks manually from the app. These requests go to GitHub's public API for `tnunamak/clawmeter` release metadata and do not include provider credentials.
 
+The Windows installer exposes an automatic update-check option. Automatic update checks can also be disabled later in local config:
+
+```bash
+clawmeter config set check_for_updates false
+```
+
 Release downloads, checksums, and installer verification are served by GitHub Releases.
 
 ## Local Files

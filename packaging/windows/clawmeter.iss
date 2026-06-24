@@ -25,6 +25,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile={#SourceDir}\clawmeter.ico
 UninstallDisplayIcon={app}\clawmeter.ico
+InfoBeforeFile={#SourceDir}\PRIVACY.md
 OutputDir={#OutputDir}
 OutputBaseFilename=ClawmeterSetup
 Compression=lzma2
@@ -41,6 +42,7 @@ SignedUninstaller=yes
 
 [Tasks]
 Name: "addtopath"; Description: "Add Clawmeter to my PATH"; Flags: checkedonce
+Name: "updates"; Description: "Check for Clawmeter updates automatically"; Flags: checkedonce
 Name: "startup"; Description: "Start Clawmeter when I sign in"; Flags: unchecked
 
 [Files]
@@ -59,6 +61,7 @@ Name: "{group}\Uninstall Clawmeter"; Filename: "{uninstallexe}"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Clawmeter"; ValueData: """{app}\clawmeter.exe"" tray"; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
+Filename: "{app}\clawmeter.exe"; Parameters: "config set check_for_updates false"; Flags: runhidden; Check: not WizardIsTaskSelected('updates')
 Filename: "{app}\clawmeter.exe"; Parameters: "tray"; Description: "Launch Clawmeter"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

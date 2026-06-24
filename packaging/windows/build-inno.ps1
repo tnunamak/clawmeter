@@ -53,6 +53,7 @@ function Resolve-InnoCompiler {
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $binary = Resolve-Path $BinaryPath
 $icon = Resolve-Path (Join-Path $repoRoot "assets\clawmeter.ico")
+$privacy = Resolve-Path (Join-Path $repoRoot "PRIVACY.md")
 $script = Resolve-Path (Join-Path $PSScriptRoot "clawmeter.iss")
 $compiler = Resolve-InnoCompiler -RequestedPath $CompilerPath
 $versionValue = $Version.TrimStart("v")
@@ -63,6 +64,7 @@ Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item -Force $binary (Join-Path $stage "clawmeter.exe")
 Copy-Item -Force $icon (Join-Path $stage "clawmeter.ico")
+Copy-Item -Force $privacy (Join-Path $stage "PRIVACY.md")
 
 $compilerArgs = @(
     "/DAppVersion=$versionValue",

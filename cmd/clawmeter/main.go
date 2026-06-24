@@ -296,6 +296,7 @@ func configShowCmd(args []string) int {
 
 	fmt.Printf("\nSettings:\n")
 	fmt.Printf("  Poll interval: %d seconds\n", cfg.Settings.PollInterval)
+	fmt.Printf("  Check for updates: %t\n", cfg.ShouldCheckForUpdates())
 	fmt.Printf("  Warning threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Warning)
 	fmt.Printf("  Critical threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Critical)
 
@@ -308,6 +309,7 @@ func configSetCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "  poll_interval <seconds>")
 		fmt.Fprintln(os.Stderr, "  warning_threshold <percent>")
 		fmt.Fprintln(os.Stderr, "  critical_threshold <percent>")
+		fmt.Fprintln(os.Stderr, "  check_for_updates <true|false>")
 		return 1
 	}
 
@@ -356,6 +358,13 @@ func configSetCmd(args []string) int {
 			return 1
 		}
 		cfg.Settings.NotificationThresholds.Critical = pct
+	case "check_for_updates":
+		var enabled bool
+		if _, err := fmt.Sscanf(value, "%t", &enabled); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
+			return 1
+		}
+		cfg.Settings.CheckForUpdates = &enabled
 	default:
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown config key %q\n", key)
 		return 1
@@ -592,10 +601,12 @@ Settable keys:
   poll_interval <seconds>   Tray polling interval (default: 300)
   warning_threshold <%>     Notification warning threshold (default: 80)
   critical_threshold <%>    Notification critical threshold (default: 95)
+  check_for_updates <bool>  Automatic GitHub release checks (default: true)
 
 Examples:
   clawmeter config show
   clawmeter config set poll_interval 600
+  clawmeter config set check_for_updates false
   clawmeter config enable openai
   clawmeter config disable claude`)
 }

@@ -259,6 +259,11 @@ func onReady() {
 
 	// Check update function
 	checkUpdate := func() {
+		if !cfg.ShouldCheckForUpdates() {
+			setPendingRelease(nil)
+			mUpdate.Hide()
+			return
+		}
 		if !updateChecking.TryLock() {
 			return
 		}

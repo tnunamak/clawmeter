@@ -18,6 +18,8 @@ The installer must:
 - Put `clawmeter` on the user `PATH`.
 - Register an uninstall entry.
 - Offer launch-at-login as an opt-in installer task.
+- Offer automatic update checks as an installer task, checked by default so the user can opt out.
+- Display the privacy policy before installation.
 - Launch the tray after interactive installs.
 - Avoid terminal flashes for tray actions such as Refresh Now.
 - Clean up the shortcut, Run key, PATH entry, and install directory on uninstall.
@@ -56,6 +58,7 @@ VM checklist:
 - Bare `clawmeter` produces useful output when piped: `clawmeter | Tee-Object clawmeter.log`.
 - Refresh Now does not visibly flash a terminal window.
 - Launch-at-login can be enabled and disabled from the tray.
+- Automatic update checks can be disabled during install or later with `clawmeter config set check_for_updates false`.
 - Uninstall removes install directory executable, Start Menu shortcut, startup Run key, and PATH entry.
 
 ## WinGet
