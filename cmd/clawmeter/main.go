@@ -104,7 +104,7 @@ func statusCmd(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	jsonMode := fs.Bool("json", false, "output JSON")
 	plainMode := fs.Bool("plain", false, "plain text (no color)")
-	agentMode := fs.Bool("agent", false, "token-efficient summary for AI agents")
+	agentMode := fs.Bool("agent", false, "token-efficient all-quota summary for AI agents")
 	checkMode := fs.Bool("check", false, "exit 0=healthy, 1=warning, 2=critical/expired/error")
 	providerFlag := fs.String("provider", "", "show only specific provider")
 	showAll := fs.Bool("all", false, "show all providers including unavailable ones")
@@ -553,7 +553,7 @@ Commands:
 Status flags:
   --json                    Output as JSON
   --plain                   Plain text, no color codes
-  --agent                   Token-efficient summary for AI agents
+  --agent                   Token-efficient all-quota summary for AI agents
   --check                   Exit 0=healthy, 1=warning, 2=critical/error
   --provider <name>         Show only specific provider
   --all                     Include unavailable providers
@@ -571,7 +571,7 @@ Tray flags:
 Examples:
   clawmeter                          # Show all providers
   clawmeter statusline               # Compact shell/tmux/statusline segment
-  clawmeter status --agent           # Precise agent-readable summary
+clawmeter status --agent           # Token-efficient all-quota summary
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
   clawmeter setup --all              # Install mainstream local integrations

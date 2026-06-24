@@ -279,12 +279,7 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	}
 
 	resetIn := clampDuration(time.Until(window.ResetsAt))
-	status := "on_track"
-	if proj.ProjectedPct >= 100 {
-		status = "at_risk"
-	} else if proj.ProjectedPct >= 90 {
-		status = "tight"
-	}
+	status := agentStatus(proj)
 
 	parts := []string{
 		fmt.Sprintf("Quota: worst=%s %s", pf.Display, window.Name),
@@ -308,8 +303,89 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	if pf.Data != nil && pf.Data.Stale {
 		parts = append(parts, "data=stale")
 	}
+	if quotas := m.agentQuotaSummaries(); len(quotas) > 0 {
+		parts = append(parts, "quotas=["+strings.Join(quotas, " | ")+"]")
+	}
 
 	return strings.Join(parts, "; ") + "."
+}
+
+type agentQuotaSummary struct {
+	Provider string
+	Window   provider.UsageWindow
+	Proj     forecast.Projection
+	Status   string
+	Tier     int
+	Stale    bool
+}
+
+func (m *MultiProviderOutput) agentQuotaSummaries() []string {
+	quotas := make([]agentQuotaSummary, 0)
+	for i := range m.Providers {
+		pf := &m.Providers[i]
+		if pf.Data == nil || pf.Data.IsExpired || (pf.Data.Error != "" && !pf.Data.HasUsageWindows()) {
+			continue
+		}
+		tier := classifyProvider(pf).tier
+		for _, window := range pf.Data.UsableWindows() {
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			quotas = append(quotas, agentQuotaSummary{
+				Provider: pf.Display,
+				Window:   window,
+				Proj:     proj,
+				Status:   agentStatus(proj),
+				Tier:     tier,
+				Stale:    pf.Data.Stale,
+			})
+		}
+	}
+
+	sort.SliceStable(quotas, func(i, j int) bool {
+		a, b := quotas[i], quotas[j]
+		if a.Tier != b.Tier {
+			return a.Tier < b.Tier
+		}
+		if a.Proj.ProjectedPct != b.Proj.ProjectedPct {
+			return a.Proj.ProjectedPct > b.Proj.ProjectedPct
+		}
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		return a.Window.Name < b.Window.Name
+	})
+
+	out := make([]string, 0, len(quotas))
+	for _, quota := range quotas {
+		resetIn := clampDuration(time.Until(quota.Window.ResetsAt))
+		fields := []string{
+			fmt.Sprintf("current=%s", formatPrecisePct(quota.Window.Utilization)),
+			fmt.Sprintf("projected_at_reset=%s", formatPrecisePct(quota.Proj.ProjectedPct)),
+			fmt.Sprintf("reset_in=%s", formatExactDuration(resetIn)),
+			"status=" + quota.Status,
+		}
+		if !quota.Proj.WillLastToReset {
+			if quota.Proj.RunsOutIn > 0 {
+				fields = append(fields, "runs_out_in="+formatExactDuration(clampDuration(quota.Proj.RunsOutIn)))
+			} else {
+				fields = append(fields, "runs_out=now")
+			}
+		}
+		if quota.Stale {
+			fields = append(fields, "data=stale")
+		}
+		out = append(out, fmt.Sprintf("%s %s(%s)", quota.Provider, quota.Window.Name, strings.Join(fields, ",")))
+	}
+	return out
+}
+
+func agentStatus(proj forecast.Projection) string {
+	if proj.ProjectedPct >= 100 {
+		return "at_risk"
+	}
+	if proj.ProjectedPct >= 90 {
+		return "tight"
+	}
+	return "on_track"
 }
 
 func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provider.UsageWindow, forecast.Projection, bool) {

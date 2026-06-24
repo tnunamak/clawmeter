@@ -91,7 +91,7 @@ clawmeter providers      # detected providers and auth status
 clawmeter claude         # one provider
 clawmeter --json         # machine-readable output
 clawmeter statusline     # compact Claude/statusline segment
-clawmeter status --agent # precise, token-efficient summary for AI agents
+clawmeter status --agent # token-efficient all-quota summary for AI agents
 clawmeter setup --all    # install mainstream local integrations
 clawmeter doctor         # provider and integration readiness
 clawmeter --check        # monitoring exit code

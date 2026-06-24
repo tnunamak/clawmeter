@@ -50,6 +50,49 @@ func TestAgentSummaryKeepsExactBoundarySeconds(t *testing.T) {
 	}
 }
 
+func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "claude",
+			Display: "Claude",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "5h Sonnet", Utilization: 40, ResetsAt: now.Add(2 * time.Hour)},
+				{Name: "7d All", Utilization: 74, ResetsAt: now.Add(36 * time.Hour)},
+			}},
+		},
+		{
+			Name:    "openai",
+			Display: "OpenAI",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 16, ResetsAt: now.Add(36 * time.Hour)},
+			}},
+		},
+	}}
+
+	got := output.AgentSummary()
+	for _, want := range []string{
+		"quotas=[",
+		"Claude 7d All(",
+		"Claude 5h Sonnet(",
+		"OpenAI 7d(",
+		"projected_at_reset=",
+		"status=tight",
+		"status=on_track",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
+		}
+	}
+
+	claude7d := strings.Index(got, "Claude 7d All(")
+	claude5h := strings.Index(got, "Claude 5h Sonnet(")
+	openai7d := strings.Index(got, "OpenAI 7d(")
+	if !(claude7d >= 0 && claude7d < claude5h && claude5h < openai7d) {
+		t.Fatalf("AgentSummary() quota order = %q, want most-at-risk to least-at-risk", got)
+	}
+}
+
 func TestFormatPrecisePctUsesMoreDecimalsNearBoundaries(t *testing.T) {
 	tests := []struct {
 		pct  float64
