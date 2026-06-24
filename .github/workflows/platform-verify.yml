@@ -290,7 +290,7 @@ jobs:
           check_plist_key() {
             local label="$1"
             local pattern="$2"
-            if echo "$PLUTIL_OUT" | grep -q "$pattern"; then
+            if echo "$PLUTIL_OUT" | grep -Eq "$pattern"; then
               echo "PASS: $label"
             else
               echo "FAIL: $label"
@@ -302,7 +302,7 @@ jobs:
           }
 
           check_plist_key 'Label = com.clawmeter.tray'   '"com\.clawmeter\.tray"'
-          check_plist_key 'RunAtLoad = 1'                '"RunAtLoad" => 1'
+          check_plist_key 'RunAtLoad = 1'                '"RunAtLoad"( =>)? 1'
           check_plist_key 'AbandonProcessGroup = 1'      '"AbandonProcessGroup" => 1'
           check_plist_key 'ProcessType = Interactive'    '"ProcessType" => "Interactive"'
 
