@@ -91,6 +91,7 @@ title="${kind}: ${package_id} version ${version}"
 git add "$target_dir"
 if git diff --cached --quiet; then
   echo "No WinGet manifest changes for ${package_id} ${version}."
+  exit 0
 else
   git commit -m "$title"
 fi

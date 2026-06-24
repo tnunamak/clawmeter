@@ -32,12 +32,23 @@ SolidCompression=yes
 WizardStyle=modern
 ChangesEnvironment=yes
 
+#ifdef AppSignTool
+SignTool={#AppSignTool}
+SignToolRunMinimized=yes
+SignToolRetryCount=3
+SignedUninstaller=yes
+#endif
+
 [Tasks]
 Name: "addtopath"; Description: "Add Clawmeter to my PATH"; Flags: checkedonce
 Name: "startup"; Description: "Start Clawmeter when I sign in"; Flags: unchecked
 
 [Files]
+#ifdef AppSignTool
+Source: "{#SourceDir}\clawmeter.exe"; DestDir: "{app}"; Flags: ignoreversion signonce
+#else
 Source: "{#SourceDir}\clawmeter.exe"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "{#SourceDir}\clawmeter.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

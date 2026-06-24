@@ -1,48 +1,54 @@
 # Windows Packaging
 
-## Ideal End State
+Windows has one polished desktop product shape: `ClawmeterSetup.exe`.
 
-Clawmeter has one Windows desktop product shape:
+Priority order:
 
-- `ClawmeterSetup.exe` is the canonical installer for direct downloads.
-- `winget install --id tnunamak.Clawmeter -e` installs that same setup exe.
-- `clawmeter-windows-amd64.exe` remains available only as a portable/advanced artifact.
+1. Direct installer: download `ClawmeterSetup.exe` from the GitHub release.
+2. WinGet: `winget install --id tnunamak.Clawmeter -e`, once the package is accepted.
+3. Portable fallback: `clawmeter-windows-amd64.exe` for advanced/manual use.
+4. Signing: next track, after installer and WinGet verification are stable.
 
-The setup installer is per-user by default. It installs into `%LOCALAPPDATA%\Programs\Clawmeter`, creates a Start Menu shortcut that launches `clawmeter tray`, adds `clawmeter` to the user `PATH`, registers a normal uninstall entry, offers launch-at-login as an opt-in task, and launches the tray after interactive installs. Silent installs do not launch the tray.
+The setup installer is per-user by default. It installs into `%LOCALAPPDATA%\Programs\Clawmeter`, creates a Start Menu shortcut that launches `clawmeter tray`, adds `clawmeter` to the user `PATH`, registers an uninstall entry, offers launch-at-login as an opt-in task, and launches the tray after interactive installs. Silent installs do not launch the tray.
 
-## Release Flow
-
-1. CI builds `clawmeter-windows-amd64.exe`.
-2. CI compiles `ClawmeterSetup.exe` with Inno Setup.
-3. Release assets include both files plus `SHA256SUMS.txt`.
-4. `packaging/winget/generate.sh vX.Y.Z` generates a WinGet manifest that points at `ClawmeterSetup.exe`.
-5. The manifest is validated and installed in Windows with local manifest mode.
-6. The generated manifest directory is submitted to `microsoft/winget-pkgs`.
-
-## Verification
-
-Local Windows VM smoke:
+## Build
 
 ```powershell
 .\packaging\windows\build-inno.ps1 -BinaryPath C:\temp\clawmeter.exe -Version 0.0.0-test -OutputDir C:\temp
-C:\temp\ClawmeterSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=addtopath
-clawmeter providers
-winget settings --enable LocalManifestFiles
-winget validate .\packaging\winget\out\manifests\t\tnunamak\Clawmeter\<version>
-winget install --manifest .\packaging\winget\out\manifests\t\tnunamak\Clawmeter\<version> --silent --accept-source-agreements --accept-package-agreements
-clawmeter providers
-winget uninstall --id tnunamak.Clawmeter -e
 ```
 
-Manual interactive smoke:
+Optional signing support is built in but disabled unless the caller supplies a sign tool:
 
-- Run `ClawmeterSetup.exe`.
-- Confirm the installer shows a normal Windows wizard.
-- Confirm Start Menu has `Clawmeter`.
-- Launch `Clawmeter` and confirm the tray appears.
-- Open a new PowerShell and confirm `clawmeter providers` works.
-- Uninstall and confirm the install directory, Start Menu shortcut, startup registry value, and PATH entry are removed.
+```powershell
+.\packaging\windows\build-inno.ps1 `
+  -BinaryPath C:\temp\clawmeter-windows-amd64.exe `
+  -Version vX.Y.Z `
+  -OutputDir C:\temp `
+  -SignToolName clawmeterSignTool `
+  -SignToolCommand 'signtool.exe sign /a $p'
+```
 
-## Known Non-Goals
+Certificate paths and passwords must come from the local environment or CI secrets, not the repo.
+The sign tool command should accept Inno's `$p` parameter placeholder; the script supplies the description, timestamp, and file path through `-SignToolParameters`.
 
-Code signing and SmartScreen reputation are separate tracks. The installer gives the right Windows UX, but an unsigned installer can still produce trust prompts until signing/reputation is handled.
+## Verify
+
+CI and manual VM runs should use the shared verifier:
+
+```powershell
+.\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup
+```
+
+For signed builds:
+
+```powershell
+.\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup -ExpectSigned
+```
+
+The full release plan and verification matrix live in [PLAN.md](PLAN.md).
+
+## Non-Goals
+
+`install.ps1` is not the primary Windows onboarding path. It remains an advanced fallback for local/portable scripting.
+
+Code signing and SmartScreen reputation are related but separate. Signing proves publisher identity and artifact integrity; SmartScreen reputation must be earned and checked from a clean Windows environment using the public release URL.

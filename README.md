@@ -28,13 +28,19 @@ curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh 
 
 Windows:
 
-Download `ClawmeterSetup.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), verify it with `SHA256SUMS.txt`, then run the installer. It creates the Start Menu tray shortcut, adds `clawmeter` to your user `PATH`, and includes an uninstall entry.
+Download `ClawmeterSetup.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), verify it with `SHA256SUMS.txt`, then run the installer. It creates a Start Menu tray shortcut, adds `clawmeter` to your user `PATH`, and includes an uninstall entry.
 
 ```powershell
 clawmeter providers
 ```
 
-Advanced/manual use: download `clawmeter-windows-amd64.exe` from the same release if you only want the portable binary.
+WinGet will install that same setup exe once the package is accepted:
+
+```powershell
+winget install --id tnunamak.Clawmeter -e
+```
+
+Advanced/manual fallback: download `clawmeter-windows-amd64.exe` from the same release if you only want the portable binary.
 
 ```powershell
 .\clawmeter-windows-amd64.exe providers
@@ -147,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh 
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --uninstall
 ```
 
-Windows users should prefer `ClawmeterSetup.exe`. `install.ps1` remains an advanced fallback with `-LocalBinary`, `-Start`, `-Startup`, and `-Uninstall`; if you use it directly, download the script first and run it from a folder you trust. Avoid copy-pasting download-and-execute one-liners.
+Windows users should prefer `ClawmeterSetup.exe`. WinGet is the package-manager path after acceptance. `clawmeter-windows-amd64.exe` is the portable fallback. `install.ps1` remains an advanced scripting fallback with `-LocalBinary`, `-Start`, `-Startup`, and `-Uninstall`; if you use it directly, download the script first and run it from a folder you trust. Avoid copy-pasting download-and-execute one-liners.
 
 macOS Homebrew installs a local app wrapper. To show it in Applications/Launchpad:
 

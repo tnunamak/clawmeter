@@ -7,7 +7,13 @@ param(
 
     [string]$OutputDir = (Join-Path (Get-Location) "dist\windows"),
 
-    [string]$CompilerPath
+    [string]$CompilerPath,
+
+    [string]$SignToolName,
+
+    [string]$SignToolCommand,
+
+    [string]$SignToolParameters = '/d $qClawmeter$q /du $qhttps://github.com/tnunamak/clawmeter$q /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com $f'
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,11 +64,24 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item -Force $binary (Join-Path $stage "clawmeter.exe")
 Copy-Item -Force $icon (Join-Path $stage "clawmeter.ico")
 
-& $compiler `
-    "/DAppVersion=$versionValue" `
-    "/DSourceDir=$stage" `
-    "/DOutputDir=$($out.FullName)" `
-    $script
+$compilerArgs = @(
+    "/DAppVersion=$versionValue",
+    "/DSourceDir=$stage",
+    "/DOutputDir=$($out.FullName)"
+)
+
+if ($SignToolCommand) {
+    if (-not $SignToolName) {
+        $SignToolName = "clawmeterSignTool"
+    }
+
+    $compilerArgs += "/S${SignToolName}=${SignToolCommand}"
+    $compilerArgs += "/DAppSignTool=${SignToolName} ${SignToolParameters}"
+}
+
+$compilerArgs += $script
+
+& $compiler @compilerArgs
 
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compiler exited with $LASTEXITCODE"

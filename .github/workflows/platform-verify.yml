@@ -410,6 +410,10 @@ jobs:
             throw "ClawmeterSetup.exe was not created"
           }
 
+      - name: Installer silent install smoke
+        run: |
+          .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup
+
       - name: CLI PowerShell pipeline smoke tests
         run: |
           function Assert-ClawmeterOutput {

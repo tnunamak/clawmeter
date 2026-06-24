@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
   pull-requests: write
 
 jobs:
@@ -188,6 +187,15 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Verify public Windows installer asset
+        run: |
+          tag="${{ needs.release.outputs.tag }}"
+          url="https://github.com/${{ github.repository }}/releases/download/${tag}/ClawmeterSetup.exe"
+          curl --retry 6 --retry-delay 5 --retry-all-errors -fsSL "$url" -o /tmp/ClawmeterSetup.exe
+          expected="$(sha256sum artifacts/ClawmeterSetup.exe | cut -d' ' -f1)"
+          actual="$(sha256sum /tmp/ClawmeterSetup.exe | cut -d' ' -f1)"
+          test "$expected" = "$actual"
 
       - name: Generate WinGet manifest
         run: |
