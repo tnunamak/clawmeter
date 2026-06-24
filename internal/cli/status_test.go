@@ -106,8 +106,13 @@ func TestClassifyProvider(t *testing.T) {
 		wantProjectedHi float64 // upper bound for maxProjectedPct (0 to skip check)
 	}{
 		{
-			name:     "nil data → tier 1 (errored)",
+			name:     "passive nil data → tier 5 (unavailable)",
 			pf:       ProviderFormatter{Name: "test", Data: nil},
+			wantTier: 5,
+		},
+		{
+			name:     "explicit nil data → tier 1 (actionable setup issue)",
+			pf:       ProviderFormatter{Name: "test", Data: nil, ExplicitlyEnabled: true},
 			wantTier: 1,
 		},
 		{

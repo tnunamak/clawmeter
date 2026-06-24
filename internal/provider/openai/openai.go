@@ -74,6 +74,7 @@ func (p *Provider) fetchUsageOnce(ctx context.Context, codexPath string) (*provi
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, codexPath, "-s", "read-only", "-a", "untrusted", "app-server")
+	hideSubprocessWindow(cmd)
 	cmd.Env = append(os.Environ(), "NO_COLOR=1")
 
 	stdin, err := cmd.StdinPipe()

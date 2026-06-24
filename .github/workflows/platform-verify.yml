@@ -399,11 +399,45 @@ jobs:
       - name: Create temp dir
         run: New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
 
-      - name: Build tray binary (windowsgui)
-        run: go build -tags tray -ldflags '-H windowsgui' -o C:\temp\clawmeter.exe ./cmd/clawmeter
+      - name: Build release-like Windows binary
+        run: go build -tags tray -o C:\temp\clawmeter.exe ./cmd/clawmeter
 
-      - name: Build CLI binary (for autostart + config tests)
-        run: go build -o C:\temp\clawmeter-cli.exe ./cmd/clawmeter
+      - name: Build Windows setup installer
+        run: |
+          choco install innosetup --no-progress -y
+          .\packaging\windows\build-inno.ps1 -BinaryPath C:\temp\clawmeter.exe -Version 0.0.0-test -OutputDir C:\temp
+          if (!(Test-Path C:\temp\ClawmeterSetup.exe)) {
+            throw "ClawmeterSetup.exe was not created"
+          }
+
+      - name: CLI PowerShell pipeline smoke tests
+        run: |
+          function Assert-ClawmeterOutput {
+            param(
+              [string]$Label,
+              [string[]]$CommandArgs
+            )
+
+            $Log = Join-Path $env:TEMP "clawmeter-$Label.log"
+            Remove-Item -Force $Log -ErrorAction SilentlyContinue
+            $output = & C:\temp\clawmeter.exe @CommandArgs 2>&1 | Tee-Object -FilePath $Log
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "FAIL: clawmeter $($CommandArgs -join ' ') exited $LASTEXITCODE"
+              Write-Host ($output | Out-String)
+              exit 1
+            }
+
+            $text = Get-Content -Raw $Log
+            if ([string]::IsNullOrWhiteSpace($text)) {
+              Write-Error "FAIL: clawmeter $($CommandArgs -join ' ') produced no pipeline output"
+              exit 1
+            }
+            Write-Host "PASS: $Label produced pipeline output"
+          }
+
+          Assert-ClawmeterOutput "plain" @("--plain")
+          Assert-ClawmeterOutput "all-plain" @("--all", "--plain")
+          Assert-ClawmeterOutput "providers" @("providers")
 
       # ── Autostart roundtrip ──────────────────────────────────────────────
       - name: Autostart roundtrip (registry Run key)
@@ -412,7 +446,7 @@ jobs:
           $ValueName = "Clawmeter"
 
           Write-Host "--- install ---"
-          $result = & C:\temp\clawmeter-cli.exe tray --install 2>&1
+          $result = & C:\temp\clawmeter.exe tray --install 2>&1
           if ($LASTEXITCODE -ne 0) {
             Write-Error "FAIL: tray --install returned exit code $LASTEXITCODE"
             Write-Host $result
@@ -441,7 +475,7 @@ jobs:
           Write-Host "PASS: registry value ends with 'tray'"
 
           Write-Host "--- uninstall ---"
-          $result = & C:\temp\clawmeter-cli.exe tray --uninstall 2>&1
+          $result = & C:\temp\clawmeter.exe tray --uninstall 2>&1
           if ($LASTEXITCODE -ne 0) {
             Write-Error "FAIL: tray --uninstall returned exit code $LASTEXITCODE"
             Write-Host $result
@@ -612,7 +646,7 @@ jobs:
           # and APPDATA (for os.UserConfigDir) to redirect paths into our sandbox.
           $env:USERPROFILE = $TmpHome
           $env:APPDATA     = $FakeAppData
-          $output = & C:\temp\clawmeter-cli.exe providers 2>&1
+          $output = & C:\temp\clawmeter.exe providers 2>&1
 
           if (Test-Path $CanonicalCfg) {
             Write-Host "PASS: canonical config created at $CanonicalCfg"

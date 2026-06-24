@@ -92,6 +92,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libayatana-appindicator3-dev
 
+      - name: Install Inno Setup
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -104,11 +109,17 @@ jobs:
           LDFLAGS="-s -w -X main.Version=${{ needs.release.outputs.tag }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".exe"
-            # -H windowsgui suppresses the console window for the tray binary;
-            # logs are redirected to %LOCALAPPDATA%\clawmeter\tray.log instead.
-            LDFLAGS="$LDFLAGS -H windowsgui"
           fi
           go build -tags tray -trimpath -ldflags="$LDFLAGS" -o "clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" ./cmd/clawmeter
+
+      - name: Package Windows installer
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          .\packaging\windows\build-inno.ps1 `
+            -BinaryPath "clawmeter-windows-amd64.exe" `
+            -Version "${{ needs.release.outputs.tag }}" `
+            -OutputDir "."
 
       - name: Package .deb and .rpm
         if: matrix.goos == 'linux'
@@ -128,6 +139,7 @@ jobs:
           name: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}*
+            ClawmeterSetup.exe
             *.deb
             *.rpm
 
@@ -135,10 +147,26 @@ jobs:
     needs: [release, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Generate WinGet manifest bundle
+        run: |
+          tag="${{ needs.release.outputs.tag }}"
+          version="${tag#v}"
+          test -f artifacts/ClawmeterSetup.exe
+          WINGET_ASSET_PATH="$PWD/artifacts/ClawmeterSetup.exe" packaging/winget/generate.sh "$tag"
+          zip -r "artifacts/winget-manifest-${version}.zip" \
+            "packaging/winget/out/manifests/t/tnunamak/Clawmeter/${version}"
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
 
       - name: Upload release assets
         env:

@@ -5,6 +5,7 @@ package tray
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -37,6 +38,7 @@ type state struct {
 	lastResults        map[string]*provider.UsageData
 	statuses           map[string]*status.ProviderStatus
 	failureGate        *provider.FailureGate
+	pendingRelease     *update.Release
 	currentTitle       string
 	currentTooltip     string
 	lastRefreshAt      time.Time
@@ -135,8 +137,6 @@ func onReady() {
 	mReauth.Disable()
 	mReauth.Hide()
 
-	var pendingRelease *update.Release
-	var pendingReleaseMu sync.Mutex
 	var updateChecking sync.Mutex
 	mUpdate := systray.AddMenuItem("", "")
 	mUpdate.Hide()
@@ -197,6 +197,10 @@ func onReady() {
 			if data == nil {
 				continue
 			}
+			if data.Error != "" {
+				log.Printf("provider refresh failed: provider=%s error=%s", name, data.Error)
+			}
+
 			if data.Error == "" && !data.IsExpired {
 				s.failureGate.RecordSuccess(name)
 				continue
@@ -263,21 +267,30 @@ func onReady() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		rel, err := update.Check(ctx, version)
-		if err != nil || rel == nil {
+		if err != nil {
 			return
 		}
-		pendingReleaseMu.Lock()
-		pendingRelease = rel
-		pendingReleaseMu.Unlock()
-		mUpdate.SetTitle(fmt.Sprintf("Update to %s", rel.Version))
-		mUpdate.Show()
+		setPendingRelease(rel)
+		if rel == nil {
+			mUpdate.Hide()
+		} else {
+			mUpdate.SetTitle(fmt.Sprintf("• Update to %s", rel.Version))
+			mUpdate.Show()
+		}
+		s.mu.Lock()
+		results := s.lastResults
+		s.mu.Unlock()
+		if results != nil {
+			displayNames := providerDisplayNames(providerMenus)
+			updateTrayIcon(results)
+			updateTrayTitle(results)
+			updateTrayTooltip(results, displayNames)
+		}
 	}
 
 	// Apply update function
 	applyUpdate := func() {
-		pendingReleaseMu.Lock()
-		rel := pendingRelease
-		pendingReleaseMu.Unlock()
+		rel := currentPendingRelease()
 		if rel == nil {
 			return
 		}
@@ -775,6 +788,22 @@ func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provid
 	return "", nil, "", false
 }
 
+func setPendingRelease(rel *update.Release) {
+	s.mu.Lock()
+	s.pendingRelease = rel
+	s.mu.Unlock()
+}
+
+func currentPendingRelease() *update.Release {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingRelease
+}
+
+func updateAvailable() bool {
+	return currentPendingRelease() != nil
+}
+
 func updateTrayIcon(results map[string]*provider.UsageData) {
 	// Pick the icon's provider using the same severity ordering as the title
 	// and tooltip so an expired/error state never hides behind a healthier
@@ -787,6 +816,7 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 		meter = iconMeterState(data, windowName)
 		worstProvider = name
 	}
+	meter.UpdateAvailable = updateAvailable()
 
 	iconData := icons.GenerateProviderIconWithMeter(worstProvider, meter, 128)
 	setIconDynamic(worstProvider, meter, iconData)
@@ -835,7 +865,7 @@ func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
-	title := "Clawmeter"
+	title := trayTitle()
 	s.mu.Lock()
 	changed := title != s.currentTitle
 	if changed {
@@ -845,6 +875,13 @@ func updateTrayTitle(results map[string]*provider.UsageData) {
 	if changed {
 		systray.SetTitle(title)
 	}
+}
+
+func trayTitle() string {
+	if updateAvailable() {
+		return "Clawmeter •"
+	}
+	return "Clawmeter"
 }
 
 func selectedIconWindow(data *provider.UsageData, windowName string) (provider.UsageWindow, forecast.Projection, bool) {
@@ -911,6 +948,14 @@ func windowBadgeLabel(name string) string {
 
 func updateTrayTooltip(results map[string]*provider.UsageData, displayNames map[string]string) {
 	tooltip := trayTooltip(results, displayNames)
+	if rel := currentPendingRelease(); rel != nil {
+		line := fmt.Sprintf("Update available: %s", rel.Version)
+		if strings.TrimSpace(tooltip) == "" {
+			tooltip = line
+		} else {
+			tooltip += "\n" + line
+		}
+	}
 	s.mu.Lock()
 	changed := tooltip != s.currentTooltip
 	if changed {

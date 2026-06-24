@@ -14,7 +14,7 @@ import (
 // the user's cache dir when stderr is not a terminal. This covers two cases
 // where errors would otherwise be silently lost:
 //
-//   - Windows tray builds (linked with -H windowsgui, no console attached)
+//   - Windows tray runs after detaching from the console
 //   - Any platform when launched at login (LaunchAgent / .desktop / .lnk
 //     in the Startup folder — none of these have a terminal)
 //

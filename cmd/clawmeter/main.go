@@ -35,8 +35,9 @@ func run() int {
 		return cli.Status(false, false, false)
 	}
 
-	// Handle top-level flags (clawmeter --json, clawmeter --plain, clawmeter --check)
-	if os.Args[1] == "--json" || os.Args[1] == "--plain" || os.Args[1] == "--check" {
+	// Handle documented top-level status flags (for example:
+	// clawmeter --json, clawmeter --plain, clawmeter --all).
+	if isStatusShortcutFlag(os.Args[1]) {
 		return statusCmd(os.Args[1:])
 	}
 
@@ -71,6 +72,20 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown command %q\n", os.Args[1])
 		printHelp(os.Stderr)
 		return 1
+	}
+}
+
+func isStatusShortcutFlag(arg string) bool {
+	switch arg {
+	case "--json", "-json",
+		"--plain", "-plain",
+		"--agent", "-agent",
+		"--check", "-check",
+		"--all", "-all",
+		"--provider", "-provider":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -146,6 +161,7 @@ func trayCmd(args []string) int {
 		return 0
 	}
 
+	prepareTrayConsole()
 	return tray.Run(Version)
 }
 
@@ -540,6 +556,7 @@ Status flags:
   --agent                   Token-efficient summary for AI agents
   --check                   Exit 0=healthy, 1=warning, 2=critical/error
   --provider <name>         Show only specific provider
+  --all                     Include unavailable providers
 
 Config commands:
   config show               Show current configuration

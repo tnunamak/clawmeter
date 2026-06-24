@@ -149,3 +149,19 @@ func TestSetupAllDoesNotInstallTmuxByDefault(t *testing.T) {
 		t.Fatalf("setup --all should include Claude Code statusline: %s", stdout)
 	}
 }
+
+func TestTopLevelAllIsStatusShortcut(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+
+	stdout, stderr, code := runWithHome(t, bin, home, "--all", "--plain")
+	if code != 0 {
+		t.Fatalf("clawmeter --all --plain: exit %d (%s)", code, stderr)
+	}
+	if strings.Contains(stderr, "unknown command") {
+		t.Fatalf("--all should be handled as a status flag, stderr: %s", stderr)
+	}
+	if !strings.Contains(stdout, "Claude") {
+		t.Fatalf("--all should include unavailable providers in status output: %s", stdout)
+	}
+}

@@ -22,6 +22,12 @@ func HumanizeError(errMsg string) string {
 	fullLowered := strings.ToLower(errMsg)
 
 	switch {
+	case strings.Contains(fullLowered, "refresh_token_reused") ||
+		strings.Contains(fullLowered, "refresh token has already been used") ||
+		strings.Contains(fullLowered, "token_expired") ||
+		strings.Contains(fullLowered, "provided authentication token is expired") ||
+		strings.Contains(fullLowered, "please log out and sign in again"):
+		return "Codex sign-in expired — run codex logout, then codex login"
 	case strings.Contains(lowered, "authentication required to read rate limits"):
 		return "rate limits unavailable — check plan at platform.openai.com"
 	case strings.Contains(lowered, "context deadline exceeded") || strings.Contains(lowered, "client.timeout"):

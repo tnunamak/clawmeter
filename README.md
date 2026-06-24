@@ -28,11 +28,19 @@ curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh 
 
 Windows:
 
+Download `ClawmeterSetup.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), verify it with `SHA256SUMS.txt`, then run the installer. It creates the Start Menu tray shortcut, adds `clawmeter` to your user `PATH`, and includes an uninstall entry.
+
 ```powershell
-powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.ps1 -OutFile $env:TEMP\install-clawmeter.ps1; & $env:TEMP\install-clawmeter.ps1 -Start"
+clawmeter providers
 ```
 
-Or download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest).
+Advanced/manual use: download `clawmeter-windows-amd64.exe` from the same release if you only want the portable binary.
+
+```powershell
+.\clawmeter-windows-amd64.exe providers
+```
+
+You can also download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest).
 
 Then run:
 
@@ -60,7 +68,8 @@ The radial meter compares actual burn with expected pace. Gray shows the shared 
 - Double-click the tray icon to return to Auto.
 - Auto picks the riskiest quota and is not part of the left-click cycle.
 - Right-click for details, refresh, update, and launch-at-login.
-- Use `Refresh Now` when you want an immediate update.
+- A small blue dot on the tray icon means an update is available.
+- Use `Refresh Now` when you want an immediate quota/update check.
 
 ## CLI
 
@@ -87,7 +96,7 @@ clawmeter setup --all    # install mainstream local integrations
 clawmeter doctor         # provider and integration readiness
 clawmeter --check        # monitoring exit code
 clawmeter update         # self-update
-clawmeter tray           # run the tray
+clawmeter tray           # run the tray in this session
 ```
 
 ## Providers
@@ -138,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh 
 curl -fsSL https://raw.githubusercontent.com/tnunamak/clawmeter/main/install.sh | sh -s -- --uninstall
 ```
 
-Windows supports `-Start`, `-Startup`, and `-Uninstall` on `install.ps1`.
+Windows users should prefer `ClawmeterSetup.exe`. `install.ps1` remains an advanced fallback with `-LocalBinary`, `-Start`, `-Startup`, and `-Uninstall`; if you use it directly, download the script first and run it from a folder you trust. Avoid copy-pasting download-and-execute one-liners.
 
 macOS Homebrew installs a local app wrapper. To show it in Applications/Launchpad:
 
@@ -172,6 +181,8 @@ clawmeter config set critical_threshold 95
 clawmeter tray --install
 clawmeter tray --uninstall
 ```
+
+`clawmeter tray` starts the tray for the current desktop session. For a persistent desktop tray, use the installer/Start Menu shortcut or `clawmeter tray --install`.
 
 On macOS with Homebrew, you can also use:
 

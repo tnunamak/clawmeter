@@ -4,3 +4,6 @@
 .cleanup/
 *.png
 llm-*.md
+
+# Generated WinGet manifests
+packaging/winget/out/

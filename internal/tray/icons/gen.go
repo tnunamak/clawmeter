@@ -85,11 +85,12 @@ const (
 // UsagePct controls how many bits are lit, ExpectedPct marks where usage should
 // be by now in the reset window, and RiskPct controls the lit-bit severity color.
 type MeterState struct {
-	UsagePct     float64
-	ExpectedPct  float64
-	RiskPct      float64
-	ShowExpected bool
-	Label        string
+	UsagePct        float64
+	ExpectedPct     float64
+	RiskPct         float64
+	ShowExpected    bool
+	Label           string
+	UpdateAvailable bool
 }
 
 // GenerateProviderIcon composites a provider logo with the Clawmeter overlay.
@@ -160,8 +161,36 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 	// meter artwork; it stays as the recognizable center mark.
 	drawClawMeterOverlay(dst, meter, workSize)
 	drawMeterLabel(dst, meter.Label)
+	if meter.UpdateAvailable {
+		drawUpdateBadge(dst)
+	}
 
 	return encodePNG(resize(dst, size))
+}
+
+func drawUpdateBadge(dst *image.RGBA) {
+	cx, cy := 104.0, 24.0
+	drawFilledCircle(dst, cx+1, cy+1, 17, color.NRGBA{R: 0, G: 0, B: 0, A: 90})
+	drawFilledCircle(dst, cx, cy, 16, color.NRGBA{R: 255, G: 255, B: 255, A: 245})
+	drawFilledCircle(dst, cx, cy, 11, color.NRGBA{R: 42, G: 127, B: 255, A: 255})
+}
+
+func drawFilledCircle(dst *image.RGBA, cx, cy, radius float64, c color.NRGBA) {
+	bounds := dst.Bounds()
+	minX := max(bounds.Min.X, int(math.Floor(cx-radius)))
+	maxX := min(bounds.Max.X-1, int(math.Ceil(cx+radius)))
+	minY := max(bounds.Min.Y, int(math.Floor(cy-radius)))
+	maxY := min(bounds.Max.Y-1, int(math.Ceil(cy+radius)))
+	r2 := radius * radius
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			dx := float64(x) + 0.5 - cx
+			dy := float64(y) + 0.5 - cy
+			if dx*dx+dy*dy <= r2 {
+				dst.Set(x, y, c)
+			}
+		}
+	}
 }
 
 // plainCrawfish renders the canonical crawfish in the color that matches

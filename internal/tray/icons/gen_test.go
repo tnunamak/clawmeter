@@ -131,6 +131,21 @@ func TestProviderIconsIncludeQuotaLabelAtTraySize(t *testing.T) {
 	}
 }
 
+func TestProviderIconsIncludeUpdateBadgeAtTraySize(t *testing.T) {
+	img := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+		UsagePct:        44,
+		ExpectedPct:     20,
+		RiskPct:         131,
+		ShowExpected:    true,
+		Label:           "7D",
+		UpdateAvailable: true,
+	}, 22))
+
+	if countBlueDominantPixels(img) < 4 {
+		t.Fatal("update badge is not visible at tray size")
+	}
+}
+
 func TestNormalizeMeterLabelKeepsTwoAlphanumericCharacters(t *testing.T) {
 	if got := normalizeMeterLabel("7d all"); got != "7D" {
 		t.Fatalf("normalizeMeterLabel = %q, want 7D", got)
@@ -409,6 +424,24 @@ func countGreenDominantPixels(img image.Image) int {
 			}
 			r, g, b := int(c.R), int(c.G), int(c.B)
 			if g > 140 && g > r+35 && g > b+20 {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func countBlueDominantPixels(img image.Image) int {
+	bounds := img.Bounds()
+	var n int
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if c.A < 200 {
+				continue
+			}
+			r, g, b := int(c.R), int(c.G), int(c.B)
+			if b > 180 && b > r+45 && b > g+20 {
 				n++
 			}
 		}

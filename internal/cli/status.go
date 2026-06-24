@@ -515,7 +515,9 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 	configuredNames := registry.ConfiguredNames()
 	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) && !cacheEntry.HasStaleData(configuredNames) {
 		output := buildOutputFromCache(registry, cfg, cacheEntry)
-		if !showAll {
+		if showAll {
+			output.IncludeAllProviders(registry, cfg)
+		} else {
 			output.HideUnavailable()
 		}
 		return output, cacheEntry, 0
@@ -560,7 +562,9 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 
 	// Build output
 	output := buildOutputFromResult(registry, cfg, result, statuses)
-	if !showAll {
+	if showAll {
+		output.IncludeAllProviders(registry, cfg)
+	} else {
 		output.HideUnavailable()
 	}
 
@@ -583,10 +587,32 @@ func loadCachedStatusOutput(showAll bool) (*MultiProviderOutput, int) {
 	}
 
 	output := buildOutputFromCache(registry, cfg, cacheEntry)
-	if !showAll {
+	if showAll {
+		output.IncludeAllProviders(registry, cfg)
+	} else {
 		output.HideUnavailable()
 	}
 	return output, 0
+}
+
+// IncludeAllProviders appends registered providers that were not fetched
+// because they are unavailable, disabled, or opt-in. This makes `status --all`
+// a true inventory view without polling providers that lack usable auth.
+func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, cfg *config.Config) {
+	seen := make(map[string]struct{}, len(m.Providers))
+	for _, pf := range m.Providers {
+		seen[pf.Name] = struct{}{}
+	}
+	for _, p := range registry.GetAll() {
+		if _, ok := seen[p.Name()]; ok {
+			continue
+		}
+		m.Providers = append(m.Providers, ProviderFormatter{
+			Name:              p.Name(),
+			Display:           p.DisplayName(),
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
+		})
+	}
 }
 
 func staleFallback(cacheEntry *cache.Entry, name, reason string) (*provider.UsageData, bool) {
@@ -732,7 +758,10 @@ type providerUrgency struct {
 
 func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	if pf.Data == nil {
-		return providerUrgency{tier: 1} // no data => treat as errored
+		if pf.ExplicitlyEnabled {
+			return providerUrgency{tier: 1} // enabled but missing data => actionable setup issue
+		}
+		return providerUrgency{tier: 5} // passive unavailable providers belong at the bottom of --all
 	}
 	if pf.Data.IsExpired {
 		return providerUrgency{tier: 0, maxProjectedPct: 100}
@@ -809,6 +838,10 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			worstIdx = i
 			worstU = u
 		}
+	}
+
+	if healthy+warning+critical+errored+expired == 0 {
+		return
 	}
 
 	var line string

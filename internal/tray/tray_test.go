@@ -10,7 +10,23 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/update"
 )
+
+func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
+	oldRelease := currentPendingRelease()
+	defer setPendingRelease(oldRelease)
+
+	setPendingRelease(nil)
+	if got := trayTitle(); got != "Clawmeter" {
+		t.Fatalf("trayTitle without update = %q", got)
+	}
+
+	setPendingRelease(&update.Release{Version: "v9.9.9"})
+	if got := trayTitle(); got != "Clawmeter •" {
+		t.Fatalf("trayTitle with update = %q", got)
+	}
+}
 
 func TestIconMeterStateUsesActualExpectedAndProjectedRiskSeparately(t *testing.T) {
 	now := time.Now()

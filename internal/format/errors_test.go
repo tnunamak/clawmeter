@@ -59,6 +59,16 @@ func TestHumanizeError(t *testing.T) {
 			want:  "rate limits unavailable — check plan at platform.openai.com",
 		},
 		{
+			name:  "codex refresh token reused",
+			input: "Failed to refresh token: 401 Unauthorized: refresh_token_reused. Please log out and sign in again.",
+			want:  "Codex sign-in expired — run codex logout, then codex login",
+		},
+		{
+			name:  "codex access token expired",
+			input: `failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; body={"error":{"message":"Provided authentication token is expired. Please try signing in again.","code":"token_expired"}}`,
+			want:  "Codex sign-in expired — run codex logout, then codex login",
+		},
+		{
 			name:  "401 kept as-is",
 			input: "API returned 401: invalid token",
 			want:  "API returned 401: invalid token",
