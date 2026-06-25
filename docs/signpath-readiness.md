@@ -20,6 +20,7 @@ This checklist maps SignPath Foundation's open-source conditions to Clawmeter re
 | MFA | [Code signing policy](code-signing.md) requires maintainer MFA for GitHub and SignPath. | Requires maintainer account setting outside repo. |
 | Roles and approvers | [Code signing policy](code-signing.md) names maintainer/approver. | Satisfied for solo-maintainer project. |
 | Code signing policy | README links [Code signing policy](code-signing.md), including SignPath required wording. | Satisfied. |
+| Release branch and policy-file write controls | `.signpath/policies/clawmeter/release-signing.yml` requires GitHub-hosted runners, disallows signing re-runs, blocks force pushes, and requires pull requests with code-owner review. `.github/CODEOWNERS` names the protected signing-critical paths. | Satisfied once the matching GitHub branch ruleset is active. |
 | Artifact metadata | Version resource script sets Windows PE metadata; SignPath artifact configuration enforces metadata. | Satisfied once SignPath project fields are configured. |
 | Verifiable build origin | Release workflow uses GitHub-hosted runners and `actions/upload-artifact` before SignPath submission. | Satisfied by workflow shape. |
 | Manual approval per signed release | [Code signing policy](code-signing.md) states each SignPath request requires manual approval. | Satisfied as policy; enforced in SignPath account. |
@@ -34,6 +35,7 @@ go test ./...
 go test -tags tray ./...
 GOOS=windows GOARCH=amd64 GOFLAGS='-tags=tray' go-licenses report ./cmd/clawmeter
 yq '.' .signpath/policies/clawmeter/release-signing.yml >/dev/null
+gh api repos/tnunamak/clawmeter/rulesets --jq '.[] | select(.name == "SignPath release integrity" and .enforcement == "active") | .name'
 python3 - <<'PY'
 import xml.etree.ElementTree as ET
 ET.parse('.signpath/artifact-configurations/windows-release.xml')

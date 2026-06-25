@@ -41,6 +41,8 @@ The repository uses `.github/CODEOWNERS` to require owner review for:
 - `.github/workflows/semantic-release.yml`
 - `packaging/windows/`
 
+GitHub must enforce this with an active branch ruleset on `main` that blocks force pushes and requires pull requests with code-owner review. That ruleset keeps the SignPath policy files, release workflow, and Windows packaging path review-gated before they can affect signed releases.
+
 The SignPath source/build policy lives at `.signpath/policies/clawmeter/release-signing.yml`.
 
 ## Privacy
