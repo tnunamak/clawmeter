@@ -14,6 +14,8 @@ Environment:
   WINGET_BRANCH        Branch name, default: add-clawmeter-<version>
   WINGET_WORK_ROOT     Scratch root, default: ~/.tmp
   WINGET_DRY_RUN=1     Prepare the branch locally but do not push or open/edit a PR
+  WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR=1
+                        Allow a new first-package PR even when one is already open
 EOF
 }
 
@@ -32,6 +34,29 @@ fork_owner="${fork_repo%%/*}"
 branch="${WINGET_BRANCH:-add-clawmeter-${version}}"
 work_root="${WINGET_WORK_ROOT:-${HOME}/.tmp}"
 dry_run="${WINGET_DRY_RUN:-0}"
+allow_duplicate_new_package_pr="${WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR:-0}"
+target_parent="manifests/t/tnunamak/Clawmeter"
+
+package_exists_upstream() {
+  gh api "repos/${upstream_repo}/contents/${target_parent}" >/dev/null 2>&1
+}
+
+open_new_package_prs() {
+  gh pr list \
+    --repo "$upstream_repo" \
+    --state open \
+    --search "\"New package: ${package_id} version\" in:title" \
+    --json number,title,url \
+    --jq '.[] | select(.title | startswith("New package: '"${package_id}"' version ")) | [.number, .title, .url] | @tsv'
+}
+
+current_branch_pr() {
+  gh api "repos/${upstream_repo}/pulls" \
+    -X GET \
+    -f "head=${fork_owner}:${branch}" \
+    -f state=open \
+    --jq '.[0].number // empty'
+}
 
 if [[ ! -d "$manifest_dir" ]]; then
   echo "missing manifest directory: $manifest_dir" >&2
@@ -50,6 +75,21 @@ fi
 if [[ "$dry_run" != "1" && -z "${GH_TOKEN:-}" ]]; then
   echo "GH_TOKEN is required unless WINGET_DRY_RUN=1" >&2
   exit 1
+fi
+
+if [[ "$dry_run" != "1" && "$allow_duplicate_new_package_pr" != "1" ]]; then
+  if ! package_exists_upstream; then
+    if [[ -z "$(current_branch_pr)" ]]; then
+      existing_new_package_prs="$(open_new_package_prs)"
+      if [[ -n "$existing_new_package_prs" ]]; then
+        echo "Skipping WinGet submission for ${package_id} ${version}."
+        echo "The package is not accepted upstream yet and an open first-package PR already exists:"
+        echo "$existing_new_package_prs"
+        echo "Set WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR=1 only when intentionally superseding the open PR."
+        exit 0
+      fi
+    fi
+  fi
 fi
 
 mkdir -p "$work_root"
@@ -75,7 +115,6 @@ git fetch upstream master --depth=1
 git fetch origin "$branch" --depth=1 || true
 git checkout -B "$branch" upstream/master
 
-target_parent="manifests/t/tnunamak/Clawmeter"
 target_dir="${target_parent}/${version}"
 rm -rf "$target_dir"
 mkdir -p "$target_parent"
@@ -117,13 +156,7 @@ fi
 
 git push --force-with-lease origin "$branch"
 
-existing_pr="$(
-  gh api "repos/${upstream_repo}/pulls" \
-    -X GET \
-    -f "head=${fork_owner}:${branch}" \
-    -f state=open \
-    --jq '.[0].number // empty'
-)"
+existing_pr="$(current_branch_pr)"
 
 if [[ -n "$existing_pr" ]]; then
   gh pr edit "$existing_pr" --repo "$upstream_repo" --title "$title" --body "$body"
