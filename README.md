@@ -30,7 +30,7 @@ Windows:
 
 Download `ClawmeterSetup.exe` from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest), verify it with `SHA256SUMS.txt`, then run the installer. It creates a Start Menu tray shortcut, adds `clawmeter` to your user `PATH`, and includes an uninstall entry.
 
-Windows code signing is being prepared through SignPath Foundation. See the [Code signing policy](docs/code-signing.md) and [SignPath readiness checklist](docs/signpath-readiness.md).
+Windows artifacts are currently unsigned. The future signing path is documented in the [Code signing policy](docs/code-signing.md) and [SignPath readiness checklist](docs/signpath-readiness.md).
 
 ```powershell
 clawmeter providers

@@ -7,7 +7,7 @@ Preferred user journey:
 1. Direct installer first: download `ClawmeterSetup.exe` from the GitHub release.
 2. WinGet second: `winget install --id tnunamak.Clawmeter -e` after Microsoft accepts the package.
 3. Portable fallback: download `clawmeter-windows-amd64.exe` for locked-down machines and debugging.
-4. Signing next: apply to SignPath Foundation first, then Authenticode-sign Windows release artifacts and build reputation.
+4. Signing later: wait until the project has more public reputation before applying to SignPath Foundation; do not pay for code signing unless that decision changes.
 
 ## Installer Requirements
 
@@ -33,6 +33,7 @@ go build -tags tray -o C:\temp\clawmeter.exe .\cmd\clawmeter
 choco install innosetup --no-progress -y
 .\packaging\windows\build-inno.ps1 -BinaryPath C:\temp\clawmeter.exe -Version 0.0.0-test -OutputDir C:\temp
 .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup
+.\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -DisableUpdates
 ```
 
 ## Release Verification
@@ -48,6 +49,13 @@ Get-FileHash .\ClawmeterSetup.exe -Algorithm SHA256
 Select-String -Path .\SHA256SUMS.txt -Pattern "ClawmeterSetup.exe"
 ```
 
+Repeatable VM verifier:
+
+```powershell
+.\packaging\windows\verify-release.ps1 -Version 0.22.0 -IncludeStartup
+.\packaging\windows\verify-release.ps1 -Version 0.22.0 -DisableUpdates -ScanWithDefender
+```
+
 VM checklist:
 
 - Installer wizard opens without a PowerShell download command.
@@ -60,6 +68,12 @@ VM checklist:
 - Launch-at-login can be enabled and disabled from the tray.
 - Automatic update checks can be disabled during install or later with `clawmeter config set check_for_updates false`.
 - Uninstall removes install directory executable, Start Menu shortcut, startup Run key, and PATH entry.
+
+Defender / Windows Security checklist:
+
+- Run `collect-defender-evidence.ps1` only when Windows Security actually flags an installer or executable.
+- Keep the evidence folder local until it has been reviewed; it can include machine policy details.
+- Submit confirmed false positives through Microsoft's file submission portal: <https://www.microsoft.com/en-us/wdsi/filesubmission>.
 
 ## WinGet
 
@@ -116,7 +130,7 @@ Portable verification should prove the exe runs and reads existing credentials, 
 
 ## SignPath Foundation Signing
 
-Apply to SignPath Foundation first. Until accepted and configured, Windows artifacts remain unsigned and the release workflow must keep publishing normal unsigned artifacts.
+Do not apply to SignPath Foundation yet. Revisit this when Clawmeter has more public reputation. Until accepted and configured, Windows artifacts remain unsigned and the release workflow must keep publishing normal unsigned artifacts.
 
 Repo collateral for the application:
 

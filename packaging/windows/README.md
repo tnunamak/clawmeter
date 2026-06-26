@@ -7,9 +7,9 @@ Priority order:
 1. Direct installer: download `ClawmeterSetup.exe` from the GitHub release.
 2. WinGet: `winget install --id tnunamak.Clawmeter -e`, once the package is accepted.
 3. Portable fallback: `clawmeter-windows-amd64.exe` for advanced/manual use.
-4. Signing: next track, after installer and WinGet verification are stable.
+4. Signing: later track, after the project has more public reputation.
 
-The setup installer is per-user by default. It installs into `%LOCALAPPDATA%\Programs\Clawmeter`, creates a Start Menu shortcut that launches `clawmeter tray`, adds `clawmeter` to the user `PATH`, registers an uninstall entry, offers launch-at-login as an opt-in task, and launches the tray after interactive installs. Silent installs do not launch the tray.
+The setup installer is per-user by default. It installs into `%LOCALAPPDATA%\Programs\Clawmeter`, creates a Start Menu shortcut that launches `clawmeter tray`, adds `clawmeter` to the user `PATH`, registers an uninstall entry, offers launch-at-login as an opt-in task, offers automatic update checks as an opt-out task, and launches the tray after interactive installs. Silent installs do not launch the tray.
 
 ## Build
 
@@ -39,11 +39,34 @@ CI and manual VM runs should use the shared verifier:
 .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup
 ```
 
+Verify the update-check opt-out path too:
+
+```powershell
+.\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -DisableUpdates
+```
+
 For signed builds:
 
 ```powershell
 .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup -ExpectSigned
 ```
+
+To verify the public release artifact in a clean Windows VM:
+
+```powershell
+.\packaging\windows\verify-release.ps1 -Version 0.22.0 -IncludeStartup
+.\packaging\windows\verify-release.ps1 -Version 0.22.0 -DisableUpdates -ScanWithDefender
+```
+
+`verify-release.ps1` downloads `ClawmeterSetup.exe`, checks it against `SHA256SUMS.txt`, optionally scans it with Microsoft Defender, and then delegates install/uninstall checks to `verify-installer.ps1`.
+
+If Windows Security flags Clawmeter, collect a local evidence bundle before changing anything:
+
+```powershell
+.\packaging\windows\collect-defender-evidence.ps1 -Path .\ClawmeterSetup.exe -Scan
+```
+
+The script writes hashes, Authenticode status, Defender status, and matching detections to a local folder. It does not submit anything automatically. Submit confirmed false positives through Microsoft's file submission portal: <https://www.microsoft.com/en-us/wdsi/filesubmission>.
 
 The full release plan and verification matrix live in [PLAN.md](PLAN.md).
 

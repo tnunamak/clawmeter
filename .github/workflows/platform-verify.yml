@@ -416,6 +416,7 @@ jobs:
       - name: Installer silent install smoke
         run: |
           .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -IncludeStartup
+          .\packaging\windows\verify-installer.ps1 -InstallerPath C:\temp\ClawmeterSetup.exe -DisableUpdates
 
       - name: CLI PowerShell pipeline smoke tests
         run: |

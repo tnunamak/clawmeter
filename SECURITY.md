@@ -20,4 +20,4 @@ Clawmeter does not operate a backend service and does not collect provider crede
 
 Release assets include checksums in `SHA256SUMS.txt`.
 
-Windows code signing is being prepared through SignPath Foundation. The current code signing policy is documented in [docs/code-signing.md](docs/code-signing.md).
+Windows code signing is not active yet. The current code signing policy is documented in [docs/code-signing.md](docs/code-signing.md).

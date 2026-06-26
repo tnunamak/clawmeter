@@ -5,6 +5,8 @@ param(
 
     [switch]$IncludeStartup,
 
+    [switch]$DisableUpdates,
+
     [switch]$ExpectSigned,
 
     [string]$ExpectedPublisher = "Tim Nunamaker"
@@ -42,6 +44,18 @@ function Assert-Signed {
     Assert-True -Condition ($signature.SignerCertificate.Subject -like "*$ExpectedPublisher*") -Message "$Path signer contains $ExpectedPublisher"
 }
 
+function Assert-CommandOutput {
+    param(
+        [string]$Message,
+        [scriptblock]$Command
+    )
+
+    $output = & $Command 2>&1 | Out-String
+    Assert-True -Condition ($LASTEXITCODE -eq 0) -Message "$Message exited 0"
+    Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($output)) -Message "$Message produced pipeline output"
+    $output | Write-Host
+}
+
 function Wait-PathGone {
     param(
         [string]$Path,
@@ -62,6 +76,15 @@ $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Clawm
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runValue = "Clawmeter"
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{92EEFACA-DA48-4099-937D-F16E591F1DEE}_is1"
+$configPath = Join-Path $env:APPDATA "clawmeter\config.yaml"
+$configBackup = $null
+
+if (Test-Path $configPath) {
+    $configBackup = "$configPath.verify-backup-$([System.Guid]::NewGuid().ToString("N"))"
+    Move-Item -Force $configPath $configBackup
+}
+
+try {
 
 if ($ExpectSigned) {
     Assert-Signed -Path $installer
@@ -76,10 +99,14 @@ Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
 Remove-Item -Force $startMenu -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path $runKey -Name $runValue -ErrorAction SilentlyContinue
 
-$tasks = "addtopath"
-if ($IncludeStartup) {
-    $tasks = "addtopath,startup"
+$selectedTasks = @("addtopath")
+if (-not $DisableUpdates) {
+    $selectedTasks += "updates"
 }
+if ($IncludeStartup) {
+    $selectedTasks += "startup"
+}
+$tasks = $selectedTasks -join ","
 
 $arguments = @(
     "/VERYSILENT",
@@ -107,8 +134,16 @@ if ($IncludeStartup) {
     Assert-True -Condition ($startup -like "*clawmeter.exe* tray*") -Message "created launch-at-login registry value"
 }
 
-& $exePath providers | Out-String | Write-Host
-Assert-True -Condition ($LASTEXITCODE -eq 0) -Message "installed CLI runs providers"
+Assert-CommandOutput -Message "bare clawmeter" -Command { & $exePath }
+Assert-CommandOutput -Message "clawmeter providers" -Command { & $exePath providers }
+
+$configOutput = & $exePath config show 2>&1 | Out-String
+Assert-True -Condition ($LASTEXITCODE -eq 0) -Message "config show exited 0"
+if ($DisableUpdates) {
+    Assert-True -Condition ($configOutput -match "Check for updates:\s+false") -Message "installer disabled automatic update checks"
+} else {
+    Assert-True -Condition ($configOutput -match "Check for updates:\s+true") -Message "automatic update checks enabled by default"
+}
 
 if ($ExpectSigned) {
     Assert-Signed -Path $exePath
@@ -131,3 +166,11 @@ if ($null -eq $userPathAfter) {
 }
 $pathPartsAfter = @($userPathAfter -split ";" | ForEach-Object { $_.TrimEnd("\") })
 Assert-True -Condition (-not ($pathPartsAfter -contains $installDir.TrimEnd("\"))) -Message "removed install directory from user PATH"
+}
+finally {
+    Remove-Item -Force $configPath -ErrorAction SilentlyContinue
+    if ($configBackup -and (Test-Path $configBackup)) {
+        New-Item -ItemType Directory -Force -Path (Split-Path $configPath -Parent) | Out-Null
+        Move-Item -Force $configBackup $configPath
+    }
+}
