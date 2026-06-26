@@ -76,6 +76,21 @@ func TestIconMeterStateKeepsUnavailableDataNeutral(t *testing.T) {
 	}
 }
 
+func TestIconMeterStateKeepsStaleDataNeutral(t *testing.T) {
+	meter := iconMeterState(&provider.UsageData{
+		Provider: "openai",
+		Stale:    true,
+		Warning:  "failed to fetch codex rate limits",
+		Windows: []provider.UsageWindow{
+			{Name: "7d", Utilization: 99, ResetsAt: time.Now().Add(24 * time.Hour)},
+		},
+	}, "")
+
+	if meter.UsagePct != 0 || meter.ExpectedPct != 0 || meter.RiskPct != 0 || meter.ShowExpected {
+		t.Fatalf("meter = %+v, want neutral provider icon for stale data", meter)
+	}
+}
+
 func TestProviderSeverityUsesHighestProjectedUsage(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
@@ -124,6 +139,34 @@ func TestIconTargetOverrideCyclesOnlyThroughProviderQuotaWindows(t *testing.T) {
 	}
 	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
 		t.Fatalf("next from missing override = %+v, want claude/5h", got)
+	}
+}
+
+func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Error:    "failed to fetch codex rate limits",
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 20, ResetsAt: now.Add(2 * time.Hour)},
+			},
+		},
+	}
+
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+
+	name, _, windowName, ok := selectedTrayTarget(results)
+	if !ok {
+		t.Fatal("selectedTrayTarget returned no provider")
+	}
+	if name != "claude" || windowName != "5h" {
+		t.Fatalf("selected target = %s/%s, want claude/5h", name, windowName)
 	}
 }
 

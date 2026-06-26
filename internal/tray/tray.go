@@ -782,11 +782,18 @@ func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provid
 
 	for _, name := range sortedKeys(results) {
 		data := results[name]
+		if data == nil {
+			continue
+		}
+		window, _, ok := selectedIconWindow(data, "")
+		if ok {
+			return name, data, window.Name, true
+		}
+	}
+
+	for _, name := range sortedKeys(results) {
+		data := results[name]
 		if data != nil {
-			window, _, ok := selectedIconWindow(data, "")
-			if ok {
-				return name, data, window.Name, true
-			}
 			return name, data, "", true
 		}
 	}
@@ -811,9 +818,9 @@ func updateAvailable() bool {
 
 func updateTrayIcon(results map[string]*provider.UsageData) {
 	// Pick the icon's provider using the same severity ordering as the title
-	// and tooltip so an expired/error state never hides behind a healthier
-	// provider's icon. Expired/error map to a red full meter even though
-	// there's no real utilization number.
+	// and tooltip, but prefer providers with usable quota windows. Setup and
+	// fetch errors are actionable in the menu; they should not steal the tray
+	// icon from real quota telemetry.
 	worstProvider := ""
 	meter := icons.MeterState{}
 
@@ -836,6 +843,9 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 	}
 	if data.IsExpired {
 		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
+	}
+	if data.Stale {
+		return icons.MeterState{}
 	}
 	if data.Error != "" && !data.HasUsageWindows() {
 		return icons.MeterState{}
