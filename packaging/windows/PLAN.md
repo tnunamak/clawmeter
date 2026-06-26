@@ -41,7 +41,7 @@ choco install innosetup --no-progress -y
 Before publishing or updating WinGet, verify the final public release asset in a clean Windows VM:
 
 ```powershell
-$version = "0.22.0"
+$version = "X.Y.Z"
 $base = "https://github.com/tnunamak/clawmeter/releases/download/v$version"
 Invoke-WebRequest "$base/ClawmeterSetup.exe" -OutFile ClawmeterSetup.exe
 Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile SHA256SUMS.txt
@@ -52,8 +52,8 @@ Select-String -Path .\SHA256SUMS.txt -Pattern "ClawmeterSetup.exe"
 Repeatable VM verifier:
 
 ```powershell
-.\packaging\windows\verify-release.ps1 -Version 0.22.0 -IncludeStartup
-.\packaging\windows\verify-release.ps1 -Version 0.22.0 -DisableUpdates -ScanWithDefender
+.\packaging\windows\verify-release.ps1 -Version vX.Y.Z -IncludeStartup
+.\packaging\windows\verify-release.ps1 -Version vX.Y.Z -DisableUpdates -ScanWithDefender
 ```
 
 VM checklist:
@@ -96,7 +96,7 @@ WINGET_DRY_RUN=1 packaging/winget/submit-pr.sh vX.Y.Z
 On Windows with local manifest mode:
 
 ```powershell
-$version = "0.22.0"
+$version = "X.Y.Z"
 $manifest = ".\packaging\winget\out\manifests\t\tnunamak\Clawmeter\$version"
 winget validate --manifest $manifest --disable-interactivity --enable LocalManifestFiles
 winget install --manifest $manifest --silent tnunamak.Clawmeter -e

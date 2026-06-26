@@ -54,8 +54,8 @@ For signed builds:
 To verify the public release artifact in a clean Windows VM:
 
 ```powershell
-.\packaging\windows\verify-release.ps1 -Version 0.22.0 -IncludeStartup
-.\packaging\windows\verify-release.ps1 -Version 0.22.0 -DisableUpdates -ScanWithDefender
+.\packaging\windows\verify-release.ps1 -Version vX.Y.Z -IncludeStartup
+.\packaging\windows\verify-release.ps1 -Version vX.Y.Z -DisableUpdates -ScanWithDefender
 ```
 
 `verify-release.ps1` downloads `ClawmeterSetup.exe`, checks it against `SHA256SUMS.txt`, optionally scans it with Microsoft Defender, and then delegates install/uninstall checks to `verify-installer.ps1`.

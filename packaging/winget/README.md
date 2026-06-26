@@ -33,25 +33,25 @@ The first accepted package appears as `New package`; later releases appear as `N
 Generate a manifest against an existing release asset:
 
 ```bash
-packaging/winget/generate.sh v0.22.0
+packaging/winget/generate.sh vX.Y.Z
 ```
 
 Generate a manifest against a local installer before release upload:
 
 ```bash
-WINGET_ASSET_PATH=/path/to/ClawmeterSetup.exe packaging/winget/generate.sh v0.22.0
+WINGET_ASSET_PATH=/path/to/ClawmeterSetup.exe packaging/winget/generate.sh vX.Y.Z
 ```
 
 Dry-run PR automation without pushing:
 
 ```bash
-WINGET_DRY_RUN=1 packaging/winget/submit-pr.sh v0.22.0
+WINGET_DRY_RUN=1 packaging/winget/submit-pr.sh vX.Y.Z
 ```
 
 On Windows:
 
 ```powershell
-$version = "0.22.0"
+$version = "X.Y.Z"
 $manifest = ".\packaging\winget\out\manifests\t\tnunamak\Clawmeter\$version"
 winget validate --manifest $manifest --disable-interactivity
 winget settings --enable LocalManifestFiles
