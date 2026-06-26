@@ -69,6 +69,15 @@ VM checklist:
 - Automatic update checks can be disabled during install or later with `clawmeter config set check_for_updates false`.
 - Uninstall removes install directory executable, Start Menu shortcut, startup Run key, and PATH entry.
 
+Quickemu host-control checklist:
+
+- `python3 packaging/windows/qemu-guest-agent.py --socket <agent.sock> ping` returns a QGA response.
+- `python3 packaging/windows/qemu-guest-agent.py --socket <agent.sock> fix-quickemu-share` can list `\\10.0.2.4\qemu`.
+- `python3 packaging/windows/qemu-guest-agent.py --socket <agent.sock> create-test-user` creates or repairs the local VM test user.
+- `python3 packaging/windows/qemu-guest-agent.py --socket <agent.sock> smoke-ssh --port <ssh-port>` proves normal-user command execution works.
+- Do not use SSH network logons as the oracle for `\\10.0.2.4\qemu`; use Guest Agent for share repair/verification and the desktop session for final installer UX.
+- If the running VM disk was recovered from a deleted QEMU fd, pause QEMU before copying `/proc/<pid>/fd/<disk-fd>` back to `disk.qcow2`, then run `qemu-img check -r all disk.qcow2`.
+
 Defender / Windows Security checklist:
 
 - Run `collect-defender-evidence.ps1` only when Windows Security actually flags an installer or executable.

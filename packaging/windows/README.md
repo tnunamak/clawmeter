@@ -68,6 +68,43 @@ If Windows Security flags Clawmeter, collect a local evidence bundle before chan
 
 The script writes hashes, Authenticode status, Defender status, and matching detections to a local folder. It does not submit anything automatically. Submit confirmed false positives through Microsoft's file submission portal: <https://www.microsoft.com/en-us/wdsi/filesubmission>.
 
+## Quickemu VM Control
+
+For local Quickemu-based Windows verification, prefer QEMU Guest Agent for privileged setup and SSH for normal-user smoke tests.
+
+Guest Agent smoke test:
+
+```bash
+python3 packaging/windows/qemu-guest-agent.py \
+  --socket <agent.sock> \
+  ping
+```
+
+Repair Quickemu's `\\10.0.2.4\qemu` share inside Windows if `dir \\10.0.2.4\qemu` fails even though port 445 is reachable:
+
+```bash
+python3 packaging/windows/qemu-guest-agent.py \
+  --socket <agent.sock> \
+  fix-quickemu-share
+```
+
+The repair restores the `LanmanWorkstation` service DLL registration and disables SMB signing / guest-auth policies for this local VM share. Do not use that policy change as general Windows setup advice.
+
+Create a local test account and verify normal-user command execution over Quickemu's forwarded SSH port:
+
+```bash
+python3 packaging/windows/qemu-guest-agent.py \
+  --socket <agent.sock> \
+  create-test-user
+
+python3 packaging/windows/qemu-guest-agent.py \
+  --socket <agent.sock> \
+  smoke-ssh --port 22220
+```
+
+The default test account is `ClawmeterTest` with password `quickemu`; it is for disposable local VM verification only.
+Do not use SSH logon sessions as the oracle for `\\10.0.2.4\qemu` share access; Windows applies different SMB behavior to SSH network logons. Use `fix-quickemu-share` for privileged share verification, then run installer checks from the desktop or copy artifacts through Guest Agent when needed.
+
 The full release plan and verification matrix live in [PLAN.md](PLAN.md).
 
 ## Non-Goals
