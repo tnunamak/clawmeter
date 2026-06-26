@@ -302,8 +302,8 @@ jobs:
           }
 
           check_plist_key 'Label = com.clawmeter.tray'   '"com\.clawmeter\.tray"'
-          check_plist_key 'RunAtLoad = 1'                '"RunAtLoad"( =>)? 1'
-          check_plist_key 'AbandonProcessGroup = 1'      '"AbandonProcessGroup" => 1'
+          check_plist_key 'RunAtLoad = true'             '"RunAtLoad"( =>)? (1|true)'
+          check_plist_key 'AbandonProcessGroup = true'   '"AbandonProcessGroup" => (1|true)'
           check_plist_key 'ProcessType = Interactive'    '"ProcessType" => "Interactive"'
 
           # ProgramArguments[0] should end with "clawmeter"
