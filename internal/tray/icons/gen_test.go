@@ -144,6 +144,14 @@ func TestProviderIconsIncludeUpdateBadgeAtTraySize(t *testing.T) {
 	if countBlueDominantPixels(img) < 4 {
 		t.Fatal("update badge is not visible at tray size")
 	}
+
+	bounds := blueDominantBounds(img)
+	if bounds.Empty() {
+		t.Fatal("update badge bounds are empty")
+	}
+	if bounds.Min.X < 17 || bounds.Max.Y > 6 {
+		t.Fatalf("update badge bounds = %v, want clipped top-right corner", bounds)
+	}
 }
 
 func TestNormalizeMeterLabelKeepsTwoAlphanumericCharacters(t *testing.T) {
@@ -447,6 +455,42 @@ func countBlueDominantPixels(img image.Image) int {
 		}
 	}
 	return n
+}
+
+func blueDominantBounds(img image.Image) image.Rectangle {
+	bounds := img.Bounds()
+	minX, minY := bounds.Max.X, bounds.Max.Y
+	maxX, maxY := bounds.Min.X, bounds.Min.Y
+	found := false
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if c.A < 200 {
+				continue
+			}
+			r, g, b := int(c.R), int(c.G), int(c.B)
+			if b <= 180 || b <= r+45 || b <= g+20 {
+				continue
+			}
+			found = true
+			if x < minX {
+				minX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if x+1 > maxX {
+				maxX = x + 1
+			}
+			if y+1 > maxY {
+				maxY = y + 1
+			}
+		}
+	}
+	if !found {
+		return image.Rectangle{}
+	}
+	return image.Rect(minX, minY, maxX, maxY)
 }
 
 func hasOpaquePixelNearFractionAtRadius(img image.Image, fraction, radius, tolerance float64) bool {

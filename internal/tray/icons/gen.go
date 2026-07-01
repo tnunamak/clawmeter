@@ -169,10 +169,10 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 }
 
 func drawUpdateBadge(dst *image.RGBA) {
-	cx, cy := 104.0, 24.0
-	drawFilledCircle(dst, cx+1, cy+1, 17, color.NRGBA{R: 0, G: 0, B: 0, A: 90})
-	drawFilledCircle(dst, cx, cy, 16, color.NRGBA{R: 255, G: 255, B: 255, A: 245})
-	drawFilledCircle(dst, cx, cy, 11, color.NRGBA{R: 42, G: 127, B: 255, A: 255})
+	cx, cy := 114.0, 14.0
+	drawFilledCircle(dst, cx+1, cy+1, 15, color.NRGBA{R: 0, G: 0, B: 0, A: 90})
+	drawFilledCircle(dst, cx, cy, 14, color.NRGBA{R: 255, G: 255, B: 255, A: 245})
+	drawFilledCircle(dst, cx, cy, 9, color.NRGBA{R: 42, G: 127, B: 255, A: 255})
 }
 
 func drawFilledCircle(dst *image.RGBA, cx, cy, radius float64, c color.NRGBA) {
