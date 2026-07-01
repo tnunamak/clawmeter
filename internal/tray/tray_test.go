@@ -159,6 +159,7 @@ func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T)
 
 	s.mu.Lock()
 	s.iconTargetOverride = iconTarget{}
+	s.iconAutoMode = iconAutoRisk
 	s.mu.Unlock()
 
 	name, _, windowName, ok := selectedTrayTarget(results)
@@ -172,10 +173,13 @@ func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T)
 
 func TestIconCycleMenuTitleMentionsDoubleClickAutoReset(t *testing.T) {
 	displayNames := map[string]string{"claude": "Claude"}
-	if got := iconCycleMenuTitle(iconTarget{}, displayNames); got != "Icon: Auto (click to cycle)" {
+	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRisk); got != "Icon: Auto Risk (click to cycle)" {
 		t.Fatalf("auto title = %q", got)
 	}
-	got := iconCycleMenuTitle(iconTarget{Provider: "claude", Window: "7d All"}, displayNames)
+	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRunway); got != "Icon: Auto Runway (click to cycle)" {
+		t.Fatalf("runway auto title = %q", got)
+	}
+	got := iconCycleMenuTitle(iconTarget{Provider: "claude", Window: "7d All"}, displayNames, iconAutoRisk)
 	want := "Icon: Claude 7A (click for next, double-click for Auto)"
 	if got != want {
 		t.Fatalf("pinned title = %q, want %q", got, want)
@@ -230,7 +234,7 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByProjectedRisk(t *testing.T)
 		},
 	}
 
-	got := activeIconTargets(results)
+	got := activeIconTargets(results, iconAutoRisk)
 	want := []iconTarget{
 		{Provider: "claude", Window: "7d Sonnet"},
 		{Provider: "openai", Window: "7d"},
@@ -245,6 +249,85 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByProjectedRisk(t *testing.T)
 		if got[i] != want[i] {
 			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestActiveIconTargetsRunwayOrdersByMostRemainingProjectedRoom(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
+				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 77, ResetsAt: now.Add(87 * time.Minute)},
+				{Name: "7d All", Utilization: 5, ResetsAt: now.Add(8 * time.Hour)},
+				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
+			},
+		},
+		"gemini": {
+			Provider: "gemini",
+			Error:    "usage unavailable",
+		},
+	}
+
+	got := activeIconTargets(results, iconAutoRunway)
+	want := []iconTarget{
+		{Provider: "claude", Window: "7d All"},
+		{Provider: "openai", Window: "5h"},
+		{Provider: "claude", Window: "5h"},
+		{Provider: "openai", Window: "7d"},
+		{Provider: "claude", Window: "7d Sonnet"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSelectedTrayTargetRunwayUsesMostAvailableUsableQuota(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 5, ResetsAt: now.Add(2 * 24 * time.Hour)},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 80, ResetsAt: now.Add(2 * time.Hour)},
+			},
+		},
+	}
+
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.iconAutoMode = iconAutoRunway
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.iconAutoMode = iconAutoRisk
+		s.iconTargetOverride = iconTarget{}
+		s.mu.Unlock()
+	}()
+
+	name, _, windowName, ok := selectedTrayTarget(results)
+	if !ok {
+		t.Fatal("selectedTrayTarget returned no provider")
+	}
+	if name != "openai" || windowName != "7d" {
+		t.Fatalf("selected target = %s/%s, want openai/7d", name, windowName)
 	}
 }
 

@@ -42,6 +42,7 @@ type state struct {
 	currentTitle       string
 	currentTooltip     string
 	lastRefreshAt      time.Time
+	iconAutoMode       iconAutoMode
 	iconTargetOverride iconTarget
 	iconTargetChoices  []iconTarget
 }
@@ -50,6 +51,13 @@ type iconTarget struct {
 	Provider string
 	Window   string
 }
+
+type iconAutoMode string
+
+const (
+	iconAutoRisk   iconAutoMode = "risk"
+	iconAutoRunway iconAutoMode = "runway"
+)
 
 var (
 	s                state
@@ -121,6 +129,7 @@ func onReady() {
 
 	// Global menu items
 	mIconProvider := systray.AddMenuItem("Icon: Auto (click to cycle)", "")
+	mIconAutoMode := systray.AddMenuItem("Auto Mode: Risk", "")
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	systray.AddSeparator()
 	iconActionCh := iconClickActions
@@ -365,12 +374,14 @@ func onReady() {
 				go checkUpdate()
 			case action := <-iconActionCh:
 				if action == iconClickResetAuto {
-					resetIconSelection(providerMenus, mIconProvider)
+					resetIconSelection(providerMenus, mIconProvider, mIconAutoMode)
 				} else {
 					cycleIconSelection(providerMenus, mIconProvider)
 				}
 			case <-mIconProvider.ClickedCh:
 				cycleIconSelection(providerMenus, mIconProvider)
+			case <-mIconAutoMode.ClickedCh:
+				toggleIconAutoMode(providerMenus, mIconProvider, mIconAutoMode)
 			case <-mUpdate.ClickedCh:
 				applyUpdate()
 			case <-mAutostart.ClickedCh:
@@ -577,7 +588,8 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 
 	s.mu.Lock()
 	results := s.lastResults
-	choices := activeIconTargets(results)
+	mode := normalizedIconAutoModeLocked()
+	choices := activeIconTargets(results, mode)
 	s.iconTargetChoices = choices
 	if !targetInChoices(s.iconTargetOverride, choices) {
 		s.iconTargetOverride = iconTarget{}
@@ -591,17 +603,45 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	updateTrayTooltip(results, displayNames)
 }
 
-func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem) {
+func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem, modeItem *systray.MenuItem) {
 	displayNames := providerDisplayNames(menus)
 
 	s.mu.Lock()
 	results := s.lastResults
-	choices := activeIconTargets(results)
+	mode := normalizedIconAutoModeLocked()
+	choices := activeIconTargets(results, mode)
 	s.iconTargetChoices = choices
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
 	updateIconTargetSelector(results, displayNames, item)
+	updateIconAutoModeLabel(modeItem)
+	updateTrayIcon(results)
+	updateTrayTitle(results)
+	updateTrayTooltip(results, displayNames)
+}
+
+func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuItem, modeItem *systray.MenuItem) {
+	displayNames := providerDisplayNames(menus)
+
+	s.mu.Lock()
+	results := s.lastResults
+	current := normalizedIconAutoModeLocked()
+	if current == iconAutoRisk {
+		s.iconAutoMode = iconAutoRunway
+	} else {
+		s.iconAutoMode = iconAutoRisk
+	}
+	mode := s.iconAutoMode
+	choices := activeIconTargets(results, mode)
+	s.iconTargetChoices = choices
+	if !targetInChoices(s.iconTargetOverride, choices) {
+		s.iconTargetOverride = iconTarget{}
+	}
+	s.mu.Unlock()
+
+	updateIconTargetSelector(results, displayNames, item)
+	updateIconAutoModeLabel(modeItem)
 	updateTrayIcon(results)
 	updateTrayTitle(results)
 	updateTrayTooltip(results, displayNames)
@@ -616,7 +656,8 @@ func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string
 }
 
 func updateIconTargetSelector(results map[string]*provider.UsageData, displayNames map[string]string, item *systray.MenuItem) {
-	choices := activeIconTargets(results)
+	mode := currentIconAutoMode()
+	choices := activeIconTargets(results, mode)
 
 	s.mu.Lock()
 	if !targetInChoices(s.iconTargetOverride, choices) {
@@ -636,13 +677,28 @@ func updateIconTargetSelector(results map[string]*provider.UsageData, displayNam
 
 	if item != nil {
 		item.Enable()
-		item.SetTitle(iconCycleMenuTitle(override, displayNames))
+		item.SetTitle(iconCycleMenuTitle(override, displayNames, mode))
 	}
 }
 
-func iconCycleMenuTitle(target iconTarget, displayNames map[string]string) string {
+func updateIconAutoModeLabel(item *systray.MenuItem) {
+	if item == nil {
+		return
+	}
+	mode := currentIconAutoMode()
+	if mode == iconAutoRunway {
+		item.SetTitle("Auto Mode: Runway")
+		return
+	}
+	item.SetTitle("Auto Mode: Risk")
+}
+
+func iconCycleMenuTitle(target iconTarget, displayNames map[string]string, mode iconAutoMode) string {
 	if target.Provider == "" {
-		return "Icon: Auto (click to cycle)"
+		if mode == iconAutoRunway {
+			return "Icon: Auto Runway (click to cycle)"
+		}
+		return "Icon: Auto Risk (click to cycle)"
 	}
 	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (click for next, double-click for Auto)"
 }
@@ -669,13 +725,13 @@ func nextIconTargetOverride(current iconTarget, choices []iconTarget, skipAutoCu
 	return choices[0]
 }
 
-func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
+func activeIconTargets(results map[string]*provider.UsageData, mode iconAutoMode) []iconTarget {
 	if len(results) == 0 {
 		return nil
 	}
 	type rankedTarget struct {
 		target iconTarget
-		risk   float64
+		score  float64
 	}
 
 	providerNames := make([]string, 0, len(results))
@@ -692,17 +748,25 @@ func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
 		}
 		windows := data.UsableWindows()
 		if len(windows) == 0 {
+			if mode == iconAutoRunway {
+				continue
+			}
 			target := iconTarget{Provider: name}
-			ranked = append(ranked, rankedTarget{target: target, risk: iconTargetRisk(data, target)})
+			ranked = append(ranked, rankedTarget{target: target, score: iconTargetRisk(data, target)})
 			continue
 		}
 		for _, window := range windows {
 			target := iconTarget{Provider: name, Window: window.Name}
-			ranked = append(ranked, rankedTarget{target: target, risk: windowProjectedPct(window)})
+			projected := windowProjectedPct(window)
+			score := projected
+			if mode == iconAutoRunway {
+				score = 100 - projected
+			}
+			ranked = append(ranked, rankedTarget{target: target, score: score})
 		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
-		return ranked[i].risk > ranked[j].risk
+		return ranked[i].score > ranked[j].score
 	})
 
 	choices := make([]iconTarget, 0, len(ranked))
@@ -710,6 +774,19 @@ func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
 		choices = append(choices, choice.target)
 	}
 	return choices
+}
+
+func currentIconAutoMode() iconAutoMode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return normalizedIconAutoModeLocked()
+}
+
+func normalizedIconAutoModeLocked() iconAutoMode {
+	if s.iconAutoMode == iconAutoRunway {
+		return iconAutoRunway
+	}
+	return iconAutoRisk
 }
 
 func iconTargetRisk(data *provider.UsageData, target iconTarget) float64 {
@@ -769,6 +846,7 @@ func providerDisplayName(name string, displayNames map[string]string) string {
 func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provider.UsageData, string, bool) {
 	s.mu.Lock()
 	override := s.iconTargetOverride
+	mode := normalizedIconAutoModeLocked()
 	s.mu.Unlock()
 
 	if override.Provider != "" {
@@ -780,14 +858,14 @@ func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provid
 		}
 	}
 
-	for _, name := range sortedKeys(results) {
-		data := results[name]
+	for _, target := range activeIconTargets(results, mode) {
+		data := results[target.Provider]
 		if data == nil {
 			continue
 		}
-		window, _, ok := selectedIconWindow(data, "")
+		window, _, ok := selectedIconWindow(data, target.Window)
 		if ok {
-			return name, data, window.Name, true
+			return target.Provider, data, window.Name, true
 		}
 	}
 
