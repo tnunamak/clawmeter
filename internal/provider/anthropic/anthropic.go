@@ -164,6 +164,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 }
 
 func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
+	seen := make(map[string]bool)
 	type namedWindow struct {
 		name, display string
 		w             *usageWindow
@@ -183,7 +184,42 @@ func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
 				Utilization: nw.w.Utilization,
 				ResetsAt:    nw.w.ResetsAt,
 			})
+			seen[nw.name] = true
 		}
+	}
+	addLimitWindows(data, apiResp.Limits, seen)
+}
+
+func addLimitWindows(data *provider.UsageData, limits []usageLimit, seen map[string]bool) {
+	for _, limit := range limits {
+		name, display, ok := limitWindowName(limit)
+		if !ok || seen[name] || limit.Percent < 0 || limit.ResetsAt.IsZero() {
+			continue
+		}
+		data.Windows = append(data.Windows, provider.UsageWindow{
+			Name:        name,
+			DisplayName: display,
+			Utilization: limit.Percent,
+			ResetsAt:    limit.ResetsAt,
+		})
+		seen[name] = true
+	}
+}
+
+func limitWindowName(limit usageLimit) (string, string, bool) {
+	switch limit.Kind {
+	case "session":
+		return "5h", "5 hours", true
+	case "weekly_all":
+		return "7d All", "7 days (all models)", true
+	case "weekly_scoped":
+		if limit.Scope == nil || limit.Scope.Model == nil || strings.TrimSpace(limit.Scope.Model.DisplayName) == "" {
+			return "", "", false
+		}
+		modelName := strings.TrimSpace(limit.Scope.Model.DisplayName)
+		return "7d " + modelName, "7 days (" + modelName + ")", true
+	default:
+		return "", "", false
 	}
 }
 
@@ -380,6 +416,7 @@ type usageResponse struct {
 	SevenDaySonnet    *usageWindow      `json:"seven_day_sonnet,omitempty"`
 	IguanaNecktie     *usageWindow      `json:"iguana_necktie,omitempty"`
 	ExtraUsage        *extraUsageWindow `json:"extra_usage,omitempty"`
+	Limits            []usageLimit      `json:"limits,omitempty"`
 }
 
 func (r usageResponse) usageUnavailable() bool {
@@ -406,6 +443,21 @@ func hasResetlessModelWindow(r usageResponse) bool {
 type usageWindow struct {
 	Utilization float64   `json:"utilization"`
 	ResetsAt    time.Time `json:"resets_at"`
+}
+
+type usageLimit struct {
+	Kind     string           `json:"kind"`
+	Percent  float64          `json:"percent"`
+	ResetsAt time.Time        `json:"resets_at"`
+	Scope    *usageLimitScope `json:"scope"`
+}
+
+type usageLimitScope struct {
+	Model *usageLimitModelScope `json:"model"`
+}
+
+type usageLimitModelScope struct {
+	DisplayName string `json:"display_name"`
 }
 
 type extraUsageWindow struct {
