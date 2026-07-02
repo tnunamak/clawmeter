@@ -726,6 +726,14 @@ func nextIconTargetOverride(current iconTarget, choices []iconTarget, skipAutoCu
 }
 
 func activeIconTargets(results map[string]*provider.UsageData, mode iconAutoMode) []iconTarget {
+	choices := activeIconTargetsAllowingStale(results, mode, false)
+	if len(choices) > 0 {
+		return choices
+	}
+	return activeIconTargetsAllowingStale(results, mode, true)
+}
+
+func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode iconAutoMode, allowStale bool) []iconTarget {
 	if len(results) == 0 {
 		return nil
 	}
@@ -744,6 +752,9 @@ func activeIconTargets(results map[string]*provider.UsageData, mode iconAutoMode
 	for _, name := range providerNames {
 		data := results[name]
 		if data == nil {
+			continue
+		}
+		if data.Stale && !allowStale {
 			continue
 		}
 		windows := data.UsableWindows()
@@ -848,17 +859,17 @@ func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provid
 	override := s.iconTargetOverride
 	mode := normalizedIconAutoModeLocked()
 	s.mu.Unlock()
+	choices := activeIconTargets(results, mode)
 
 	if override.Provider != "" {
-		if data := results[override.Provider]; data != nil {
-			_, hasWindow := data.GetWindow(override.Window)
-			if override.Window == "" || hasWindow {
+		if targetInChoices(override, choices) {
+			if data := results[override.Provider]; data != nil {
 				return override.Provider, data, override.Window, true
 			}
 		}
 	}
 
-	for _, target := range activeIconTargets(results, mode) {
+	for _, target := range choices {
 		data := results[target.Provider]
 		if data == nil {
 			continue
@@ -1076,16 +1087,27 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 	if data.Error != "" && !data.HasUsageWindows() {
 		return fmt.Sprintf("%s: %s", display, format.HumanizeError(data.Error))
 	}
+	if data.Stale {
+		reason := staleTooltipReason(data)
+		if !data.FetchedAt.IsZero() {
+			return fmt.Sprintf("%s: stale - showing last good data from %s (%s)", display, data.FetchedAt.Local().Format("15:04"), reason)
+		}
+		return fmt.Sprintf("%s: stale - showing last good data (%s)", display, reason)
+	}
 
 	window, proj, ok := selectedIconWindow(data, windowName)
 	if !ok {
 		return display
 	}
 	title := iconTooltipTitle(display, window)
-	if data.Stale {
-		title += " (stale)"
-	}
 	return compactIconTooltip(title, window, proj)
+}
+
+func staleTooltipReason(data *provider.UsageData) string {
+	if data == nil || data.Warning == "" {
+		return "usage unavailable"
+	}
+	return format.HumanizeError(data.Warning)
 }
 
 func compactIconTooltip(title string, window provider.UsageWindow, proj forecast.Projection) string {

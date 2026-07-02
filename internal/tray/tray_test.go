@@ -294,6 +294,54 @@ func TestActiveIconTargetsRunwayOrdersByMostRemainingProjectedRoom(t *testing.T)
 	}
 }
 
+func TestActiveIconTargetsPrefersFreshWindowsOverStaleFallback(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"claude": {
+			Provider:  "claude",
+			Stale:     true,
+			Warning:   "rate limited (429)",
+			FetchedAt: now.Add(-15 * time.Minute),
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 95, ResetsAt: now.Add(1 * time.Hour)},
+			},
+		},
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)},
+			},
+		},
+	}
+
+	got := activeIconTargets(results, iconAutoRisk)
+	want := []iconTarget{{Provider: "openai", Window: "7d"}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("activeIconTargets = %+v, want only fresh target %+v", got, want)
+	}
+}
+
+func TestActiveIconTargetsKeepsStaleFallbackWhenNoFreshWindows(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"claude": {
+			Provider:  "claude",
+			Stale:     true,
+			Warning:   "rate limited (429)",
+			FetchedAt: now.Add(-15 * time.Minute),
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 11, ResetsAt: now.Add(4 * time.Hour)},
+			},
+		},
+	}
+
+	got := activeIconTargets(results, iconAutoRisk)
+	want := []iconTarget{{Provider: "claude", Window: "5h"}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("activeIconTargets = %+v, want stale fallback target %+v", got, want)
+	}
+}
+
 func TestSelectedTrayTargetRunwayUsesMostAvailableUsableQuota(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
@@ -319,6 +367,45 @@ func TestSelectedTrayTargetRunwayUsesMostAvailableUsableQuota(t *testing.T) {
 		s.mu.Lock()
 		s.iconAutoMode = iconAutoRisk
 		s.iconTargetOverride = iconTarget{}
+		s.mu.Unlock()
+	}()
+
+	name, _, windowName, ok := selectedTrayTarget(results)
+	if !ok {
+		t.Fatal("selectedTrayTarget returned no provider")
+	}
+	if name != "openai" || windowName != "7d" {
+		t.Fatalf("selected target = %s/%s, want openai/7d", name, windowName)
+	}
+}
+
+func TestSelectedTrayTargetIgnoresStaleOverrideWhenFreshTargetExists(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"claude": {
+			Provider: "claude",
+			Stale:    true,
+			Warning:  "rate limited (429)",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 95, ResetsAt: now.Add(1 * time.Hour)},
+			},
+		},
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)},
+			},
+		},
+	}
+
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{Provider: "claude", Window: "5h"}
+	s.iconAutoMode = iconAutoRisk
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.iconTargetOverride = iconTarget{}
+		s.iconAutoMode = iconAutoRisk
 		s.mu.Unlock()
 	}()
 
@@ -510,6 +597,37 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 	}
 	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 3 {
 		t.Fatalf("trayTooltip() = %q, want four newline-separated lines", got)
+	}
+}
+
+func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"claude": {
+			Provider:  "claude",
+			Stale:     true,
+			Warning:   "rate limited (429)",
+			FetchedAt: now.Add(-15 * time.Minute),
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 11, ResetsAt: now.Add(4 * time.Hour)},
+			},
+		},
+	}
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.iconAutoMode = iconAutoRisk
+	s.mu.Unlock()
+
+	got := trayTooltip(results, map[string]string{"claude": "Claude"})
+
+	if !strings.HasPrefix(got, "Claude: stale - showing last good data from ") {
+		t.Fatalf("trayTooltip() = %q, want stale fallback summary", got)
+	}
+	if !strings.Contains(got, "rate limited") {
+		t.Fatalf("trayTooltip() = %q, want stale reason", got)
+	}
+	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est.") {
+		t.Fatalf("trayTooltip() = %q, should not forecast stale data like live usage", got)
 	}
 }
 
