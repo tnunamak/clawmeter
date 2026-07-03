@@ -236,7 +236,7 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		{
 			name: "over limit estimate with run-out note",
 			proj: Projection{ProjectedPct: 139, WillLastToReset: false, RunsOutIn: 2 * time.Hour, RunsOutEarlyBy: time.Hour},
-			want: "est. 139% at reset · runs out in 2h00m",
+			want: "est. 139% at reset · runs out in 2h00m (1h00m before reset)",
 		},
 		{
 			name: "zero usage estimate",
@@ -261,7 +261,7 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		{
 			name: "already out",
 			proj: Projection{ProjectedPct: 128, WillLastToReset: false, RunsOutEarlyBy: time.Hour},
-			want: "out now",
+			want: "out now (1h00m until reset)",
 		},
 	}
 
@@ -270,6 +270,43 @@ func TestProjection_PaceIndicator(t *testing.T) {
 			got := tt.proj.PaceIndicator()
 			if !strings.Contains(got, tt.want) {
 				t.Errorf("PaceIndicator() = %q, want substring %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProjection_RunOutNote(t *testing.T) {
+	tests := []struct {
+		name string
+		proj Projection
+		want string
+	}{
+		{
+			name: "on track has no note",
+			proj: Projection{ProjectedPct: 70, WillLastToReset: true},
+			want: "",
+		},
+		{
+			name: "projected runout includes blocked gap",
+			proj: Projection{ProjectedPct: 124, WillLastToReset: false, RunsOutIn: 46 * time.Hour, RunsOutEarlyBy: 32 * time.Hour},
+			want: "runs out in 1d22h (1d8h before reset)",
+		},
+		{
+			name: "already out names remaining reset wait",
+			proj: Projection{ProjectedPct: 180, WillLastToReset: false, RunsOutEarlyBy: 52 * time.Hour},
+			want: "out now (2d4h until reset)",
+		},
+		{
+			name: "missing gap still reports runout",
+			proj: Projection{ProjectedPct: 124, WillLastToReset: false, RunsOutIn: 90 * time.Minute},
+			want: "runs out in 1h30m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.proj.RunOutNote(); got != tt.want {
+				t.Errorf("RunOutNote() = %q, want %q", got, tt.want)
 			}
 		})
 	}

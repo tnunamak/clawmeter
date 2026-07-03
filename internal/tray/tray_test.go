@@ -28,6 +28,44 @@ func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
 	}
 }
 
+func TestCompactIconTooltipShowsBlockedGap(t *testing.T) {
+	got := compactIconTooltip("OpenAI 7-Day", provider.UsageWindow{
+		Name:     "7d",
+		ResetsAt: time.Now().Add(3 * time.Hour),
+	}, forecast.Projection{
+		ProjectedPct:    124,
+		WillLastToReset: false,
+		RunsOutIn:       90 * time.Minute,
+		RunsOutEarlyBy:  time.Hour,
+	})
+
+	for _, want := range []string{
+		"OpenAI 7-Day",
+		"Runs out in 1h30m (1h00m before reset)",
+		"Resets in",
+		"Est. 124% at reset",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("compactIconTooltip() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestCompactIconTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
+	got := compactIconTooltip("OpenAI 7-Day", provider.UsageWindow{
+		Name:     "7d",
+		ResetsAt: time.Now().Add(2 * time.Hour),
+	}, forecast.Projection{
+		ProjectedPct:    180,
+		WillLastToReset: false,
+		RunsOutEarlyBy:  2 * time.Hour,
+	})
+
+	if !strings.Contains(got, "Out now (2h00m until reset)") {
+		t.Fatalf("compactIconTooltip() = %q, want already-out wait", got)
+	}
+}
+
 func TestIconMeterStateUsesActualExpectedAndProjectedRiskSeparately(t *testing.T) {
 	now := time.Now()
 	data := &provider.UsageData{

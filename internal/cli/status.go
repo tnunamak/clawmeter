@@ -345,6 +345,13 @@ func (m *MultiProviderOutput) AgentSummary() string {
 		} else {
 			parts = append(parts, "runs_out=now")
 		}
+		if proj.RunsOutEarlyBy > 0 {
+			runsOutEarlyBy := clampDuration(proj.RunsOutEarlyBy)
+			parts = append(parts,
+				fmt.Sprintf("runs_out_early_by_seconds=%d", int64(runsOutEarlyBy.Seconds())),
+				"runs_out_early_by="+formatExactDuration(runsOutEarlyBy),
+			)
+		}
 	}
 	if pf.Data != nil && pf.Data.Stale {
 		parts = append(parts, "data=stale")
@@ -414,9 +421,20 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		}
 		if !quota.Proj.WillLastToReset {
 			if quota.Proj.RunsOutIn > 0 {
-				fields = append(fields, "runs_out_in="+formatExactDuration(clampDuration(quota.Proj.RunsOutIn)))
+				runsOutIn := clampDuration(quota.Proj.RunsOutIn)
+				fields = append(fields,
+					fmt.Sprintf("runs_out_in_seconds=%d", int64(runsOutIn.Seconds())),
+					"runs_out_in="+formatExactDuration(runsOutIn),
+				)
 			} else {
 				fields = append(fields, "runs_out=now")
+			}
+			if quota.Proj.RunsOutEarlyBy > 0 {
+				runsOutEarlyBy := clampDuration(quota.Proj.RunsOutEarlyBy)
+				fields = append(fields,
+					fmt.Sprintf("runs_out_early_by_seconds=%d", int64(runsOutEarlyBy.Seconds())),
+					"runs_out_early_by="+formatExactDuration(runsOutEarlyBy),
+				)
 			}
 		}
 		if quota.Stale {

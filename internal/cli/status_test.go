@@ -126,6 +126,82 @@ func TestAgentSummaryIncludesCodexResetCredits(t *testing.T) {
 	}
 }
 
+func TestAgentSummaryIncludesRunOutEarlyBy(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "openai",
+			Display: "OpenAI",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
+			}},
+		},
+	}}
+
+	got := output.AgentSummary()
+	for _, want := range []string{
+		"Quota: worst=OpenAI 5h",
+		"status=at_risk",
+		"runs_out_in_seconds=",
+		"runs_out_in=",
+		"runs_out_early_by_seconds=",
+		"runs_out_early_by=",
+		"OpenAI 5h(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestAgentSummaryAlreadyOutIncludesBlockedWait(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "openai",
+			Display: "OpenAI",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 100, ResetsAt: now.Add(time.Hour)},
+			}},
+		},
+	}}
+
+	got := output.AgentSummary()
+	for _, want := range []string{
+		"runs_out=now",
+		"runs_out_early_by_seconds=",
+		"runs_out_early_by=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "runs_out_in=") {
+		t.Fatalf("AgentSummary() = %q, want no runs_out_in when already out", got)
+	}
+}
+
+func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
+	now := time.Now()
+	pf := ProviderFormatter{
+		Name:    "openai",
+		Display: "OpenAI",
+		Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
+		}},
+	}
+
+	got := pf.FormatPlain()
+	for _, want := range []string{
+		"runs out in",
+		"before reset",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("FormatPlain() = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestFormatPlainIncludesResetCredits(t *testing.T) {
 	now := time.Now()
 	pf := ProviderFormatter{

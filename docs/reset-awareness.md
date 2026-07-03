@@ -1,7 +1,8 @@
 # Reset Awareness
 
 Status: final PRD for the first shipped slice, revised after product review on
-2026-07-03.
+2026-07-03. A second small shipped slice adds blocked-gap visibility next to
+existing run-out estimates.
 
 ## Research Note
 
@@ -62,23 +63,37 @@ shows they need exact, low-anxiety inventory and expiry information. Reset-event
 notifications remain a later feature once we can throttle them against real
 state without producing false urgency.
 
+The next slice keeps the same instrument-first stance and shows the existing
+blocked-gap fact when a quota is projected to run out before its natural reset:
+
+```text
+runs out in 1d22h (1d8h before reset)
+```
+
+This is `RunsOutEarlyBy`: the projected wait between hitting 100% and the
+natural reset. It is not a recommendation to redeem a reset. Showing it next to
+reset-credit expiry gives users the missing subtraction without introducing
+coach copy such as "use a reset now."
+
 ## UX Copy
 
 Terminal plain/color output, when credits exist:
 
 ```text
+7d: 66% (resets 3d6h, est. 124% at reset · runs out in 1d22h (1d8h before reset))
 reset credits: 2 available, earliest expires Jul 12 2:30 PM
 ```
 
 Agent output, when credits exist:
 
 ```text
-reset_credits=[OpenAI available=2 earliest_expires_at=2026-07-12T14:30:00-05:00 earliest_expires_in=9d]
+runs_out_in=1d22h; runs_out_early_by=1d8h; reset_credits=[OpenAI available=2 earliest_expires_at=2026-07-12T14:30:00-05:00 earliest_expires_in=9d]
 ```
 
 Tray provider menu and tooltip, when credits exist:
 
 ```text
+Runs out in 1d22h (1d8h before reset)
 2 reset credits - earliest expires Jul 12 2:30 PM
 ```
 
@@ -95,6 +110,8 @@ raw responses or credentials.
 ## Non-goals
 
 - Redeeming or consuming reset credits. Clawmeter must never do this.
+- Recommendation or verdict copy such as "use a reset now." Clawmeter presents
+  facts and calculated facts; users decide when to redeem credits.
 - A generic reset-credit framework for every provider. Current evidence only
   supports Codex.
 - Push notifications for reset credits in this slice. Passive visibility solves
@@ -143,7 +160,8 @@ raw responses or credentials.
 Initial concept included reset/windfall notifications. That was too broad for the
 evidence and would add noisy statefulness before the core value is proven. The
 revised SLVP keeps the provider-specific read-only metadata path, surfaces the
-validated expiry gap, and avoids action prompts unless the user explicitly opens
-the existing quota surfaces. This is smaller but stronger: it cannot waste a
-reset, cannot nag the user into burning one, and degrades to the current
-Clawmeter experience on every unsupported provider.
+validated reset-credit inventory and blocked-gap facts, and avoids action
+prompts unless the user explicitly opens the existing quota surfaces. This is
+smaller but stronger: it cannot waste a reset, cannot nag the user into burning
+one, and degrades to the current Clawmeter experience on every unsupported
+provider.

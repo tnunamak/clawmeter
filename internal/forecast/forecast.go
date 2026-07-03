@@ -81,15 +81,28 @@ func (p Projection) Indicator() string {
 // PaceIndicator returns a human-readable usage estimate for the reset window.
 func (p Projection) PaceIndicator() string {
 	left := PaceLabel(p.ProjectedPct)
-	if !p.WillLastToReset {
-		if p.RunsOutIn > 0 {
-			return fmt.Sprintf("%-*s · runs out in %s", paceWidth, left, format.FormatDuration(p.RunsOutIn))
-		}
-		if p.RunsOutEarlyBy > 0 {
-			return fmt.Sprintf("%-*s · out now", paceWidth, left)
-		}
+	if note := p.RunOutNote(); note != "" {
+		return fmt.Sprintf("%-*s · %s", paceWidth, left, note)
 	}
 	return left
+}
+
+// RunOutNote states the projected blocking gap without recommending an action.
+func (p Projection) RunOutNote() string {
+	if p.WillLastToReset {
+		return ""
+	}
+	if p.RunsOutIn > 0 {
+		note := "runs out in " + format.FormatDuration(p.RunsOutIn)
+		if p.RunsOutEarlyBy > 0 {
+			note += " (" + format.FormatDuration(p.RunsOutEarlyBy) + " before reset)"
+		}
+		return note
+	}
+	if p.RunsOutEarlyBy > 0 {
+		return "out now (" + format.FormatDuration(p.RunsOutEarlyBy) + " until reset)"
+	}
+	return "out now"
 }
 
 // PaceLabel summarizes the projected usage at reset. This is the same value

@@ -1141,8 +1141,8 @@ func compactIconTooltip(title string, window provider.UsageWindow, proj forecast
 		parts = append(parts, title)
 	}
 	switch {
-	case proj.RunsOutIn > 0:
-		parts = append(parts, "Runs out in "+format.FormatDuration(proj.RunsOutIn))
+	case proj.RunOutNote() != "":
+		parts = append(parts, upperFirst(proj.RunOutNote()))
 	case !proj.WillLastToReset:
 		parts = append(parts, "Out now")
 	default:
@@ -1151,6 +1151,13 @@ func compactIconTooltip(title string, window provider.UsageWindow, proj forecast
 	parts = append(parts, "Resets in "+format.FormatDuration(time.Until(window.ResetsAt)))
 	parts = append(parts, compactProjectionEstimate(proj))
 	return strings.Join(parts, "\n")
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func iconTooltipTitle(display string, window provider.UsageWindow) string {
