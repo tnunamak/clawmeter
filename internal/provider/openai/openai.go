@@ -54,6 +54,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	for attempt := 1; attempt <= maxFetchAttempts; attempt++ {
 		data, err := p.fetchUsageOnce(ctx, codexPath)
 		if err == nil {
+			p.attachResetCredits(ctx, data)
 			return data, nil
 		}
 		lastErr = err

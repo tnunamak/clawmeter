@@ -93,6 +93,69 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 	}
 }
 
+func TestAgentSummaryIncludesCodexResetCredits(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "openai",
+			Display: "OpenAI",
+			Data: &provider.UsageData{
+				Windows: []provider.UsageWindow{
+					{Name: "7d", Utilization: 20, ResetsAt: now.Add(4 * 24 * time.Hour)},
+				},
+				ResetCredits: &provider.UsageResetCredits{
+					AvailableCount: 2,
+					Credits: []provider.UsageResetCredit{
+						{Status: "available", ExpiresAt: now.Add(9 * 24 * time.Hour)},
+					},
+				},
+			},
+		},
+	}}
+
+	got := output.AgentSummary()
+	for _, want := range []string{
+		"reset_credits=[",
+		"OpenAI available=2",
+		"earliest_expires_at=",
+		"earliest_expires_in=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestFormatPlainIncludesResetCredits(t *testing.T) {
+	now := time.Now()
+	pf := ProviderFormatter{
+		Name:    "openai",
+		Display: "OpenAI",
+		Data: &provider.UsageData{
+			Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 20, ResetsAt: now.Add(4 * 24 * time.Hour)},
+			},
+			ResetCredits: &provider.UsageResetCredits{
+				AvailableCount: 1,
+				Credits: []provider.UsageResetCredit{
+					{Status: "available", ExpiresAt: now.Add(9 * 24 * time.Hour)},
+				},
+			},
+		},
+	}
+
+	got := pf.FormatPlain()
+	for _, want := range []string{
+		"OpenAI:",
+		"7d:",
+		"reset credits: 1 available, earliest expires",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("FormatPlain() = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestFormatPrecisePctUsesMoreDecimalsNearBoundaries(t *testing.T) {
 	tests := []struct {
 		pct  float64

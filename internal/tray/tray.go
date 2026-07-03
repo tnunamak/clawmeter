@@ -530,6 +530,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		if data.Stale {
 			menu.statusItem.SetTitle(fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
 			menu.statusItem.Show()
+		} else if resetTitle := resetCreditTraySummary(data, time.Now()); resetTitle != "" {
+			menu.statusItem.SetTitle(resetTitle)
+			menu.statusItem.Show()
 		} else {
 			menu.statusItem.Hide()
 		}
@@ -1100,7 +1103,29 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 		return display
 	}
 	title := iconTooltipTitle(display, window)
-	return compactIconTooltip(title, window, proj)
+	tooltip := compactIconTooltip(title, window, proj)
+	if resetLine := resetCreditTraySummary(data, time.Now()); resetLine != "" {
+		tooltip += "\n" + resetLine
+	}
+	return tooltip
+}
+
+func resetCreditTraySummary(data *provider.UsageData, now time.Time) string {
+	if data == nil || data.Stale || data.ResetCredits == nil {
+		return ""
+	}
+	count := data.ResetCredits.DisplayCount(now)
+	if count <= 0 {
+		return ""
+	}
+	noun := "reset credit"
+	if count != 1 {
+		noun = "reset credits"
+	}
+	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
+		return fmt.Sprintf("%d %s - earliest expires %s", count, noun, expiresAt.Local().Format("Jan 2 3:04 PM"))
+	}
+	return fmt.Sprintf("%d %s available", count, noun)
 }
 
 func staleTooltipReason(data *provider.UsageData) string {

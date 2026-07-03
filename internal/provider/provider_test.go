@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -276,17 +278,84 @@ func TestUsageDataCloneCopiesWindows(t *testing.T) {
 	original := &UsageData{
 		Provider: "openai",
 		Windows:  []UsageWindow{{Name: "5h", Utilization: 12}},
+		ResetCredits: &UsageResetCredits{
+			AvailableCount: 1,
+			Credits:        []UsageResetCredit{{Status: "available", ExpiresAt: time.Now().Add(24 * time.Hour)}},
+		},
 	}
 
 	clone := original.Clone()
 	clone.Error = "timeout"
 	clone.Windows[0].Utilization = 99
+	clone.ResetCredits.AvailableCount = 2
+	clone.ResetCredits.Credits[0].Status = "consumed"
 
 	if original.Error != "" {
 		t.Fatalf("Clone mutated original error: %q", original.Error)
 	}
 	if original.Windows[0].Utilization != 12 {
 		t.Fatalf("Clone mutated original window utilization: %.0f", original.Windows[0].Utilization)
+	}
+	if original.ResetCredits.AvailableCount != 1 {
+		t.Fatalf("Clone mutated original reset count: %d", original.ResetCredits.AvailableCount)
+	}
+	if original.ResetCredits.Credits[0].Status != "available" {
+		t.Fatalf("Clone mutated original reset credit: %q", original.ResetCredits.Credits[0].Status)
+	}
+}
+
+func TestUsageResetCreditsEarliestExpiryIgnoresUnavailableCredits(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	credits := &UsageResetCredits{
+		AvailableCount: 3,
+		Credits: []UsageResetCredit{
+			{Status: "available", ExpiresAt: now.Add(72 * time.Hour)},
+			{Status: "available", ExpiresAt: now.Add(24 * time.Hour)},
+			{Status: "available", ExpiresAt: now.Add(-1 * time.Hour)},
+			{Status: "consumed", ExpiresAt: now.Add(2 * time.Hour)},
+			{Status: "available", ExpiresAt: now.Add(3 * time.Hour), ConsumedAt: now},
+		},
+	}
+
+	expiresAt, ok := credits.EarliestExpiry(now)
+	if !ok {
+		t.Fatal("EarliestExpiry() ok = false, want true")
+	}
+	if !expiresAt.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("EarliestExpiry() = %s, want %s", expiresAt, now.Add(24*time.Hour))
+	}
+}
+
+func TestUsageResetCreditsDisplayCountPrefersProviderCount(t *testing.T) {
+	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	credits := &UsageResetCredits{
+		AvailableCount: 1,
+		Credits: []UsageResetCredit{
+			{Status: "available", ExpiresAt: now.Add(24 * time.Hour)},
+			{Status: "available", ExpiresAt: now.Add(48 * time.Hour)},
+		},
+	}
+
+	if got := credits.DisplayCount(now); got != 1 {
+		t.Fatalf("DisplayCount() = %d, want provider available_count 1", got)
+	}
+}
+
+func TestUsageResetCreditJSONOmitsUnknownTimestamps(t *testing.T) {
+	expiresAt := time.Date(2026, 7, 12, 1, 41, 26, 0, time.UTC)
+	data, err := json.Marshal(UsageResetCredit{Status: "available", ExpiresAt: expiresAt})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "0001-01-01") {
+		t.Fatalf("json output includes zero timestamp: %s", got)
+	}
+	if !strings.Contains(got, "expires_at") {
+		t.Fatalf("json output = %s, want expires_at", got)
+	}
+	if strings.Contains(got, "created_at") || strings.Contains(got, "consumed_at") {
+		t.Fatalf("json output = %s, want unknown timestamps omitted", got)
 	}
 }
 

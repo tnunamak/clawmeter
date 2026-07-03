@@ -600,6 +600,41 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 	}
 }
 
+func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
+			},
+			ResetCredits: &provider.UsageResetCredits{
+				AvailableCount: 2,
+				Credits: []provider.UsageResetCredit{
+					{Status: "available", ExpiresAt: now.Add(9 * 24 * time.Hour)},
+				},
+			},
+		},
+	}
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{Provider: "openai", Window: "5h"}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.iconTargetOverride = iconTarget{}
+		s.mu.Unlock()
+	}()
+
+	got := trayTooltip(results, map[string]string{"openai": "OpenAI"})
+
+	if !strings.Contains(got, "2 reset credits - earliest expires") {
+		t.Fatalf("trayTooltip() = %q, want reset-credit expiry line", got)
+	}
+	if strings.Count(got, "\n") != 4 {
+		t.Fatalf("trayTooltip() = %q, want five newline-separated lines with reset credits", got)
+	}
+}
+
 func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{

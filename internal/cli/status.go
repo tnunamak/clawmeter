@@ -106,7 +106,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 	}
 
 	windows := pf.Data.UsableWindows()
-	lines := make([]string, 0, len(windows)+1)
+	lines := make([]string, 0, len(windows)+2)
 	for i, window := range windows {
 		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 		resetStr := format.FormatDuration(time.Until(window.ResetsAt))
@@ -122,6 +122,13 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 			line += "  " + statusLine
 		}
 		lines = append(lines, line)
+	}
+	if summary := resetCreditCompactSummary(pf.Data, time.Now()); summary != "" {
+		label := ""
+		if len(lines) == 0 {
+			label = pf.Display
+		}
+		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %s", label, "resets", summary))
 	}
 
 	return lines
@@ -163,7 +170,46 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	if pf.Data.Stale {
 		prefix = fmt.Sprintf("stale (updated %s) - ", pf.Data.FetchedAt.Format("15:04"))
 	}
+	if resetSummary := resetCreditPlainSummary(pf.Data, time.Now()); resetSummary != "" {
+		parts = append(parts, resetSummary)
+	}
 	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
+}
+
+func resetCreditPlainSummary(data *provider.UsageData, now time.Time) string {
+	if data == nil || data.Stale || data.ResetCredits == nil {
+		return ""
+	}
+	count := data.ResetCredits.DisplayCount(now)
+	if count <= 0 {
+		return ""
+	}
+	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
+		return fmt.Sprintf("reset credits: %d available, earliest expires %s", count, formatResetCreditExpiry(expiresAt))
+	}
+	return fmt.Sprintf("reset credits: %d available", count)
+}
+
+func resetCreditCompactSummary(data *provider.UsageData, now time.Time) string {
+	if data == nil || data.Stale || data.ResetCredits == nil {
+		return ""
+	}
+	count := data.ResetCredits.DisplayCount(now)
+	if count <= 0 {
+		return ""
+	}
+	noun := "reset credit"
+	if count != 1 {
+		noun = "reset credits"
+	}
+	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
+		return fmt.Sprintf("%d %s - earliest expires %s", count, noun, formatResetCreditExpiry(expiresAt))
+	}
+	return fmt.Sprintf("%d %s available", count, noun)
+}
+
+func formatResetCreditExpiry(t time.Time) string {
+	return t.Local().Format("Jan 2 3:04 PM")
 }
 
 // MultiProviderOutput handles displaying data from multiple providers.
@@ -306,6 +352,9 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	if quotas := m.agentQuotaSummaries(); len(quotas) > 0 {
 		parts = append(parts, "quotas=["+strings.Join(quotas, " | ")+"]")
 	}
+	if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
+		parts = append(parts, "reset_credits=["+strings.Join(resets, " | ")+"]")
+	}
 
 	return strings.Join(parts, "; ") + "."
 }
@@ -374,6 +423,64 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 			fields = append(fields, "data=stale")
 		}
 		out = append(out, fmt.Sprintf("%s %s(%s)", quota.Provider, quota.Window.Name, strings.Join(fields, ",")))
+	}
+	return out
+}
+
+func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
+	type resetSummary struct {
+		text      string
+		expiresAt time.Time
+		hasExpiry bool
+		provider  string
+		count     int
+	}
+	now := time.Now()
+	summaries := make([]resetSummary, 0)
+	for i := range m.Providers {
+		pf := &m.Providers[i]
+		if pf.Data == nil || pf.Data.Stale || pf.Data.ResetCredits == nil {
+			continue
+		}
+		count := pf.Data.ResetCredits.DisplayCount(now)
+		if count <= 0 {
+			continue
+		}
+		fields := []string{
+			pf.Display,
+			fmt.Sprintf("available=%d", count),
+		}
+		expiresAt, hasExpiry := pf.Data.ResetCredits.EarliestExpiry(now)
+		if hasExpiry {
+			fields = append(fields,
+				"earliest_expires_at="+expiresAt.Local().Format(time.RFC3339),
+				"earliest_expires_in="+formatExactDuration(expiresAt.Sub(now)),
+			)
+		}
+		summaries = append(summaries, resetSummary{
+			text:      strings.Join(fields, " "),
+			expiresAt: expiresAt,
+			hasExpiry: hasExpiry,
+			provider:  pf.Display,
+			count:     count,
+		})
+	}
+	sort.SliceStable(summaries, func(i, j int) bool {
+		a, b := summaries[i], summaries[j]
+		if a.hasExpiry != b.hasExpiry {
+			return a.hasExpiry
+		}
+		if a.hasExpiry && !a.expiresAt.Equal(b.expiresAt) {
+			return a.expiresAt.Before(b.expiresAt)
+		}
+		if a.provider != b.provider {
+			return a.provider < b.provider
+		}
+		return a.count > b.count
+	})
+	out := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		out = append(out, summary.text)
 	}
 	return out
 }

@@ -3,6 +3,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -41,15 +42,113 @@ type UsageWindow struct {
 	Used        int       `json:"used,omitempty"`         // Optional: actual usage number
 }
 
+// UsageResetCredit is read-only metadata about a banked usage-limit reset.
+// It is intentionally passive inventory: Clawmeter never redeems resets.
+type UsageResetCredit struct {
+	Status     string    `json:"status,omitempty"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	ExpiresAt  time.Time `json:"expires_at,omitempty"`
+	ConsumedAt time.Time `json:"consumed_at,omitempty"`
+}
+
+// MarshalJSON omits unknown timestamps instead of serializing Go's zero time.
+func (c UsageResetCredit) MarshalJSON() ([]byte, error) {
+	type resetCreditJSON struct {
+		Status     string     `json:"status,omitempty"`
+		CreatedAt  *time.Time `json:"created_at,omitempty"`
+		ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+		ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+	}
+	out := resetCreditJSON{Status: c.Status}
+	if !c.CreatedAt.IsZero() {
+		createdAt := c.CreatedAt
+		out.CreatedAt = &createdAt
+	}
+	if !c.ExpiresAt.IsZero() {
+		expiresAt := c.ExpiresAt
+		out.ExpiresAt = &expiresAt
+	}
+	if !c.ConsumedAt.IsZero() {
+		consumedAt := c.ConsumedAt
+		out.ConsumedAt = &consumedAt
+	}
+	return json.Marshal(out)
+}
+
+// UsageResetCredits summarizes banked usage-limit resets for a provider.
+type UsageResetCredits struct {
+	AvailableCount int                `json:"available_count"`
+	Credits        []UsageResetCredit `json:"credits,omitempty"`
+	FetchedAt      time.Time          `json:"fetched_at,omitempty"`
+	Warning        string             `json:"warning,omitempty"`
+}
+
+// DisplayCount returns the best non-sensitive available reset count.
+func (r *UsageResetCredits) DisplayCount(now time.Time) int {
+	if r == nil {
+		return 0
+	}
+	count := r.AvailableCount
+	if count < 0 {
+		count = 0
+	}
+	if count > 0 || len(r.Credits) == 0 {
+		return count
+	}
+	return len(r.Available(now))
+}
+
+// Available returns usable, unconsumed reset credits sorted by expiry.
+func (r *UsageResetCredits) Available(now time.Time) []UsageResetCredit {
+	if r == nil || len(r.Credits) == 0 {
+		return nil
+	}
+	available := make([]UsageResetCredit, 0, len(r.Credits))
+	for _, credit := range r.Credits {
+		if strings.ToLower(strings.TrimSpace(credit.Status)) != "available" {
+			continue
+		}
+		if !credit.ConsumedAt.IsZero() {
+			continue
+		}
+		if !credit.ExpiresAt.IsZero() && !credit.ExpiresAt.After(now) {
+			continue
+		}
+		available = append(available, credit)
+	}
+	sort.SliceStable(available, func(i, j int) bool {
+		a, b := available[i], available[j]
+		if a.ExpiresAt.IsZero() {
+			return false
+		}
+		if b.ExpiresAt.IsZero() {
+			return true
+		}
+		return a.ExpiresAt.Before(b.ExpiresAt)
+	})
+	return available
+}
+
+// EarliestExpiry returns the earliest known expiry among available reset credits.
+func (r *UsageResetCredits) EarliestExpiry(now time.Time) (time.Time, bool) {
+	for _, credit := range r.Available(now) {
+		if !credit.ExpiresAt.IsZero() {
+			return credit.ExpiresAt, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // UsageData contains usage information for a provider.
 type UsageData struct {
-	Provider  string        `json:"provider"`             // Provider name
-	FetchedAt time.Time     `json:"fetched_at"`           // When this data was fetched
-	Windows   []UsageWindow `json:"windows"`              // Usage windows (providers may have 1 or more)
-	IsExpired bool          `json:"is_expired,omitempty"` // True if credentials are expired
-	Error     string        `json:"error,omitempty"`      // Error message if fetch failed
-	Stale     bool          `json:"stale,omitempty"`      // True if showing last good data after refresh failed
-	Warning   string        `json:"warning,omitempty"`    // Short non-blocking data quality note
+	Provider     string             `json:"provider"`                // Provider name
+	FetchedAt    time.Time          `json:"fetched_at"`              // When this data was fetched
+	Windows      []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
+	ResetCredits *UsageResetCredits `json:"reset_credits,omitempty"` // Optional banked usage-limit reset metadata
+	IsExpired    bool               `json:"is_expired,omitempty"`    // True if credentials are expired
+	Error        string             `json:"error,omitempty"`         // Error message if fetch failed
+	Stale        bool               `json:"stale,omitempty"`         // True if showing last good data after refresh failed
+	Warning      string             `json:"warning,omitempty"`       // Short non-blocking data quality note
 }
 
 // Clone returns a deep-enough copy for UI/cache fallback paths.
@@ -60,6 +159,13 @@ func (u *UsageData) Clone() *UsageData {
 	clone := *u
 	if u.Windows != nil {
 		clone.Windows = append([]UsageWindow(nil), u.Windows...)
+	}
+	if u.ResetCredits != nil {
+		resetCredits := *u.ResetCredits
+		if u.ResetCredits.Credits != nil {
+			resetCredits.Credits = append([]UsageResetCredit(nil), u.ResetCredits.Credits...)
+		}
+		clone.ResetCredits = &resetCredits
 	}
 	return &clone
 }

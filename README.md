@@ -63,6 +63,7 @@ Setup installs the mainstream local surface Clawmeter can verify today: a Claude
 
 - See your riskiest quota without opening provider dashboards.
 - Compare current usage with expected pace for the reset window.
+- See Codex banked reset credits and their earliest known expiry when available.
 - Cycle the tray icon between concrete provider/quota windows.
 - Reuse existing credentials without rewriting or refreshing provider tokens.
 
@@ -112,7 +113,7 @@ clawmeter tray           # run the tray in this session
 | Provider | Tracks |
 |---|---|
 | Claude | 5h, 7d, model-specific windows |
-| OpenAI/Codex | 5h and weekly rate limits |
+| OpenAI/Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
 | Gemini | 24h Pro and Flash quotas |
 | GitHub Copilot | Premium and chat interactions |
 | Kimi | Daily and hourly limits |
@@ -121,6 +122,8 @@ clawmeter tray           # run the tray in this session
 | Kimi K2 | Credit balance |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
+
+Codex reset-credit visibility is read-only. Clawmeter shows available count and earliest expiry when Codex exposes banked resets locally, but it never redeems resets. Design notes and provider coverage are in [Reset awareness](docs/reset-awareness.md).
 
 ## Details
 
