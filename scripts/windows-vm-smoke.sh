@@ -231,7 +231,7 @@ vm_memory_preflight() {
     die "refusing to boot VM: MemAvailable ${available_mib}MiB < ${required_mib}MiB required (${VM_RAM} VM + ${MIN_AVAILABLE_GIB}GiB headroom)"
   fi
   if [[ "$swap_mib" -gt 2048 ]]; then
-    die "refusing to boot VM: swap already has ${swap_mib}MiB in use; close memory-heavy apps or pass --unsafe-vm-memory"
+    warn "swap already has ${swap_mib}MiB in use; treating this as informational because MemAvailable is the VM safety gate"
   fi
 }
 

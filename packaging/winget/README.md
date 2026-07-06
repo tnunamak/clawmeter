@@ -28,6 +28,12 @@ The release workflow does this automatically when `WINGET_PR_TOKEN` is configure
 
 The first accepted package appears as `New package`; later releases appear as `New version`. If the package has not been accepted yet and a first-package PR is already open, automation skips opening another one. Use `WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR=1` only when intentionally superseding an open first-package PR.
 
+After the package exists upstream, release automation also closes any stale open `New package` PRs authored by the fork owner. Rehearse that cleanup without changing GitHub:
+
+```bash
+packaging/winget/close-superseded-first-package-prs.sh --dry-run --latest-tag vX.Y.Z
+```
+
 ## Local Rehearsal
 
 Generate a manifest against an existing release asset:
@@ -71,6 +77,12 @@ winget show --id tnunamak.Clawmeter -e --source winget
 winget install --id tnunamak.Clawmeter -e --source winget --silent
 clawmeter providers
 winget uninstall --id tnunamak.Clawmeter -e
+```
+
+Or run the repeatable verifier:
+
+```powershell
+.\packaging\windows\verify-winget.ps1 -ExpectedVersion X.Y.Z
 ```
 
 ## Legacy Portable Manifest

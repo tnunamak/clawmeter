@@ -60,6 +60,12 @@ To verify the public release artifact in a clean Windows VM:
 
 `verify-release.ps1` downloads `ClawmeterSetup.exe`, checks it against `SHA256SUMS.txt`, optionally scans it with Microsoft Defender, and then delegates install/uninstall checks to `verify-installer.ps1`.
 
+After a version is published through WinGet, verify the real WinGet user path:
+
+```powershell
+.\packaging\windows\verify-winget.ps1 -ExpectedVersion X.Y.Z
+```
+
 If Windows Security flags Clawmeter, collect a local evidence bundle before changing anything:
 
 ```powershell
