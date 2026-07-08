@@ -68,6 +68,7 @@ var (
 
 func Run(ver string) int {
 	redirectLogToFile()
+	configureNotificationIdentity()
 	version = ver
 	iconClickActions = make(chan iconClickAction, 1)
 	installTrayClickHandlers(iconClickActions)
@@ -77,6 +78,10 @@ func Run(ver string) int {
 		cleanupIconTheme()
 	})
 	return 0
+}
+
+func configureNotificationIdentity() {
+	beeep.AppName = "Clawmeter"
 }
 
 func onReady() {

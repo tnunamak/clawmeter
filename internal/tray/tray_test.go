@@ -8,10 +8,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gen2brain/beeep"
+
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/update"
 )
+
+func TestConfigureNotificationIdentity(t *testing.T) {
+	old := beeep.AppName
+	defer func() { beeep.AppName = old }()
+
+	beeep.AppName = "DefaultAppName"
+	configureNotificationIdentity()
+
+	if beeep.AppName != "Clawmeter" {
+		t.Fatalf("beeep.AppName = %q, want Clawmeter", beeep.AppName)
+	}
+}
 
 func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
 	oldRelease := currentPendingRelease()
