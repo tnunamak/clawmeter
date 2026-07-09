@@ -17,6 +17,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/openai"
 	"github.com/tnunamak/clawmeter/internal/provider/openrouter"
 	"github.com/tnunamak/clawmeter/internal/provider/synthetic"
+	"github.com/tnunamak/clawmeter/internal/provider/xai"
 	"github.com/tnunamak/clawmeter/internal/provider/zai"
 )
 
@@ -35,6 +36,7 @@ func Register(registry *provider.Registry, cfg *config.Config) {
 		openrouter.Register,
 		jetbrains.Register,
 		synthetic.Register,
+		xai.Register,
 		zai.Register,
 	} {
 		if err := fn(registry, cfg); err != nil {

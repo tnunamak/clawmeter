@@ -53,6 +53,7 @@ var ProviderLogos = map[string][]byte{
 var ProviderLogoFallbacks = map[string]string{
 	"jetbrains": "no canonical tray-safe source asset in this repo yet",
 	"synthetic": "test provider; plain crawfish icon is intentional",
+	"xai":       "no canonical tray-safe source asset in this repo yet",
 	"zai":       "no canonical tray-safe source asset in this repo yet",
 }
 
