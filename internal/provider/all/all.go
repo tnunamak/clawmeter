@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -20,6 +21,15 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/xai"
 	"github.com/tnunamak/clawmeter/internal/provider/zai"
 )
+
+var aliases = map[string]string{
+	"codex":  "openai",
+	"grok":   "xai",
+	"x.ai":   "xai",
+	"x-ai":   "xai",
+	"xai":    "xai",
+	"openai": "openai",
+}
 
 // Register registers all known providers with the given registry and wires
 // the user's config as the registry's enabled-filter so explicitly disabled
@@ -60,22 +70,55 @@ func Names() []string {
 	return names
 }
 
-// IsKnown reports whether name is the canonical name of a registered provider.
+// IsKnown reports whether name is a registered provider key or accepted alias.
 func IsKnown(name string) bool {
+	_, ok := CanonicalName(name)
+	return ok
+}
+
+// IsCanonicalName reports whether name is the stable provider key used in
+// config/cache files.
+func IsCanonicalName(name string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return false
+	}
 	for _, n := range Names() {
-		if n == name {
+		if n == normalized {
 			return true
 		}
 	}
 	return false
 }
 
+// CanonicalName maps a user-facing provider name or legacy config key to the
+// stable provider key used in config/cache files.
+func CanonicalName(name string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return "", false
+	}
+	if alias, ok := aliases[normalized]; ok {
+		return alias, true
+	}
+	for _, n := range Names() {
+		if n == normalized {
+			return n, true
+		}
+	}
+	return "", false
+}
+
 // Suggest returns the closest known provider name to input, or "" if no
 // close match exists. Uses simple Levenshtein distance with a cap so we
 // don't suggest wildly different names for total typos.
 func Suggest(input string) string {
+	input = strings.ToLower(strings.TrimSpace(input))
 	if input == "" {
 		return ""
+	}
+	if canonical, ok := CanonicalName(input); ok {
+		return canonical
 	}
 	best := ""
 	bestDist := -1
@@ -85,7 +128,8 @@ func Suggest(input string) string {
 	if maxDist < 2 {
 		maxDist = 2
 	}
-	for _, n := range Names() {
+	candidates := append(Names(), "codex", "grok")
+	for _, n := range candidates {
 		d := levenshtein(input, n)
 		if d > maxDist {
 			continue

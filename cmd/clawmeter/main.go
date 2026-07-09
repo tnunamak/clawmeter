@@ -66,8 +66,8 @@ func run() int {
 		return 0
 	default:
 		// Check if it's a provider name (e.g., "clawmeter claude --json")
-		if newRegistry().Has(os.Args[1]) {
-			return providerCmd(os.Args[1], os.Args[2:])
+		if providerName, ok := all.CanonicalName(os.Args[1]); ok && newRegistry().Has(providerName) {
+			return providerCmd(providerName, os.Args[2:])
 		}
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown command %q\n", os.Args[1])
 		printHelp(os.Stderr)
@@ -274,7 +274,7 @@ func configShowCmd(args []string) int {
 			state = "enabled"
 		}
 		marker := ""
-		if !all.IsKnown(name) {
+		if !all.IsCanonicalName(name) {
 			marker = "  (unknown provider name — ignored)"
 		}
 		fmt.Printf("  %s: %s%s\n", name, state, marker)
@@ -390,11 +390,11 @@ func configEnableCmd(args []string, enable bool) int {
 		return 1
 	}
 
-	providerName := args[0]
+	providerName, ok := all.CanonicalName(args[0])
 
-	if !all.IsKnown(providerName) {
-		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", providerName)
-		if suggestion := all.Suggest(providerName); suggestion != "" {
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", args[0])
+		if suggestion := all.Suggest(args[0]); suggestion != "" {
 			fmt.Fprintf(os.Stderr, "  did you mean %q?\n", suggestion)
 		}
 		fmt.Fprintf(os.Stderr, "  known providers: %s\n", strings.Join(all.Names(), ", "))
@@ -439,6 +439,28 @@ func configEnableCmd(args []string, enable bool) int {
 }
 
 func providersCmd(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "enable":
+			return configEnableCmd(args[1:], true)
+		case "disable":
+			return configEnableCmd(args[1:], false)
+		case "help", "--help", "-h":
+			fmt.Println("Usage: clawmeter providers [enable|disable <provider>]")
+			fmt.Println()
+			fmt.Println("Without arguments, lists provider auth status.")
+			fmt.Println("Examples:")
+			fmt.Println("  clawmeter providers")
+			fmt.Println("  clawmeter providers enable grok")
+			fmt.Println("  clawmeter providers disable codex")
+			return 0
+		default:
+			fmt.Fprintf(os.Stderr, "clawmeter: unknown providers command %q\n", args[0])
+			fmt.Fprintln(os.Stderr, "Usage: clawmeter providers [enable|disable <provider>]")
+			return 1
+		}
+	}
+
 	registry := newRegistry()
 
 	cfg, err := config.Load()
@@ -470,14 +492,13 @@ func providersCmd(args []string) int {
 	fmt.Println("  disabled      explicitly disabled in config, will NOT be polled")
 	fmt.Println("  no credentials  no credentials detected; nothing to poll")
 	fmt.Println()
-	fmt.Println("Use 'clawmeter config enable <provider>' to opt a provider in,")
-	fmt.Println("'clawmeter config disable <provider>' to opt out.")
+	fmt.Println("Use 'clawmeter providers enable <provider>' to opt a provider in,")
+	fmt.Println("'clawmeter providers disable <provider>' to opt out.")
 	return 0
 }
 
-// describeProviderState returns one of: "enabled", "disabled", "detected",
-// "configured but no credentials", or "no credentials". This is the
-// user-facing summary of how a provider will be treated.
+// describeProviderState returns the user-facing summary of how a provider will
+// be treated by default polling and explicit config.
 func describeProviderState(p provider.Provider, cfg *config.Config) string {
 	pc, hasEntry := cfg.Providers[p.Name()]
 	setup := provider.GetSetupStatus(p)
@@ -572,6 +593,8 @@ Config commands:
   config set <key> <value>  Set a configuration value
   config enable <provider>  Enable a provider
   config disable <provider> Disable a provider
+  providers enable <provider>
+                            Enable a provider alias from provider listing
 
 Tray flags:
   --install                 Enable launch at login
@@ -580,11 +603,12 @@ Tray flags:
 Examples:
   clawmeter                          # Show all providers
   clawmeter statusline               # Compact shell/tmux/statusline segment
-clawmeter status --agent           # Token-efficient all-quota summary
+  clawmeter status --agent           # Token-efficient all-quota summary
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
   clawmeter setup --all              # Install mainstream local integrations
-  clawmeter config enable openai     # Enable Codex provider
+  clawmeter providers enable codex   # Enable Codex provider
+  clawmeter providers enable grok    # Enable Grok provider
   clawmeter providers                # List available providers`)
 }
 
@@ -607,6 +631,7 @@ Examples:
   clawmeter config show
   clawmeter config set poll_interval 600
   clawmeter config set check_for_updates false
-  clawmeter config enable openai
+  clawmeter config enable codex
+  clawmeter providers enable grok
   clawmeter config disable claude`)
 }

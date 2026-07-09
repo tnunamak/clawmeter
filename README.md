@@ -75,7 +75,11 @@ The radial meter compares actual burn with expected pace. Gray shows the shared 
 
 - Left-click the tray icon to cycle through active provider/quota windows.
 - Double-click the tray icon to return to Auto.
-- Auto picks the riskiest quota and is not part of the left-click cycle.
+- Auto picks a quota window and is not part of the left-click cycle.
+- The tray menu can switch Auto between Risk, EST, and Runway:
+  - Risk: the quota projected to block you soonest.
+  - EST: the highest projected-at-reset percentage.
+  - Runway: the quota with the most projected room left.
 - Right-click for details, refresh, update, and launch-at-login.
 - A small blue dot on the tray icon means an update is available.
 - Use `Refresh Now` when you want an immediate quota/update check.
@@ -98,6 +102,8 @@ Useful commands:
 ```bash
 clawmeter providers      # detected providers and auth status
 clawmeter claude         # one provider
+clawmeter codex          # Codex quota
+clawmeter grok           # Grok quota
 clawmeter --json         # machine-readable output
 clawmeter statusline     # compact Claude/statusline segment
 clawmeter status --agent # token-efficient all-quota summary for AI agents
@@ -177,7 +183,8 @@ Config file: `~/.config/clawmeter/config.yaml`
 
 ```bash
 clawmeter config show
-clawmeter config enable openai
+clawmeter providers enable codex
+clawmeter providers enable grok
 clawmeter config disable copilot
 clawmeter config set poll_interval 600
 clawmeter config set warning_threshold 80

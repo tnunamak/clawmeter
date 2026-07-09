@@ -228,6 +228,9 @@ func TestIconCycleMenuTitleMentionsDoubleClickAutoReset(t *testing.T) {
 	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRisk); got != "Icon: Auto Risk (click to cycle)" {
 		t.Fatalf("auto title = %q", got)
 	}
+	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoProjected); got != "Icon: Auto EST (click to cycle)" {
+		t.Fatalf("est auto title = %q", got)
+	}
 	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRunway); got != "Icon: Auto Runway (click to cycle)" {
 		t.Fatalf("runway auto title = %q", got)
 	}
@@ -327,6 +330,40 @@ func TestActiveIconTargetsRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testi
 	want := []iconTarget{
 		{Provider: "claude", Window: "7d"},
 		{Provider: "openai", Window: "7d"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestActiveIconTargetsESTPrefersHigherProjectedPct(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				// Projected ~115%, but not blocked until about 3d12h from now.
+				{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				// Projected ~106%, but blocked in about 1h35m from now.
+				{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
+			},
+		},
+	}
+
+	got := activeIconTargets(results, iconAutoProjected)
+	want := []iconTarget{
+		{Provider: "openai", Window: "7d"},
+		{Provider: "claude", Window: "7d"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)

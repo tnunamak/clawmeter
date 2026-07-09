@@ -55,8 +55,9 @@ type iconTarget struct {
 type iconAutoMode string
 
 const (
-	iconAutoRisk   iconAutoMode = "risk"
-	iconAutoRunway iconAutoMode = "runway"
+	iconAutoRisk      iconAutoMode = "risk"
+	iconAutoProjected iconAutoMode = "projected"
+	iconAutoRunway    iconAutoMode = "runway"
 )
 
 var (
@@ -129,6 +130,8 @@ func onReady() {
 	// toggles its visibility based on whether any menu has data to render.
 	mEmpty := systray.AddMenuItem("No active providers", "")
 	mEmpty.Disable()
+	mProviderSetup := systray.AddMenuItem("Provider setup: run `clawmeter providers`", "")
+	mProviderSetup.Disable()
 
 	systray.AddSeparator()
 
@@ -635,9 +638,12 @@ func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.mu.Lock()
 	results := s.lastResults
 	current := normalizedIconAutoModeLocked()
-	if current == iconAutoRisk {
+	switch current {
+	case iconAutoRisk:
+		s.iconAutoMode = iconAutoProjected
+	case iconAutoProjected:
 		s.iconAutoMode = iconAutoRunway
-	} else {
+	default:
 		s.iconAutoMode = iconAutoRisk
 	}
 	mode := s.iconAutoMode
@@ -694,6 +700,10 @@ func updateIconAutoModeLabel(item *systray.MenuItem) {
 		return
 	}
 	mode := currentIconAutoMode()
+	if mode == iconAutoProjected {
+		item.SetTitle("Auto Mode: EST")
+		return
+	}
 	if mode == iconAutoRunway {
 		item.SetTitle("Auto Mode: Runway")
 		return
@@ -703,6 +713,9 @@ func updateIconAutoModeLabel(item *systray.MenuItem) {
 
 func iconCycleMenuTitle(target iconTarget, displayNames map[string]string, mode iconAutoMode) string {
 	if target.Provider == "" {
+		if mode == iconAutoProjected {
+			return "Icon: Auto EST (click to cycle)"
+		}
 		if mode == iconAutoRunway {
 			return "Icon: Auto Runway (click to cycle)"
 		}
@@ -814,6 +827,9 @@ func currentIconAutoMode() iconAutoMode {
 }
 
 func normalizedIconAutoModeLocked() iconAutoMode {
+	if s.iconAutoMode == iconAutoProjected {
+		return iconAutoProjected
+	}
 	if s.iconAutoMode == iconAutoRunway {
 		return iconAutoRunway
 	}

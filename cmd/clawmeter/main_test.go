@@ -96,6 +96,43 @@ func TestConfigEnable_AcceptsKnownProvider(t *testing.T) {
 	}
 }
 
+func TestConfigEnable_AcceptsProviderAlias(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+
+	stdout, stderr, code := runWithHome(t, bin, home, "config", "enable", "grok")
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (stderr: %s)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Enabled provider: xai") {
+		t.Errorf("expected canonical provider confirmation, got: %s", stdout)
+	}
+	cfgPath := filepath.Join(home, ".config", "clawmeter", "config.yaml")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "xai:") {
+		t.Fatalf("config should contain canonical xai key: %s", data)
+	}
+	if strings.Contains(string(data), "grok:") {
+		t.Fatalf("config should not persist alias key: %s", data)
+	}
+}
+
+func TestProvidersEnable_AliasesConfigEnable(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+
+	stdout, stderr, code := runWithHome(t, bin, home, "providers", "enable", "codex")
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d (stderr: %s)", code, stderr)
+	}
+	if !strings.Contains(stdout, "Enabled provider: openai") {
+		t.Errorf("expected canonical provider confirmation, got: %s", stdout)
+	}
+}
+
 func TestConfigDisable_PersistsAndSurfacesInSingleProvider(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()

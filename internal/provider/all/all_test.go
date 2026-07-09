@@ -35,11 +35,50 @@ func TestIsKnown(t *testing.T) {
 	if !IsKnown("openai") {
 		t.Error("openai should be known")
 	}
+	if !IsKnown("codex") {
+		t.Error("codex alias should be known")
+	}
+	if !IsKnown("grok") {
+		t.Error("grok alias should be known")
+	}
 	if IsKnown("opneai") {
 		t.Error("opneai (typo) must not be known")
 	}
 	if IsKnown("") {
 		t.Error("empty string must not be known")
+	}
+}
+
+func TestCanonicalName(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"openai", "openai"},
+		{"Codex", "openai"},
+		{"grok", "xai"},
+		{"x.ai", "xai"},
+	}
+	for _, tt := range tests {
+		got, ok := CanonicalName(tt.in)
+		if !ok {
+			t.Fatalf("CanonicalName(%q) not ok", tt.in)
+		}
+		if got != tt.want {
+			t.Fatalf("CanonicalName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestIsCanonicalNameRejectsAliases(t *testing.T) {
+	if !IsCanonicalName("openai") {
+		t.Fatal("openai should be canonical")
+	}
+	if IsCanonicalName("codex") {
+		t.Fatal("codex is an accepted alias, not a canonical config key")
+	}
+	if IsCanonicalName("grok") {
+		t.Fatal("grok is an accepted alias, not a canonical config key")
 	}
 }
 
