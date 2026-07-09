@@ -116,7 +116,7 @@ clawmeter tray           # run the tray in this session
 | OpenAI/Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
 | Gemini | 24h Pro and Flash quotas |
 | GitHub Copilot | Premium and chat interactions |
-| Grok/xAI | API prepaid credits |
+| Grok/xAI | Grok Build subscription usage; API prepaid credits |
 | Kimi | Daily and hourly limits |
 | OpenRouter | Credit balance |
 | JetBrains AI | Monthly credits |
@@ -214,15 +214,17 @@ brew services stop clawmeter
 | OpenAI/Codex | `~/.codex/auth.json` |
 | Gemini | `~/.gemini/` OAuth credentials |
 | GitHub Copilot | `~/.config/github-copilot/hosts.json` |
-| Grok/xAI | `XAI_MANAGEMENT_API_KEY`; optional `XAI_TEAM_ID` |
+| Grok/xAI | `~/.grok/auth.json` from `grok login`; or `XAI_MANAGEMENT_API_KEY` with optional `XAI_TEAM_ID` |
 | Kimi | `~/.kimi/credentials/kimi-code.json` |
 | OpenRouter | `OPENROUTER_API_KEY` or config |
 | JetBrains AI | IDE config files |
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
 
-For Grok/xAI, use a Management API key from xAI Console settings, not the
-model-serving `XAI_API_KEY`. Clawmeter only reads prepaid credit balance and
-usage metadata; it does not create, rotate, delete, or top up keys.
+For Grok/xAI, `grok login` enables Grok Build subscription usage from the
+read-only grok.com billing surface. `XAI_MANAGEMENT_API_KEY` enables xAI API
+prepaid-credit tracking from the Management API; use a Management API key from
+xAI Console settings, not the model-serving `XAI_API_KEY`. Clawmeter does not
+create, rotate, delete, top up, or spend anything.
 
 </details>
 

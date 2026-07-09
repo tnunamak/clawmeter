@@ -2,10 +2,16 @@ package xai
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
 )
@@ -170,4 +176,194 @@ func TestManagementKey_DoesNotUseInferenceAPIKey(t *testing.T) {
 	if _, err := p.managementKey(); err == nil {
 		t.Fatal("XAI_API_KEY must not be accepted as a management key")
 	}
+}
+
+func TestSetupStatus_GrokLoginCredentials(t *testing.T) {
+	writeGrokAuth(t, "grok-token", time.Now().Add(time.Hour))
+	p := New(config.ProviderConfig{})
+
+	if !p.IsConfigured() {
+		t.Fatal("provider should be configured from grok login credentials")
+	}
+	if got := p.SetupStatus(); !got.IsReady() {
+		t.Fatalf("SetupStatus = %#v, want ready", got)
+	}
+}
+
+func TestFetchUsage_UsesGrokLoginBilling(t *testing.T) {
+	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	writeGrokAuth(t, "grok-token", time.Now().Add(time.Hour))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer grok-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		body := make([]byte, 5)
+		if _, err := io.ReadFull(r.Body, body); err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if body[0] != 0 || body[1] != 0 || body[2] != 0 || body[3] != 0 || body[4] != 0 {
+			t.Fatalf("request body = %v, want empty grpc-web frame", body)
+		}
+		w.Header().Set("Content-Type", "application/grpc-web+proto")
+		_, _ = w.Write(grokGRPCWebResponse(grokBillingPayload(42.5, reset)))
+	}))
+	defer srv.Close()
+
+	p := New(config.ProviderConfig{})
+	p.grokBillingURL = srv.URL
+	p.client = srv.Client()
+
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage: %v", err)
+	}
+	if len(data.Windows) != 1 {
+		t.Fatalf("windows = %d, want 1", len(data.Windows))
+	}
+	w := data.Windows[0]
+	if w.Name != "grok_build" {
+		t.Fatalf("window name = %q, want grok_build", w.Name)
+	}
+	if math.Abs(w.Utilization-42.5) > 0.001 {
+		t.Fatalf("utilization = %.3f, want 42.5", w.Utilization)
+	}
+	if !w.ResetsAt.Equal(reset) {
+		t.Fatalf("resets_at = %s, want %s", w.ResetsAt, reset)
+	}
+}
+
+func TestParseGrokBilling_NoUsageYet(t *testing.T) {
+	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	snapshot, err := parseGrokBilling(grokGRPCWebResponse(grokBillingNoUsagePayload(reset)), time.Now())
+	if err != nil {
+		t.Fatalf("parseGrokBilling: %v", err)
+	}
+	if snapshot.UsedPercent != 0 {
+		t.Fatalf("used percent = %.2f, want 0", snapshot.UsedPercent)
+	}
+	if !snapshot.ResetsAt.Equal(reset) {
+		t.Fatalf("resets_at = %s, want %s", snapshot.ResetsAt, reset)
+	}
+}
+
+func TestFetchUsage_GrokAuthRejectedReturnsExpiredData(t *testing.T) {
+	writeGrokAuth(t, "grok-token", time.Now().Add(time.Hour))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/grpc-web+proto")
+		w.Header().Set("grpc-status", "16")
+		w.Header().Set("grpc-message", "Authentication required")
+	}))
+	defer srv.Close()
+
+	p := New(config.ProviderConfig{})
+	p.grokBillingURL = srv.URL
+	p.client = srv.Client()
+
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage: %v", err)
+	}
+	if !data.IsExpired {
+		t.Fatal("auth rejection should mark data expired")
+	}
+	if data.Error == "" {
+		t.Fatal("auth rejection should include an error")
+	}
+}
+
+func TestGrokCredentials_Expired(t *testing.T) {
+	writeGrokAuth(t, "grok-token", time.Now().Add(-time.Minute))
+	p := New(config.ProviderConfig{})
+
+	if p.IsConfigured() {
+		t.Fatal("expired grok auth should not configure provider")
+	}
+	if got := p.SetupStatus(); got.State != "needs_auth" {
+		t.Fatalf("SetupStatus = %#v, want needs_auth", got)
+	}
+}
+
+func writeGrokAuth(t *testing.T, token string, expiresAt time.Time) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("GROK_HOME", dir)
+	data := map[string]map[string]string{
+		"https://auth.x.ai::client": {
+			"key":        token,
+			"expires_at": expiresAt.UTC().Format(time.RFC3339Nano),
+		},
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal auth: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), raw, 0o600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+}
+
+func grokGRPCWebResponse(payload []byte) []byte {
+	dataFrame := grpcFrame(0, payload)
+	trailerFrame := grpcFrame(0x80, []byte("grpc-status: 0\r\n"))
+	return append(dataFrame, trailerFrame...)
+}
+
+func grpcFrame(flags byte, payload []byte) []byte {
+	out := make([]byte, 5+len(payload))
+	out[0] = flags
+	binary.BigEndian.PutUint32(out[1:5], uint32(len(payload)))
+	copy(out[5:], payload)
+	return out
+}
+
+func grokBillingPayload(percent float32, reset time.Time) []byte {
+	var msg []byte
+	msg = append(msg, protoFixed32(1, math.Float32bits(percent))...)
+	msg = append(msg, protoMessage(5, protoVarint(1, uint64(reset.Unix())))...)
+	msg = append(msg, protoMessage(8, protoVarint(1, 2))...)
+	return protoMessage(1, msg)
+}
+
+func grokBillingNoUsagePayload(reset time.Time) []byte {
+	var msg []byte
+	msg = append(msg, protoMessage(4, protoVarint(1, uint64(reset.Add(-7*24*time.Hour).Unix())))...)
+	msg = append(msg, protoMessage(5, protoVarint(1, uint64(reset.Unix())))...)
+	msg = append(msg, protoMessage(8, protoVarint(1, 2))...)
+	return protoMessage(1, msg)
+}
+
+func protoMessage(field uint64, payload []byte) []byte {
+	out := protoKey(field, 2)
+	out = append(out, encodeVarint(uint64(len(payload)))...)
+	return append(out, payload...)
+}
+
+func protoVarint(field, value uint64) []byte {
+	out := protoKey(field, 0)
+	return append(out, encodeVarint(value)...)
+}
+
+func protoFixed32(field uint64, value uint32) []byte {
+	out := protoKey(field, 5)
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, value)
+	return append(out, buf...)
+}
+
+func protoKey(field, wire uint64) []byte {
+	return encodeVarint(field<<3 | wire)
+}
+
+func encodeVarint(value uint64) []byte {
+	var out []byte
+	for value >= 0x80 {
+		out = append(out, byte(value)|0x80)
+		value >>= 7
+	}
+	return append(out, byte(value))
 }
