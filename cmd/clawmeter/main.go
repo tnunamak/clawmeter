@@ -449,9 +449,11 @@ func providersCmd(args []string) int {
 			fmt.Println("Usage: clawmeter providers [enable|disable <provider>]")
 			fmt.Println()
 			fmt.Println("Without arguments, lists provider auth status.")
+			fmt.Println("Detected providers run automatically. Enable is for opt-in providers or manual overrides.")
 			fmt.Println("Examples:")
 			fmt.Println("  clawmeter providers")
-			fmt.Println("  clawmeter providers enable grok")
+			fmt.Println("  clawmeter grok")
+			fmt.Println("  clawmeter providers enable openrouter")
 			fmt.Println("  clawmeter providers disable codex")
 			return 0
 		default:
@@ -492,8 +494,9 @@ func providersCmd(args []string) int {
 	fmt.Println("  disabled      explicitly disabled in config, will NOT be polled")
 	fmt.Println("  no credentials  no credentials detected; nothing to poll")
 	fmt.Println()
-	fmt.Println("Use 'clawmeter providers enable <provider>' to opt a provider in,")
-	fmt.Println("'clawmeter providers disable <provider>' to opt out.")
+	fmt.Println("Detected/enabled providers are polled automatically.")
+	fmt.Println("Use 'clawmeter providers enable <provider>' to opt available providers in,")
+	fmt.Println("or 'clawmeter providers disable <provider>' to opt out.")
 	return 0
 }
 
@@ -607,8 +610,8 @@ Examples:
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
   clawmeter setup --all              # Install mainstream local integrations
-  clawmeter providers enable codex   # Enable Codex provider
-  clawmeter providers enable grok    # Enable Grok provider
+  clawmeter codex                    # Show Codex quota
+  clawmeter grok                     # Show Grok quota after grok login
   clawmeter providers                # List available providers`)
 }
 
@@ -631,7 +634,7 @@ Examples:
   clawmeter config show
   clawmeter config set poll_interval 600
   clawmeter config set check_for_updates false
-  clawmeter config enable codex
-  clawmeter providers enable grok
+  clawmeter config enable openrouter
+  clawmeter providers enable openrouter
   clawmeter config disable claude`)
 }

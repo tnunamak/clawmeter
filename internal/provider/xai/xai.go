@@ -194,12 +194,14 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now()
+	windowName := grokBuildWindowName(snapshot.ResetsAt, now)
 	data := &provider.UsageData{
 		Provider:  p.Name(),
-		FetchedAt: time.Now(),
+		FetchedAt: now,
 		Windows: []provider.UsageWindow{{
-			Name:        "grok_build",
-			DisplayName: grokBuildLabel(snapshot.ResetsAt, time.Now()),
+			Name:        windowName,
+			DisplayName: windowName,
 			Utilization: snapshot.UsedPercent,
 			ResetsAt:    snapshot.ResetsAt,
 		}},
@@ -725,18 +727,18 @@ func earliestTime(times []time.Time) time.Time {
 	return earliest
 }
 
-func grokBuildLabel(resetsAt, now time.Time) string {
+func grokBuildWindowName(resetsAt, now time.Time) string {
 	if resetsAt.IsZero() {
-		return "Grok Build"
+		return "Build"
 	}
 	days := int(math.Round(resetsAt.Sub(now).Hours() / 24))
 	if days >= 4 && days <= 12 {
-		return "Grok Build Weekly"
+		return "Build Weekly"
 	}
 	if days >= 20 && days <= 45 {
-		return "Grok Build Monthly"
+		return "Build Monthly"
 	}
-	return "Grok Build"
+	return "Build"
 }
 
 type managementKeyValidation struct {

@@ -183,8 +183,9 @@ Config file: `~/.config/clawmeter/config.yaml`
 
 ```bash
 clawmeter config show
-clawmeter providers enable codex
-clawmeter providers enable grok
+clawmeter codex
+clawmeter grok
+clawmeter providers enable openrouter
 clawmeter config disable copilot
 clawmeter config set poll_interval 600
 clawmeter config set warning_threshold 80

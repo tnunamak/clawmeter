@@ -130,8 +130,9 @@ func onReady() {
 	// toggles its visibility based on whether any menu has data to render.
 	mEmpty := systray.AddMenuItem("No active providers", "")
 	mEmpty.Disable()
-	mProviderSetup := systray.AddMenuItem("Provider setup: run `clawmeter providers`", "")
+	mProviderSetup := systray.AddMenuItem("Manage providers: run `clawmeter providers`", "")
 	mProviderSetup.Disable()
+	mProviderSetup.Hide()
 
 	systray.AddSeparator()
 
@@ -253,7 +254,7 @@ func onReady() {
 		statuses := s.statuses // reuse last known statuses
 		s.mu.Unlock()
 
-		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider, mEmpty)
+		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
 		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
 	}
 
@@ -270,7 +271,7 @@ func onReady() {
 		s.mu.Unlock()
 
 		if lastResults != nil {
-			updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider, mEmpty)
+			updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
 		}
 	}
 
@@ -348,7 +349,7 @@ func onReady() {
 		s.lastResults = filtered
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
-		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider, mEmpty)
+		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
 	}
 
 	// Initial refresh in background (don't block tray UI)
@@ -471,7 +472,7 @@ func showProviderHeader(menu *providerMenuItems) {
 	menu.headerItem.Show()
 }
 
-func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem) {
+func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
 	hasExpiredClaude := false
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
@@ -579,8 +580,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	// adding clutter once at least one provider is showing data.
 	if visibleProviderCount == 0 {
 		mEmpty.Show()
+		mProviderSetup.Show()
 	} else {
 		mEmpty.Hide()
+		mProviderSetup.Hide()
 	}
 
 	updateIconTargetSelector(activeResults, displayNames, mIconProvider)

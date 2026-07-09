@@ -244,8 +244,11 @@ func TestFetchUsage_UsesGrokLoginBilling(t *testing.T) {
 		t.Fatalf("windows = %d, want 1", len(data.Windows))
 	}
 	w := data.Windows[0]
-	if w.Name != "grok_build" {
-		t.Fatalf("window name = %q, want grok_build", w.Name)
+	if w.Name != "Build Weekly" {
+		t.Fatalf("window name = %q, want Build Weekly", w.Name)
+	}
+	if w.DisplayName != "Build Weekly" {
+		t.Fatalf("window display name = %q, want Build Weekly", w.DisplayName)
 	}
 	if math.Abs(w.Utilization-42.5) > 0.001 {
 		t.Fatalf("utilization = %.3f, want 42.5", w.Utilization)

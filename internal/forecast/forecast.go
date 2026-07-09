@@ -11,6 +11,7 @@ import (
 const (
 	FiveHourWindow = 5 * time.Hour
 	SevenDayWindow = 7 * 24 * time.Hour
+	MonthlyWindow  = 30 * 24 * time.Hour
 
 	// paceWidth is the fixed column width before an extra run-out note.
 	// Must be >= the longest output of PaceLabel.
@@ -191,13 +192,18 @@ func (p Projection) ColorIndicator() string {
 
 // GuessWindowType infers the window duration from a window name string.
 func GuessWindowType(name string) time.Duration {
+	normalized := strings.ToLower(strings.TrimSpace(name))
 	switch {
-	case name == "5h":
+	case normalized == "5h":
 		return FiveHourWindow
-	case strings.HasPrefix(name, "7d"):
+	case strings.HasPrefix(normalized, "7d"):
 		return SevenDayWindow
-	case strings.HasPrefix(name, "24h"):
+	case strings.HasPrefix(normalized, "24h"):
 		return 24 * time.Hour
+	case strings.Contains(normalized, "weekly"):
+		return SevenDayWindow
+	case strings.Contains(normalized, "monthly"):
+		return MonthlyWindow
 	default:
 		return 24 * time.Hour // default to daily
 	}
