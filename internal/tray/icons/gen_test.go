@@ -78,7 +78,7 @@ func TestGenerateProviderIconAddsContrastPlateAtTraySize(t *testing.T) {
 // downscaling. We test against a colorful logo so the assertion isn't satisfied
 // by the contrast plate or the Clawmeter overlay alone.
 func TestProviderMarkRemainsVisibleAtTraySize(t *testing.T) {
-	for _, name := range []string{"claude", "gemini", "kimi"} {
+	for _, name := range []string{"claude", "gemini", "kimi", "xai"} {
 		t.Run(name, func(t *testing.T) {
 			img := decodePNG(t, GenerateProviderIcon(name, 0, 22))
 			if !hasNonBackgroundColoredPixel(img) {

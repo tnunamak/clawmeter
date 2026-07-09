@@ -2,6 +2,12 @@
 
 Clawmeter is released under the MIT license. Windows release artifacts are built from the Go module graph and the local `systray-fork` replacement in this repository.
 
+## Bundled assets
+
+| Asset | Use | Source | License |
+| --- | --- | --- | --- |
+| `internal/tray/icons/provider-grok.png` | Grok provider tray mark, recolored to Clawmeter's tray palette | Adapted from CodexBar's `ProviderIcon-grok.svg` ([source](https://github.com/steipete/CodexBar)) | MIT, Copyright (c) 2026 Peter Steinberger |
+
 ## Windows tray build license audit
 
 This table is based on:

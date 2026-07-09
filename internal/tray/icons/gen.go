@@ -34,6 +34,8 @@ var (
 	ProviderOpenRouter []byte
 	//go:embed provider-copilot.png
 	ProviderCopilot []byte
+	//go:embed provider-grok.png
+	ProviderGrok []byte
 )
 
 // ProviderLogos maps provider name to its embedded logo PNG.
@@ -45,6 +47,7 @@ var ProviderLogos = map[string][]byte{
 	"kimik2":     ProviderKimi,
 	"codex":      ProviderCodex,
 	"copilot":    ProviderCopilot,
+	"xai":        ProviderGrok,
 	"openrouter": ProviderOpenRouter,
 }
 
@@ -53,7 +56,6 @@ var ProviderLogos = map[string][]byte{
 var ProviderLogoFallbacks = map[string]string{
 	"jetbrains": "no canonical tray-safe source asset in this repo yet",
 	"synthetic": "test provider; plain crawfish icon is intentional",
-	"xai":       "no canonical tray-safe source asset in this repo yet",
 	"zai":       "no canonical tray-safe source asset in this repo yet",
 }
 
