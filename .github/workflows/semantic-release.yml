@@ -323,7 +323,6 @@ jobs:
           git config --global user.name "Tim Nunamaker"
           git config --global user.email "tnunamak@gmail.com"
           packaging/winget/submit-pr.sh "${{ needs.release.outputs.tag }}"
-          packaging/winget/close-superseded-first-package-prs.sh --latest-tag "${{ needs.release.outputs.tag }}"
 
   cleanup:
     needs: [release, build]

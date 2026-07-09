@@ -202,6 +202,28 @@ func TestProject_CurrentPctOverLimitDoesNotProduceNegativeRunOut(t *testing.T) {
 	}
 }
 
+func TestCompareRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testing.T) {
+	higherButLater := Projection{
+		ProjectedPct:    115,
+		WillLastToReset: false,
+		RunsOutIn:       3*24*time.Hour + 12*time.Hour,
+		RunsOutEarlyBy:  22*time.Hour + 29*time.Minute,
+	}
+	lowerButSooner := Projection{
+		ProjectedPct:    106,
+		WillLastToReset: false,
+		RunsOutIn:       time.Hour + 35*time.Minute,
+		RunsOutEarlyBy:  9*time.Hour + 23*time.Minute,
+	}
+
+	if got := CompareRisk(lowerButSooner, higherButLater); got >= 0 {
+		t.Fatalf("CompareRisk(sooner, later) = %d, want sooner runout to rank first", got)
+	}
+	if got := CompareRisk(higherButLater, lowerButSooner); got <= 0 {
+		t.Fatalf("CompareRisk(later, sooner) = %d, want later runout to rank after sooner", got)
+	}
+}
+
 func TestProjection_Indicator(t *testing.T) {
 	tests := []struct {
 		projected float64

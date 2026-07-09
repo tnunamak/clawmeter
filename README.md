@@ -1,8 +1,8 @@
 # Clawmeter
 
 <p align="center">
-  <img src="assets/readme/tray-openai-5h-32.png" alt="OpenAI 5H tray icon" width="32" height="32">
-  <img src="assets/readme/tray-openai-7d-32.png" alt="OpenAI 7D tray icon" width="32" height="32">
+  <img src="assets/readme/tray-openai-5h-32.png" alt="Codex 5H tray icon" width="32" height="32">
+  <img src="assets/readme/tray-openai-7d-32.png" alt="Codex 7D tray icon" width="32" height="32">
   <img src="assets/readme/tray-claude-7a-32.png" alt="Claude 7A tray icon" width="32" height="32">
   <img src="assets/readme/tray-claude-7s-32.png" alt="Claude 7S tray icon" width="32" height="32">
 </p>
@@ -113,7 +113,7 @@ clawmeter tray           # run the tray in this session
 | Provider | Tracks |
 |---|---|
 | Claude | 5h, 7d, model-specific windows |
-| OpenAI/Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
+| Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
 | Gemini | 24h Pro and Flash quotas |
 | GitHub Copilot | Premium and chat interactions |
 | Grok/xAI | Grok Build subscription usage; API prepaid credits |
@@ -211,7 +211,7 @@ brew services stop clawmeter
 | Provider | Source |
 |---|---|
 | Claude | Claude Code OAuth token |
-| OpenAI/Codex | `~/.codex/auth.json` |
+| Codex | `~/.codex/auth.json` |
 | Gemini | `~/.gemini/` OAuth credentials |
 | GitHub Copilot | `~/.config/github-copilot/hosts.json` |
 | Grok/xAI | `~/.grok/auth.json` from `grok login`; or `XAI_MANAGEMENT_API_KEY` with optional `XAI_TEAM_ID` |

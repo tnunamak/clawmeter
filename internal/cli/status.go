@@ -401,8 +401,8 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		if a.Tier != b.Tier {
 			return a.Tier < b.Tier
 		}
-		if a.Proj.ProjectedPct != b.Proj.ProjectedPct {
-			return a.Proj.ProjectedPct > b.Proj.ProjectedPct
+		if cmp := forecast.CompareRisk(a.Proj, b.Proj); cmp != 0 {
+			return cmp < 0
 		}
 		if a.Provider != b.Provider {
 			return a.Provider < b.Provider
@@ -523,7 +523,6 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 	var bestWindow provider.UsageWindow
 	var bestProj forecast.Projection
 	var bestTier = 5
-	var bestPct float64
 
 	for i := range m.Providers {
 		pf := &m.Providers[i]
@@ -533,12 +532,11 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		tier := classifyProvider(pf).tier
 		for _, window := range pf.Data.UsableWindows() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			if bestPF == nil || tier < bestTier || (tier == bestTier && proj.ProjectedPct > bestPct) {
+			if bestPF == nil || tier < bestTier || (tier == bestTier && forecast.CompareRisk(proj, bestProj) < 0) {
 				bestPF = pf
 				bestWindow = window
 				bestProj = proj
 				bestTier = tier
-				bestPct = proj.ProjectedPct
 			}
 		}
 	}
@@ -953,6 +951,7 @@ type providerUrgency struct {
 	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
 	maxProjectedPct float64
 	worstWindow     string
+	worstProjection forecast.Projection
 	runsOutIn       time.Duration
 	runsOutEarlyBy  time.Duration
 }
@@ -973,13 +972,19 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 
 	var maxPct float64
 	var worstWindow string
+	var worstProjection forecast.Projection
+	var hasWorstProjection bool
 	var runsOutIn time.Duration
 	var runsOutEarlyBy time.Duration
 	for _, w := range pf.Data.UsableWindows() {
 		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
 		if proj.ProjectedPct > maxPct {
 			maxPct = proj.ProjectedPct
+		}
+		if !hasWorstProjection || forecast.CompareRisk(proj, worstProjection) < 0 {
 			worstWindow = w.Name
+			worstProjection = proj
+			hasWorstProjection = true
 			runsOutIn = proj.RunsOutIn
 			runsOutEarlyBy = proj.RunsOutEarlyBy
 		}
@@ -993,7 +998,14 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 		tier = 3
 	}
 
-	return providerUrgency{tier: tier, maxProjectedPct: maxPct, worstWindow: worstWindow, runsOutIn: runsOutIn, runsOutEarlyBy: runsOutEarlyBy}
+	return providerUrgency{
+		tier:            tier,
+		maxProjectedPct: maxPct,
+		worstWindow:     worstWindow,
+		worstProjection: worstProjection,
+		runsOutIn:       runsOutIn,
+		runsOutEarlyBy:  runsOutEarlyBy,
+	}
 }
 
 // sortProvidersByUrgency sorts providers so the most urgent appear first.
@@ -1004,7 +1016,9 @@ func sortProvidersByUrgency(providers []ProviderFormatter) {
 		if ui.tier != uj.tier {
 			return ui.tier < uj.tier
 		}
-		// Within same tier, higher projected usage first
+		if cmp := forecast.CompareRisk(ui.worstProjection, uj.worstProjection); cmp != 0 {
+			return cmp < 0
+		}
 		return ui.maxProjectedPct > uj.maxProjectedPct
 	})
 }
@@ -1035,7 +1049,7 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 		case 4:
 			healthy++
 		}
-		if u.tier < worstU.tier || (u.tier == worstU.tier && u.maxProjectedPct > worstU.maxProjectedPct) {
+		if u.tier < worstU.tier || (u.tier == worstU.tier && forecast.CompareRisk(u.worstProjection, worstU.worstProjection) < 0) {
 			worstIdx = i
 			worstU = u
 		}
@@ -1089,7 +1103,7 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			rest = summaryCounts(healthy-1, warning, critical, errored, expired)
 		}
 
-		paceWord := forecast.PaceLabel(worstU.maxProjectedPct)
+		paceWord := forecast.PaceLabel(worstU.worstProjection.ProjectedPct)
 		line = fmt.Sprintf("⚠ %s %s%s", windowLabel, paceWord, etaStr)
 		if rest != "" {
 			line += " — " + rest

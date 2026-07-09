@@ -43,7 +43,7 @@ func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
 }
 
 func TestCompactIconTooltipShowsBlockedGap(t *testing.T) {
-	got := compactIconTooltip("OpenAI 7-Day", provider.UsageWindow{
+	got := compactIconTooltip("Codex 7-Day", provider.UsageWindow{
 		Name:     "7d",
 		ResetsAt: time.Now().Add(3 * time.Hour),
 	}, forecast.Projection{
@@ -54,7 +54,7 @@ func TestCompactIconTooltipShowsBlockedGap(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"OpenAI 7-Day",
+		"Codex 7-Day",
 		"Runs out in 1h30m (1h00m before reset)",
 		"Resets in",
 		"Est. 124% at reset",
@@ -66,7 +66,7 @@ func TestCompactIconTooltipShowsBlockedGap(t *testing.T) {
 }
 
 func TestCompactIconTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
-	got := compactIconTooltip("OpenAI 7-Day", provider.UsageWindow{
+	got := compactIconTooltip("Codex 7-Day", provider.UsageWindow{
 		Name:     "7d",
 		ResetsAt: time.Now().Add(2 * time.Hour),
 	}, forecast.Projection{
@@ -80,7 +80,7 @@ func TestCompactIconTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
 	}
 }
 
-func TestIconMeterStateUsesActualExpectedAndProjectedRiskSeparately(t *testing.T) {
+func TestIconMeterStateUsesSoonestBlockingWindowForProviderDefault(t *testing.T) {
 	now := time.Now()
 	data := &provider.UsageData{
 		Provider: "openai",
@@ -102,17 +102,17 @@ func TestIconMeterStateUsesActualExpectedAndProjectedRiskSeparately(t *testing.T
 	if !meter.ShowExpected {
 		t.Fatal("meter should show expected pace for healthy usage windows")
 	}
-	if meter.Label != "7D" {
-		t.Fatalf("meter.Label = %q, want 7D", meter.Label)
+	if meter.Label != "5H" {
+		t.Fatalf("meter.Label = %q, want 5H", meter.Label)
 	}
-	if meter.UsagePct != 50 {
-		t.Fatalf("UsagePct = %.1f, want actual utilization from worst projected window", meter.UsagePct)
+	if meter.UsagePct != 90 {
+		t.Fatalf("UsagePct = %.1f, want actual utilization from soonest blocking window", meter.UsagePct)
 	}
-	wantExpected := 100 / 7.0
-	if absFloat(meter.ExpectedPct-wantExpected) > 0.2 {
+	wantExpected := 80.0
+	if absFloat(meter.ExpectedPct-wantExpected) > 0.5 {
 		t.Fatalf("ExpectedPct = %.1f, want roughly %.1f", meter.ExpectedPct, wantExpected)
 	}
-	if meter.RiskPct < 300 {
+	if meter.RiskPct < 110 || meter.RiskPct > 115 {
 		t.Fatalf("RiskPct = %.1f, want projected overrun severity from rate", meter.RiskPct)
 	}
 }
@@ -143,7 +143,7 @@ func TestIconMeterStateKeepsStaleDataNeutral(t *testing.T) {
 	}
 }
 
-func TestProviderSeverityUsesHighestProjectedUsage(t *testing.T) {
+func TestProviderSeverityUsesRiskUrgency(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -164,8 +164,8 @@ func TestProviderSeverityUsesHighestProjectedUsage(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal("sortedKeys() returned no providers")
 	}
-	if keys[0] != "openai" {
-		t.Fatalf("sortedKeys()[0] = %q, want openai because it has the highest projected usage; keys=%v", keys[0], keys)
+	if keys[0] != "claude" {
+		t.Fatalf("sortedKeys()[0] = %q, want claude because it runs out sooner; keys=%v", keys[0], keys)
 	}
 }
 
@@ -266,7 +266,7 @@ func TestTrayClickDispatcherDoubleClickResetsAutoWithoutCycle(t *testing.T) {
 	}
 }
 
-func TestActiveIconTargetsOrdersEveryProviderWindowByProjectedRisk(t *testing.T) {
+func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -288,11 +288,45 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByProjectedRisk(t *testing.T)
 
 	got := activeIconTargets(results, iconAutoRisk)
 	want := []iconTarget{
+		{Provider: "claude", Window: "5h"},
 		{Provider: "claude", Window: "7d Sonnet"},
 		{Provider: "openai", Window: "7d"},
-		{Provider: "claude", Window: "5h"},
 		{Provider: "openai", Window: "5h"},
 		{Provider: "claude", Window: "7d All"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestActiveIconTargetsRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"openai": {
+			Provider: "openai",
+			Windows: []provider.UsageWindow{
+				// Projected ~115%, but not blocked until about 3d12h from now.
+				{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
+			},
+		},
+		"claude": {
+			Provider: "claude",
+			Windows: []provider.UsageWindow{
+				// Projected ~106%, but blocked in about 1h35m from now.
+				{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
+			},
+		},
+	}
+
+	got := activeIconTargets(results, iconAutoRisk)
+	want := []iconTarget{
+		{Provider: "claude", Window: "7d"},
+		{Provider: "openai", Window: "7d"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
@@ -601,7 +635,7 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
-	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "OpenAI"})
+	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "Codex"})
 
 	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nRuns out in ") {
 		t.Fatalf("trayTooltip() = %q, want full title followed by run-out line", got)
@@ -639,9 +673,9 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 		s.mu.Unlock()
 	}()
 
-	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "OpenAI"})
+	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "Codex"})
 
-	if !strings.HasPrefix(got, "OpenAI 5-Hour\nWon't run out") {
+	if !strings.HasPrefix(got, "Codex 5-Hour\nWon't run out") {
 		t.Fatalf("trayTooltip() = %q, want full title followed by run-out state", got)
 	}
 	if strings.Contains(got, "5H") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
@@ -677,7 +711,7 @@ func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
 		s.mu.Unlock()
 	}()
 
-	got := trayTooltip(results, map[string]string{"openai": "OpenAI"})
+	got := trayTooltip(results, map[string]string{"openai": "Codex"})
 
 	if !strings.Contains(got, "2 reset credits - earliest expires") {
 		t.Fatalf("trayTooltip() = %q, want reset-credit expiry line", got)

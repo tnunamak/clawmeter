@@ -746,8 +746,10 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		return nil
 	}
 	type rankedTarget struct {
-		target iconTarget
-		score  float64
+		target        iconTarget
+		projection    forecast.Projection
+		hasProjection bool
+		score         float64
 	}
 
 	providerNames := make([]string, 0, len(results))
@@ -776,15 +778,25 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		}
 		for _, window := range windows {
 			target := iconTarget{Provider: name, Window: window.Name}
-			projected := windowProjectedPct(window)
-			score := projected
+			proj := windowProjection(window)
+			score := proj.ProjectedPct
 			if mode == iconAutoRunway {
-				score = 100 - projected
+				score = 100 - proj.ProjectedPct
 			}
-			ranked = append(ranked, rankedTarget{target: target, score: score})
+			ranked = append(ranked, rankedTarget{
+				target:        target,
+				projection:    proj,
+				hasProjection: true,
+				score:         score,
+			})
 		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
+		if mode == iconAutoRisk && ranked[i].hasProjection && ranked[j].hasProjection {
+			if cmp := forecast.CompareRisk(ranked[i].projection, ranked[j].projection); cmp != 0 {
+				return cmp < 0
+			}
+		}
 		return ranked[i].score > ranked[j].score
 	})
 
@@ -828,8 +840,11 @@ func iconTargetRisk(data *provider.UsageData, target iconTarget) float64 {
 }
 
 func windowProjectedPct(window provider.UsageWindow) float64 {
-	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-	return proj.ProjectedPct
+	return windowProjection(window).ProjectedPct
+}
+
+func windowProjection(window provider.UsageWindow) forecast.Projection {
+	return forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 }
 
 func targetInChoices(target iconTarget, choices []iconTarget) bool {
@@ -933,7 +948,7 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 
 // iconMeterState maps provider usage into the tray icon's three visual
 // channels: actual usage, expected usage by this point in the reset window, and
-// projected risk. The popup keeps exact text; the icon carries the comparison.
+// projected urgency. The popup keeps exact text; the icon carries the comparison.
 func iconMeterState(data *provider.UsageData, windowName string) icons.MeterState {
 	if data == nil {
 		return icons.MeterState{}
@@ -1012,16 +1027,16 @@ func selectedIconWindow(data *provider.UsageData, windowName string) (provider.U
 		}
 		return selected, selectedProj, false
 	}
-	worst := -1.0
+	hasSelected := false
 	for _, window := range data.UsableWindows() {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-		if proj.ProjectedPct > worst {
-			worst = proj.ProjectedPct
+		proj := windowProjection(window)
+		if !hasSelected || forecast.CompareRisk(proj, selectedProj) < 0 {
 			selected = window
 			selectedProj = proj
+			hasSelected = true
 		}
 	}
-	return selected, selectedProj, worst >= 0
+	return selected, selectedProj, hasSelected
 }
 
 func providerProjectedPct(data *provider.UsageData) float64 {
@@ -1351,7 +1366,7 @@ func splitProvidersForRefresh(providers []provider.Provider, gate *provider.Fail
 }
 
 // sortedKeys returns provider names sorted by severity (worst first).
-// Expired > error > highest projected usage > alphabetical.
+// Expired > error > risk-window urgency > alphabetical.
 func sortedKeys(m map[string]*provider.UsageData) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -1360,25 +1375,36 @@ func sortedKeys(m map[string]*provider.UsageData) []string {
 	sort.Slice(keys, func(i, j int) bool {
 		di, dj := m[keys[i]], m[keys[j]]
 		si, sj := providerSeverity(di), providerSeverity(dj)
-		if si != sj {
-			return si > sj // higher severity first
+		if si.tier != sj.tier {
+			return si.tier < sj.tier
+		}
+		if si.hasProjection && sj.hasProjection {
+			if cmp := forecast.CompareRisk(si.projection, sj.projection); cmp != 0 {
+				return cmp < 0
+			}
 		}
 		return keys[i] < keys[j] // alphabetical tiebreak
 	})
 	return keys
 }
 
-// providerSeverity returns a numeric severity score for sorting.
-// Higher = more urgent.
-func providerSeverity(data *provider.UsageData) float64 {
+type providerSeverityRank struct {
+	tier          int
+	projection    forecast.Projection
+	hasProjection bool
+}
+
+// providerSeverity returns a sortable severity rank.
+func providerSeverity(data *provider.UsageData) providerSeverityRank {
 	if data == nil {
-		return -1
+		return providerSeverityRank{tier: 3}
 	}
 	if data.IsExpired {
-		return 10000 // expired always on top
+		return providerSeverityRank{tier: 0}
 	}
 	if data.Error != "" && !data.HasUsageWindows() {
-		return 9000 // error next
+		return providerSeverityRank{tier: 1}
 	}
-	return providerProjectedPct(data)
+	_, proj, ok := selectedIconWindow(data, "")
+	return providerSeverityRank{tier: 2, projection: proj, hasProjection: ok}
 }

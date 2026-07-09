@@ -55,7 +55,7 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 	}
 
 	if strings.TrimSpace(auth.OpenAIAPIKey) != "" {
-		return provider.SetupStatus{State: provider.SetupReady, Detail: "OpenAI API key"}
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "Codex auth API key"}
 	}
 	if auth.Tokens != nil && strings.TrimSpace(auth.Tokens.AccessToken) != "" {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "ChatGPT account"}

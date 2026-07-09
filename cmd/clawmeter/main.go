@@ -584,7 +584,7 @@ clawmeter status --agent           # Token-efficient all-quota summary
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
   clawmeter setup --all              # Install mainstream local integrations
-  clawmeter config enable openai     # Enable OpenAI provider
+  clawmeter config enable openai     # Enable Codex provider
   clawmeter providers                # List available providers`)
 }
 

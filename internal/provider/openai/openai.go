@@ -1,4 +1,4 @@
-// Package openai implements the Provider interface for OpenAI/Codex via JSON-RPC subprocess.
+// Package openai implements the Provider interface for Codex via JSON-RPC subprocess.
 package openai
 
 import (
@@ -26,21 +26,21 @@ const (
 
 var errNoResponse = errors.New("no response received")
 
-// Provider implements the provider.Provider interface for OpenAI/Codex.
+// Provider implements the provider.Provider interface for Codex.
 type Provider struct {
 	cfg config.ProviderConfig
 }
 
-// New creates a new OpenAI provider.
+// New creates a new Codex provider.
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
 		cfg: cfg,
 	}
 }
 
-func (p *Provider) Name() string         { return "openai" }
-func (p *Provider) DisplayName() string  { return "OpenAI" }
-func (p *Provider) Description() string  { return "OpenAI/Codex (via codex CLI)" }
+func (p *Provider) Name() string         { return "openai" } // stable config key
+func (p *Provider) DisplayName() string  { return "Codex" }
+func (p *Provider) Description() string  { return "Codex quota (via codex CLI)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
 
 // FetchUsage retrieves rate limit data by launching codex as a JSON-RPC subprocess.
@@ -435,7 +435,7 @@ func truncateDiagnostic(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// Register registers the OpenAI provider with the registry.
+// Register registers the Codex provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("openai")
 	return registry.Register(New(providerCfg))

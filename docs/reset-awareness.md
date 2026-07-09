@@ -87,7 +87,7 @@ reset credits: 2 available, earliest expires Jul 12 2:30 PM
 Agent output, when credits exist:
 
 ```text
-runs_out_in=1d22h; runs_out_early_by=1d8h; reset_credits=[OpenAI available=2 earliest_expires_at=2026-07-12T14:30:00-05:00 earliest_expires_in=9d]
+runs_out_in=1d22h; runs_out_early_by=1d8h; reset_credits=[Codex available=2 earliest_expires_at=2026-07-12T14:30:00-05:00 earliest_expires_in=9d]
 ```
 
 Tray provider menu and tooltip, when credits exist:

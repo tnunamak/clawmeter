@@ -29,7 +29,7 @@ func TestAgentSummaryKeepsExactBoundarySeconds(t *testing.T) {
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
 		{
 			Name:    "openai",
-			Display: "OpenAI",
+			Display: "Codex",
 			Data: &provider.UsageData{Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 99, ResetsAt: now.Add(59 * time.Second)},
 			}},
@@ -38,7 +38,7 @@ func TestAgentSummaryKeepsExactBoundarySeconds(t *testing.T) {
 
 	got := output.AgentSummary()
 	for _, want := range []string{
-		"Quota: worst=OpenAI 7d",
+		"Quota: worst=Codex 7d",
 		"current=99%",
 		"reset_in_seconds=",
 		"reset_in=59s",
@@ -63,7 +63,7 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 		},
 		{
 			Name:    "openai",
-			Display: "OpenAI",
+			Display: "Codex",
 			Data: &provider.UsageData{Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 16, ResetsAt: now.Add(36 * time.Hour)},
 			}},
@@ -75,7 +75,7 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 		"quotas=[",
 		"Claude 7d All(",
 		"Claude 5h Sonnet(",
-		"OpenAI 7d(",
+		"Codex 7d(",
 		"projected_at_reset=",
 		"status=tight",
 		"status=on_track",
@@ -87,9 +87,45 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 
 	claude7d := strings.Index(got, "Claude 7d All(")
 	claude5h := strings.Index(got, "Claude 5h Sonnet(")
-	openai7d := strings.Index(got, "OpenAI 7d(")
+	openai7d := strings.Index(got, "Codex 7d(")
 	if !(claude7d >= 0 && claude7d < claude5h && claude5h < openai7d) {
 		t.Fatalf("AgentSummary() quota order = %q, want most-at-risk to least-at-risk", got)
+	}
+}
+
+func TestAgentSummaryWorstQuotaPrefersSoonerRunoutOverHigherProjectedPct(t *testing.T) {
+	now := time.Now()
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{
+			Name:    "openai",
+			Display: "Codex",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
+			}},
+		},
+		{
+			Name:    "claude",
+			Display: "Claude",
+			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+				{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
+			}},
+		},
+	}}
+
+	got := output.AgentSummary()
+	for _, want := range []string{
+		"Quota: worst=Claude 7d",
+		"projected_at_reset=105",
+		"runs_out_in=",
+		"runs_out_early_by=",
+		"Codex 7d(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "Quota: worst=Codex 7d") {
+		t.Fatalf("AgentSummary() = %q, should not choose higher projected but later-runout quota", got)
 	}
 }
 
@@ -98,7 +134,7 @@ func TestAgentSummaryIncludesCodexResetCredits(t *testing.T) {
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
 		{
 			Name:    "openai",
-			Display: "OpenAI",
+			Display: "Codex",
 			Data: &provider.UsageData{
 				Windows: []provider.UsageWindow{
 					{Name: "7d", Utilization: 20, ResetsAt: now.Add(4 * 24 * time.Hour)},
@@ -116,7 +152,7 @@ func TestAgentSummaryIncludesCodexResetCredits(t *testing.T) {
 	got := output.AgentSummary()
 	for _, want := range []string{
 		"reset_credits=[",
-		"OpenAI available=2",
+		"Codex available=2",
 		"earliest_expires_at=",
 		"earliest_expires_in=",
 	} {
@@ -131,7 +167,7 @@ func TestAgentSummaryIncludesRunOutEarlyBy(t *testing.T) {
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
 		{
 			Name:    "openai",
-			Display: "OpenAI",
+			Display: "Codex",
 			Data: &provider.UsageData{Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
 			}},
@@ -140,13 +176,13 @@ func TestAgentSummaryIncludesRunOutEarlyBy(t *testing.T) {
 
 	got := output.AgentSummary()
 	for _, want := range []string{
-		"Quota: worst=OpenAI 5h",
+		"Quota: worst=Codex 5h",
 		"status=at_risk",
 		"runs_out_in_seconds=",
 		"runs_out_in=",
 		"runs_out_early_by_seconds=",
 		"runs_out_early_by=",
-		"OpenAI 5h(",
+		"Codex 5h(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AgentSummary() = %q, missing %q", got, want)
@@ -159,7 +195,7 @@ func TestAgentSummaryAlreadyOutIncludesBlockedWait(t *testing.T) {
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
 		{
 			Name:    "openai",
-			Display: "OpenAI",
+			Display: "Codex",
 			Data: &provider.UsageData{Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 100, ResetsAt: now.Add(time.Hour)},
 			}},
@@ -185,7 +221,7 @@ func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
 	now := time.Now()
 	pf := ProviderFormatter{
 		Name:    "openai",
-		Display: "OpenAI",
+		Display: "Codex",
 		Data: &provider.UsageData{Windows: []provider.UsageWindow{
 			{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
 		}},
@@ -206,7 +242,7 @@ func TestFormatPlainIncludesResetCredits(t *testing.T) {
 	now := time.Now()
 	pf := ProviderFormatter{
 		Name:    "openai",
-		Display: "OpenAI",
+		Display: "Codex",
 		Data: &provider.UsageData{
 			Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 20, ResetsAt: now.Add(4 * 24 * time.Hour)},
@@ -222,7 +258,7 @@ func TestFormatPlainIncludesResetCredits(t *testing.T) {
 
 	got := pf.FormatPlain()
 	for _, want := range []string{
-		"OpenAI:",
+		"Codex:",
 		"7d:",
 		"reset credits: 1 available, earliest expires",
 	} {
@@ -471,6 +507,29 @@ func TestSortProvidersByUrgency(t *testing.T) {
 		}
 		if providers[1].Name != "low" {
 			t.Errorf("expected 'low' second, got %q", providers[1].Name)
+		}
+	})
+
+	t.Run("within critical tier, sooner runout beats higher projected usage", func(t *testing.T) {
+		providers := []ProviderFormatter{
+			{Name: "codex", Display: "Codex", Data: &provider.UsageData{
+				Windows: []provider.UsageWindow{
+					// Projected ~115%, but not blocked until about 3d12h from now.
+					{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
+				},
+			}},
+			{Name: "claude", Display: "Claude", Data: &provider.UsageData{
+				Windows: []provider.UsageWindow{
+					// Projected ~106%, but blocked in about 1h35m from now.
+					{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
+				},
+			}},
+		}
+
+		sortProvidersByUrgency(providers)
+
+		if providers[0].Name != "claude" {
+			t.Fatalf("first provider = %q, want claude because it runs out sooner", providers[0].Name)
 		}
 	})
 

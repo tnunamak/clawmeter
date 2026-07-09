@@ -30,6 +30,72 @@ type Projection struct {
 	RunsOutEarlyBy time.Duration
 }
 
+// CompareRisk orders two projections from most quota-sensitive to least.
+// It keeps the math factual: critical beats tight, tight beats on-track; among
+// quotas that are projected to run out, the one that blocks sooner wins.
+func CompareRisk(a, b Projection) int {
+	aTier := riskTier(a)
+	bTier := riskTier(b)
+	if aTier != bTier {
+		if aTier < bTier {
+			return -1
+		}
+		return 1
+	}
+
+	aOutIn, aRunsOut := runOutRank(a)
+	bOutIn, bRunsOut := runOutRank(b)
+	if aRunsOut != bRunsOut {
+		if aRunsOut {
+			return -1
+		}
+		return 1
+	}
+	if aRunsOut {
+		if aOutIn != bOutIn {
+			if aOutIn < bOutIn {
+				return -1
+			}
+			return 1
+		}
+		if a.RunsOutEarlyBy != b.RunsOutEarlyBy {
+			if a.RunsOutEarlyBy > b.RunsOutEarlyBy {
+				return -1
+			}
+			return 1
+		}
+	}
+
+	if a.ProjectedPct != b.ProjectedPct {
+		if a.ProjectedPct > b.ProjectedPct {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+func riskTier(p Projection) int {
+	switch {
+	case p.ProjectedPct >= 100:
+		return 0
+	case p.ProjectedPct >= 90:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func runOutRank(p Projection) (time.Duration, bool) {
+	if p.WillLastToReset {
+		return 0, false
+	}
+	if p.RunsOutIn > 0 {
+		return p.RunsOutIn, true
+	}
+	return 0, true
+}
+
 // Project estimates where utilization will be at window reset.
 // currentPct is 0-100, resetsAt is when the window resets,
 // windowLen is the total window duration (5h or 7d).
@@ -105,8 +171,7 @@ func (p Projection) RunOutNote() string {
 	return "out now"
 }
 
-// PaceLabel summarizes the projected usage at reset. This is the same value
-// Auto uses to choose the tray icon target.
+// PaceLabel summarizes the projected usage at reset.
 func PaceLabel(projectedPct float64) string {
 	return fmt.Sprintf("est. %.0f%% at reset", projectedPct)
 }

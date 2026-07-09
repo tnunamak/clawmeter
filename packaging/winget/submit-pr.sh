@@ -14,8 +14,8 @@ Environment:
   WINGET_BRANCH        Branch name, default: add-clawmeter-<version>
   WINGET_WORK_ROOT     Scratch root, default: ~/.tmp
   WINGET_DRY_RUN=1     Prepare the branch locally but do not push or open/edit a PR
-  WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR=1
-                        Allow a new first-package PR even when one is already open
+  WINGET_ALLOW_DUPLICATE_PR=1
+                        Allow a new PR even when an updateable Clawmeter PR is open
 EOF
 }
 
@@ -34,20 +34,21 @@ fork_owner="${fork_repo%%/*}"
 branch="${WINGET_BRANCH:-add-clawmeter-${version}}"
 work_root="${WINGET_WORK_ROOT:-${HOME}/.tmp}"
 dry_run="${WINGET_DRY_RUN:-0}"
-allow_duplicate_new_package_pr="${WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR:-0}"
+allow_duplicate_pr="${WINGET_ALLOW_DUPLICATE_PR:-${WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR:-0}}"
 target_parent="manifests/t/tnunamak/Clawmeter"
 
 package_exists_upstream() {
   gh api "repos/${upstream_repo}/contents/${target_parent}" >/dev/null 2>&1
 }
 
-open_new_package_prs() {
+open_package_prs() {
+  local kind="$1"
   gh pr list \
     --repo "$upstream_repo" \
     --state open \
-    --search "\"New package: ${package_id} version\" in:title" \
-    --json number,title,url \
-    --jq '.[] | select(.title | startswith("New package: '"${package_id}"' version ")) | [.number, .title, .url] | @tsv'
+    --search "\"${kind}: ${package_id} version\" in:title" \
+    --json number,title,url,headRefName,headRepositoryOwner \
+    --jq '.[] | select(.title | startswith("'"${kind}: ${package_id} version "'")) | select(.headRepositoryOwner.login == "'"${fork_owner}"'") | [.number, .title, .url, .headRefName] | @tsv'
 }
 
 current_branch_pr() {
@@ -77,18 +78,20 @@ if [[ "$dry_run" != "1" && -z "${GH_TOKEN:-}" ]]; then
   exit 1
 fi
 
-if [[ "$dry_run" != "1" && "$allow_duplicate_new_package_pr" != "1" ]]; then
-  if ! package_exists_upstream; then
-    if [[ -z "$(current_branch_pr)" ]]; then
-      existing_new_package_prs="$(open_new_package_prs)"
-      if [[ -n "$existing_new_package_prs" ]]; then
-        echo "Skipping WinGet submission for ${package_id} ${version}."
-        echo "The package is not accepted upstream yet and an open first-package PR already exists:"
-        echo "$existing_new_package_prs"
-        echo "Set WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR=1 only when intentionally superseding the open PR."
-        exit 0
-      fi
-    fi
+if package_exists_upstream; then
+  kind="New version"
+else
+  kind="New package"
+fi
+
+if [[ "$dry_run" != "1" && "$allow_duplicate_pr" != "1" && -z "${WINGET_BRANCH:-}" ]]; then
+  existing_package_pr="$(open_package_prs "$kind" | head -n 1 || true)"
+  if [[ -n "$existing_package_pr" ]]; then
+    existing_number="$(cut -f1 <<<"$existing_package_pr")"
+    existing_url="$(cut -f3 <<<"$existing_package_pr")"
+    branch="$(cut -f4 <<<"$existing_package_pr")"
+    echo "Reusing open WinGet PR #${existing_number}: ${existing_url}"
+    echo "Updating branch ${fork_repo}:${branch} to ${package_id} ${version}."
   fi
 fi
 
@@ -120,11 +123,6 @@ rm -rf "$target_dir"
 mkdir -p "$target_parent"
 cp -R "$manifest_dir" "$target_dir"
 
-if git ls-tree -d upstream/master "$target_parent" | grep -q "$target_parent"; then
-  kind="New version"
-else
-  kind="New package"
-fi
 title="${kind}: ${package_id} version ${version}"
 
 git add "$target_dir"

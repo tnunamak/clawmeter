@@ -26,9 +26,9 @@ packaging/winget/submit-pr.sh vX.Y.Z
 
 The release workflow does this automatically when `WINGET_PR_TOKEN` is configured. The token must be able to push to the `tnunamak/winget-pkgs` fork and open pull requests against `microsoft/winget-pkgs`.
 
-The first accepted package appears as `New package`; later releases appear as `New version`. If the package has not been accepted yet and a first-package PR is already open, automation skips opening another one. Use `WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR=1` only when intentionally superseding an open first-package PR.
+The first accepted package appears as `New package`; later releases appear as `New version`. If an open Clawmeter PR of the relevant kind already exists, automation reuses that PR's branch and updates it to the latest release instead of opening another PR. Use `WINGET_ALLOW_DUPLICATE_PR=1` only when intentionally creating a second open PR.
 
-After the package exists upstream, release automation also closes any stale open `New package` PRs authored by the fork owner. Rehearse that cleanup without changing GitHub:
+If stale first-package PRs ever need manual cleanup, rehearse it without changing GitHub:
 
 ```bash
 packaging/winget/close-superseded-first-package-prs.sh --dry-run --latest-tag vX.Y.Z
