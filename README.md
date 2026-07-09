@@ -122,7 +122,7 @@ clawmeter tray           # run the tray in this session
 | Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
 | Gemini | 24h Pro and Flash quotas |
 | GitHub Copilot | Premium and chat interactions |
-| Grok/xAI | Grok Build subscription usage; API prepaid credits |
+| Grok/xAI | Grok weekly usage pool; API prepaid credits |
 | Kimi | Daily and hourly limits |
 | OpenRouter | Credit balance |
 | JetBrains AI | Monthly credits |
@@ -228,7 +228,7 @@ brew services stop clawmeter
 | JetBrains AI | IDE config files |
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
 
-For Grok/xAI, `grok login` enables Grok Build subscription usage from the
+For Grok/xAI, `grok login` enables Grok weekly usage-pool tracking from the
 read-only grok.com billing surface. `XAI_MANAGEMENT_API_KEY` enables xAI API
 prepaid-credit tracking from the Management API; use a Management API key from
 xAI Console settings, not the model-serving `XAI_API_KEY`. Clawmeter does not

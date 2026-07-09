@@ -244,17 +244,40 @@ func TestFetchUsage_UsesGrokLoginBilling(t *testing.T) {
 		t.Fatalf("windows = %d, want 1", len(data.Windows))
 	}
 	w := data.Windows[0]
-	if w.Name != "Build Weekly" {
-		t.Fatalf("window name = %q, want Build Weekly", w.Name)
+	if w.Name != "7d" {
+		t.Fatalf("window name = %q, want 7d", w.Name)
 	}
-	if w.DisplayName != "Build Weekly" {
-		t.Fatalf("window display name = %q, want Build Weekly", w.DisplayName)
+	if w.DisplayName != "Weekly usage pool" {
+		t.Fatalf("window display name = %q, want Weekly usage pool", w.DisplayName)
 	}
 	if math.Abs(w.Utilization-42.5) > 0.001 {
 		t.Fatalf("utilization = %.3f, want 42.5", w.Utilization)
 	}
 	if !w.ResetsAt.Equal(reset) {
 		t.Fatalf("resets_at = %s, want %s", w.ResetsAt, reset)
+	}
+}
+
+func TestGrokSubscriptionWindowLabels(t *testing.T) {
+	now := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		resetsAt    time.Time
+		wantName    string
+		wantDisplay string
+	}{
+		{"unknown", time.Time{}, "usage", "Usage"},
+		{"weekly", now.Add(6 * 24 * time.Hour), "7d", "Weekly usage pool"},
+		{"monthly", now.Add(30 * 24 * time.Hour), "monthly", "Monthly usage"},
+		{"other", now.Add(48 * time.Hour), "usage", "Usage"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotName, gotDisplay := grokSubscriptionWindowLabels(tt.resetsAt, now)
+			if gotName != tt.wantName || gotDisplay != tt.wantDisplay {
+				t.Fatalf("grokSubscriptionWindowLabels() = %q/%q, want %q/%q", gotName, gotDisplay, tt.wantName, tt.wantDisplay)
+			}
+		})
 	}
 }
 

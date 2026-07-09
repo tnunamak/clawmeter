@@ -828,6 +828,7 @@ func TestHumanWindowLabelUsesReadableQuotaNames(t *testing.T) {
 func TestWindowBadgeLabelUsesTwoCharacterQuotaCode(t *testing.T) {
 	tests := map[string]string{
 		"7d All":     "7A",
+		"7d":         "7D",
 		"5h":         "5H",
 		"monthly":    "MO",
 		"???":        "--",

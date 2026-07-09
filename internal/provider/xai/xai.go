@@ -49,7 +49,7 @@ func New(cfg config.ProviderConfig) *Provider {
 
 func (p *Provider) Name() string         { return "xai" }
 func (p *Provider) DisplayName() string  { return "Grok" }
-func (p *Provider) Description() string  { return "Grok Build usage or xAI API prepaid credits" }
+func (p *Provider) Description() string  { return "Grok weekly usage pool or xAI API prepaid credits" }
 func (p *Provider) DashboardURL() string { return "https://grok.com/?_s=usage" }
 func (p *Provider) AutoPollByDefault() bool {
 	_, err := p.grokCredentials()
@@ -195,13 +195,13 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 		return nil, err
 	}
 	now := time.Now()
-	windowName := grokBuildWindowName(snapshot.ResetsAt, now)
+	windowName, windowDisplayName := grokSubscriptionWindowLabels(snapshot.ResetsAt, now)
 	data := &provider.UsageData{
 		Provider:  p.Name(),
 		FetchedAt: now,
 		Windows: []provider.UsageWindow{{
 			Name:        windowName,
-			DisplayName: windowName,
+			DisplayName: windowDisplayName,
 			Utilization: snapshot.UsedPercent,
 			ResetsAt:    snapshot.ResetsAt,
 		}},
@@ -727,18 +727,18 @@ func earliestTime(times []time.Time) time.Time {
 	return earliest
 }
 
-func grokBuildWindowName(resetsAt, now time.Time) string {
+func grokSubscriptionWindowLabels(resetsAt, now time.Time) (string, string) {
 	if resetsAt.IsZero() {
-		return "Build"
+		return "usage", "Usage"
 	}
 	days := int(math.Round(resetsAt.Sub(now).Hours() / 24))
 	if days >= 4 && days <= 12 {
-		return "Build Weekly"
+		return "7d", "Weekly usage pool"
 	}
 	if days >= 20 && days <= 45 {
-		return "Build Monthly"
+		return "monthly", "Monthly usage"
 	}
-	return "Build"
+	return "usage", "Usage"
 }
 
 type managementKeyValidation struct {
