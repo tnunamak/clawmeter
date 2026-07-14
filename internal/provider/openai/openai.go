@@ -273,11 +273,13 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 	}
 
 	if rl.Primary != nil {
+		primaryReset := time.Unix(rl.Primary.ResetsAt, 0)
+		name, displayName := primaryWindowLabels(primaryReset, time.Now())
 		result.Windows = append(result.Windows, provider.UsageWindow{
-			Name:        "5h",
-			DisplayName: "5h",
+			Name:        name,
+			DisplayName: displayName,
 			Utilization: rl.Primary.UsedPercent,
-			ResetsAt:    time.Unix(rl.Primary.ResetsAt, 0),
+			ResetsAt:    primaryReset,
 		})
 	}
 
@@ -291,6 +293,18 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 	}
 
 	return result, nil
+}
+
+// primaryWindowLabels keeps the slot mapping compatible with the normal Codex
+// response while handling policy changes that temporarily omit the five-hour
+// limit and return the remaining weekly limit in primary instead. The wire
+// protocol does not expose a semantic window name, so the reset horizon is the
+// only defensive signal available when the slot and observed cadence disagree.
+func primaryWindowLabels(resetsAt, now time.Time) (string, string) {
+	if resetsAt.After(now.Add(24 * time.Hour)) {
+		return "7d", "7 days"
+	}
+	return "5h", "5h"
 }
 
 // Wire types

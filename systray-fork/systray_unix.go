@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
@@ -339,7 +340,9 @@ func register() bool {
 }
 
 func stayRegistered() {
-	register()
+	registered := register()
+	retry := time.NewTicker(5 * time.Second)
+	defer retry.Stop()
 
 	conn := instance.conn
 	if err := conn.AddMatchSignal(
@@ -361,6 +364,10 @@ func stayRegistered() {
 
 	for {
 		select {
+		case <-retry.C:
+			if !registered {
+				registered = register()
+			}
 		case sig := <-sc:
 			if sig == nil {
 				return // We get a nil signal when closing the window.
@@ -370,7 +377,9 @@ func stayRegistered() {
 
 			// sig.Body has the args, which are [name old_owner new_owner]
 			if s, ok := sig.Body[2].(string); ok && s != "" {
-				register()
+				registered = register()
+			} else if ok && s == "" {
+				registered = false
 			}
 		case <-quitChan:
 			return
