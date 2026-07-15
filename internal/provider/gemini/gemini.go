@@ -21,9 +21,11 @@ import (
 )
 
 const (
-	quotaURL      = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
-	tokenEndpoint = "https://oauth2.googleapis.com/token"
-	timeout       = 10 * time.Second
+	quotaURL        = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
+	codeAssistURL   = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+	tokenEndpoint   = "https://oauth2.googleapis.com/token"
+	timeout         = 10 * time.Second
+	consumerTierErr = "Gemini CLI consumer tier is no longer supported; use Antigravity"
 )
 
 // Provider implements the provider.Provider interface for Google Gemini.
@@ -101,12 +103,32 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
+	status, err := p.loadCodeAssistStatus(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if status.ConsumerTierDeprecated() {
+		return &provider.UsageData{
+			Provider:  p.Name(),
+			FetchedAt: time.Now(),
+			Error:     consumerTierErr,
+		}, nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", quotaURL, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	if status.ProjectID != "" {
+		body, err := json.Marshal(map[string]string{"project": status.ProjectID})
+		if err != nil {
+			return nil, fmt.Errorf("encode quota request: %w", err)
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
 
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
@@ -125,6 +147,14 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		if isConsumerTierDeprecationSignal(body) {
+			return &provider.UsageData{
+				Provider:  p.Name(),
+				FetchedAt: time.Now(),
+				Error:     consumerTierErr,
+			}, nil
+		}
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 
@@ -134,6 +164,80 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	return p.transformQuota(&apiResp), nil
+}
+
+type codeAssistStatus struct {
+	AllowedTiers    []codeAssistTier `json:"allowedTiers"`
+	IneligibleTiers []codeAssistTier `json:"ineligibleTiers"`
+	ProjectID       string           `json:"cloudaicompanionProject"`
+	PaidTier        *codeAssistTier  `json:"paidTier"`
+	Deprecated      bool             `json:"-"`
+}
+
+type codeAssistTier struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (s codeAssistStatus) ConsumerTierDeprecated() bool {
+	if s.Deprecated {
+		return true
+	}
+	if s.PaidTier != nil && s.PaidTier.Name != "" {
+		return false
+	}
+	if len(s.AllowedTiers) == 0 {
+		return false
+	}
+	for _, tier := range s.AllowedTiers {
+		if tier.ID == "standard-tier" || tier.ID == "legacy-tier" || tier.ID == "enterprise-tier" {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *Provider) loadCodeAssistStatus(ctx context.Context, token string) (codeAssistStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", codeAssistURL, bytes.NewReader([]byte(`{"metadata":{"ideType":"GEMINI_CLI","pluginType":"GEMINI"}}`)))
+	if err != nil {
+		return codeAssistStatus{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return codeAssistStatus{}, fmt.Errorf("Code Assist status request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return codeAssistStatus{}, fmt.Errorf("read Code Assist status: %w", err)
+	}
+	if isConsumerTierDeprecationSignal(body) {
+		return codeAssistStatus{Deprecated: true}, nil
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return codeAssistStatus{}, fmt.Errorf("Code Assist status API returned %d", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return codeAssistStatus{}, fmt.Errorf("Code Assist status API returned %d", resp.StatusCode)
+	}
+
+	var status codeAssistStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return codeAssistStatus{}, fmt.Errorf("decode Code Assist status: %w", err)
+	}
+	return status, nil
+}
+
+func isConsumerTierDeprecationSignal(body []byte) bool {
+	normalized := strings.ToLower(string(body))
+	return strings.Contains(normalized, "unsupported_client") ||
+		strings.Contains(normalized, "ineligibletiererror") ||
+		(strings.Contains(normalized, "no longer supported") && strings.Contains(normalized, "gemini code assist")) ||
+		(strings.Contains(normalized, "migrate") && strings.Contains(normalized, "antigravity") && strings.Contains(normalized, "gemini"))
 }
 
 // getAccessToken returns a valid access token, refreshing if needed.

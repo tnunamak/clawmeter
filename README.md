@@ -120,7 +120,7 @@ clawmeter tray           # run the tray in this session
 |---|---|
 | Claude | 5h, 7d, model-specific windows |
 | Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
-| Gemini | 24h Pro and Flash quotas |
+| Gemini | 24h Pro-model and Flash-model quotas; Code Assist tier checked when available |
 | GitHub Copilot | Premium and chat interactions |
 | Grok/xAI | Grok weekly usage pool; API prepaid credits |
 | Kimi | Daily and hourly limits |

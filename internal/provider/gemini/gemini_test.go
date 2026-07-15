@@ -66,6 +66,41 @@ func TestIsConfigured_AllowsCurrentOAuthCredentials(t *testing.T) {
 	}
 }
 
+func TestCodeAssistStatusRecognizesSupportedStandardTier(t *testing.T) {
+	status := codeAssistStatus{
+		AllowedTiers: []codeAssistTier{{ID: "standard-tier", Name: "Gemini Code Assist"}},
+		ProjectID:    "project-123",
+	}
+	if status.ConsumerTierDeprecated() {
+		t.Fatal("standard tier should be supported")
+	}
+	if status.ProjectID != "project-123" {
+		t.Fatalf("project ID = %q, want project-123", status.ProjectID)
+	}
+}
+
+func TestCodeAssistStatusRecognizesDeprecatedFreeTier(t *testing.T) {
+	status := codeAssistStatus{
+		AllowedTiers: []codeAssistTier{{ID: "free-tier", Name: "Gemini Code Assist for individuals"}},
+	}
+	if !status.ConsumerTierDeprecated() {
+		t.Fatal("free tier should be treated as deprecated when it is the only allowed tier")
+	}
+}
+
+func TestConsumerTierDeprecationSignals(t *testing.T) {
+	tests := [][]byte{
+		[]byte(`{"error":"UNSUPPORTED_CLIENT"}`),
+		[]byte(`{"error":"IneligibleTierError"}`),
+		[]byte(`Gemini Code Assist is no longer supported; migrate to Antigravity`),
+	}
+	for _, body := range tests {
+		if !isConsumerTierDeprecationSignal(body) {
+			t.Fatalf("isConsumerTierDeprecationSignal(%q) = false", body)
+		}
+	}
+}
+
 func TestIsConfigured_ExpiredTokenWithoutRefreshSupportNeedsSetup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
