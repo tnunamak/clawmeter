@@ -11,11 +11,10 @@ Environment:
   GH_TOKEN              GitHub token that can push to the WinGet fork and open PRs
   WINGET_FORK_REPO     Fork repo, default: tnunamak/winget-pkgs
   WINGET_UPSTREAM_REPO Upstream repo, default: microsoft/winget-pkgs
-  WINGET_BRANCH        Branch name, default: add-clawmeter-<version>
+  WINGET_BRANCH        Branch name when no Clawmeter PR is open,
+                       default: add-clawmeter-<version>
   WINGET_WORK_ROOT     Scratch root, default: ~/.tmp
   WINGET_DRY_RUN=1     Prepare the branch locally but do not push or open/edit a PR
-  WINGET_ALLOW_DUPLICATE_PR=1
-                        Allow a new PR even when an updateable Clawmeter PR is open
 EOF
 }
 
@@ -34,7 +33,6 @@ fork_owner="${fork_repo%%/*}"
 branch="${WINGET_BRANCH:-add-clawmeter-${version}}"
 work_root="${WINGET_WORK_ROOT:-${HOME}/.tmp}"
 dry_run="${WINGET_DRY_RUN:-0}"
-allow_duplicate_pr="${WINGET_ALLOW_DUPLICATE_PR:-${WINGET_ALLOW_DUPLICATE_NEW_PACKAGE_PR:-0}}"
 target_parent="manifests/t/tnunamak/Clawmeter"
 
 package_exists_upstream() {
@@ -42,13 +40,12 @@ package_exists_upstream() {
 }
 
 open_package_prs() {
-  local kind="$1"
-  gh pr list \
-    --repo "$upstream_repo" \
-    --state open \
-    --search "\"${kind}: ${package_id} version\" in:title" \
-    --json number,title,url,headRefName,headRepositoryOwner \
-    --jq '.[] | select(.title | startswith("'"${kind}: ${package_id} version "'")) | select(.headRepositoryOwner.login == "'"${fork_owner}"'") | [.number, .title, .url, .headRefName] | @tsv'
+  gh api "repos/${upstream_repo}/pulls" \
+    -X GET \
+    -f state=open \
+    -f per_page=100 \
+    --paginate \
+    --jq '.[] | select(.head.repo.full_name == "'"${fork_repo}"'") | select((.title | startswith("New package: '"${package_id}"' version ")) or (.title | startswith("New version: '"${package_id}"' version "))) | [.number, .title, .html_url, .head.ref] | @tsv'
 }
 
 current_branch_pr() {
@@ -84,15 +81,23 @@ else
   kind="New package"
 fi
 
-if [[ "$dry_run" != "1" && "$allow_duplicate_pr" != "1" && -z "${WINGET_BRANCH:-}" ]]; then
-  existing_package_pr="$(open_package_prs "$kind" | head -n 1 || true)"
-  if [[ -n "$existing_package_pr" ]]; then
-    existing_number="$(cut -f1 <<<"$existing_package_pr")"
-    existing_url="$(cut -f3 <<<"$existing_package_pr")"
-    branch="$(cut -f4 <<<"$existing_package_pr")"
-    echo "Reusing open WinGet PR #${existing_number}: ${existing_url}"
-    echo "Updating branch ${fork_repo}:${branch} to ${package_id} ${version}."
-  fi
+existing_package_pr_output="$(open_package_prs)"
+existing_package_prs=()
+if [[ -n "$existing_package_pr_output" ]]; then
+  mapfile -t existing_package_prs <<<"$existing_package_pr_output"
+fi
+if (( ${#existing_package_prs[@]} > 1 )); then
+  echo "refusing to submit: multiple open ${package_id} WinGet PRs already exist" >&2
+  printf '  %s\n' "${existing_package_prs[@]}" >&2
+  exit 1
+fi
+if (( ${#existing_package_prs[@]} == 1 )); then
+  existing_package_pr="${existing_package_prs[0]}"
+  existing_number="$(cut -f1 <<<"$existing_package_pr")"
+  existing_url="$(cut -f3 <<<"$existing_package_pr")"
+  branch="$(cut -f4 <<<"$existing_package_pr")"
+  echo "Reusing open WinGet PR #${existing_number}: ${existing_url}"
+  echo "Updating branch ${fork_repo}:${branch} to ${package_id} ${version}."
 fi
 
 mkdir -p "$work_root"
