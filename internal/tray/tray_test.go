@@ -444,6 +444,16 @@ func TestActiveIconTargetsPrefersFreshWindowsOverStaleFallback(t *testing.T) {
 	}
 }
 
+func TestActiveIconTargetsExcludesNonForecastableFacts(t *testing.T) {
+	results := map[string]*provider.UsageData{
+		"balance-only":  {Balances: []provider.UsageBalance{{Name: "credits", Remaining: 1}}},
+		"unknown-reset": {Windows: []provider.UsageWindow{{Name: "daily", Utilization: 99}}},
+	}
+	if got := activeIconTargets(results, iconAutoRisk); len(got) != 0 {
+		t.Fatalf("activeIconTargets() = %+v, want no non-forecastable targets", got)
+	}
+}
+
 func TestActiveIconTargetsKeepsStaleFallbackWhenNoFreshWindows(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{

@@ -24,6 +24,38 @@ func (p cliStubProvider) FetchUsage(ctx context.Context) (*provider.UsageData, e
 	return nil, nil
 }
 
+func TestFormatColorShowsBalanceOnlyProviderWithNameFallback(t *testing.T) {
+	pf := ProviderFormatter{Display: "Provider", Data: &provider.UsageData{
+		Balances: []provider.UsageBalance{{Name: "credits", Remaining: 3.5}},
+	}}
+	got := strings.Join(pf.FormatColorAligned(len(pf.Display), 7), "\n")
+	if got := strings.Join(strings.Fields(got), " "); got != "Provider credits 3.50 remaining" {
+		t.Fatalf("FormatColorAligned() normalized = %q, want %q", got, "Provider credits 3.50 remaining")
+	}
+}
+
+func TestFormatPlainShowsBalanceNameWhenDisplayNameEmpty(t *testing.T) {
+	pf := ProviderFormatter{Display: "Provider", Data: &provider.UsageData{
+		Balances: []provider.UsageBalance{{Name: "credits", Remaining: 3.5}},
+	}}
+	got := pf.FormatPlain()
+	if !strings.Contains(got, "credits: 3.50 remaining") {
+		t.Fatalf("FormatPlain() = %q, want balance name fallback", got)
+	}
+}
+
+func TestNonForecastableFactsDoNotAffectCheckSeverity(t *testing.T) {
+	for _, data := range []*provider.UsageData{
+		{Balances: []provider.UsageBalance{{Name: "credits", Remaining: 0}}},
+		{Windows: []provider.UsageWindow{{Name: "daily", Utilization: 100}}},
+	} {
+		got := classifyProvider(&ProviderFormatter{Data: data})
+		if got.tier != 4 {
+			t.Fatalf("classifyProvider(%+v) tier = %d, want healthy/non-severity tier 4", data, got.tier)
+		}
+	}
+}
+
 func TestAgentSummaryKeepsExactBoundarySeconds(t *testing.T) {
 	now := time.Now()
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
@@ -599,8 +631,8 @@ func TestStaleFallbackMarksLastGoodDataAndDropsResetlessWindows(t *testing.T) {
 	if !got.Stale || got.Warning != "usage unavailable" || got.Error != "" {
 		t.Fatalf("fallback state = stale:%v warning:%q error:%q", got.Stale, got.Warning, got.Error)
 	}
-	if len(got.Windows) != 1 || got.Windows[0].Name != "7d All" {
-		t.Fatalf("fallback windows = %+v, want only usable last-good window", got.Windows)
+	if len(got.Windows) != 2 || got.Windows[0].Name != "7d Sonnet" {
+		t.Fatalf("fallback windows = %+v, want all last-good windows", got.Windows)
 	}
 	if entry.ProviderData["claude"].Stale {
 		t.Fatal("staleFallback mutated cache entry")

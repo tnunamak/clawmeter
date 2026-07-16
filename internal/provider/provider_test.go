@@ -377,7 +377,7 @@ func TestUsageDataHasUsageWindowsRequiresReset(t *testing.T) {
 	}
 }
 
-func TestUsageDataMarkStaleKeepsOnlyUsableWindows(t *testing.T) {
+func TestUsageDataMarkStaleKeepsNonForecastableFacts(t *testing.T) {
 	data := &UsageData{
 		Provider: "claude",
 		Error:    "usage unavailable",
@@ -395,8 +395,15 @@ func TestUsageDataMarkStaleKeepsOnlyUsableWindows(t *testing.T) {
 	if data.Error != "" {
 		t.Fatalf("Error = %q, want cleared for stale last-good data", data.Error)
 	}
-	if len(data.Windows) != 1 || data.Windows[0].Name != "7d All" {
-		t.Fatalf("Windows = %+v, want only reset-backed window", data.Windows)
+	if len(data.Windows) != 2 || data.Windows[0].Name != "7d Sonnet" {
+		t.Fatalf("Windows = %+v, want resetless window preserved", data.Windows)
+	}
+}
+
+func TestUsageDataHasPresentableUsageIncludesUnknownResetAndBalance(t *testing.T) {
+	data := &UsageData{Windows: []UsageWindow{{Name: "daily", Utilization: 40}}, Balances: []UsageBalance{{Name: "credits", Remaining: 3}}}
+	if !data.HasPresentableUsage() || len(data.UsableWindows()) != 0 {
+		t.Fatalf("presentable=%v forecastable=%v, want presentable only", data.HasPresentableUsage(), len(data.UsableWindows()))
 	}
 }
 

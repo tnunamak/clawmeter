@@ -105,23 +105,41 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		return []string{line}
 	}
 
-	windows := pf.Data.UsableWindows()
+	windows := pf.Data.PresentationWindows()
 	lines := make([]string, 0, len(windows)+2)
 	for i, window := range windows {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-		resetStr := format.FormatDuration(time.Until(window.ResetsAt))
+		proj := forecast.Projection{}
+		resetStr := "unknown"
+		indicator := "reset unknown"
+		colorPct := window.Utilization
+		if !window.ResetsAt.IsZero() {
+			proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			resetStr = format.FormatDuration(time.Until(window.ResetsAt))
+			indicator = proj.ColorIndicator()
+			colorPct = proj.ProjectedPct
+		} else if window.ResetPolicy != "" {
+			indicator = window.ResetPolicy
+		}
 
 		label := pf.Display
 		if i > 0 {
 			label = ""
 		}
 		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-7s %s",
-			label, window.Name, color(proj.ProjectedPct), bar(window.Utilization), reset,
-			window.Utilization, resetStr, proj.ColorIndicator())
+			label, window.Name, color(colorPct), bar(window.Utilization), reset,
+			window.Utilization, resetStr, indicator)
 		if i == 0 && statusLine != "" {
 			line += "  " + statusLine
 		}
 		lines = append(lines, line)
+	}
+	for _, balance := range pf.Data.Balances {
+		label := balance.DisplayName
+		if label == "" {
+			label = balance.Name
+		}
+		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %.2f remaining",
+			pf.Display, label, balance.Remaining))
 	}
 	if summary := resetCreditCompactSummary(pf.Data, time.Now()); summary != "" {
 		label := ""
@@ -157,13 +175,17 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		return fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix)
 	}
 
-	windows := pf.Data.UsableWindows()
+	windows := pf.Data.PresentationWindows()
 	parts := make([]string, 0, len(windows))
 	for _, window := range windows {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-		resetStr := format.FormatDuration(time.Until(window.ResetsAt))
-		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)",
-			window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
+		resetStr, indicator := "unknown", "reset unknown"
+		if !window.ResetsAt.IsZero() {
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
+		} else if window.ResetPolicy != "" {
+			indicator = window.ResetPolicy
+		}
+		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)", window.Name, window.Utilization, resetStr, indicator))
 	}
 
 	prefix := ""
@@ -174,7 +196,11 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		parts = append(parts, resetSummary)
 	}
 	for _, balance := range pf.Data.Balances {
-		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", balance.DisplayName, balance.Remaining))
+		label := balance.DisplayName
+		if label == "" {
+			label = balance.Name
+		}
+		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
 	}
 	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
 }
@@ -749,7 +775,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 		// For providers that errored, fall back to cached data if available
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
-				if data != nil && data.Error != "" && !data.HasUsageWindows() {
+				if data != nil && data.Error != "" && !data.HasPresentableUsage() {
 					if cached, ok := staleFallback(cacheEntry, name, data.Error); ok {
 						result.Results[name] = cached
 					}
@@ -828,7 +854,7 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 
 func staleFallback(cacheEntry *cache.Entry, name, reason string) (*provider.UsageData, bool) {
 	cached, ok := cacheEntry.GetProvider(name)
-	if !ok || cached == nil || !cached.HasUsageWindows() {
+	if !ok || cached == nil || !cached.HasPresentableUsage() {
 		return nil, false
 	}
 	cached = cached.Clone()
@@ -879,7 +905,7 @@ func Check() int {
 		result := provider.FetchAllParallel(ctx, registry)
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
-				if data != nil && data.Error != "" && !data.HasUsageWindows() {
+				if data != nil && data.Error != "" && !data.HasPresentableUsage() {
 					if cached, ok := staleFallback(cacheEntry, name, data.Error); ok {
 						result.Results[name] = cached
 					}
@@ -978,7 +1004,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	if pf.Data.IsExpired {
 		return providerUrgency{tier: 0, maxProjectedPct: 100}
 	}
-	if pf.Data.Error != "" && !pf.Data.HasUsageWindows() {
+	if pf.Data.Error != "" && !pf.Data.HasPresentableUsage() {
 		return providerUrgency{tier: 1}
 	}
 
@@ -1234,7 +1260,7 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", fetchErr)
 		return 1
 	}
-	if data != nil && data.Error != "" && !data.HasUsageWindows() {
+	if data != nil && data.Error != "" && !data.HasPresentableUsage() {
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			if cached, ok := staleFallback(cacheEntry, p.Name(), data.Error); ok {
 				data = cached

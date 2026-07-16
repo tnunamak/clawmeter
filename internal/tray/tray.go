@@ -226,10 +226,10 @@ func onReady() {
 			// Provider errored — keep showing last good windows, but label them
 			// stale so the tray never turns unavailable data into a clean 0%.
 			hasPrior := false
-			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.HasUsageWindows() {
+			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.HasPresentableUsage() {
 				hasPrior = true
 			}
-			if hasPrior && !data.HasUsageWindows() {
+			if hasPrior && !data.HasPresentableUsage() {
 				prev := s.lastResults[name].Clone()
 				prev.MarkStale(data.Error)
 				result.Results[name] = prev
@@ -409,6 +409,7 @@ type providerMenuItems struct {
 	headerItem        *systray.MenuItem
 	statusItem        *systray.MenuItem
 	windowItems       []*systray.MenuItem
+	balanceItems      []*systray.MenuItem
 	dashboardItem     *systray.MenuItem
 	everHealthy       bool // true once we've seen useful quota data
 	explicitlyEnabled bool
@@ -433,6 +434,13 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *provi
 		item.Hide()
 		windowItems[i] = item
 	}
+	balanceItems := make([]*systray.MenuItem, maxWindowItems)
+	for i := range balanceItems {
+		item := systray.AddMenuItem("", "")
+		item.Disable()
+		item.Hide()
+		balanceItems[i] = item
+	}
 
 	// Dashboard item (clickable). The disabled-header of the next provider
 	// (or the global separator after the provider block) acts as the visual
@@ -450,6 +458,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *provi
 		headerItem:        header,
 		statusItem:        statusItem,
 		windowItems:       windowItems,
+		balanceItems:      balanceItems,
 		dashboardItem:     dashboardItem,
 		explicitlyEnabled: explicitlyEnabled,
 	}
@@ -465,6 +474,9 @@ func hideProviderMenu(menu *providerMenuItems) {
 func hideProviderWindows(menu *providerMenuItems) {
 	for _, w := range menu.windowItems {
 		w.Hide()
+	}
+	for _, b := range menu.balanceItems {
+		b.Hide()
 	}
 }
 
@@ -546,22 +558,41 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			menu.statusItem.Hide()
 		}
 
-		windows := data.UsableWindows()
+		windows := data.PresentationWindows()
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
 				break
 			}
 
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			resetStr := format.FormatDuration(time.Until(window.ResetsAt))
+			resetStr, indicator := "reset unknown", "reset unknown"
+			if !window.ResetsAt.IsZero() {
+				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+				resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
+			} else if window.ResetPolicy != "" {
+				indicator = window.ResetPolicy
+			}
 			menu.windowItems[i].SetTitle(fmt.Sprintf("%s: %.0f%% — %s — %s",
-				window.Name, window.Utilization, resetStr, proj.PaceIndicator()))
+				window.Name, window.Utilization, resetStr, indicator))
 			menu.windowItems[i].Show()
 
 		}
 
 		for i := len(windows); i < len(menu.windowItems); i++ {
 			menu.windowItems[i].Hide()
+		}
+		for i, balance := range data.Balances {
+			if i >= len(menu.balanceItems) {
+				break
+			}
+			label := balance.DisplayName
+			if label == "" {
+				label = balance.Name
+			}
+			menu.balanceItems[i].SetTitle(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
+			menu.balanceItems[i].Show()
+		}
+		for i := len(data.Balances); i < len(menu.balanceItems); i++ {
+			menu.balanceItems[i].Hide()
 		}
 
 		menu.dashboardItem.Show()
@@ -785,11 +816,6 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		}
 		windows := data.UsableWindows()
 		if len(windows) == 0 {
-			if mode == iconAutoRunway {
-				continue
-			}
-			target := iconTarget{Provider: name}
-			ranked = append(ranked, rankedTarget{target: target, score: iconTargetRisk(data, target)})
 			continue
 		}
 		for _, window := range windows {
@@ -846,7 +872,7 @@ func iconTargetRisk(data *provider.UsageData, target iconTarget) float64 {
 	if data.IsExpired {
 		return 10000
 	}
-	if data.Error != "" && !data.HasUsageWindows() {
+	if data.Error != "" && !data.HasPresentableUsage() {
 		return 9000
 	}
 	if target.Window == "" {
@@ -978,7 +1004,7 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 	if data.Stale {
 		return icons.MeterState{}
 	}
-	if data.Error != "" && !data.HasUsageWindows() {
+	if data.Error != "" && !data.HasPresentableUsage() {
 		return icons.MeterState{}
 	}
 
@@ -1126,7 +1152,7 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 		}
 		return fmt.Sprintf("%s: %s", display, msg)
 	}
-	if data.Error != "" && !data.HasUsageWindows() {
+	if data.Error != "" && !data.HasPresentableUsage() {
 		return fmt.Sprintf("%s: %s", display, format.HumanizeError(data.Error))
 	}
 	if data.Stale {
@@ -1421,7 +1447,7 @@ func providerSeverity(data *provider.UsageData) providerSeverityRank {
 	if data.IsExpired {
 		return providerSeverityRank{tier: 0}
 	}
-	if data.Error != "" && !data.HasUsageWindows() {
+	if data.Error != "" && !data.HasPresentableUsage() {
 		return providerSeverityRank{tier: 1}
 	}
 	_, proj, ok := selectedIconWindow(data, "")

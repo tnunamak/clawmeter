@@ -194,6 +194,23 @@ func (u *UsageData) HasUsageWindows() bool {
 	return u != nil && len(u.UsableWindows()) > 0 && !u.IsExpired
 }
 
+// HasPresentableUsage reports whether the provider returned a fact worth
+// showing, including windows whose reset is unknown and non-resetting
+// balances. It is intentionally broader than HasUsageWindows: forecasts and
+// pacing must continue to use only reset-backed windows.
+func (u *UsageData) HasPresentableUsage() bool {
+	return u != nil && !u.IsExpired && (len(u.Windows) > 0 || len(u.Balances) > 0)
+}
+
+// PresentationWindows returns every reported window, including windows with
+// an unknown reset time. Callers must not use it for pacing or ranking.
+func (u *UsageData) PresentationWindows() []UsageWindow {
+	if u == nil {
+		return nil
+	}
+	return append([]UsageWindow(nil), u.Windows...)
+}
+
 // UsableWindows returns quota windows that can be compared against a reset.
 func (u *UsageData) UsableWindows() []UsageWindow {
 	if u == nil || len(u.Windows) == 0 {
@@ -218,13 +235,12 @@ func (u *UsageData) MarkStale(reason string) {
 	u.Stale = true
 	u.Warning = reason
 	u.Error = ""
-	u.Windows = u.UsableWindows()
 }
 
 // EstablishesPrimaryUIHistory reports whether this data proves the provider
 // has produced useful quota data before.
 func (u *UsageData) EstablishesPrimaryUIHistory() bool {
-	return u.HasUsageWindows()
+	return u.HasPresentableUsage()
 }
 
 // ShouldShowInPrimaryUI decides whether a provider belongs in the main tray
@@ -238,10 +254,10 @@ func ShouldShowInPrimaryUI(data *UsageData, hadPriorUsefulData, explicitlyEnable
 	if data == nil {
 		return false
 	}
-	if data.IsHealthy() && data.HasUsageWindows() {
+	if data.IsHealthy() && data.HasPresentableUsage() {
 		return true
 	}
-	if data.HasUsageWindows() {
+	if data.HasPresentableUsage() {
 		return true
 	}
 	return hadPriorUsefulData && (data.IsExpired || data.Error != "")
