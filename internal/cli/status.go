@@ -582,11 +582,17 @@ func roundPct(pct float64) float64 {
 	return math.Round(pct*100) / 100
 }
 
+// JSONSchemaVersion identifies the --json output contract. Consumers (e.g.
+// waspflow's quota-observation envelope) pin on this instead of shape-guessing;
+// bump it on any breaking change to the JSON structure.
+const JSONSchemaVersion = 1
+
 // JSONOutput represents the JSON structure for multi-provider output.
 type JSONOutput struct {
-	Providers map[string]*ProviderJSONOutput `json:"providers"`
-	FetchedAt time.Time                      `json:"fetched_at,omitempty"`
-	Cache     *CacheInfo                     `json:"cache,omitempty"`
+	SchemaVersion int                            `json:"schema_version"`
+	Providers     map[string]*ProviderJSONOutput `json:"providers"`
+	FetchedAt     time.Time                      `json:"fetched_at,omitempty"`
+	Cache         *CacheInfo                     `json:"cache,omitempty"`
 }
 
 // ProviderJSONOutput is the JSON representation for a single provider.
@@ -616,7 +622,8 @@ type CacheInfo struct {
 // PrintJSON prints JSON output for all providers.
 func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 	out := JSONOutput{
-		Providers: make(map[string]*ProviderJSONOutput),
+		SchemaVersion: JSONSchemaVersion,
+		Providers:     make(map[string]*ProviderJSONOutput),
 	}
 
 	if cacheEntry != nil {
