@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/tnunamak/clawmeter/main/docs/schemas/diagnose-v1.schema.json",
+  "title": "Clawmeter provider diagnostic v1",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "diagnostics"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "diagnostics": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/diagnostic" } }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "diagnostic": {
+      "type": "object",
+      "required": ["provider", "maturity", "setup", "polling_state", "probe"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "maturity": { "$ref": "#/$defs/maturity" },
+        "setup": { "$ref": "#/$defs/setup" },
+        "polling_state": { "enum": ["detected", "enabled", "available", "disabled", "setup_needed", "unavailable"] },
+        "probe": { "$ref": "#/$defs/probe" },
+        "usage": { "$ref": "#/$defs/usage" }
+      },
+      "additionalProperties": true
+    },
+    "maturity": {
+      "type": "object",
+      "required": ["experimental"],
+      "properties": {
+        "experimental": { "type": "boolean" },
+        "learn_more": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": true
+    },
+    "setup": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["ready", "needs_auth", "unavailable"] },
+        "detail": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "probe": {
+      "type": "object",
+      "required": ["attempted", "outcome"],
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "outcome": { "enum": ["success", "skipped", "error"] },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "error_category": { "enum": ["auth", "rate_limited", "network", "api", "parse", "unknown"] },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "usage": {
+      "type": "object",
+      "required": ["stale"],
+      "properties": {
+        "fetched_at": { "type": "string", "format": "date-time" },
+        "stale": { "type": "boolean" },
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "utilization"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 1 },
+              "name": { "type": "string" },
+              "utilization": { "type": "number" },
+              "resets_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "balances": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "remaining"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 1 },
+              "remaining": { "type": "number" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "reset_credits_available": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    }
+  }
+}

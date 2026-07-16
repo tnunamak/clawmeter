@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/tnunamak/clawmeter/main/docs/schemas/status-v1.schema.json",
+  "title": "Clawmeter status v1",
+  "type": "object",
+  "required": ["schema_version", "providers"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "fetched_at": { "type": "string", "format": "date-time" },
+    "providers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/provider" } },
+    "cache": {
+      "type": "object",
+      "required": ["hit"],
+      "properties": {
+        "hit": { "type": "boolean" },
+        "fetched_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "provider": {
+      "type": "object",
+      "required": ["maturity"],
+      "properties": {
+        "maturity": {
+          "type": "object",
+          "required": ["experimental"],
+          "properties": {
+            "experimental": { "type": "boolean" },
+            "learn_more": { "type": "string", "format": "uri" }
+          },
+          "additionalProperties": true
+        },
+        "usage": { "$ref": "#/$defs/usage" },
+        "forecast": {
+          "type": "object",
+          "required": ["windows"],
+          "properties": {
+            "windows": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["projected_pct", "indicator"],
+                "properties": {
+                  "projected_pct": { "type": "number" },
+                  "indicator": { "type": "string" }
+                },
+                "additionalProperties": true
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "status": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "usage": {
+      "type": "object",
+      "required": ["provider", "fetched_at", "windows"],
+      "properties": {
+        "provider": { "type": "string" },
+        "fetched_at": { "type": "string", "format": "date-time" },
+        "windows": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["name", "utilization", "resets_at"],
+            "properties": {
+              "name": { "type": "string" },
+              "display_name": { "type": "string" },
+              "utilization": { "type": "number" },
+              "resets_at": { "type": "string", "format": "date-time" },
+              "reset_policy": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "error": { "type": "string" },
+        "stale": { "type": "boolean" },
+        "warning": { "type": "string" },
+        "is_expired": { "type": "boolean" },
+        "reset_credits": {
+          "type": "object",
+          "required": ["available_count"],
+          "properties": {
+            "available_count": { "type": "integer", "minimum": 0 },
+            "fetched_at": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

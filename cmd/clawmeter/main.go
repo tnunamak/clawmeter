@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/diagnose"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	"github.com/tnunamak/clawmeter/internal/tray"
@@ -445,8 +447,10 @@ func providersCmd(args []string) int {
 			return configEnableCmd(args[1:], true)
 		case "disable":
 			return configEnableCmd(args[1:], false)
+		case "diagnose":
+			return providersDiagnoseCmd(args[1:])
 		case "help", "--help", "-h":
-			fmt.Println("Usage: clawmeter providers [enable|disable <provider>]")
+			fmt.Println("Usage: clawmeter providers [enable|disable <provider>|diagnose <provider|all>]")
 			fmt.Println()
 			fmt.Println("Without arguments, lists provider auth status.")
 			fmt.Println("Detected providers run automatically. Enable is for opt-in providers or manual overrides.")
@@ -455,10 +459,11 @@ func providersCmd(args []string) int {
 			fmt.Println("  clawmeter grok")
 			fmt.Println("  clawmeter providers enable openrouter")
 			fmt.Println("  clawmeter providers disable codex")
+			fmt.Println("  clawmeter providers diagnose codex --pretty")
 			return 0
 		default:
 			fmt.Fprintf(os.Stderr, "clawmeter: unknown providers command %q\n", args[0])
-			fmt.Fprintln(os.Stderr, "Usage: clawmeter providers [enable|disable <provider>]")
+			fmt.Fprintln(os.Stderr, "Usage: clawmeter providers [enable|disable <provider>|diagnose <provider|all>]")
 			return 1
 		}
 	}
@@ -510,27 +515,133 @@ func providersCmd(args []string) int {
 	return 0
 }
 
-// describeProviderState returns the user-facing summary of how a provider will
-// be treated by default polling and explicit config.
-func describeProviderState(p provider.Provider, cfg *config.Config) string {
+func providersDiagnoseCmd(args []string) int {
+	selection := ""
+	pretty := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			// JSON is the only diagnostic format; accept the flag for clarity.
+		case "--pretty":
+			pretty = true
+		case "help", "--help", "-h":
+			fmt.Println("Usage: clawmeter providers diagnose <provider|all> [--json] [--pretty]")
+			fmt.Println()
+			fmt.Println("Runs a live provider probe and emits privacy-safe JSON.")
+			return 0
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "clawmeter: unknown diagnose flag %q\n", arg)
+				return 1
+			}
+			if selection != "" {
+				fmt.Fprintln(os.Stderr, "clawmeter: diagnose accepts one provider or 'all'")
+				return 1
+			}
+			selection = arg
+		}
+	}
+	if selection == "" {
+		fmt.Fprintln(os.Stderr, "clawmeter: diagnose requires a provider or 'all'")
+		fmt.Fprintln(os.Stderr, "Usage: clawmeter providers diagnose <provider|all> [--json] [--pretty]")
+		return 1
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: load config: %v\n", err)
+		return 1
+	}
+	registry := provider.NewRegistry()
+	all.Register(registry, cfg)
+
+	selected := registry.GetAll()
+	probeNames := make(map[string]bool)
+	if selection == "all" {
+		for _, p := range registry.GetConfigured() {
+			probeNames[p.Name()] = true
+		}
+	} else {
+		name, ok := all.CanonicalName(selection)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", selection)
+			return 1
+		}
+		p, ok := registry.Get(name)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "clawmeter: provider %q is not registered\n", name)
+			return 1
+		}
+		selected = []provider.Provider{p}
+		probeNames[name] = true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	output := diagnose.Run(
+		ctx,
+		selected,
+		func(name string) string {
+			p, _ := registry.Get(name)
+			return providerPollingState(p, cfg)
+		},
+		func(name string) bool { return probeNames[name] },
+	)
+	encoder := json.NewEncoder(os.Stdout)
+	if pretty {
+		encoder.SetIndent("", "  ")
+	}
+	if err := encoder.Encode(output); err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: encode diagnostic: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func providerPollingState(p provider.Provider, cfg *config.Config) string {
+	if p == nil {
+		return "unavailable"
+	}
 	pc, hasEntry := cfg.Providers[p.Name()]
 	setup := provider.GetSetupStatus(p)
-	autoPoll := provider.AutoPollByDefault(p)
 	switch {
 	case hasEntry && !pc.Enabled:
 		return "disabled"
 	case hasEntry && pc.Enabled && setup.IsReady():
 		return "enabled"
 	case hasEntry && pc.Enabled:
-		if setup.Detail != "" {
-			return "enabled, setup needed: " + setup.Detail
-		}
-		return "enabled, setup needed"
-	case setup.IsReady() && autoPoll:
+		return "setup_needed"
+	case setup.IsReady() && provider.AutoPollByDefault(p):
 		return "detected"
 	case setup.IsReady():
-		return "available, enable to poll"
+		return "available"
 	case setup.State == provider.SetupNeedsAuth:
+		return "setup_needed"
+	default:
+		return "unavailable"
+	}
+}
+
+// describeProviderState returns the user-facing summary of how a provider will
+// be treated by default polling and explicit config.
+func describeProviderState(p provider.Provider, cfg *config.Config) string {
+	setup := provider.GetSetupStatus(p)
+	switch providerPollingState(p, cfg) {
+	case "disabled":
+		return "disabled"
+	case "enabled":
+		return "enabled"
+	case "detected":
+		return "detected"
+	case "available":
+		return "available, enable to poll"
+	case "setup_needed":
+		if cfg.IsProviderExplicitlyEnabled(p.Name()) {
+			if setup.Detail != "" {
+				return "enabled, setup needed: " + setup.Detail
+			}
+			return "enabled, setup needed"
+		}
 		if setup.Detail != "" {
 			return "setup needed: " + setup.Detail
 		}

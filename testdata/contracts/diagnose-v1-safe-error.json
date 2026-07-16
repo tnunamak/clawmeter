@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-16T18:00:00Z",
+  "diagnostics": [
+    {
+      "provider": "openai",
+      "maturity": { "experimental": false },
+      "setup": { "state": "ready", "detail": "Supported credentials detected." },
+      "polling_state": "detected",
+      "probe": {
+        "attempted": true,
+        "outcome": "error",
+        "duration_ms": 42,
+        "error_category": "auth",
+        "message": "Authentication was rejected or has expired."
+      }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "fetched_at": "2026-07-16T18:00:00Z",
+  "providers": {
+    "openai": {
+      "usage": {
+        "provider": "openai",
+        "fetched_at": "2026-07-16T18:00:00Z",
+        "windows": [
+          {
+            "name": "7d",
+            "display_name": "7 days",
+            "utilization": 58,
+            "resets_at": "2026-07-22T23:16:04Z"
+          }
+        ],
+        "reset_credits": {
+          "available_count": 5,
+          "fetched_at": "2026-07-16T18:00:00Z"
+        }
+      },
+      "forecast": {
+        "windows": {
+          "7d": { "projected_pct": 699.29, "indicator": "699%" }
+        }
+      },
+      "maturity": { "experimental": false }
+    }
+  }
+}

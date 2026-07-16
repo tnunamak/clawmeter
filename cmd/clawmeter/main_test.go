@@ -171,6 +171,29 @@ func TestProvidersList_DistinguishesDisabledFromDetected(t *testing.T) {
 	}
 }
 
+func TestProvidersDiagnose_FailsClosedOnInvalidConfig(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "clawmeter")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("providers: [invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runWithHome(t, bin, home, "providers", "diagnose", "all", "--json")
+	if code == 0 {
+		t.Fatalf("expected invalid config to fail, stdout: %s", stdout)
+	}
+	if stdout != "" {
+		t.Fatalf("invalid config must not produce valid-looking diagnostic JSON: %s", stdout)
+	}
+	if !strings.Contains(stderr, "load config") {
+		t.Fatalf("stderr = %q, want config error", stderr)
+	}
+}
+
 func TestSetupAllDoesNotInstallTmuxByDefault(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()

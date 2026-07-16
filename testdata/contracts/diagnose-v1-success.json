@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-16T18:00:00Z",
+  "diagnostics": [
+    {
+      "provider": "openai",
+      "maturity": { "experimental": false },
+      "setup": { "state": "ready", "detail": "Supported credentials detected." },
+      "polling_state": "detected",
+      "probe": { "attempted": true, "outcome": "success", "duration_ms": 42 },
+      "usage": {
+        "fetched_at": "2026-07-16T18:00:00Z",
+        "stale": false,
+        "windows": [
+          { "index": 1, "name": "7d", "utilization": 58, "resets_at": "2026-07-22T23:16:04Z" }
+        ],
+        "reset_credits_available": 5
+      }
+    }
+  ]
+}

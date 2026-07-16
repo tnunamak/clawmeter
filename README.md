@@ -101,6 +101,7 @@ Useful commands:
 
 ```bash
 clawmeter providers      # detected providers and auth status
+clawmeter providers diagnose codex --pretty  # privacy-safe live diagnostic
 clawmeter claude         # one provider
 clawmeter codex          # Codex quota
 clawmeter grok           # Grok quota
@@ -131,6 +132,8 @@ clawmeter tray           # run the tray in this session
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 
 Provider maturity is binary and intentionally kept out of quota rows and the tray. The `clawmeter providers` inventory and `--json` metadata identify experimental integrations and link to [provider maturity](docs/provider-maturity.md).
+
+Automation should use the versioned [`--json` machine interface](docs/machine-interface.md), not parse terminal output. Its schemas, compatibility policy, diagnostic command, and consumer guidance are published with the repository.
 
 Codex reset-credit visibility is read-only. Clawmeter shows available count and earliest expiry when Codex exposes banked resets locally, but it never redeems resets. Design notes and provider coverage are in [Reset awareness](docs/reset-awareness.md).
 

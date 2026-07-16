@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "fetched_at": "2026-07-16T18:00:00Z",
+  "providers": {
+    "openai": {
+      "usage": {
+        "provider": "openai",
+        "fetched_at": "2026-07-16T18:00:00Z",
+        "windows": null,
+        "error": "rate limited (429)"
+      },
+      "maturity": { "experimental": false }
+    }
+  }
+}
