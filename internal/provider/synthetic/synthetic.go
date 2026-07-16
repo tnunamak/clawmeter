@@ -99,53 +99,26 @@ func (p *Provider) parseQuotas(raw json.RawMessage) (*provider.UsageData, error)
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
-	// Try as array first, then as object with quota arrays
-	var entries []map[string]interface{}
-
-	if err := json.Unmarshal(raw, &entries); err != nil {
-		// Try as object
-		var obj map[string]interface{}
-		if err := json.Unmarshal(raw, &obj); err != nil {
-			return nil, fmt.Errorf("parse quotas: %w", err)
-		}
-		// Look for arrays inside the object
-		for _, key := range []string{"quotas", "quota", "limits", "usage", "entries", "data"} {
-			if arr, ok := obj[key]; ok {
-				if b, err := json.Marshal(arr); err == nil {
-					if err := json.Unmarshal(b, &entries); err == nil && len(entries) > 0 {
-						break
-					}
-				}
-			}
-		}
-		// If still empty, try nested data.quotas etc.
-		if len(entries) == 0 {
-			if dataObj, ok := obj["data"].(map[string]interface{}); ok {
-				for _, key := range []string{"quotas", "quota", "limits", "usage", "entries"} {
-					if arr, ok := dataObj[key]; ok {
-						if b, err := json.Marshal(arr); err == nil {
-							if err := json.Unmarshal(b, &entries); err == nil && len(entries) > 0 {
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-		// If still empty, treat the root object as a single quota entry
-		if len(entries) == 0 {
-			entries = []map[string]interface{}{obj}
-		}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return nil, fmt.Errorf("parse quotas: %w", err)
 	}
-
-	// Parse up to 2 quota entries
-	for i, entry := range entries {
-		if i >= 2 {
-			break
+	if slots := knownSlots(root); slots != nil {
+		labels := [...]string{"Rolling five-hour limit", "Weekly token limit", "Search hourly"}
+		for i, slot := range slots {
+			if slot == nil {
+				continue
+			}
+			if w := parseQuotaEntry(slot); w != nil {
+				w.Name, w.DisplayName = labels[i], labels[i]
+				data.Windows = append(data.Windows, *w)
+			}
 		}
-		w := p.parseQuotaEntry(entry, i)
-		if w != nil {
-			data.Windows = append(data.Windows, *w)
+	} else {
+		for _, entry := range quotaEntries(root) {
+			if w := parseQuotaEntry(entry); w != nil {
+				data.Windows = append(data.Windows, *w)
+			}
 		}
 	}
 
@@ -156,10 +129,60 @@ func (p *Provider) parseQuotas(raw json.RawMessage) (*provider.UsageData, error)
 	return data, nil
 }
 
-func (p *Provider) parseQuotaEntry(entry map[string]interface{}, idx int) *provider.UsageWindow {
+func knownSlots(root map[string]json.RawMessage) *[3]map[string]json.RawMessage {
+	data, _ := object(root["data"])
+	slot := func(key string) map[string]json.RawMessage {
+		if v, ok := object(root[key]); ok {
+			return v
+		}
+		if v, ok := object(data[key]); ok {
+			return v
+		}
+		return nil
+	}
+	search, _ := object(root["search"])
+	if search == nil {
+		search, _ = object(data["search"])
+	}
+	searchHourly, _ := object(search["hourly"])
+	if slot("rollingFiveHourLimit") == nil && slot("weeklyTokenLimit") == nil && searchHourly == nil {
+		return nil
+	}
+	result := [3]map[string]json.RawMessage{slot("rollingFiveHourLimit"), slot("weeklyTokenLimit"), searchHourly}
+	return &result
+}
+
+func quotaEntries(root map[string]json.RawMessage) []map[string]json.RawMessage {
+	for _, key := range []string{"quotas", "quota", "limits", "usage", "entries", "subscription"} {
+		if entries, ok := array(root[key]); ok {
+			return entries
+		}
+		if entry, ok := object(root[key]); ok {
+			return []map[string]json.RawMessage{entry}
+		}
+	}
+	if data, ok := object(root["data"]); ok {
+		return quotaEntries(data)
+	}
+	return nil
+}
+
+func object(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false
+	}
+	var value map[string]json.RawMessage
+	return value, json.Unmarshal(raw, &value) == nil && value != nil
+}
+
+func array(raw json.RawMessage) ([]map[string]json.RawMessage, bool) {
+	var value []map[string]json.RawMessage
+	return value, len(raw) > 0 && json.Unmarshal(raw, &value) == nil && len(value) > 0
+}
+
+func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 	// Try direct percent first
-	usedPct := provider.FindFloat(entry, []string{"percentUsed", "usedPercent", "usagePercent",
-		"usage_percent", "used_percent", "percent_used", "percent"})
+	usedPct, hasUsedPct := number(entry, []string{"percentUsed", "usedPercent", "usagePercent", "usage_percent", "used_percent", "percent_used", "percent"})
 
 	// If <= 1.0, assume it's a fraction
 	if usedPct > 0 && usedPct <= 1.0 {
@@ -167,10 +190,9 @@ func (p *Provider) parseQuotaEntry(entry map[string]interface{}, idx int) *provi
 	}
 
 	// Try inverse percent
-	if usedPct == 0 {
-		remaining := provider.FindFloat(entry, []string{"percentRemaining", "remainingPercent",
-			"remaining_percent", "percent_remaining"})
-		if remaining > 0 {
+	if !hasUsedPct {
+		remaining, ok := number(entry, []string{"percentRemaining", "remainingPercent", "remaining_percent", "percent_remaining"})
+		if ok {
 			if remaining <= 1.0 {
 				remaining *= 100
 			}
@@ -179,22 +201,20 @@ func (p *Provider) parseQuotaEntry(entry map[string]interface{}, idx int) *provi
 	}
 
 	// Derive from limit/used/remaining
-	if usedPct == 0 {
-		limit := provider.FindFloat(entry, []string{"limit", "quota", "max", "total", "capacity", "allowance"})
-		used := provider.FindFloat(entry, []string{"used", "usage", "requests", "consumed", "spent"})
-		remaining := provider.FindFloat(entry, []string{"remaining", "left", "available", "balance"})
+	if !hasUsedPct {
+		limit, hasLimit := number(entry, []string{"limit"})
+		used, hasUsed := number(entry, []string{"used", "requests"})
+		remaining, hasRemaining := number(entry, []string{"remaining"})
 
-		if limit > 0 && used > 0 {
+		if hasLimit && hasUsed && limit > 0 {
 			usedPct = (used / limit) * 100
-		} else if limit > 0 && remaining > 0 {
+		} else if hasLimit && hasRemaining && limit > 0 {
 			usedPct = ((limit - remaining) / limit) * 100
-		} else if used > 0 && remaining > 0 {
+		} else if hasUsed && hasRemaining && used+remaining > 0 {
 			usedPct = (used / (used + remaining)) * 100
+		} else {
+			return nil
 		}
-	}
-
-	if usedPct == 0 {
-		return nil
 	}
 
 	if usedPct < 0 {
@@ -206,12 +226,9 @@ func (p *Provider) parseQuotaEntry(entry map[string]interface{}, idx int) *provi
 
 	// Label
 	label := findString(entry, []string{"name", "label", "type", "period", "scope", "title"})
-	if label == "" {
-		label = fmt.Sprintf("quota%d", idx+1)
-	}
 
 	// Reset time
-	resetsAt := time.Now().Add(24 * time.Hour)
+	var resetsAt time.Time
 	resetStr := findString(entry, []string{"resetAt", "reset_at", "resetsAt", "resets_at",
 		"renewAt", "renew_at", "periodEnd", "period_end", "expiresAt", "expires_at"})
 	if resetStr != "" {
@@ -222,11 +239,10 @@ func (p *Provider) parseQuotaEntry(entry map[string]interface{}, idx int) *provi
 		}
 	}
 	// Try as epoch
-	resetEpoch := provider.FindFloat(entry, []string{"resetAt", "reset_at", "resetsAt", "resets_at",
-		"renewAt", "renew_at", "periodEnd", "period_end", "expiresAt", "expires_at"})
-	if resetEpoch > 1e12 {
+	resetEpoch, hasEpoch := number(entry, []string{"resetAt", "reset_at", "resetsAt", "resets_at", "renewAt", "renew_at", "periodEnd", "period_end", "expiresAt", "expires_at"})
+	if hasEpoch && resetEpoch > 1e12 {
 		resetsAt = time.UnixMilli(int64(resetEpoch))
-	} else if resetEpoch > 1e9 {
+	} else if hasEpoch && resetEpoch > 1e9 {
 		resetsAt = time.Unix(int64(resetEpoch), 0)
 	}
 
@@ -238,10 +254,24 @@ func (p *Provider) parseQuotaEntry(entry map[string]interface{}, idx int) *provi
 	}
 }
 
-func findString(obj map[string]interface{}, keys []string) string {
+func number(obj map[string]json.RawMessage, keys []string) (float64, bool) {
+	for _, key := range keys {
+		var n json.Number
+		if err := json.Unmarshal(obj[key], &n); err == nil {
+			f, err := n.Float64()
+			if err == nil {
+				return f, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func findString(obj map[string]json.RawMessage, keys []string) string {
 	for _, k := range keys {
 		if v, ok := obj[k]; ok {
-			if s, ok := v.(string); ok && s != "" {
+			var s string
+			if json.Unmarshal(v, &s) == nil && s != "" {
 				return s
 			}
 		}
