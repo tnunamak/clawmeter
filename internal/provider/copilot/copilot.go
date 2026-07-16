@@ -33,7 +33,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "copilot" }
+func (p *Provider) Name() string         { return "copilot" }
 func (p *Provider) DisplayName() string  { return "Copilot" }
 func (p *Provider) Description() string  { return "GitHub Copilot (via GitHub token)" }
 func (p *Provider) DashboardURL() string { return "https://github.com/settings/copilot" }
@@ -49,7 +49,11 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	return p.fetchUsage(ctx, &http.Client{Timeout: timeout}, apiURL, token)
+}
+
+func (p *Provider) fetchUsage(ctx context.Context, client *http.Client, endpoint, token string) (*provider.UsageData, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +63,6 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	req.Header.Set("User-Agent", "GitHubCopilotChat/0.26.7")
 	req.Header.Set("X-Github-Api-Version", "2025-04-01")
 
-	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -151,7 +154,10 @@ func tokenFromHostsJSON(data []byte) (string, error) {
 // API response types
 
 type userResponse struct {
-	QuotaSnapshots map[string]quotaSnapshot `json:"quotaSnapshots"`
+	QuotaSnapshots  map[string]quotaSnapshot `json:"quotaSnapshots"`
+	QuotaSnapshots2 map[string]quotaSnapshot `json:"quota_snapshots"`
+	QuotaResetDate  string                   `json:"quotaResetDate"`
+	QuotaResetDate2 string                   `json:"quota_reset_date"`
 }
 
 type quotaSnapshot struct {
@@ -164,32 +170,58 @@ func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
+	resetAt, resetKnown := parseResetDate(resp.QuotaResetDate)
+	if !resetKnown {
+		resetAt, resetKnown = parseResetDate(resp.QuotaResetDate2)
+	}
+	if !resetKnown && (resp.QuotaResetDate != "" || resp.QuotaResetDate2 != "") {
+		data.Warning = "Copilot returned an invalid quota reset date; reset is unknown"
+	}
+	snapshots := resp.QuotaSnapshots
+	if len(snapshots) == 0 {
+		snapshots = resp.QuotaSnapshots2
+	}
 
-	if snap, ok := resp.QuotaSnapshots["premiumInteractions"]; ok {
+	if snap, ok := snapshots["premiumInteractions"]; ok {
 		usedPct := clamp(100-snap.PercentRemaining, 0, 100)
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        "premium",
 			DisplayName: "Premium",
 			Utilization: usedPct,
-			ResetsAt:    time.Now().Add(30 * 24 * time.Hour), // monthly reset
+			ResetsAt:    resetAt,
 		})
 	}
 
-	if snap, ok := resp.QuotaSnapshots["chat"]; ok {
+	if snap, ok := snapshots["chat"]; ok {
 		usedPct := clamp(100-snap.PercentRemaining, 0, 100)
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        "chat",
 			DisplayName: "Chat",
 			Utilization: usedPct,
-			ResetsAt:    time.Now().Add(30 * 24 * time.Hour),
+			ResetsAt:    resetAt,
 		})
 	}
 
 	if len(data.Windows) == 0 {
 		data.Error = "no quota data in response"
 	}
+	if !resetKnown && len(data.Windows) > 0 && data.Warning == "" {
+		data.Warning = "Copilot quota reset date is not available; reset is unknown"
+	}
 
 	return data
+}
+
+func parseResetDate(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func clamp(v, lo, hi float64) float64 {
