@@ -123,7 +123,7 @@ clawmeter tray           # run the tray in this session
 | Gemini | 24h Pro-model and Flash-model quotas; Code Assist tier checked when available |
 | GitHub Copilot | Premium and chat interactions |
 | Grok/xAI | Grok weekly usage pool; API prepaid credits |
-| Kimi | Daily and hourly limits |
+| Kimi | Usage and rate limits; cadence is provider-reported/experimental |
 | OpenRouter | Wallet credit balance and finite API-key limits |
 | JetBrains AI | Monthly credits |
 | Kimi K2 | Credit balance |

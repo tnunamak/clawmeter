@@ -92,6 +92,24 @@ func TestTransformUsagePreservesZeroAndPartialWindows(t *testing.T) {
 	}
 }
 
+func TestTransformUsageUsesNeutralMainNameAndProviderTitle(t *testing.T) {
+	p := New(config.ProviderConfig{})
+	data := p.transformUsage(&usageResponse{Usage: &usageSummary{
+		Name:  "Weekly",
+		Title: "Kimi Code weekly quota",
+		Limit: 10,
+	}})
+	if len(data.Windows) != 1 {
+		t.Fatalf("window count = %d, want 1", len(data.Windows))
+	}
+	if got := data.Windows[0].Name; got != "usage" {
+		t.Fatalf("main usage name = %q, want neutral usage", got)
+	}
+	if got := data.Windows[0].DisplayName; got != "Kimi Code weekly quota" {
+		t.Fatalf("display name = %q, want provider title", got)
+	}
+}
+
 func TestFetchUsageHandlesAuthRateLimitAndServerErrors(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusBadGateway} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {

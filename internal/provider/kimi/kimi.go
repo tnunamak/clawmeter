@@ -333,9 +333,9 @@ func (p *Provider) transformUsage(resp *usageResponse) *provider.UsageData {
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
-	// Process the main usage summary (weekly/daily limit)
+	// Process the main usage summary without asserting an undocumented cadence.
 	if resp.Usage != nil {
-		window := p.usageToWindow(resp.Usage, "daily", "Daily")
+		window := p.usageToWindow(resp.Usage, "usage", "Usage")
 		if window != nil {
 			data.Windows = append(data.Windows, *window)
 		}
@@ -377,7 +377,7 @@ func (p *Provider) usageToWindow(u *usageSummary, name, displayName string) *pro
 
 	return &provider.UsageWindow{
 		Name:        name,
-		DisplayName: coalesce(u.Name, u.Title, displayName),
+		DisplayName: coalesce(u.Title, u.Name, displayName),
 		Utilization: utilization,
 		ResetsAt:    resetsAt,
 		Limit:       int(u.Limit),
