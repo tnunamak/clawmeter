@@ -600,9 +600,10 @@ type JSONOutput struct {
 
 // ProviderJSONOutput is the JSON representation for a single provider.
 type ProviderJSONOutput struct {
-	Usage    *provider.UsageData    `json:"usage,omitempty"`
-	Forecast *JSONForecast          `json:"forecast,omitempty"`
-	Status   *status.ProviderStatus `json:"status,omitempty"`
+	Usage    *provider.UsageData       `json:"usage,omitempty"`
+	Forecast *JSONForecast             `json:"forecast,omitempty"`
+	Status   *status.ProviderStatus    `json:"status,omitempty"`
+	Maturity provider.ProviderMaturity `json:"maturity"`
 }
 
 // JSONForecast contains forecast data.
@@ -642,7 +643,8 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 		}
 
 		providerOut := &ProviderJSONOutput{
-			Usage: pf.Data,
+			Usage:    pf.Data,
+			Maturity: provider.GetMaturity(pf.Name),
 		}
 
 		// Add forecasts for each window

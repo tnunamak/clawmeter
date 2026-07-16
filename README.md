@@ -130,6 +130,8 @@ clawmeter tray           # run the tray in this session
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 
+Provider maturity is binary and intentionally kept out of quota rows and the tray. The `clawmeter providers` inventory and `--json` metadata identify experimental integrations and link to [provider maturity](docs/provider-maturity.md).
+
 Codex reset-credit visibility is read-only. Clawmeter shows available count and earliest expiry when Codex exposes banked resets locally, but it never redeems resets. Design notes and provider coverage are in [Reset awareness](docs/reset-awareness.md).
 
 ## Details
