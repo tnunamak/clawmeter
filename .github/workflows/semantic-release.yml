@@ -261,8 +261,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          retry_release_api() {
+            for attempt in $(seq 1 12); do
+              if "$@"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 12 ]; then
+                return 1
+              fi
+              echo "GitHub release API unavailable; retrying in 15s ($attempt/12)..." >&2
+              sleep 15
+            done
+          }
           notes="$(mktemp)"
-          gh release view "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --json body --jq '.body // ""' > "$notes"
+          retry_release_api gh release view "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --json body --jq '.body // ""' > "$notes"
           {
             echo ""
             echo "## Windows distribution"
@@ -277,12 +289,22 @@ jobs:
             echo "Code signing policy: https://github.com/${{ github.repository }}/blob/main/docs/code-signing.md"
             echo "Privacy policy: https://github.com/${{ github.repository }}/blob/main/PRIVACY.md"
           } >> "$notes"
-          gh release edit "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --notes-file "$notes"
+          retry_release_api gh release edit "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --notes-file "$notes"
 
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.release.outputs.tag }}" artifacts/* --repo "${{ github.repository }}" --clobber
+        run: |
+          for attempt in $(seq 1 12); do
+            if gh release upload "${{ needs.release.outputs.tag }}" artifacts/* --repo "${{ github.repository }}" --clobber; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              exit 1
+            fi
+            echo "GitHub release API unavailable; retrying in 15s ($attempt/12)..." >&2
+            sleep 15
+          done
 
   # Clean up empty release if build fails
   submit-winget:
