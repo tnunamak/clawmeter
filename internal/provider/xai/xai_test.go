@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -281,17 +282,36 @@ func TestGrokSubscriptionWindowLabels(t *testing.T) {
 	}
 }
 
-func TestParseGrokBilling_NoUsageYet(t *testing.T) {
+func TestParseGrokBilling_OmittedUsageIsUnavailable(t *testing.T) {
 	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
-	snapshot, err := parseGrokBilling(grokGRPCWebResponse(grokBillingNoUsagePayload(reset)), time.Now())
+	_, err := parseGrokBilling(grokGRPCWebResponse(grokBillingNoUsagePayload(reset)), time.Now())
+	if !errors.Is(err, errGrokUsageUnavailable) {
+		t.Fatalf("parseGrokBilling error = %v, want errGrokUsageUnavailable", err)
+	}
+}
+
+func TestFetchUsage_OmittedGrokUsageInvalidatesPriorReading(t *testing.T) {
+	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	writeGrokAuth(t, "grok-token", time.Now().Add(time.Hour))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/grpc-web+proto")
+		_, _ = w.Write(grokGRPCWebResponse(grokBillingNoUsagePayload(reset)))
+	}))
+	defer srv.Close()
+
+	p := New(config.ProviderConfig{})
+	p.grokBillingURL = srv.URL
+	p.client = srv.Client()
+	data, err := p.FetchUsage(context.Background())
 	if err != nil {
-		t.Fatalf("parseGrokBilling: %v", err)
+		t.Fatalf("FetchUsage: %v", err)
 	}
-	if snapshot.UsedPercent != 0 {
-		t.Fatalf("used percent = %.2f, want 0", snapshot.UsedPercent)
+	if data.Error != "Grok usage percentage unavailable" || !data.InvalidatesPriorUsage {
+		t.Fatalf("FetchUsage data = %#v, want invalidating unavailable result", data)
 	}
-	if !snapshot.ResetsAt.Equal(reset) {
-		t.Fatalf("resets_at = %s, want %s", snapshot.ResetsAt, reset)
+	if data.HasPresentableUsage() {
+		t.Fatal("ambiguous Grok response must not produce a zero-usage window")
 	}
 }
 

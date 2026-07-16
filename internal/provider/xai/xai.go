@@ -192,6 +192,14 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 
 	snapshot, err := parseGrokBilling(body, time.Now())
 	if err != nil {
+		if errors.Is(err, errGrokUsageUnavailable) {
+			return &provider.UsageData{
+				Provider:              p.Name(),
+				FetchedAt:             time.Now(),
+				Error:                 "Grok usage percentage unavailable",
+				InvalidatesPriorUsage: true,
+			}, nil
+		}
 		return nil, err
 	}
 	now := time.Now()
@@ -396,6 +404,8 @@ type grokBillingSnapshot struct {
 	ResetsAt    time.Time
 }
 
+var errGrokUsageUnavailable = errors.New("Grok billing omitted usage percentage")
+
 type grokGRPCError struct {
 	status  int
 	message string
@@ -521,10 +531,9 @@ func parseGrokBilling(data []byte, now time.Time) (*grokBillingSnapshot, error) 
 	percent, hasPercent := scan.grokUsedPercent()
 	reset, hasReset := scan.grokReset(now)
 	hasUsagePeriod := scan.hasGrokUsagePeriod()
-	noUsageYet := !hasPercent && len(scan.fixed32) == 0 && hasReset && hasUsagePeriod
-	if noUsageYet {
-		percent = 0
-		hasPercent = true
+	usageUnavailable := !hasPercent && len(scan.fixed32) == 0 && hasReset && hasUsagePeriod
+	if usageUnavailable {
+		return nil, errGrokUsageUnavailable
 	}
 	if !hasPercent {
 		return nil, fmt.Errorf("could not parse Grok billing usage")

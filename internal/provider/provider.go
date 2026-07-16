@@ -160,6 +160,9 @@ type UsageData struct {
 	Error        string             `json:"error,omitempty"`         // Error message if fetch failed
 	Stale        bool               `json:"stale,omitempty"`         // True if showing last good data after refresh failed
 	Warning      string             `json:"warning,omitempty"`       // Short non-blocking data quality note
+	// InvalidatesPriorUsage means the current response disproves the semantic
+	// validity of earlier readings, so callers must not use stale fallback.
+	InvalidatesPriorUsage bool `json:"-"`
 }
 
 // Clone returns a deep-enough copy for UI/cache fallback paths.

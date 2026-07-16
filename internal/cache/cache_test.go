@@ -1,11 +1,34 @@
 package cache
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+func TestInvalidatingErrorRoundTripCannotResurrectUsage(t *testing.T) {
+	entry := Entry{ProviderData: map[string]*provider.UsageData{
+		"xai": {
+			Provider:              "xai",
+			Error:                 "Grok usage percentage unavailable",
+			InvalidatesPriorUsage: true,
+		},
+	}}
+	encoded, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Entry
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	got := decoded.ProviderData["xai"]
+	if got == nil || got.Error == "" || got.HasPresentableUsage() {
+		t.Fatalf("round-tripped invalidation = %#v, want error-only data", got)
+	}
+}
 
 func TestIsValid(t *testing.T) {
 	cases := []struct {

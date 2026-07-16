@@ -624,7 +624,7 @@ func TestStaleFallbackMarksLastGoodDataAndDropsResetlessWindows(t *testing.T) {
 		},
 	}
 
-	got, ok := staleFallback(entry, "claude", "usage unavailable")
+	got, ok := staleFallback(entry, "claude", &provider.UsageData{Error: "usage unavailable"})
 	if !ok {
 		t.Fatal("staleFallback() ok = false, want true")
 	}
@@ -636,5 +636,22 @@ func TestStaleFallbackMarksLastGoodDataAndDropsResetlessWindows(t *testing.T) {
 	}
 	if entry.ProviderData["claude"].Stale {
 		t.Fatal("staleFallback mutated cache entry")
+	}
+}
+
+func TestStaleFallbackRejectsInvalidatedPriorUsage(t *testing.T) {
+	entry := &cache.Entry{ProviderData: map[string]*provider.UsageData{
+		"xai": {
+			Provider: "xai",
+			Windows:  []provider.UsageWindow{{Name: "7d", Utilization: 0, ResetsAt: time.Now().Add(7 * 24 * time.Hour)}},
+		},
+	}}
+	current := &provider.UsageData{
+		Provider:              "xai",
+		Error:                 "Grok usage percentage unavailable",
+		InvalidatesPriorUsage: true,
+	}
+	if got, ok := staleFallback(entry, "xai", current); ok || got != nil {
+		t.Fatalf("staleFallback() = %#v, %v; want no fallback for invalidated usage", got, ok)
 	}
 }

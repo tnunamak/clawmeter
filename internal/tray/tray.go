@@ -229,7 +229,9 @@ func onReady() {
 			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.HasPresentableUsage() {
 				hasPrior = true
 			}
-			if hasPrior && !data.HasPresentableUsage() {
+			if data.InvalidatesPriorUsage {
+				_ = s.failureGate.ShouldSurfaceError(name, hasPrior)
+			} else if hasPrior && !data.HasPresentableUsage() {
 				prev := s.lastResults[name].Clone()
 				prev.MarkStale(data.Error)
 				result.Results[name] = prev

@@ -776,7 +776,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
 				if data != nil && data.Error != "" && !data.HasPresentableUsage() {
-					if cached, ok := staleFallback(cacheEntry, name, data.Error); ok {
+					if cached, ok := staleFallback(cacheEntry, name, data); ok {
 						result.Results[name] = cached
 					}
 				}
@@ -852,13 +852,16 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 	}
 }
 
-func staleFallback(cacheEntry *cache.Entry, name, reason string) (*provider.UsageData, bool) {
+func staleFallback(cacheEntry *cache.Entry, name string, current *provider.UsageData) (*provider.UsageData, bool) {
+	if current == nil || current.InvalidatesPriorUsage {
+		return nil, false
+	}
 	cached, ok := cacheEntry.GetProvider(name)
 	if !ok || cached == nil || !cached.HasPresentableUsage() {
 		return nil, false
 	}
 	cached = cached.Clone()
-	cached.MarkStale(reason)
+	cached.MarkStale(current.Error)
 	return cached, true
 }
 
@@ -906,7 +909,7 @@ func Check() int {
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
 				if data != nil && data.Error != "" && !data.HasPresentableUsage() {
-					if cached, ok := staleFallback(cacheEntry, name, data.Error); ok {
+					if cached, ok := staleFallback(cacheEntry, name, data); ok {
 						result.Results[name] = cached
 					}
 				}
@@ -1262,7 +1265,7 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 	}
 	if data != nil && data.Error != "" && !data.HasPresentableUsage() {
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
-			if cached, ok := staleFallback(cacheEntry, p.Name(), data.Error); ok {
+			if cached, ok := staleFallback(cacheEntry, p.Name(), data); ok {
 				data = cached
 			}
 		}
