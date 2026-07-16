@@ -38,6 +38,7 @@ type UsageWindow struct {
 	DisplayName string    `json:"display_name,omitempty"` // e.g., "5 hours", "7 days", "Daily", "Monthly"
 	Utilization float64   `json:"utilization"`            // 0-100 percentage
 	ResetsAt    time.Time `json:"resets_at"`              // When this window resets
+	ResetPolicy string    `json:"reset_policy,omitempty"` // Provider policy when no timestamp is known
 	Limit       int       `json:"limit,omitempty"`        // Optional: actual limit number (e.g., 50 requests)
 	Used        int       `json:"used,omitempty"`         // Optional: actual usage number
 }

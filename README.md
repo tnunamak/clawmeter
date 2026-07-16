@@ -224,7 +224,7 @@ brew services stop clawmeter
 | GitHub Copilot | `~/.config/github-copilot/hosts.json` |
 | Grok/xAI | `~/.grok/auth.json` from `grok login`; or `XAI_MANAGEMENT_API_KEY` with optional `XAI_TEAM_ID` |
 | Kimi | `~/.kimi/credentials/kimi-code.json` |
-| OpenRouter | `OPENROUTER_API_KEY` or config |
+| OpenRouter | `OPENROUTER_API_KEY` or config; optional `OPENROUTER_MANAGEMENT_KEY` for wallet credits |
 | JetBrains AI | IDE config files |
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
 

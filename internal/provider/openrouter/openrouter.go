@@ -26,6 +26,7 @@ type Provider struct {
 	cfg                config.ProviderConfig
 	client             *http.Client
 	creditsURL, keyURL string
+	managementKey      string
 }
 
 type apiError int
@@ -40,36 +41,58 @@ func (p *Provider) DisplayName() string     { return "OpenRouter" }
 func (p *Provider) Description() string     { return "OpenRouter (via OPENROUTER_API_KEY)" }
 func (p *Provider) DashboardURL() string    { return "https://openrouter.ai/credits" }
 func (p *Provider) AutoPollByDefault() bool { return false }
-func (p *Provider) IsConfigured() bool      { _, err := p.getAPIKey(); return err == nil }
+func (p *Provider) IsConfigured() bool      { return p.standardKey() != "" || p.managementAPIKey() != "" }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
-	key, err := p.getAPIKey()
-	if err != nil {
-		return nil, fmt.Errorf("credentials: %w", err)
+	standardKey, managementKey := p.standardKey(), p.managementAPIKey()
+	if standardKey == "" && managementKey == "" {
+		return nil, fmt.Errorf("credentials: no API key found")
 	}
-	data, err := p.fetchCredits(ctx, key)
-	if err != nil {
-		if status, ok := err.(apiError); ok && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
-			return &provider.UsageData{Provider: p.Name(), FetchedAt: time.Now(), IsExpired: true, Error: "unauthorized — check OPENROUTER_API_KEY"}, nil
+	data := &provider.UsageData{Provider: p.Name(), FetchedAt: time.Now()}
+	if standardKey != "" {
+		keyData, keyErr := p.fetchKey(ctx, standardKey)
+		if keyErr != nil {
+			return authOrError(keyErr, "OPENROUTER_API_KEY")
 		}
-		return nil, err
-	}
-	if keyData, keyErr := p.fetchKey(ctx, key); keyErr == nil {
 		applyKey(data, keyData)
-	} else {
-		data.Warning = "API key limits unavailable: " + keyErr.Error()
+	}
+	if managementKey != "" {
+		wallet, walletErr := p.fetchCredits(ctx, managementKey)
+		if walletErr != nil {
+			if len(data.Windows) == 0 {
+				return authOrError(walletErr, "OPENROUTER_MANAGEMENT_KEY")
+			}
+			data.Warning = "wallet credits unavailable: " + walletErr.Error()
+		} else {
+			data.Balances = wallet.Balances
+		}
+	}
+	if len(data.Windows) == 0 && len(data.Balances) == 0 && data.Warning == "" {
+		data.Warning = "no usable OpenRouter limits returned"
 	}
 	return data, nil
 }
 
-func (p *Provider) getAPIKey() (string, error) {
+func authOrError(err error, name string) (*provider.UsageData, error) {
+	if status, ok := err.(apiError); ok && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		return &provider.UsageData{Provider: "openrouter", FetchedAt: time.Now(), IsExpired: true, Error: "unauthorized — check " + name}, nil
+	}
+	return nil, err
+}
+func (p *Provider) standardKey() string {
 	if strings.TrimSpace(p.cfg.APIKey) != "" {
-		return strings.TrimSpace(p.cfg.APIKey), nil
+		return strings.TrimSpace(p.cfg.APIKey)
 	}
 	if key := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")); key != "" {
-		return key, nil
+		return key
 	}
-	return "", fmt.Errorf("no API key found")
+	return ""
+}
+func (p *Provider) managementAPIKey() string {
+	if strings.TrimSpace(p.managementKey) != "" {
+		return strings.TrimSpace(p.managementKey)
+	}
+	return strings.TrimSpace(os.Getenv("OPENROUTER_MANAGEMENT_KEY"))
 }
 
 type creditsResponse struct {
@@ -135,11 +158,12 @@ func applyKey(data *provider.UsageData, k *keyData) {
 	if k.Limit == nil || k.LimitRemaining == nil || k.Usage == nil || *k.Limit < 0 {
 		return
 	}
-	used := *k.Usage
 	limit := *k.Limit
-	if limit == 0 {
+	remaining := *k.LimitRemaining
+	if limit <= 0 || remaining < 0 {
 		return
 	}
+	used := limit - remaining
 	pct := used / limit * 100
 	if pct < 0 {
 		pct = 0
@@ -147,7 +171,7 @@ func applyKey(data *provider.UsageData, k *keyData) {
 	if pct > 100 {
 		pct = 100
 	}
-	data.Windows = append(data.Windows, provider.UsageWindow{Name: "key", DisplayName: "API key", Utilization: pct, Limit: int(limit), Used: int(used)})
+	data.Windows = append(data.Windows, provider.UsageWindow{Name: "key", DisplayName: "API key", Utilization: pct, Limit: int(limit), Used: int(used), ResetPolicy: k.LimitReset})
 }
 
 func Register(registry *provider.Registry, cfg *config.Config) error {
