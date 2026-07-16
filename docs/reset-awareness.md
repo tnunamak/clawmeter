@@ -41,6 +41,8 @@ Other provider coverage checked:
   https://docs.github.com/en/copilot/concepts/billing/copilot-requests
 - OpenRouter exposes purchased-credit balances, not banked reset credits:
   https://openrouter.ai/docs/api/api-reference/credits/get-credits
+  Clawmeter keeps that wallet balance separate from optional finite API-key limits;
+  symbolic daily/weekly/monthly limit policies do not become guessed timestamps.
 - Cursor, Kimi, and JetBrains AI expose quota or credit concepts, but no verified
   local read-only banked reset-credit surface currently supported by Clawmeter.
 

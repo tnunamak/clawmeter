@@ -42,6 +42,15 @@ type UsageWindow struct {
 	Used        int       `json:"used,omitempty"`         // Optional: actual usage number
 }
 
+// UsageBalance represents a non-resetting provider balance.
+type UsageBalance struct {
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name,omitempty"`
+	Total       float64 `json:"total"`
+	Used        float64 `json:"used"`
+	Remaining   float64 `json:"remaining"`
+}
+
 // UsageResetCredit is read-only metadata about a banked usage-limit reset.
 // It is intentionally passive inventory: Clawmeter never redeems resets.
 type UsageResetCredit struct {
@@ -144,6 +153,7 @@ type UsageData struct {
 	Provider     string             `json:"provider"`                // Provider name
 	FetchedAt    time.Time          `json:"fetched_at"`              // When this data was fetched
 	Windows      []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
+	Balances     []UsageBalance     `json:"balances,omitempty"`      // Non-resetting balances
 	ResetCredits *UsageResetCredits `json:"reset_credits,omitempty"` // Optional banked usage-limit reset metadata
 	IsExpired    bool               `json:"is_expired,omitempty"`    // True if credentials are expired
 	Error        string             `json:"error,omitempty"`         // Error message if fetch failed
@@ -159,6 +169,9 @@ func (u *UsageData) Clone() *UsageData {
 	clone := *u
 	if u.Windows != nil {
 		clone.Windows = append([]UsageWindow(nil), u.Windows...)
+	}
+	if u.Balances != nil {
+		clone.Balances = append([]UsageBalance(nil), u.Balances...)
 	}
 	if u.ResetCredits != nil {
 		resetCredits := *u.ResetCredits

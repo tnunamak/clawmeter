@@ -173,6 +173,9 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	if resetSummary := resetCreditPlainSummary(pf.Data, time.Now()); resetSummary != "" {
 		parts = append(parts, resetSummary)
 	}
+	for _, balance := range pf.Data.Balances {
+		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", balance.DisplayName, balance.Remaining))
+	}
 	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
 }
 

@@ -124,7 +124,7 @@ clawmeter tray           # run the tray in this session
 | GitHub Copilot | Premium and chat interactions |
 | Grok/xAI | Grok weekly usage pool; API prepaid credits |
 | Kimi | Daily and hourly limits |
-| OpenRouter | Credit balance |
+| OpenRouter | Wallet credit balance and finite API-key limits |
 | JetBrains AI | Monthly credits |
 | Kimi K2 | Credit balance |
 
