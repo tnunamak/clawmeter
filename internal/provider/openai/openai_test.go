@@ -42,6 +42,34 @@ func TestPrimaryWindowLabelsKeepFiveHourWindow(t *testing.T) {
 	}
 }
 
+func TestParseRateLimitsDoesNotTurnMissingUsageIntoZero(t *testing.T) {
+	reset := time.Now().Add(2 * time.Hour).Unix()
+	for _, raw := range []string{
+		`{"id":3,"result":{"rateLimits":{"primary":{"resetsAt":` + itoa64(reset) + `}}}}`,
+		`{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":null,"resetsAt":` + itoa64(reset) + `}}}}`,
+	} {
+		data, err := New(config.ProviderConfig{}).parseRateLimits([]byte(raw), &accountResponse{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data.Windows) != 0 || data.Error == "" {
+			t.Fatalf("data = %#v, want unavailable usage", data)
+		}
+	}
+}
+
+func TestParseRateLimitsPreservesExplicitZero(t *testing.T) {
+	reset := time.Now().Add(2 * time.Hour).Unix()
+	raw := `{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":0,"resetsAt":` + itoa64(reset) + `}}}}`
+	data, err := New(config.ProviderConfig{}).parseRateLimits([]byte(raw), &accountResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Windows) != 1 || data.Windows[0].Utilization != 0 {
+		t.Fatalf("data = %#v, want explicit zero usage", data)
+	}
+}
+
 func TestReadResponseReturnsSentinelOnEOF(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader(""))
 	_, err := readResponse(scanner)

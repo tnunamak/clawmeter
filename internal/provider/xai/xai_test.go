@@ -21,11 +21,11 @@ func TestTransformBalance_ComputesCreditUsage(t *testing.T) {
 	p := New(config.ProviderConfig{})
 	data := p.transformBalance(&prepaidBalanceResponse{
 		Changes: []balanceChange{
-			{TopupStatus: "SUCCEEDED", Amount: centsValue{Val: -2500}},
-			{TopupStatus: "SUCCEEDED", Amount: centsValue{Val: 500}},
-			{TopupStatus: "FAILED", Amount: centsValue{Val: -1000}},
+			{TopupStatus: "SUCCEEDED", Amount: centsValue{Val: -2500, Present: true}},
+			{TopupStatus: "SUCCEEDED", Amount: centsValue{Val: 500, Present: true}},
+			{TopupStatus: "FAILED", Amount: centsValue{Val: -1000, Present: true}},
 		},
-		Total: centsValue{Val: -1000},
+		Total: centsValue{Val: -1000, Present: true},
 	})
 
 	if len(data.Windows) != 1 {
@@ -43,6 +43,16 @@ func TestTransformBalance_ComputesCreditUsage(t *testing.T) {
 	}
 	if w.Utilization != 60 {
 		t.Fatalf("utilization = %.2f, want 60", w.Utilization)
+	}
+	if !w.ResetsAt.IsZero() {
+		t.Fatalf("non-resetting credits received invented reset %s", w.ResetsAt)
+	}
+}
+
+func TestTransformBalanceRejectsMissingTotal(t *testing.T) {
+	data := New(config.ProviderConfig{}).transformBalance(&prepaidBalanceResponse{})
+	if len(data.Windows) != 0 || data.Error == "" {
+		t.Fatalf("data = %#v, want missing balance unavailable", data)
 	}
 }
 
@@ -285,6 +295,16 @@ func TestGrokSubscriptionWindowLabels(t *testing.T) {
 func TestParseGrokBilling_OmittedUsageIsUnavailable(t *testing.T) {
 	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
 	_, err := parseGrokBilling(grokGRPCWebResponse(grokBillingNoUsagePayload(reset)), time.Now())
+	if !errors.Is(err, errGrokUsageUnavailable) {
+		t.Fatalf("parseGrokBilling error = %v, want errGrokUsageUnavailable", err)
+	}
+}
+
+func TestParseGrokBilling_OmittedUsageWithUnrelatedFloatIsUnavailable(t *testing.T) {
+	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	payload := grokBillingNoUsagePayload(reset)
+	payload = append(payload, protoFixed32(2, math.Float32bits(42))...)
+	_, err := parseGrokBilling(grokGRPCWebResponse(payload), time.Now())
 	if !errors.Is(err, errGrokUsageUnavailable) {
 		t.Fatalf("parseGrokBilling error = %v, want errGrokUsageUnavailable", err)
 	}

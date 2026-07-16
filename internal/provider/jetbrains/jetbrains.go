@@ -27,7 +27,7 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string        { return "jetbrains" }
+func (p *Provider) Name() string         { return "jetbrains" }
 func (p *Provider) DisplayName() string  { return "JetBrains" }
 func (p *Provider) Description() string  { return "JetBrains AI Assistant (via local config)" }
 func (p *Provider) DashboardURL() string { return "https://account.jetbrains.com/usage" }
@@ -120,6 +120,8 @@ type xmlOption struct {
 type quotaData struct {
 	MonthlyLimit int
 	MonthlyUsed  int
+	HasLimit     bool
+	HasUsed      bool
 	RefillDate   string // ISO date
 }
 
@@ -137,10 +139,12 @@ func parseQuotaXML(data []byte) (*quotaData, error) {
 			case "monthlyCreditsLimit":
 				if v, err := strconv.Atoi(opt.Value); err == nil {
 					quota.MonthlyLimit = v
+					quota.HasLimit = true
 				}
 			case "monthlyCreditsUsed":
 				if v, err := strconv.Atoi(opt.Value); err == nil {
 					quota.MonthlyUsed = v
+					quota.HasUsed = true
 				}
 			case "refillDate":
 				quota.RefillDate = opt.Value
@@ -148,7 +152,7 @@ func parseQuotaXML(data []byte) (*quotaData, error) {
 		}
 	}
 
-	if quota.MonthlyLimit == 0 {
+	if !quota.HasLimit || quota.MonthlyLimit <= 0 || !quota.HasUsed || quota.MonthlyUsed < 0 {
 		return nil, fmt.Errorf("no quota data found in XML")
 	}
 
@@ -168,7 +172,7 @@ func (p *Provider) transformQuota(quota *quotaData) *provider.UsageData {
 	}
 
 	// Parse refill date
-	resetsAt := time.Now().Add(30 * 24 * time.Hour) // default monthly
+	var resetsAt time.Time
 	if quota.RefillDate != "" {
 		if t, err := time.Parse("2006-01-02", quota.RefillDate); err == nil {
 			resetsAt = t

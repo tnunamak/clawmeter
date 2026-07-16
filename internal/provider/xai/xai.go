@@ -531,7 +531,7 @@ func parseGrokBilling(data []byte, now time.Time) (*grokBillingSnapshot, error) 
 	percent, hasPercent := scan.grokUsedPercent()
 	reset, hasReset := scan.grokReset(now)
 	hasUsagePeriod := scan.hasGrokUsagePeriod()
-	usageUnavailable := !hasPercent && len(scan.fixed32) == 0 && hasReset && hasUsagePeriod
+	usageUnavailable := !hasPercent && hasReset && hasUsagePeriod
 	if usageUnavailable {
 		return nil, errGrokUsageUnavailable
 	}
@@ -768,7 +768,8 @@ type balanceChange struct {
 }
 
 type centsValue struct {
-	Val int64
+	Val     int64
+	Present bool
 }
 
 func (c *centsValue) UnmarshalJSON(data []byte) error {
@@ -779,7 +780,6 @@ func (c *centsValue) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if len(obj.Val) == 0 || string(obj.Val) == "null" {
-		c.Val = 0
 		return nil
 	}
 	var s string
@@ -799,6 +799,7 @@ func (c *centsValue) parse(s string) error {
 		return fmt.Errorf("parse cents %q: %w", s, err)
 	}
 	c.Val = v
+	c.Present = true
 	return nil
 }
 
@@ -808,6 +809,10 @@ func (p *Provider) transformBalance(resp *prepaidBalanceResponse) *provider.Usag
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0, 1),
 	}
+	if !resp.Total.Present {
+		data.Error = "prepaid balance unavailable"
+		return data
+	}
 
 	availableCents := -resp.Total.Val
 	if availableCents < 0 {
@@ -816,6 +821,9 @@ func (p *Provider) transformBalance(resp *prepaidBalanceResponse) *provider.Usag
 
 	issuedCents := int64(0)
 	for _, change := range resp.Changes {
+		if !change.Amount.Present {
+			continue
+		}
 		if change.Amount.Val >= 0 {
 			continue
 		}
@@ -852,11 +860,8 @@ func (p *Provider) transformBalance(resp *prepaidBalanceResponse) *provider.Usag
 		Name:        "credits",
 		DisplayName: "Prepaid credits",
 		Utilization: utilization,
-		// xAI API credits do not have a reset window. Match existing credit
-		// providers with a far-future reset so the shared UI can display them.
-		ResetsAt: time.Now().Add(365 * 24 * time.Hour),
-		Limit:    clampInt(limitCents),
-		Used:     clampInt(usedCents),
+		Limit:       clampInt(limitCents),
+		Used:        clampInt(usedCents),
 	})
 
 	return data

@@ -151,13 +151,19 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 
 	// Extra usage (overage) — only show if enabled
 	if apiResp.ExtraUsage != nil && apiResp.ExtraUsage.IsEnabled {
-		data.Windows = append(data.Windows, provider.UsageWindow{
-			Name:        "extra",
-			DisplayName: "Extra usage",
-			Utilization: apiResp.ExtraUsage.Utilization,
-			Used:        int(apiResp.ExtraUsage.UsedCredits * 100), // cents
-			Limit:       int(apiResp.ExtraUsage.MonthlyLimit * 100),
-		})
+		utilization, ok := apiResp.ExtraUsage.utilization()
+		if ok {
+			data.Windows = append(data.Windows, provider.UsageWindow{
+				Name:        "extra",
+				DisplayName: "Extra usage",
+				Utilization: utilization,
+				Used:        cents(apiResp.ExtraUsage.UsedCredits),
+				Limit:       cents(apiResp.ExtraUsage.MonthlyLimit),
+			})
+		}
+	}
+	if len(data.Windows) == 0 {
+		data.Error = "no complete usage data"
 	}
 
 	return data, nil
@@ -177,11 +183,11 @@ func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
 		{"7d Sonnet", "7 days (Sonnet)", apiResp.SevenDaySonnet},
 		{"bonus", "Bonus", apiResp.IguanaNecktie},
 	} {
-		if nw.w != nil && nw.w.Utilization >= 0 && !nw.w.ResetsAt.IsZero() {
+		if nw.w != nil && validUtilization(nw.w.Utilization) && !nw.w.ResetsAt.IsZero() {
 			data.Windows = append(data.Windows, provider.UsageWindow{
 				Name:        nw.name,
 				DisplayName: nw.display,
-				Utilization: nw.w.Utilization,
+				Utilization: *nw.w.Utilization,
 				ResetsAt:    nw.w.ResetsAt,
 			})
 			seen[nw.name] = true
@@ -193,13 +199,13 @@ func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
 func addLimitWindows(data *provider.UsageData, limits []usageLimit, seen map[string]bool) {
 	for _, limit := range limits {
 		name, display, ok := limitWindowName(limit)
-		if !ok || seen[name] || limit.Percent < 0 || limit.ResetsAt.IsZero() {
+		if !ok || seen[name] || !validUtilization(limit.Percent) || limit.ResetsAt.IsZero() {
 			continue
 		}
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        name,
 			DisplayName: display,
-			Utilization: limit.Percent,
+			Utilization: *limit.Percent,
 			ResetsAt:    limit.ResetsAt,
 		})
 		seen[name] = true
@@ -422,8 +428,10 @@ type usageResponse struct {
 func (r usageResponse) usageUnavailable() bool {
 	return r.FiveHour != nil &&
 		r.SevenDay != nil &&
-		r.FiveHour.Utilization == 0 &&
-		r.SevenDay.Utilization == 0 &&
+		validUtilization(r.FiveHour.Utilization) &&
+		validUtilization(r.SevenDay.Utilization) &&
+		*r.FiveHour.Utilization == 0 &&
+		*r.SevenDay.Utilization == 0 &&
 		hasResetlessModelWindow(r)
 }
 
@@ -441,13 +449,13 @@ func hasResetlessModelWindow(r usageResponse) bool {
 }
 
 type usageWindow struct {
-	Utilization float64   `json:"utilization"`
+	Utilization *float64  `json:"utilization"`
 	ResetsAt    time.Time `json:"resets_at"`
 }
 
 type usageLimit struct {
 	Kind     string           `json:"kind"`
-	Percent  float64          `json:"percent"`
+	Percent  *float64         `json:"percent"`
 	ResetsAt time.Time        `json:"resets_at"`
 	Scope    *usageLimitScope `json:"scope"`
 }
@@ -461,11 +469,36 @@ type usageLimitModelScope struct {
 }
 
 type extraUsageWindow struct {
-	IsEnabled    bool    `json:"is_enabled"`
-	MonthlyLimit float64 `json:"monthly_limit"`
-	UsedCredits  float64 `json:"used_credits"`
-	Utilization  float64 `json:"utilization"`
-	Currency     string  `json:"currency"`
+	IsEnabled    bool     `json:"is_enabled"`
+	MonthlyLimit *float64 `json:"monthly_limit"`
+	UsedCredits  *float64 `json:"used_credits"`
+	Utilization  *float64 `json:"utilization"`
+	Currency     string   `json:"currency"`
+}
+
+func validUtilization(percent *float64) bool {
+	return percent != nil && *percent >= 0 && *percent <= 100
+}
+
+func (w extraUsageWindow) utilization() (float64, bool) {
+	if validUtilization(w.Utilization) {
+		return *w.Utilization, true
+	}
+	if w.MonthlyLimit != nil && w.UsedCredits != nil && *w.MonthlyLimit > 0 && *w.UsedCredits >= 0 {
+		percent := *w.UsedCredits / *w.MonthlyLimit * 100
+		if percent > 100 {
+			percent = 100
+		}
+		return percent, true
+	}
+	return 0, false
+}
+
+func cents(value *float64) int {
+	if value == nil || *value <= 0 {
+		return 0
+	}
+	return int(*value * 100)
 }
 
 // Register registers the Anthropic provider with the registry.

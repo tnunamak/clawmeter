@@ -159,7 +159,7 @@ type apiLimit struct {
 	Usage         *int64 `json:"usage"`        // total limit
 	CurrentValue  *int64 `json:"currentValue"` // amount used
 	Remaining     *int64 `json:"remaining"`
-	Percentage    int    `json:"percentage"`    // 0-100 fallback
+	Percentage    *int   `json:"percentage"`    // 0-100 fallback
 	NextResetTime *int64 `json:"nextResetTime"` // milliseconds epoch; absent means unknown
 }
 
@@ -188,8 +188,10 @@ func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
 		var usedPct float64
 		if total > 0 {
 			usedPct = float64(used) / float64(total) * 100
+		} else if limit.Percentage != nil {
+			usedPct = float64(*limit.Percentage)
 		} else {
-			usedPct = float64(limit.Percentage)
+			continue
 		}
 		if usedPct < 0 {
 			usedPct = 0
@@ -218,6 +220,9 @@ func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
 			Limit:       total,
 			Used:        used,
 		})
+	}
+	if len(data.Windows) == 0 {
+		data.Error = "no complete quota data"
 	}
 
 	return data

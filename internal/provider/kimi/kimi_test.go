@@ -99,7 +99,7 @@ func TestConfigAndEnvironmentTokensKeepExpiryUnknown(t *testing.T) {
 func TestTransformUsagePreservesZeroAndPartialWindows(t *testing.T) {
 	p := New(config.ProviderConfig{})
 	p.now = func() time.Time { return time.Unix(1000, 0) }
-	data := p.transformUsage(&usageResponse{Usage: &usageSummary{Limit: 10, Used: 0}, Limits: []limitItem{{Detail: limitDetail{Limit: 4, Remaining: 4, ResetAt: "bad"}}}})
+	data := p.transformUsage(&usageResponse{Usage: &usageSummary{Limit: jsonIntPtr(10), Used: jsonIntPtr(0)}, Limits: []limitItem{{Detail: limitDetail{Limit: jsonIntPtr(4), Remaining: jsonIntPtr(4), ResetAt: "bad"}}}})
 	if len(data.Windows) != 2 || data.Windows[0].Used != 0 || data.Windows[1].Used != 0 {
 		t.Fatalf("partial/zero payload = %#v", data.Windows)
 	}
@@ -113,7 +113,8 @@ func TestTransformUsageUsesNeutralMainNameAndProviderTitle(t *testing.T) {
 	data := p.transformUsage(&usageResponse{Usage: &usageSummary{
 		Name:  "Weekly",
 		Title: "Kimi Code weekly quota",
-		Limit: 10,
+		Limit: jsonIntPtr(10),
+		Used:  jsonIntPtr(0),
 	}})
 	if len(data.Windows) != 1 {
 		t.Fatalf("window count = %d, want 1", len(data.Windows))
@@ -124,6 +125,18 @@ func TestTransformUsageUsesNeutralMainNameAndProviderTitle(t *testing.T) {
 	if got := data.Windows[0].DisplayName; got != "Kimi Code weekly quota" {
 		t.Fatalf("display name = %q, want provider title", got)
 	}
+}
+
+func TestTransformUsageRejectsLimitWithoutUsageEvidence(t *testing.T) {
+	data := New(config.ProviderConfig{}).transformUsage(&usageResponse{Usage: &usageSummary{Limit: jsonIntPtr(10)}})
+	if len(data.Windows) != 0 {
+		t.Fatalf("windows = %#v, want missing usage omitted", data.Windows)
+	}
+}
+
+func jsonIntPtr(value int) *jsonInt {
+	v := jsonInt(value)
+	return &v
 }
 
 func TestFetchUsageHandlesAuthRateLimitAndServerErrors(t *testing.T) {

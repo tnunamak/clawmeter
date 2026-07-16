@@ -79,12 +79,14 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	consumed, remaining := p.extractCredits(raw)
+	consumed, hasConsumed, remaining, hasRemaining := p.extractCredits(raw)
 
 	// Also check x-credits-remaining header as fallback
-	if remaining == 0 && consumed == 0 {
+	if !hasRemaining {
 		if hdr := resp.Header.Get("x-credits-remaining"); hdr != "" {
-			fmt.Sscanf(hdr, "%f", &remaining)
+			if n, err := fmt.Sscanf(hdr, "%f", &remaining); err == nil && n == 1 {
+				hasRemaining = true
+			}
 		}
 	}
 
@@ -95,7 +97,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	total := consumed + remaining
-	if total > 0 {
+	if hasConsumed && hasRemaining && total > 0 {
 		usedPct := (consumed / total) * 100
 		if usedPct < 0 {
 			usedPct = 0
@@ -107,7 +109,6 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			Name:        "credits",
 			DisplayName: "Credits",
 			Utilization: usedPct,
-			ResetsAt:    time.Now().Add(365 * 24 * time.Hour),
 		})
 	} else {
 		data.Error = "no credit data in response"
@@ -129,7 +130,7 @@ func (p *Provider) getAPIKey() (string, error) {
 }
 
 // extractCredits searches for consumed/remaining values in a flexible JSON structure.
-func (p *Provider) extractCredits(obj map[string]interface{}) (consumed, remaining float64) {
+func (p *Provider) extractCredits(obj map[string]interface{}) (consumed float64, hasConsumed bool, remaining float64, hasRemaining bool) {
 	// Try root level, then nested under "data", "data.credits", "data.usage", "result", "result.credits"
 	sources := []map[string]interface{}{obj}
 	for _, key := range []string{"data", "result", "usage", "credits"} {
@@ -152,11 +153,11 @@ func (p *Provider) extractCredits(obj map[string]interface{}) (consumed, remaini
 		"creditsLeft", "remaining", "left", "available", "balance"}
 
 	for _, src := range sources {
-		if consumed == 0 {
-			consumed = provider.FindFloat(src, consumedKeys)
+		if !hasConsumed {
+			consumed, hasConsumed = provider.FindFloatPresent(src, consumedKeys)
 		}
-		if remaining == 0 {
-			remaining = provider.FindFloat(src, remainingKeys)
+		if !hasRemaining {
+			remaining, hasRemaining = provider.FindFloatPresent(src, remainingKeys)
 		}
 	}
 	return

@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,33 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+func TestTransformQuotaRequiresExplicitRemainingFraction(t *testing.T) {
+	for _, payload := range []string{
+		`{"buckets":[{"modelId":"gemini-pro","resetTime":"2026-08-01T00:00:00Z"}]}`,
+		`{"buckets":[{"modelId":"gemini-pro","remainingFraction":null,"resetTime":"2026-08-01T00:00:00Z"}]}`,
+	} {
+		var response quotaResponse
+		if err := json.Unmarshal([]byte(payload), &response); err != nil {
+			t.Fatal(err)
+		}
+		data := (&Provider{}).transformQuota(&response)
+		if len(data.Windows) != 0 || data.Error == "" {
+			t.Fatalf("data = %#v, want unavailable usage", data)
+		}
+	}
+}
+
+func TestTransformQuotaPreservesExplicitZeroAndUnknownReset(t *testing.T) {
+	var response quotaResponse
+	if err := json.Unmarshal([]byte(`{"buckets":[{"modelId":"gemini-pro","remainingFraction":1}]}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	data := (&Provider{}).transformQuota(&response)
+	if len(data.Windows) != 1 || data.Windows[0].Utilization != 0 || !data.Windows[0].ResetsAt.IsZero() {
+		t.Fatalf("data = %#v, want explicit zero usage and unknown reset", data)
+	}
+}
 
 func TestSetupStatus_InstalledWithoutLoginNeedsAuth(t *testing.T) {
 	home := t.TempDir()

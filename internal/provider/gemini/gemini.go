@@ -350,9 +350,9 @@ type quotaResponse struct {
 }
 
 type quotaBucket struct {
-	ModelID           string  `json:"modelId"`
-	RemainingFraction float64 `json:"remainingFraction"` // 0.0-1.0
-	ResetTime         string  `json:"resetTime"`         // ISO 8601 timestamp
+	ModelID           string   `json:"modelId"`
+	RemainingFraction *float64 `json:"remainingFraction"` // 0.0-1.0
+	ResetTime         string   `json:"resetTime"`         // ISO 8601 timestamp
 }
 
 func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
@@ -371,13 +371,16 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 	flash := tierInfo{worst: 1.0}
 
 	for _, b := range resp.Buckets {
+		if b.RemainingFraction == nil || *b.RemainingFraction < 0 || *b.RemainingFraction > 1 {
+			continue
+		}
 		tier := &flash
 		if isProModel(b.ModelID) {
 			tier = &pro
 		}
 		tier.found = true
-		if b.RemainingFraction < tier.worst {
-			tier.worst = b.RemainingFraction
+		if *b.RemainingFraction < tier.worst {
+			tier.worst = *b.RemainingFraction
 			if t, err := time.Parse(time.RFC3339, b.ResetTime); err == nil {
 				tier.resetAt = t
 			} else if t, err := time.Parse(time.RFC3339Nano, b.ResetTime); err == nil {
@@ -397,16 +400,15 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 		if !t.info.found {
 			continue
 		}
-		resetAt := t.info.resetAt
-		if resetAt.IsZero() {
-			resetAt = time.Now().Add(24 * time.Hour)
-		}
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        t.name,
 			DisplayName: t.disp,
 			Utilization: (1 - t.info.worst) * 100,
-			ResetsAt:    resetAt,
+			ResetsAt:    t.info.resetAt,
 		})
+	}
+	if len(data.Windows) == 0 {
+		data.Error = "no complete quota data"
 	}
 
 	return data

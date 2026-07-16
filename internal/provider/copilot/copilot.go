@@ -161,7 +161,7 @@ type userResponse struct {
 }
 
 type quotaSnapshot struct {
-	PercentRemaining float64 `json:"percentRemaining"`
+	PercentRemaining *float64 `json:"percentRemaining"`
 }
 
 func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
@@ -182,8 +182,8 @@ func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
 		snapshots = resp.QuotaSnapshots2
 	}
 
-	if snap, ok := snapshots["premiumInteractions"]; ok {
-		usedPct := clamp(100-snap.PercentRemaining, 0, 100)
+	if snap, ok := snapshots["premiumInteractions"]; ok && validPercentRemaining(snap.PercentRemaining) {
+		usedPct := clamp(100-*snap.PercentRemaining, 0, 100)
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        "premium",
 			DisplayName: "Premium",
@@ -192,8 +192,8 @@ func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
 		})
 	}
 
-	if snap, ok := snapshots["chat"]; ok {
-		usedPct := clamp(100-snap.PercentRemaining, 0, 100)
+	if snap, ok := snapshots["chat"]; ok && validPercentRemaining(snap.PercentRemaining) {
+		usedPct := clamp(100-*snap.PercentRemaining, 0, 100)
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        "chat",
 			DisplayName: "Chat",
@@ -210,6 +210,10 @@ func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
 	}
 
 	return data
+}
+
+func validPercentRemaining(percent *float64) bool {
+	return percent != nil && *percent >= 0 && *percent <= 100
 }
 
 func parseResetDate(value string) (time.Time, bool) {

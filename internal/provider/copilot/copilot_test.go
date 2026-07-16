@@ -54,6 +54,22 @@ func TestTransformUsagePreservesZeroAndIgnoresUnknownSnapshots(t *testing.T) {
 	}
 }
 
+func TestTransformUsageDoesNotTurnMissingPercentageIntoExhaustion(t *testing.T) {
+	for _, payload := range []string{
+		`{"quotaSnapshots":{"chat":{}}}`,
+		`{"quotaSnapshots":{"chat":{"percentRemaining":null}}}`,
+	} {
+		var response userResponse
+		if err := json.Unmarshal([]byte(payload), &response); err != nil {
+			t.Fatal(err)
+		}
+		data := (&Provider{}).transformUsage(&response)
+		if len(data.Windows) != 0 || data.Error == "" {
+			t.Fatalf("data = %#v, want unavailable usage", data)
+		}
+	}
+}
+
 func TestFetchUsageHTTPStatuses(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {

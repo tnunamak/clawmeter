@@ -288,15 +288,15 @@ type usageResponse struct {
 
 // usageSummary represents the overall usage summary (weekly limit).
 type usageSummary struct {
-	Name      string  `json:"name,omitempty"`
-	Title     string  `json:"title,omitempty"`
-	Used      jsonInt `json:"used,omitempty"`
-	Limit     jsonInt `json:"limit,omitempty"`
-	Remaining jsonInt `json:"remaining,omitempty"`
-	ResetAt   string  `json:"reset_at,omitempty"`  // ISO timestamp
-	ResetTime string  `json:"resetTime,omitempty"` // Alternative field name
-	ResetIn   int     `json:"reset_in,omitempty"`  // Seconds until reset
-	TTL       int     `json:"ttl,omitempty"`       // Seconds until reset
+	Name      string   `json:"name,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Used      *jsonInt `json:"used,omitempty"`
+	Limit     *jsonInt `json:"limit,omitempty"`
+	Remaining *jsonInt `json:"remaining,omitempty"`
+	ResetAt   string   `json:"reset_at,omitempty"`  // ISO timestamp
+	ResetTime string   `json:"resetTime,omitempty"` // Alternative field name
+	ResetIn   int      `json:"reset_in,omitempty"`  // Seconds until reset
+	TTL       int      `json:"ttl,omitempty"`       // Seconds until reset
 }
 
 // limitItem represents a single rate limit window.
@@ -312,15 +312,15 @@ type limitItem struct {
 
 // limitDetail contains the actual limit numbers.
 type limitDetail struct {
-	Name      string  `json:"name,omitempty"`
-	Title     string  `json:"title,omitempty"`
-	Used      jsonInt `json:"used,omitempty"`
-	Limit     jsonInt `json:"limit,omitempty"`
-	Remaining jsonInt `json:"remaining,omitempty"`
-	ResetAt   string  `json:"reset_at,omitempty"`
-	ResetTime string  `json:"resetTime,omitempty"` // Alternative field name
-	ResetIn   int     `json:"reset_in,omitempty"`
-	TTL       int     `json:"ttl,omitempty"`
+	Name      string   `json:"name,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Used      *jsonInt `json:"used,omitempty"`
+	Limit     *jsonInt `json:"limit,omitempty"`
+	Remaining *jsonInt `json:"remaining,omitempty"`
+	ResetAt   string   `json:"reset_at,omitempty"`
+	ResetTime string   `json:"resetTime,omitempty"` // Alternative field name
+	ResetIn   int      `json:"reset_in,omitempty"`
+	TTL       int      `json:"ttl,omitempty"`
 }
 
 // limitWindow describes the time window for the limit.
@@ -352,22 +352,21 @@ func (p *Provider) transformUsage(resp *usageResponse) *provider.UsageData {
 			data.Windows = append(data.Windows, *window)
 		}
 	}
+	if len(data.Windows) == 0 {
+		data.Error = "no complete quota data"
+	}
 
 	return data
 }
 
 // usageToWindow converts a usage summary to a UsageWindow.
 func (p *Provider) usageToWindow(u *usageSummary, name, displayName string) *provider.UsageWindow {
-	used := int(u.Used)
-	if used == 0 && u.Remaining > 0 && u.Limit > 0 {
-		used = int(u.Limit) - int(u.Remaining)
-	}
-
-	if u.Limit == 0 {
+	used, limit, ok := measuredUsage(u.Used, u.Remaining, u.Limit)
+	if !ok {
 		return nil
 	}
 
-	utilization := float64(used) / float64(u.Limit) * 100
+	utilization := float64(used) / float64(limit) * 100
 	if utilization > 100 {
 		utilization = 100
 	}
@@ -384,7 +383,7 @@ func (p *Provider) usageToWindow(u *usageSummary, name, displayName string) *pro
 		DisplayName: coalesce(u.Title, u.Name, displayName),
 		Utilization: utilization,
 		ResetsAt:    resetsAt,
-		Limit:       int(u.Limit),
+		Limit:       limit,
 		Used:        used,
 	}
 }
@@ -392,16 +391,12 @@ func (p *Provider) usageToWindow(u *usageSummary, name, displayName string) *pro
 // limitToWindow converts a limit item to a UsageWindow.
 func (p *Provider) limitToWindow(l *limitItem) *provider.UsageWindow {
 	detail := &l.Detail
-	used := int(detail.Used)
-	if used == 0 && detail.Remaining > 0 && detail.Limit > 0 {
-		used = int(detail.Limit) - int(detail.Remaining)
-	}
-
-	if detail.Limit == 0 {
+	used, limit, ok := measuredUsage(detail.Used, detail.Remaining, detail.Limit)
+	if !ok {
 		return nil
 	}
 
-	utilization := float64(used) / float64(detail.Limit) * 100
+	utilization := float64(used) / float64(limit) * 100
 	if utilization > 100 {
 		utilization = 100
 	}
@@ -442,9 +437,32 @@ func (p *Provider) limitToWindow(l *limitItem) *provider.UsageWindow {
 		DisplayName: displayName,
 		Utilization: utilization,
 		ResetsAt:    resetsAt,
-		Limit:       int(detail.Limit),
+		Limit:       limit,
 		Used:        used,
 	}
+}
+
+func measuredUsage(usedValue, remainingValue, limitValue *jsonInt) (used, limit int, ok bool) {
+	if limitValue == nil || int(*limitValue) <= 0 || (usedValue == nil && remainingValue == nil) {
+		return 0, 0, false
+	}
+	limit = int(*limitValue)
+	if usedValue != nil && int(*usedValue) > 0 {
+		used = int(*usedValue)
+	}
+	if remainingValue != nil {
+		derived := limit - int(*remainingValue)
+		if derived > used {
+			used = derived
+		}
+	}
+	if used < 0 {
+		used = 0
+	}
+	if used > limit {
+		used = limit
+	}
+	return used, limit, true
 }
 
 // windowToName generates a name from a limit window.

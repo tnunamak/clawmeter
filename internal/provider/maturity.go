@@ -14,7 +14,7 @@ var experimentalProviderByName = map[string]bool{
 	"claude":     false,
 	"openai":     false,
 	"gemini":     false,
-	"xai":        false,
+	"xai":        true,
 	"kimi":       true,
 	"kimik2":     true,
 	"copilot":    true,

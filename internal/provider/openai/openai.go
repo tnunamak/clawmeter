@@ -272,24 +272,27 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
-	if rl.Primary != nil {
+	if validRateLimitWindow(rl.Primary) {
 		primaryReset := time.Unix(rl.Primary.ResetsAt, 0)
 		name, displayName := primaryWindowLabels(primaryReset, time.Now())
 		result.Windows = append(result.Windows, provider.UsageWindow{
 			Name:        name,
 			DisplayName: displayName,
-			Utilization: rl.Primary.UsedPercent,
+			Utilization: *rl.Primary.UsedPercent,
 			ResetsAt:    primaryReset,
 		})
 	}
 
-	if rl.Secondary != nil {
+	if validRateLimitWindow(rl.Secondary) {
 		result.Windows = append(result.Windows, provider.UsageWindow{
 			Name:        "7d",
 			DisplayName: "7 days",
-			Utilization: rl.Secondary.UsedPercent,
+			Utilization: *rl.Secondary.UsedPercent,
 			ResetsAt:    time.Unix(rl.Secondary.ResetsAt, 0),
 		})
+	}
+	if len(result.Windows) == 0 {
+		result.Error = "no complete rate limit data"
 	}
 
 	return result, nil
@@ -324,8 +327,12 @@ type rateLimits struct {
 }
 
 type rateLimitWindow struct {
-	UsedPercent float64 `json:"usedPercent"`
-	ResetsAt    int64   `json:"resetsAt"`
+	UsedPercent *float64 `json:"usedPercent"`
+	ResetsAt    int64    `json:"resetsAt"`
+}
+
+func validRateLimitWindow(window *rateLimitWindow) bool {
+	return window != nil && window.UsedPercent != nil && *window.UsedPercent >= 0 && *window.UsedPercent <= 100 && window.ResetsAt > 0
 }
 
 func writeJSON(w interface{ Write([]byte) (int, error) }, v interface{}) error {

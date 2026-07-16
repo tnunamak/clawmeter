@@ -54,7 +54,7 @@ func TestTransformLimitsIsTypedAndConservative(t *testing.T) {
 	limit := int64(100)
 	data := New(config.ProviderConfig{}).transformLimits(&apiResponse{Data: apiData{Limits: []apiLimit{
 		{Type: "TOKENS_LIMIT", Unit: 3, Number: 5, Usage: &limit, CurrentValue: ptr(20), Remaining: ptr(60), NextResetTime: &reset},
-		{Type: "TOKENS_LIMIT", Unit: 6, Number: 1, Usage: &zero, CurrentValue: &zero},
+		{Type: "TOKENS_LIMIT", Unit: 6, Number: 1, Usage: &zero, CurrentValue: &zero, Percentage: intPtr(0)},
 		{Type: "UNKNOWN", Usage: &limit},
 	}}})
 	if len(data.Windows) != 2 {
@@ -70,14 +70,25 @@ func TestTransformLimitsIsTypedAndConservative(t *testing.T) {
 
 func TestTransformLimitsClampsNegativeValues(t *testing.T) {
 	data := New(config.ProviderConfig{}).transformLimits(&apiResponse{Data: apiData{Limits: []apiLimit{
-		{Type: "TOKENS_LIMIT", Usage: ptr(-10), CurrentValue: ptr(-5), Remaining: ptr(-20), Percentage: -4},
+		{Type: "TOKENS_LIMIT", Usage: ptr(-10), CurrentValue: ptr(-5), Remaining: ptr(-20), Percentage: intPtr(-4)},
 	}}})
 	if data.Windows[0].Used != 0 || data.Windows[0].Limit != 0 || data.Windows[0].Utilization != 0 {
 		t.Fatalf("negative values were not clamped: %+v", data.Windows[0])
 	}
 }
 
+func TestTransformLimitsRequiresExplicitUsageEvidence(t *testing.T) {
+	data := New(config.ProviderConfig{}).transformLimits(&apiResponse{Data: apiData{Limits: []apiLimit{
+		{Type: "TOKENS_LIMIT", Unit: 3, Number: 5},
+		{Type: "TOKENS_LIMIT", Unit: 6, Number: 1, Percentage: intPtr(0)},
+	}}})
+	if len(data.Windows) != 1 || data.Windows[0].Utilization != 0 {
+		t.Fatalf("windows = %#v, want only explicit zero usage", data.Windows)
+	}
+}
+
 func ptr(value int64) *int64 { return &value }
+func intPtr(value int) *int  { return &value }
 
 func TestFetchUsageBoundsErrorsAndRedactsKey(t *testing.T) {
 	secret := "zai-secret-token"
@@ -133,7 +144,7 @@ func (t rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func TestTransformPreservesKnownReset(t *testing.T) {
 	reset := time.Now().Add(time.Hour).UnixMilli()
-	data := New(config.ProviderConfig{}).transformLimits(&apiResponse{Data: apiData{Limits: []apiLimit{{Type: "TIME_LIMIT", Unit: 6, Number: 1, NextResetTime: &reset}}}})
+	data := New(config.ProviderConfig{}).transformLimits(&apiResponse{Data: apiData{Limits: []apiLimit{{Type: "TIME_LIMIT", Unit: 6, Number: 1, Percentage: intPtr(0), NextResetTime: &reset}}}})
 	if len(data.Windows) != 1 || !data.Windows[0].ResetsAt.Equal(time.UnixMilli(reset)) {
 		t.Fatalf("reset = %+v", data.Windows)
 	}

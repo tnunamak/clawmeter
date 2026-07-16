@@ -1,19 +1,60 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
+func TestUsageResponseDoesNotTurnMissingUtilizationIntoZero(t *testing.T) {
+	var response usageResponse
+	if err := json.Unmarshal([]byte(`{"five_hour":{"resets_at":"2026-08-01T00:00:00Z"}}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	data := &provider.UsageData{Provider: "claude"}
+	addUsageWindows(data, response)
+	if len(data.Windows) != 0 {
+		t.Fatalf("windows = %#v, want missing utilization omitted", data.Windows)
+	}
+}
+
+func TestUsageResponsePreservesExplicitZero(t *testing.T) {
+	var response usageResponse
+	if err := json.Unmarshal([]byte(`{"five_hour":{"utilization":0,"resets_at":"2026-08-01T00:00:00Z"}}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	data := &provider.UsageData{Provider: "claude"}
+	addUsageWindows(data, response)
+	if len(data.Windows) != 1 || data.Windows[0].Utilization != 0 {
+		t.Fatalf("windows = %#v, want explicit zero usage", data.Windows)
+	}
+}
+
+func TestExtraUsageRequiresExplicitUtilizationOrAmounts(t *testing.T) {
+	var response usageResponse
+	if err := json.Unmarshal([]byte(`{"extra_usage":{"is_enabled":true,"monthly_limit":100}}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := response.ExtraUsage.utilization(); ok {
+		t.Fatal("missing used amount was converted into zero utilization")
+	}
+	if err := json.Unmarshal([]byte(`{"extra_usage":{"is_enabled":true,"monthly_limit":100,"used_credits":0}}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	if utilization, ok := response.ExtraUsage.utilization(); !ok || utilization != 0 {
+		t.Fatalf("explicit zero utilization = %v, %t; want 0, true", utilization, ok)
+	}
+}
+
 func TestAddUsageWindowsSkipsWindowsWithoutResetTime(t *testing.T) {
 	data := &provider.UsageData{Provider: "claude"}
 	reset := time.Date(2026, 5, 28, 21, 40, 0, 0, time.UTC)
 
 	addUsageWindows(data, usageResponse{
-		FiveHour:       &usageWindow{Utilization: 12, ResetsAt: reset},
-		SevenDaySonnet: &usageWindow{Utilization: 0},
+		FiveHour:       &usageWindow{Utilization: float64Ptr(12), ResetsAt: reset},
+		SevenDaySonnet: &usageWindow{Utilization: float64Ptr(0)},
 	})
 
 	if len(data.Windows) != 1 {
@@ -35,7 +76,7 @@ func TestAddUsageWindowsIncludesNormalizedScopedModelLimits(t *testing.T) {
 		Limits: []usageLimit{
 			{
 				Kind:     "weekly_scoped",
-				Percent:  42,
+				Percent:  float64Ptr(42),
 				ResetsAt: reset,
 				Scope: &usageLimitScope{
 					Model: &usageLimitModelScope{DisplayName: "Fable"},
@@ -61,11 +102,11 @@ func TestAddUsageWindowsDeduplicatesLegacyAndNormalizedLimits(t *testing.T) {
 	reset := time.Date(2026, 7, 1, 21, 40, 0, 0, time.UTC)
 
 	addUsageWindows(data, usageResponse{
-		FiveHour: &usageWindow{Utilization: 12, ResetsAt: reset},
-		SevenDay: &usageWindow{Utilization: 34, ResetsAt: reset.Add(24 * time.Hour)},
+		FiveHour: &usageWindow{Utilization: float64Ptr(12), ResetsAt: reset},
+		SevenDay: &usageWindow{Utilization: float64Ptr(34), ResetsAt: reset.Add(24 * time.Hour)},
 		Limits: []usageLimit{
-			{Kind: "session", Percent: 56, ResetsAt: reset},
-			{Kind: "weekly_all", Percent: 78, ResetsAt: reset.Add(24 * time.Hour)},
+			{Kind: "session", Percent: float64Ptr(56), ResetsAt: reset},
+			{Kind: "weekly_all", Percent: float64Ptr(78), ResetsAt: reset.Add(24 * time.Hour)},
 		},
 	})
 
@@ -84,9 +125,9 @@ func TestUsageUnavailableWhenMainWindowsAreZeroAndModelResetMissing(t *testing.T
 	reset := time.Date(2026, 5, 28, 21, 40, 0, 0, time.UTC)
 
 	resp := usageResponse{
-		FiveHour:       &usageWindow{Utilization: 0, ResetsAt: reset},
-		SevenDay:       &usageWindow{Utilization: 0, ResetsAt: reset.Add(7 * time.Hour)},
-		SevenDaySonnet: &usageWindow{Utilization: 0},
+		FiveHour:       &usageWindow{Utilization: float64Ptr(0), ResetsAt: reset},
+		SevenDay:       &usageWindow{Utilization: float64Ptr(0), ResetsAt: reset.Add(7 * time.Hour)},
+		SevenDaySonnet: &usageWindow{Utilization: float64Ptr(0)},
 	}
 
 	if !resp.usageUnavailable() {
@@ -98,11 +139,13 @@ func TestUsageUnavailableAllowsRealZeroWhenModelWindowsAreAbsent(t *testing.T) {
 	reset := time.Date(2026, 5, 28, 21, 40, 0, 0, time.UTC)
 
 	resp := usageResponse{
-		FiveHour: &usageWindow{Utilization: 0, ResetsAt: reset},
-		SevenDay: &usageWindow{Utilization: 0, ResetsAt: reset.Add(7 * time.Hour)},
+		FiveHour: &usageWindow{Utilization: float64Ptr(0), ResetsAt: reset},
+		SevenDay: &usageWindow{Utilization: float64Ptr(0), ResetsAt: reset.Add(7 * time.Hour)},
 	}
 
 	if resp.usageUnavailable() {
 		t.Fatal("usageUnavailable() = true, want false")
 	}
 }
+
+func float64Ptr(value float64) *float64 { return &value }
