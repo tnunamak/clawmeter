@@ -6,15 +6,23 @@ Clawmeter is released under the MIT license. Windows release artifacts are built
 
 | Asset | Use | Source and canonical identity check | License / redistribution rationale |
 | --- | --- | --- | --- |
+| `internal/tray/icons/provider-claude.png` | Claude provider tray mark | Introduced as an official brand asset in repository commit `a7bb4b6`; identity checked against [Claude](https://claude.ai/) | Used only to identify the provider. Anthropic retains all trademark rights; no endorsement or trademark license is claimed. |
+| `internal/tray/icons/provider-codex.png`, `provider-openai.png` | Codex provider tray mark | Introduced as an official brand asset in repository commit `a7bb4b6`; identity checked against [OpenAI's design guidelines](https://openai.com/brand/) | OpenAI permits product-related use subject to its current marks terms. OpenAI retains all trademark rights; no endorsement is claimed. |
+| `internal/tray/icons/provider-gemini.png` | Gemini provider tray mark | Introduced as an official brand asset in repository commit `a7bb4b6`; identity checked against [Gemini](https://gemini.google.com/) | Used only to identify the provider. Google retains all trademark rights; no endorsement or trademark license is claimed. |
+| `internal/tray/icons/provider-kimi.png` | Kimi and Kimi K2 provider tray mark | Introduced as an official brand asset in repository commit `a7bb4b6`; identity checked against [Kimi](https://www.kimi.com/). Kimi K2 intentionally reuses the parent provider mark. | Used only to identify the provider. Moonshot AI retains all trademark rights; no endorsement or trademark license is claimed. |
+| `internal/tray/icons/provider-copilot.png` | GitHub Copilot provider tray mark | Introduced as an official product asset in repository commit `a7bb4b6`; identity checked against GitHub's [Copilot brand toolkit](https://brand.github.com/brand-identity/copilot) | Used only to identify the provider. GitHub retains all trademark rights; no endorsement or trademark license is claimed. |
+| `internal/tray/icons/provider-openrouter.png` | OpenRouter provider tray mark | Introduced as an official brand asset in repository commit `a7bb4b6`; identity checked against [OpenRouter](https://openrouter.ai/) | Used only to identify the provider. OpenRouter retains all trademark rights; no endorsement or trademark license is claimed. |
 | `internal/tray/icons/provider-grok.png` | Grok provider tray mark, recolored to Clawmeter's tray palette | Adapted from CodexBar's `ProviderIcon-grok.svg` ([source](https://github.com/steipete/CodexBar)) | MIT, Copyright (c) 2026 Peter Steinberger |
 | `internal/tray/icons/provider-jetbrains.png` | JetBrains provider tray mark | Rasterized from pinned CodexBar `ProviderIcon-jetbrains.svg` ([source](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/Sources/CodexBar/Resources/ProviderIcon-jetbrains.svg)); identity checked against [JetBrains brand materials](https://www.jetbrains.com/company/brand/) | The pinned CodexBar checkout distributes this resource under its repository [MIT license](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/LICENSE), which permits copying the copyrighted resource with attribution. The JetBrains mark remains a trademark; no trademark license is claimed. |
 | `internal/tray/icons/provider-synthetic.png` | Synthetic provider tray mark | Rasterized from pinned CodexBar `ProviderIcon-synthetic.svg` ([source](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/Sources/CodexBar/Resources/ProviderIcon-synthetic.svg)); identity checked against [Synthetic](https://synthetic.new/) | The pinned CodexBar checkout distributes this resource under its repository [MIT license](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/LICENSE), which permits copying the copyrighted resource with attribution. The Synthetic mark remains a trademark; no trademark license is claimed. |
 | `internal/tray/icons/provider-zai.png` | z.ai provider tray mark | Rasterized from pinned CodexBar `ProviderIcon-zai.svg` ([source](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/Sources/CodexBar/Resources/ProviderIcon-zai.svg)); identity checked against [z.ai](https://z.ai/) | The pinned CodexBar checkout distributes this resource under its repository [MIT license](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/LICENSE), which permits copying the copyrighted resource with attribution. The z.ai mark remains a trademark; no trademark license is claimed. |
 
-These PNGs are fixed 128px RGBA rasterizations of the cited vectors and are downscaled at
-runtime for tray sizes. They are not modified brand marks and are used only to identify the
-provider in the tray. The pinned local source paths used for this audit are listed in the
-implementation report.
+The PNGs are fixed 128px RGBA assets and are downscaled at runtime for tray
+sizes. JetBrains, Synthetic, and z.ai are alpha-preserving rasterizations of
+the cited vectors; the compositor darkens those monochrome marks so they remain
+visible on the tray's light chip. All marks are used only to identify providers.
+For the older assets introduced in `a7bb4b6`, the original download URLs were
+not recorded; the table states that limitation rather than inventing provenance.
 
 ## Windows tray build license audit
 

@@ -46,10 +46,11 @@ var (
 
 // ProviderLogos maps provider name to its embedded logo PNG.
 var ProviderLogos = map[string][]byte{
-	"claude":     ProviderClaude,
-	"openai":     ProviderOpenAI,
-	"gemini":     ProviderGemini,
-	"kimi":       ProviderKimi,
+	"claude": ProviderClaude,
+	"openai": ProviderOpenAI,
+	"gemini": ProviderGemini,
+	"kimi":   ProviderKimi,
+	// Kimi K2 is a model/service under the Kimi provider identity.
 	"kimik2":     ProviderKimi,
 	"codex":      ProviderCodex,
 	"copilot":    ProviderCopilot,

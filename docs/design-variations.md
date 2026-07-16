@@ -2,7 +2,7 @@
 
 This is a design handoff for a second-pass visual review. It focuses on the tray icon / quota visualization, not the full CLI or installer UX.
 
-Preview images are in [docs/design-variations/](/home/tnunamak/code/clawmeter/docs/design-variations). The enlarged review sheet is [contact-sheet.png](/home/tnunamak/code/clawmeter/docs/design-variations/contact-sheet.png). Real-size sheets are [contact-sheet-real-22px.png](/home/tnunamak/code/clawmeter/docs/design-variations/contact-sheet-real-22px.png) and [contact-sheet-real-32px.png](/home/tnunamak/code/clawmeter/docs/design-variations/contact-sheet-real-32px.png). Historical static PNGs were extracted from git; the `current-*` images were generated from the current working tree and are representative of the latest procedural renderer.
+Preview images are in [`docs/design-variations/`](design-variations/). The enlarged review sheet is [contact-sheet.png](design-variations/contact-sheet.png). Real-size sheets are [contact-sheet-real-22px.png](design-variations/contact-sheet-real-22px.png) and [contact-sheet-real-32px.png](design-variations/contact-sheet-real-32px.png). Historical static PNGs were extracted from git; the `current-*` images were generated from the current working tree and are representative of the latest procedural renderer.
 
 The enlarged sheet is for concept comparison only. It should not be used to judge tray legibility. The 22px and 32px sheets are closer to what a real user sees in a system tray, depending on platform, panel scale, and tray implementation.
 
