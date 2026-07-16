@@ -4,9 +4,17 @@ Clawmeter is released under the MIT license. Windows release artifacts are built
 
 ## Bundled assets
 
-| Asset | Use | Source | License |
+| Asset | Use | Source and canonical identity check | License / redistribution rationale |
 | --- | --- | --- | --- |
 | `internal/tray/icons/provider-grok.png` | Grok provider tray mark, recolored to Clawmeter's tray palette | Adapted from CodexBar's `ProviderIcon-grok.svg` ([source](https://github.com/steipete/CodexBar)) | MIT, Copyright (c) 2026 Peter Steinberger |
+| `internal/tray/icons/provider-jetbrains.png` | JetBrains provider tray mark | Rasterized from pinned CodexBar `ProviderIcon-jetbrains.svg` ([source](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/Sources/CodexBar/Resources/ProviderIcon-jetbrains.svg)); identity checked against [JetBrains brand materials](https://www.jetbrains.com/company/brand/) | The pinned CodexBar checkout distributes this resource under its repository [MIT license](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/LICENSE), which permits copying the copyrighted resource with attribution. The JetBrains mark remains a trademark; no trademark license is claimed. |
+| `internal/tray/icons/provider-synthetic.png` | Synthetic provider tray mark | Rasterized from pinned CodexBar `ProviderIcon-synthetic.svg` ([source](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/Sources/CodexBar/Resources/ProviderIcon-synthetic.svg)); identity checked against [Synthetic](https://synthetic.new/) | The pinned CodexBar checkout distributes this resource under its repository [MIT license](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/LICENSE), which permits copying the copyrighted resource with attribution. The Synthetic mark remains a trademark; no trademark license is claimed. |
+| `internal/tray/icons/provider-zai.png` | z.ai provider tray mark | Rasterized from pinned CodexBar `ProviderIcon-zai.svg` ([source](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/Sources/CodexBar/Resources/ProviderIcon-zai.svg)); identity checked against [z.ai](https://z.ai/) | The pinned CodexBar checkout distributes this resource under its repository [MIT license](https://github.com/steipete/CodexBar/blob/6d71af30b84d8ee0b02361648b2123e0921a8277/LICENSE), which permits copying the copyrighted resource with attribution. The z.ai mark remains a trademark; no trademark license is claimed. |
+
+These PNGs are fixed 128px RGBA rasterizations of the cited vectors and are downscaled at
+runtime for tray sizes. They are not modified brand marks and are used only to identify the
+provider in the tray. The pinned local source paths used for this audit are listed in the
+implementation report.
 
 ## Windows tray build license audit
 

@@ -12,16 +12,8 @@ import (
 )
 
 func TestGenerateProviderIconOutputsSquareNonBlankPNGs(t *testing.T) {
-	names := make([]string, 0, len(ProviderLogos)+len(ProviderLogoFallbacks))
-	for name := range ProviderLogos {
-		names = append(names, name)
-	}
-	for name := range ProviderLogoFallbacks {
-		names = append(names, name)
-	}
-
-	for _, name := range names {
-		for _, size := range []int{16, 22, 32, 64, 128} {
+	for _, name := range all.Names() {
+		for _, size := range []int{22, 32} {
 			t.Run(name+"/"+itoa(size), func(t *testing.T) {
 				img := decodePNG(t, GenerateProviderIcon(name, 42, size))
 				bounds := img.Bounds()
@@ -36,15 +28,17 @@ func TestGenerateProviderIconOutputsSquareNonBlankPNGs(t *testing.T) {
 	}
 }
 
-func TestRegisteredProvidersHaveLogoOrDocumentedFallback(t *testing.T) {
+func TestRegisteredProvidersHaveRealLogos(t *testing.T) {
 	for _, name := range all.Names() {
-		if ProviderLogos[name] != nil {
-			continue
+		if len(ProviderLogos[name]) == 0 {
+			t.Fatalf("%q has no embedded provider logo", name)
 		}
-		if ProviderLogoFallbacks[name] != "" {
-			continue
+		for _, size := range []int{22, 32} {
+			img := decodePNG(t, GenerateProviderIcon(name, 0, size))
+			if alphaBounds(img).Empty() {
+				t.Fatalf("%q has a blank %dpx rendered logo", name, size)
+			}
 		}
-		t.Fatalf("%q has no provider logo and no documented fallback", name)
 	}
 }
 

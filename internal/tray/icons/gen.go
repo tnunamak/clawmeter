@@ -36,6 +36,12 @@ var (
 	ProviderCopilot []byte
 	//go:embed provider-grok.png
 	ProviderGrok []byte
+	//go:embed provider-jetbrains.png
+	ProviderJetBrains []byte
+	//go:embed provider-synthetic.png
+	ProviderSynthetic []byte
+	//go:embed provider-zai.png
+	ProviderZAI []byte
 )
 
 // ProviderLogos maps provider name to its embedded logo PNG.
@@ -49,14 +55,9 @@ var ProviderLogos = map[string][]byte{
 	"copilot":    ProviderCopilot,
 	"xai":        ProviderGrok,
 	"openrouter": ProviderOpenRouter,
-}
-
-// ProviderLogoFallbacks documents registered providers that intentionally use
-// the plain crawfish icon until a canonical provider logo is added.
-var ProviderLogoFallbacks = map[string]string{
-	"jetbrains": "no canonical tray-safe source asset in this repo yet",
-	"synthetic": "test provider; plain crawfish icon is intentional",
-	"zai":       "no canonical tray-safe source asset in this repo yet",
+	"jetbrains":  ProviderJetBrains,
+	"synthetic":  ProviderSynthetic,
+	"zai":        ProviderZAI,
 }
 
 type logoTreatment struct {
