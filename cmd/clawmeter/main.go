@@ -473,6 +473,7 @@ func providersCmd(args []string) int {
 	fmt.Println("Available providers:")
 	fmt.Println()
 
+	experimentalLearnMore := ""
 	for _, p := range registry.GetAll() {
 		st := describeProviderState(p, cfg)
 
@@ -485,13 +486,14 @@ func providersCmd(args []string) int {
 		maturityLabel := ""
 		if maturity.Experimental {
 			maturityLabel = ", experimental"
+			experimentalLearnMore = maturity.LearnMore
 		}
 		fmt.Printf("  %s %s (%s%s)\n", indicator, p.DisplayName(), st, maturityLabel)
 		fmt.Printf("      %s\n", p.Description())
-		if maturity.Experimental {
-			fmt.Printf("      learn more: %s\n", maturity.LearnMore)
-		}
 		fmt.Println()
+	}
+	if experimentalLearnMore != "" {
+		fmt.Printf("Experimental integrations: %s\n\n", experimentalLearnMore)
 	}
 
 	fmt.Println("Legend:")
