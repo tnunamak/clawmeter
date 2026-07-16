@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,14 +21,16 @@ const (
 	defaultBaseURL = "https://api.z.ai"
 	quotaPath      = "/api/monitor/usage/quota/limit"
 	timeout        = 10 * time.Second
+	maxBodySize    = 1 << 20
 )
 
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg    config.ProviderConfig
+	client *http.Client
 }
 
 func New(cfg config.ProviderConfig) *Provider {
-	return &Provider{cfg: cfg}
+	return &Provider{cfg: cfg, client: &http.Client{Timeout: timeout}}
 }
 
 func (p *Provider) Name() string         { return "zai" }
@@ -57,8 +61,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	req.Header.Set("authorization", "Bearer "+apiKey)
 	req.Header.Set("accept", "application/json")
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -74,16 +77,17 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBodySize))
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 
 	var apiResp apiResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBodySize)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	if !apiResp.Success || apiResp.Code != 200 {
-		return nil, fmt.Errorf("API error: %s", apiResp.Msg)
+		return nil, fmt.Errorf("API error code %d", apiResp.Code)
 	}
 
 	return p.transformLimits(&apiResp), nil
@@ -100,22 +104,38 @@ func (p *Provider) getAPIKey() (string, error) {
 }
 
 func (p *Provider) getQuotaURL() string {
-	// Full URL override
-	if url := os.Getenv("Z_AI_QUOTA_URL"); url != "" {
-		if !strings.HasPrefix(url, "http") {
-			url = "https://" + url
+	if raw := strings.TrimSpace(os.Getenv("Z_AI_QUOTA_URL")); raw != "" {
+		if endpoint, ok := safeEndpoint(raw); ok {
+			return endpoint
 		}
-		return url
+		return ""
 	}
-	// Host override
-	if host := os.Getenv("Z_AI_API_HOST"); host != "" {
-		if !strings.HasPrefix(host, "http") {
-			host = "https://" + host
+	if raw := strings.TrimSpace(os.Getenv("Z_AI_API_HOST")); raw != "" {
+		if endpoint, ok := safeEndpoint(raw); ok {
+			return strings.TrimRight(endpoint, "/") + quotaPath
 		}
-		host = strings.TrimRight(host, "/")
-		return host + quotaPath
+		return ""
 	}
-	return defaultBaseURL + quotaPath
+	base := defaultBaseURL
+	if strings.EqualFold(os.Getenv("Z_AI_REGION"), "cn") {
+		base = "https://open.bigmodel.cn"
+	}
+	return base + quotaPath
+}
+
+func safeEndpoint(raw string) (string, bool) {
+	raw = strings.Trim(strings.TrimSpace(raw), "\"'")
+	if raw == "" {
+		return "", false
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	return u.String(), true
 }
 
 // API response types
@@ -140,7 +160,7 @@ type apiLimit struct {
 	CurrentValue  *int64 `json:"currentValue"` // amount used
 	Remaining     *int64 `json:"remaining"`
 	Percentage    int    `json:"percentage"`    // 0-100 fallback
-	NextResetTime int64  `json:"nextResetTime"` // milliseconds epoch
+	NextResetTime *int64 `json:"nextResetTime"` // milliseconds epoch; absent means unknown
 }
 
 func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
@@ -150,18 +170,24 @@ func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
+	tokenIndex := 0
 	for _, limit := range resp.Data.Limits {
-		name := "tokens"
+		name := "time"
 		displayName := "Tokens"
 		if limit.Type == "TIME_LIMIT" {
-			name = "time"
 			displayName = "Time"
+		} else if limit.Type == "TOKENS_LIMIT" {
+			tokenIndex++
+			name = tokenWindowName(limit, tokenIndex)
+		} else {
+			continue
 		}
 
 		// Compute utilization
+		used, total := limitUsage(limit)
 		var usedPct float64
-		if limit.Usage != nil && *limit.Usage > 0 && limit.CurrentValue != nil {
-			usedPct = float64(*limit.CurrentValue) / float64(*limit.Usage) * 100
+		if total > 0 {
+			usedPct = float64(used) / float64(total) * 100
 		} else {
 			usedPct = float64(limit.Percentage)
 		}
@@ -173,23 +199,15 @@ func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
 		}
 
 		// Parse reset time (milliseconds epoch)
-		resetsAt := time.Now().Add(24 * time.Hour)
-		if limit.NextResetTime > 0 {
-			resetsAt = time.UnixMilli(limit.NextResetTime)
+		var resetsAt time.Time
+		if limit.NextResetTime != nil && *limit.NextResetTime > 0 {
+			resetsAt = time.UnixMilli(*limit.NextResetTime)
 		}
 
 		// Add window duration to display name
 		windowDesc := unitToString(limit.Unit, limit.Number)
 		if windowDesc != "" {
 			displayName += " (" + windowDesc + ")"
-		}
-
-		var used, total int
-		if limit.CurrentValue != nil {
-			used = int(*limit.CurrentValue)
-		}
-		if limit.Usage != nil {
-			total = int(*limit.Usage)
 		}
 
 		data.Windows = append(data.Windows, provider.UsageWindow{
@@ -203,6 +221,54 @@ func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
 	}
 
 	return data
+}
+
+// limitUsage follows CodexBar's contradiction-safe rule: when direct usage and
+// remaining-derived usage disagree, retain the larger non-negative estimate.
+func limitUsage(limit apiLimit) (used, total int) {
+	if limit.Usage == nil || *limit.Usage <= 0 {
+		return nonNegativeInt(pointerValue(limit.CurrentValue)), 0
+	}
+	total = int(*limit.Usage)
+	current := nonNegativeInt(pointerValue(limit.CurrentValue))
+	derived := 0
+	if limit.Remaining != nil {
+		derived = int(*limit.Usage - *limit.Remaining)
+		if derived < 0 {
+			derived = 0
+		}
+	}
+	if derived > current {
+		current = derived
+	}
+	if current > total {
+		current = total
+	}
+	return current, total
+}
+
+func pointerValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func nonNegativeInt(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	return int(value)
+}
+
+func tokenWindowName(limit apiLimit, index int) string {
+	if limit.Unit == 6 && limit.Number == 1 {
+		return "tokens_weekly"
+	}
+	if limit.Unit == 3 && limit.Number == 5 {
+		return "tokens_5h"
+	}
+	return "tokens_" + strconv.Itoa(index)
 }
 
 func unitToString(unit, number int) string {
@@ -219,6 +285,11 @@ func unitToString(unit, number int) string {
 		return fmt.Sprintf("%dh", number)
 	case 5:
 		return fmt.Sprintf("%dm", number)
+	case 6:
+		if number == 1 {
+			return "weekly"
+		}
+		return fmt.Sprintf("%dw", number)
 	default:
 		return ""
 	}
