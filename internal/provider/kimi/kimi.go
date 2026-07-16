@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,13 +27,21 @@ const (
 
 // Provider implements the provider.Provider interface for Kimi Code.
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg        config.ProviderConfig
+	httpClient *http.Client
+	usageURL   string
+	tokenURL   string
+	now        func() time.Time
 }
 
 // New creates a new Kimi provider.
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
-		cfg: cfg,
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: timeout},
+		usageURL:   usageURL,
+		tokenURL:   tokenURL,
+		now:        time.Now,
 	}
 }
 
@@ -92,14 +101,13 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", usageURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", p.usageURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -152,18 +160,17 @@ func (c *Credentials) ExpiresWithin(d time.Duration) bool {
 	return time.Now().Add(d).Unix() >= int64(c.ExpiresAt)
 }
 
-// refreshAccessToken uses the refresh token to obtain a new access token,
-// writes the updated credentials to disk, and returns the new credentials.
+// refreshAccessToken uses the refresh token to obtain a new access token.
+// Refreshed credentials remain in memory; polling never mutates CLI credentials.
 func (p *Provider) refreshAccessToken(ctx context.Context, refreshToken string) (*Credentials, error) {
-	form := fmt.Sprintf("client_id=%s&grant_type=refresh_token&refresh_token=%s", clientID, refreshToken)
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(form))
+	form := url.Values{"client_id": {clientID}, "grant_type": {"refresh_token"}, "refresh_token": {refreshToken}}
+	req, err := http.NewRequestWithContext(ctx, "POST", p.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("refresh request: %w", err)
 	}
@@ -183,24 +190,19 @@ func (p *Provider) refreshAccessToken(ctx context.Context, refreshToken string) 
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenResp); err != nil {
 		return nil, fmt.Errorf("decode refresh response: %w", err)
 	}
+	if tokenResp.AccessToken == "" || tokenResp.ExpiresIn <= 0 {
+		return nil, fmt.Errorf("refresh response missing usable access token or expiry")
+	}
+	if tokenResp.RefreshToken == "" {
+		tokenResp.RefreshToken = refreshToken
+	}
 
 	creds := &Credentials{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
-		ExpiresAt:    float64(time.Now().Unix()) + tokenResp.ExpiresIn,
+		ExpiresAt:    float64(p.now().Unix()) + tokenResp.ExpiresIn,
 		Scope:        tokenResp.Scope,
 		TokenType:    tokenResp.TokenType,
-	}
-
-	// Write refreshed credentials back to disk so Kimi CLI and future
-	// clawmeter polls pick them up.
-	home, err := os.UserHomeDir()
-	if err == nil {
-		path := filepath.Join(home, ".kimi", "credentials", "kimi-code.json")
-		data, err := json.Marshal(creds)
-		if err == nil {
-			os.WriteFile(path, data, 0600)
-		}
 	}
 
 	return creds, nil
@@ -476,8 +478,6 @@ func normalizeTimeUnit(unit string) string {
 
 // parseResetTime parses various reset time formats.
 func (p *Provider) parseResetTime(resetAt string, resetIn, ttl int) time.Time {
-	now := time.Now()
-
 	// Try ISO timestamp first
 	if resetAt != "" {
 		if t, err := time.Parse(time.RFC3339Nano, resetAt); err == nil {
@@ -494,11 +494,11 @@ func (p *Provider) parseResetTime(resetAt string, resetIn, ttl int) time.Time {
 		seconds = ttl
 	}
 	if seconds > 0 {
-		return now.Add(time.Duration(seconds) * time.Second)
+		return p.now().Add(time.Duration(seconds) * time.Second)
 	}
 
-	// Default: 7 days from now (weekly reset)
-	return now.Add(7 * 24 * time.Hour)
+	// The provider contract does not establish a default window. Unknown stays unknown.
+	return time.Time{}
 }
 
 // coalesce returns the first non-empty string.
