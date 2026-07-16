@@ -1,47 +1,39 @@
 package provider
 
-// Maturity is the deliberately binary confidence classification for a
-// provider integration. Numeric confidence is intentionally not part of the
-// product model: promotion to ordinary is a reviewed metadata change.
-type Maturity string
-
-const (
-	MaturityOrdinary     Maturity = "ordinary"
-	MaturityExperimental Maturity = "experimental"
-)
-
-// ProviderMaturity is stable provider metadata intended for inventory and
-// machine-readable output, not primary quota rows.
+// ProviderMaturity is binary provider metadata intended for inventory and
+// machine-readable output, not primary quota rows. Numeric confidence and a
+// named "stable" tier are intentionally not part of the product model.
 type ProviderMaturity struct {
-	Level     Maturity `json:"level"`
-	LearnMore string   `json:"learn_more"`
+	Experimental bool   `json:"experimental"`
+	LearnMore    string `json:"learn_more,omitempty"`
 }
 
-const providerMaturityLearnMore = "docs/provider-maturity.md"
+const providerMaturityLearnMore = "https://github.com/tnunamak/clawmeter/blob/main/docs/provider-maturity.md"
 
-var providerMaturityByName = map[string]Maturity{
-	"claude":     MaturityOrdinary,
-	"openai":     MaturityOrdinary,
-	"gemini":     MaturityOrdinary,
-	"xai":        MaturityOrdinary,
-	"kimi":       MaturityExperimental,
-	"kimik2":     MaturityExperimental,
-	"copilot":    MaturityExperimental,
-	"openrouter": MaturityExperimental,
-	"jetbrains":  MaturityExperimental,
-	"synthetic":  MaturityExperimental,
-	"zai":        MaturityExperimental,
+var experimentalProviderByName = map[string]bool{
+	"claude":     false,
+	"openai":     false,
+	"gemini":     false,
+	"xai":        false,
+	"kimi":       true,
+	"kimik2":     true,
+	"copilot":    true,
+	"openrouter": true,
+	"jetbrains":  true,
+	"synthetic":  true,
+	"zai":        true,
 }
 
 // GetMaturity returns the conservative audit classification for a known
 // provider. Unknown providers remain experimental until deliberately reviewed.
 func GetMaturity(name string) ProviderMaturity {
-	level, ok := providerMaturityByName[name]
+	experimental, ok := experimentalProviderByName[name]
 	if !ok {
-		// Unknown integrations are not promoted by accident, but this fallback
-		// does not make an unassessed known provider experimental: every current
-		// provider is required to have an explicit table entry and test coverage.
-		level = MaturityExperimental
+		experimental = true
 	}
-	return ProviderMaturity{Level: level, LearnMore: providerMaturityLearnMore}
+	result := ProviderMaturity{Experimental: experimental}
+	if experimental {
+		result.LearnMore = providerMaturityLearnMore
+	}
+	return result
 }

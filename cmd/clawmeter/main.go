@@ -482,9 +482,15 @@ func providersCmd(args []string) int {
 		}
 
 		maturity := provider.GetMaturity(p.Name())
-		fmt.Printf("  %s %s (%s, %s)\n", indicator, p.DisplayName(), st, maturity.Level)
+		maturityLabel := ""
+		if maturity.Experimental {
+			maturityLabel = ", experimental"
+		}
+		fmt.Printf("  %s %s (%s%s)\n", indicator, p.DisplayName(), st, maturityLabel)
 		fmt.Printf("      %s\n", p.Description())
-		fmt.Printf("      learn more: %s\n", maturity.LearnMore)
+		if maturity.Experimental {
+			fmt.Printf("      learn more: %s\n", maturity.LearnMore)
+		}
 		fmt.Println()
 	}
 
