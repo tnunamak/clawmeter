@@ -18,14 +18,21 @@ import (
 const (
 	quotasURL = "https://api.synthetic.new/v2/quotas"
 	timeout   = 10 * time.Second
+	maxBody   = 1 << 20
+
+	rollingFiveHourName = "5h"
+	weeklyTokenName     = "7d"
+	searchHourlyName    = "search-hourly"
 )
 
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg        config.ProviderConfig
+	httpClient *http.Client
+	endpoint   string
 }
 
 func New(cfg config.ProviderConfig) *Provider {
-	return &Provider{cfg: cfg}
+	return &Provider{cfg: cfg, httpClient: &http.Client{Timeout: timeout}, endpoint: quotasURL}
 }
 
 func (p *Provider) Name() string         { return "synthetic" }
@@ -47,15 +54,14 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", quotasURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -74,8 +80,15 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(body) > maxBody {
+		return nil, fmt.Errorf("response exceeds %d-byte limit", maxBody)
+	}
 	var raw json.RawMessage
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -104,13 +117,14 @@ func (p *Provider) parseQuotas(raw json.RawMessage) (*provider.UsageData, error)
 		return nil, fmt.Errorf("parse quotas: %w", err)
 	}
 	if slots := knownSlots(root); slots != nil {
-		labels := [...]string{"Rolling five-hour limit", "Weekly token limit", "Search hourly"}
+		names := [...]string{rollingFiveHourName, weeklyTokenName, searchHourlyName}
+		displayNames := [...]string{"Rolling five-hour limit", "Weekly token limit", "Search hourly"}
 		for i, slot := range slots {
 			if slot == nil {
 				continue
 			}
 			if w := parseQuotaEntry(slot); w != nil {
-				w.Name, w.DisplayName = labels[i], labels[i]
+				w.Name, w.DisplayName = names[i], displayNames[i]
 				data.Windows = append(data.Windows, *w)
 			}
 		}
