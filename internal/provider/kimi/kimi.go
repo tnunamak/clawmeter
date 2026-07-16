@@ -152,11 +152,17 @@ type Credentials struct {
 
 // IsExpired checks if the token is expired.
 func (c *Credentials) IsExpired() bool {
+	if c.ExpiresAt <= 0 {
+		return false
+	}
 	return time.Now().Unix() >= int64(c.ExpiresAt)
 }
 
 // ExpiresWithin checks if the token expires within the given duration.
 func (c *Credentials) ExpiresWithin(d time.Duration) bool {
+	if c.ExpiresAt <= 0 {
+		return false
+	}
 	return time.Now().Add(d).Unix() >= int64(c.ExpiresAt)
 }
 
@@ -214,7 +220,6 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 	if p.cfg.OAuthToken != "" {
 		return &Credentials{
 			AccessToken: p.cfg.OAuthToken,
-			ExpiresAt:   float64(time.Now().Add(24 * time.Hour).Unix()), // Assume valid for 24h
 			TokenType:   "Bearer",
 		}, nil
 	}
@@ -223,7 +228,6 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 	if token := os.Getenv("KIMI_ACCESS_TOKEN"); token != "" {
 		return &Credentials{
 			AccessToken: token,
-			ExpiresAt:   float64(time.Now().Add(24 * time.Hour).Unix()),
 			TokenType:   "Bearer",
 		}, nil
 	}

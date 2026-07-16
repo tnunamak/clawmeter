@@ -64,6 +64,19 @@ func TestParseQuotasConflictingValuesPreferExplicitPercent(t *testing.T) {
 	}
 }
 
+func TestParseQuotasDoesNotPromoteGenericTimestampsToResets(t *testing.T) {
+	for _, field := range []string{"expiresAt", "periodEnd", "renewAt"} {
+		input := json.RawMessage(`{"subscription":{"limit":100,"used":50,"` + field + `":"2026-07-17T18:00:00Z"}}`)
+		data, err := NewParseProvider().parseQuotas(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data.Windows) != 1 || !data.Windows[0].ResetsAt.IsZero() {
+			t.Fatalf("%s produced reset-backed window: %+v", field, data.Windows)
+		}
+	}
+}
+
 func TestFetchUsageTransportStatusesAndRedaction(t *testing.T) {
 	secret := "synthetic-secret-token"
 	for _, tc := range []struct {

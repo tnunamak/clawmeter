@@ -243,8 +243,8 @@ func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 
 	// Reset time
 	var resetsAt time.Time
-	resetStr := findString(entry, []string{"resetAt", "reset_at", "resetsAt", "resets_at",
-		"renewAt", "renew_at", "periodEnd", "period_end", "expiresAt", "expires_at"})
+	resetKeys := []string{"resetAt", "reset_at", "resetsAt", "resets_at"}
+	resetStr := findString(entry, resetKeys)
 	if resetStr != "" {
 		if t, err := time.Parse(time.RFC3339, resetStr); err == nil {
 			resetsAt = t
@@ -253,7 +253,7 @@ func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 		}
 	}
 	// Try as epoch
-	resetEpoch, hasEpoch := number(entry, []string{"resetAt", "reset_at", "resetsAt", "resets_at", "renewAt", "renew_at", "periodEnd", "period_end", "expiresAt", "expires_at"})
+	resetEpoch, hasEpoch := number(entry, resetKeys)
 	if hasEpoch && resetEpoch > 1e12 {
 		resetsAt = time.UnixMilli(int64(resetEpoch))
 	} else if hasEpoch && resetEpoch > 1e9 {

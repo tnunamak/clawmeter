@@ -80,6 +80,22 @@ func TestParseResetTimeLeavesUnknownAndMalformedValuesUnknown(t *testing.T) {
 	}
 }
 
+func TestConfigAndEnvironmentTokensKeepExpiryUnknown(t *testing.T) {
+	t.Setenv("KIMI_ACCESS_TOKEN", "")
+	configured := New(config.ProviderConfig{OAuthToken: "configured"})
+	creds, err := configured.readCredentials()
+	if err != nil || creds.ExpiresAt != 0 || creds.IsExpired() || creds.ExpiresWithin(365*24*time.Hour) {
+		t.Fatalf("configured token credentials = %+v, err = %v; want unknown non-expired expiry", creds, err)
+	}
+
+	t.Setenv("KIMI_ACCESS_TOKEN", "environment")
+	environment := New(config.ProviderConfig{})
+	creds, err = environment.readCredentials()
+	if err != nil || creds.ExpiresAt != 0 || creds.IsExpired() || creds.ExpiresWithin(365*24*time.Hour) {
+		t.Fatalf("environment token credentials = %+v, err = %v; want unknown non-expired expiry", creds, err)
+	}
+}
+
 func TestTransformUsagePreservesZeroAndPartialWindows(t *testing.T) {
 	p := New(config.ProviderConfig{})
 	p.now = func() time.Time { return time.Unix(1000, 0) }
