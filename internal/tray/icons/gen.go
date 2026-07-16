@@ -61,7 +61,8 @@ var ProviderLogos = map[string][]byte{
 }
 
 type logoTreatment struct {
-	contrastPlate bool
+	contrastPlate    bool
+	darkenMonochrome bool
 }
 
 // providerLogoTreatments encodes per-provider rendering rules. Only near-pure-
@@ -73,6 +74,9 @@ var providerLogoTreatments = map[string]logoTreatment{
 	"copilot":    {contrastPlate: true},
 	"openai":     {contrastPlate: true},
 	"openrouter": {contrastPlate: true},
+	"jetbrains":  {darkenMonochrome: true},
+	"synthetic":  {darkenMonochrome: true},
+	"zai":        {darkenMonochrome: true},
 }
 
 const (
@@ -135,6 +139,9 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 	if err != nil {
 		return plainCrawfish(meter.UsagePct, size)
 	}
+	if treatment.darkenMonochrome {
+		logoImg = darkMonochromeLogo(logoImg)
+	}
 
 	// Work at a high resolution then downscale at the end.
 	workSize := 128
@@ -170,6 +177,17 @@ func generateIcon(providerLogo []byte, meter MeterState, size int, treatment log
 	}
 
 	return encodePNG(resize(dst, size))
+}
+
+func darkMonochromeLogo(src image.Image) image.Image {
+	dst := image.NewNRGBA(src.Bounds())
+	for y := src.Bounds().Min.Y; y < src.Bounds().Max.Y; y++ {
+		for x := src.Bounds().Min.X; x < src.Bounds().Max.X; x++ {
+			_, _, _, a := src.At(x, y).RGBA()
+			dst.SetNRGBA(x, y, color.NRGBA{R: 28, G: 31, B: 35, A: uint8(a >> 8)})
+		}
+	}
+	return dst
 }
 
 func drawUpdateBadge(dst *image.RGBA) {

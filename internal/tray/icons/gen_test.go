@@ -42,6 +42,26 @@ func TestRegisteredProvidersHaveRealLogos(t *testing.T) {
 	}
 }
 
+func TestWhiteMonochromeProviderMarksRemainVisibleOnLightChip(t *testing.T) {
+	for _, name := range []string{"jetbrains", "synthetic", "zai"} {
+		for _, size := range []int{22, 32} {
+			img := decodePNG(t, GenerateProviderIconWithMeter(name, MeterState{}, size))
+			darkPixels := 0
+			for y := size / 4; y < size*3/4; y++ {
+				for x := size / 4; x < size*3/4; x++ {
+					r, g, b, a := img.At(x, y).RGBA()
+					if a > 0x8000 && r+g+b < 3*0x7000 {
+						darkPixels++
+					}
+				}
+			}
+			if darkPixels < 2 {
+				t.Fatalf("%s has no visible dark mark at %dpx", name, size)
+			}
+		}
+	}
+}
+
 func TestDarkProviderMarksHaveExplicitContrastTreatment(t *testing.T) {
 	for name, data := range ProviderLogos {
 		if !logoNeedsContrastPlate(data) {
