@@ -68,10 +68,18 @@ function Wait-PathGone {
     }
 }
 
+function Find-Uninstaller {
+    param([string]$InstallDirectory)
+
+    Get-ChildItem -Path $InstallDirectory -Filter "unins*.exe" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+
 $installer = (Resolve-Path $InstallerPath).Path
 $installDir = Join-Path $env:LOCALAPPDATA "Programs\Clawmeter"
 $exePath = Join-Path $installDir "clawmeter.exe"
-$uninstaller = Join-Path $installDir "unins000.exe"
+$uninstaller = Find-Uninstaller -InstallDirectory $installDir
 $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Clawmeter\Clawmeter.lnk"
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runValue = "Clawmeter"
@@ -90,9 +98,9 @@ if ($ExpectSigned) {
     Assert-Signed -Path $installer
 }
 
-if (Test-Path $uninstaller) {
+if ($uninstaller -and (Test-Path $uninstaller)) {
     & $uninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-    Wait-PathGone -Path $exePath
+    Wait-PathGone -Path $installDir
 }
 
 Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
@@ -118,7 +126,8 @@ $arguments = @(
 $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
 Assert-True -Condition ($process.ExitCode -eq 0) -Message "installer exited 0"
 Assert-True -Condition (Test-Path $exePath) -Message "installed clawmeter.exe"
-Assert-True -Condition (Test-Path $uninstaller) -Message "installed uninstaller"
+$uninstaller = Find-Uninstaller -InstallDirectory $installDir
+Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($uninstaller)) -Message "installed uninstaller"
 Assert-True -Condition (Test-Path $startMenu) -Message "created Start Menu shortcut"
 Assert-True -Condition (Test-Path $uninstallKey) -Message "created uninstall registry entry"
 
@@ -154,6 +163,7 @@ if ($ExpectSigned) {
 Assert-True -Condition ($LASTEXITCODE -eq 0) -Message "uninstaller exited 0"
 Wait-PathGone -Path $exePath
 Wait-PathGone -Path $startMenu
+Wait-PathGone -Path $installDir
 Assert-NotExists -Path $exePath -Message "removed installed clawmeter.exe"
 Assert-NotExists -Path $startMenu -Message "removed Start Menu shortcut"
 
