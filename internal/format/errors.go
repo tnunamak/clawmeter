@@ -32,6 +32,8 @@ func HumanizeError(errMsg string) string {
 		return "rate limits unavailable — check plan at platform.openai.com"
 	case strings.Contains(lowered, "context deadline exceeded") || strings.Contains(lowered, "client.timeout"):
 		return "connection timed out"
+	case strings.Contains(lowered, "error sending request for url"):
+		return "connection failed"
 	case strings.Contains(lowered, "connection refused"):
 		return "connection refused"
 	case strings.Contains(lowered, "no such host"):

@@ -9,6 +9,11 @@ func TestHumanizeError(t *testing.T) {
 		want  string
 	}{
 		{
+			name:  "Codex transport failure",
+			input: "error sending request for url",
+			want:  "connection failed",
+		},
+		{
 			name:  "empty string",
 			input: "",
 			want:  "",

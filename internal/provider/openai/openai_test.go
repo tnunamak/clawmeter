@@ -134,6 +134,56 @@ done
 	}
 }
 
+func TestFetchUsageRetriesStructuredTransportFailure(t *testing.T) {
+	dir := t.TempDir()
+	counterPath := filepath.Join(dir, "attempts")
+	codexPath := filepath.Join(dir, "codex")
+	reset := time.Now().Add(6 * 24 * time.Hour).Unix()
+	script := `#!/bin/sh
+counter_path="$1"
+count=0
+if [ -f "$counter_path" ]; then
+  count="$(cat "$counter_path")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$counter_path"
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":1'*) printf '{"id":1,"result":{}}\n' ;;
+    *'"method":"initialized"'*) ;;
+    *'"id":2'*) printf '{"id":2,"result":{"account":{"type":"chatgpt"},"requiresOpenaiAuth":false}}\n' ;;
+    *'"id":3'*)
+      if [ "$count" = "1" ]; then
+        printf '{"id":3,"error":{"code":-1,"message":"error sending request for url"}}\n'
+      else
+        printf '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":41,"resetsAt":__RESET__}}}}\n'
+      fi
+      exit 0 ;;
+  esac
+done
+`
+	script = strings.ReplaceAll(script, "__RESET__", itoa64(reset))
+	wrapper := "#!/bin/sh\nexec " + shellQuote(codexPath+".impl") + " " + shellQuote(counterPath) + "\n"
+	if err := os.WriteFile(codexPath+".impl", []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexPath, []byte(wrapper), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	data, err := New(config.ProviderConfig{}).FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage() error = %v", err)
+	}
+	if len(data.Windows) != 1 || data.Windows[0].Utilization != 41 {
+		t.Fatalf("FetchUsage() data = %#v", data)
+	}
+	if attempts, err := os.ReadFile(counterPath); err != nil || strings.TrimSpace(string(attempts)) != "2" {
+		t.Fatalf("attempts = %q, %v; want 2", attempts, err)
+	}
+}
+
 func itoa64(n int64) string {
 	return strconv.FormatInt(n, 10)
 }

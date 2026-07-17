@@ -415,6 +415,7 @@ func TestIsTransientFetchError(t *testing.T) {
 		{"read rateLimits response: no response received", true},
 		{"codex app-server exited without a response", true},
 		{"Post \"https://example\": context deadline exceeded", true},
+		{"error sending request for url", true},
 		{"write |1: broken pipe", true},
 		{"API returned 403: forbidden", false},
 		{"authentication required", false},

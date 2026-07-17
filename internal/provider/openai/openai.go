@@ -53,12 +53,17 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	var lastErr error
 	for attempt := 1; attempt <= maxFetchAttempts; attempt++ {
 		data, err := p.fetchUsageOnce(ctx, codexPath)
-		if err == nil {
+		if err != nil {
+			lastErr = err
+		} else if data == nil {
+			lastErr = errors.New("codex app-server returned no usage data")
+		} else if provider.IsTransientFetchError(data.Error) {
+			lastErr = errors.New(data.Error)
+		} else {
 			p.attachResetCredits(ctx, data)
 			return data, nil
 		}
-		lastErr = err
-		if attempt == maxFetchAttempts || !isRetryableAppServerError(err) || ctx.Err() != nil {
+		if attempt == maxFetchAttempts || !isRetryableAppServerError(lastErr) || ctx.Err() != nil {
 			break
 		}
 		select {

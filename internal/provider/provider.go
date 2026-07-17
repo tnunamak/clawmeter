@@ -274,6 +274,7 @@ func IsTransientFetchError(errMsg string) bool {
 		return false
 	}
 	transientNeedles := []string{
+		"error sending request for url",
 		"no response received",
 		"without a response",
 		"context deadline exceeded",
