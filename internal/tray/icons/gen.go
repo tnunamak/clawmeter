@@ -22,6 +22,8 @@ import (
 var (
 	//go:embed provider-claude.png
 	ProviderClaude []byte
+	//go:embed provider-antigravity.png
+	ProviderAntigravity []byte
 	//go:embed provider-gemini.png
 	ProviderGemini []byte
 	//go:embed provider-codex.png
@@ -46,10 +48,11 @@ var (
 
 // ProviderLogos maps provider name to its embedded logo PNG.
 var ProviderLogos = map[string][]byte{
-	"claude": ProviderClaude,
-	"openai": ProviderOpenAI,
-	"gemini": ProviderGemini,
-	"kimi":   ProviderKimi,
+	"antigravity": ProviderAntigravity,
+	"claude":      ProviderClaude,
+	"openai":      ProviderOpenAI,
+	"gemini":      ProviderGemini,
+	"kimi":        ProviderKimi,
 	// Kimi K2 is a model/service under the Kimi provider identity.
 	"kimik2":     ProviderKimi,
 	"codex":      ProviderCodex,
@@ -71,13 +74,14 @@ type logoTreatment struct {
 // they don't disappear on dark trays. Colorful marks (claude, gemini, kimi)
 // are left alone so their brand color survives.
 var providerLogoTreatments = map[string]logoTreatment{
-	"codex":      {contrastPlate: true},
-	"copilot":    {contrastPlate: true},
-	"openai":     {contrastPlate: true},
-	"openrouter": {contrastPlate: true},
-	"jetbrains":  {darkenMonochrome: true},
-	"synthetic":  {darkenMonochrome: true},
-	"zai":        {darkenMonochrome: true},
+	"codex":       {contrastPlate: true},
+	"copilot":     {contrastPlate: true},
+	"openai":      {contrastPlate: true},
+	"openrouter":  {contrastPlate: true},
+	"jetbrains":   {darkenMonochrome: true},
+	"synthetic":   {darkenMonochrome: true},
+	"zai":         {darkenMonochrome: true},
+	"antigravity": {darkenMonochrome: true},
 }
 
 const (

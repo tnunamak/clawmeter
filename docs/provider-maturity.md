@@ -11,13 +11,15 @@ an audit covered a provider:
 | Providers | Maturity |
 |---|---|
 | Claude, Codex (`openai`), Gemini | not experimental |
-| Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
+| Antigravity, Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
 
 The experimental group reflects the current provider audit's documented
-contract or semantic risks. Grok is experimental because its live endpoint has
-omitted the usage percentage even while the account was exhausted. The other
-group retains this project's existing live-validation evidence. Maturity
-describes confidence in the integration, not whether
+contract or semantic risks. Antigravity has been validated against one live
+consumer account, but its CLI-owned credential storage and internal quota API
+still need live validation on macOS and Windows. Grok is experimental because
+its live endpoint has omitted the usage percentage even while the account was
+exhausted. The other group retains this project's existing live-validation
+evidence. Maturity describes confidence in the integration, not whether
 credentials were found or whether polling is enabled. The `providers`
 inventory remains the place to see setup and polling state; quota rows and the
 tray intentionally do not carry maturity labels.

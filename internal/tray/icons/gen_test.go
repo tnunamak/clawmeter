@@ -43,7 +43,7 @@ func TestRegisteredProvidersHaveRealLogos(t *testing.T) {
 }
 
 func TestWhiteMonochromeProviderMarksRemainVisibleOnLightChip(t *testing.T) {
-	for _, name := range []string{"jetbrains", "synthetic", "zai"} {
+	for _, name := range []string{"antigravity", "jetbrains", "synthetic", "zai"} {
 		for _, size := range []int{22, 32} {
 			img := decodePNG(t, GenerateProviderIconWithMeter(name, MeterState{}, size))
 			darkPixels := 0

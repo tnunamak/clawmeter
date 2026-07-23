@@ -10,6 +10,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/anthropic"
+	"github.com/tnunamak/clawmeter/internal/provider/antigravity"
 	"github.com/tnunamak/clawmeter/internal/provider/copilot"
 	"github.com/tnunamak/clawmeter/internal/provider/gemini"
 	"github.com/tnunamak/clawmeter/internal/provider/jetbrains"
@@ -37,6 +38,7 @@ var aliases = map[string]string{
 func Register(registry *provider.Registry, cfg *config.Config) {
 	registry.SetEnabledFilter(cfg)
 	for _, fn := range []func(*provider.Registry, *config.Config) error{
+		antigravity.Register,
 		anthropic.Register,
 		kimi.Register,
 		kimik2.Register,

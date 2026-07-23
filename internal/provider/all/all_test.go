@@ -10,7 +10,7 @@ func TestNames_IncludesKnownProviders(t *testing.T) {
 		t.Fatal("expected at least one provider")
 	}
 	// Sanity-check a handful of canonical names.
-	required := []string{"claude", "openai", "gemini", "kimi", "kimik2", "xai"}
+	required := []string{"antigravity", "claude", "openai", "gemini", "kimi", "kimik2", "xai"}
 	have := make(map[string]bool, len(got))
 	for _, n := range got {
 		have[n] = true

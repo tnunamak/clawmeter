@@ -121,6 +121,7 @@ clawmeter tray           # run the tray in this session
 |---|---|
 | Claude | 5h, 7d, model-specific windows |
 | Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
+| Antigravity | Separate weekly pools for Gemini models and Claude/GPT models |
 | Gemini | 24h Pro-model and Flash-model quotas; Code Assist tier checked when available |
 | GitHub Copilot | Premium and chat interactions |
 | Grok/xAI | Grok weekly usage pool; API prepaid credits |
@@ -225,6 +226,7 @@ brew services stop clawmeter
 |---|---|
 | Claude | Claude Code OAuth token |
 | Codex | `~/.codex/auth.json` |
+| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` from `agy` login |
 | Gemini | `~/.gemini/` OAuth credentials |
 | GitHub Copilot | `~/.config/github-copilot/hosts.json` |
 | Grok/xAI | `~/.grok/auth.json` from `grok login`; or `XAI_MANAGEMENT_API_KEY` with optional `XAI_TEAM_ID` |

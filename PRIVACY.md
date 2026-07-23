@@ -10,6 +10,7 @@ Clawmeter reuses credentials that the provider's own tools already store locally
 | --- | --- | --- |
 | Claude | `~/.claude/.credentials.json` | May refresh OAuth access and write the provider's normal credential file. |
 | Codex/OpenAI | Local Codex CLI integration | Clawmeter delegates rate-limit reads to the local Codex CLI instead of directly reading OpenAI credentials. |
+| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | Clawmeter asks the official `agy` CLI to refresh an expired login, then reads its access token. It does not read or store the refresh token. |
 | Gemini | `~/.gemini/oauth_creds.json` and Gemini settings | May refresh an access token for API requests. |
 | GitHub Copilot | `COPILOT_API_TOKEN` | Reads the token from the environment when configured. |
 | Kimi | Kimi config, `KIMI_ACCESS_TOKEN`, or `KIMI_K2_API_KEY` | OAuth mode may refresh access and write the provider's normal credential file. |
@@ -19,7 +20,7 @@ Clawmeter does not send provider credentials to Tim Nunamaker, GitHub, SignPath,
 
 ## Network Requests
 
-Clawmeter contacts provider-owned APIs only to fetch quota, usage, account, or rate-limit status for enabled providers. These requests go to the provider you configured.
+Clawmeter contacts provider-owned APIs only to fetch quota, usage, account, or rate-limit status for enabled providers. These requests go to the provider you configured. For Antigravity, Clawmeter calls Google's read-only `loadCodeAssist` and `retrieveUserQuotaSummary` methods; it does not submit prompts or consume model quota.
 
 Clawmeter also checks GitHub Releases for application updates. The tray performs periodic update checks, and users can trigger update checks manually from the app. These requests go to GitHub's public API for `tnunamak/clawmeter` release metadata and do not include provider credentials.
 
