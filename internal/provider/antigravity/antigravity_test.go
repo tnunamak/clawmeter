@@ -84,19 +84,41 @@ func TestFetchUsageReturnsAuthoritativeWeeklyPools(t *testing.T) {
 	assertWindow(t, data.Windows[1], "7d Claude + GPT", "7 days (Claude + GPT)", 60)
 }
 
-func TestFetchUsageRefreshesExpiredTokenThroughOfficialCLI(t *testing.T) {
+func TestFetchUsageRefreshesExpiredTokenWithoutWritingLoginFile(t *testing.T) {
 	home := t.TempDir()
 	writeToken(t, home, "expired", time.Now().Add(-time.Hour))
-	runs := 0
-	p := newTestProvider(home, "http://unused.invalid")
-	p.runCLI = func(ctx context.Context) error {
-		runs++
-		writeToken(t, home, "fresh", time.Now().Add(time.Hour))
-		return nil
+	tokenPath := filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+	before, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
 	}
+	binaryPath := filepath.Join(home, "agy")
+	if err := os.WriteFile(binaryPath, testOAuthBinary(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshes := 0
+	p := newTestProvider(home, "http://unused.invalid")
+	p.tokenURL = "https://oauth.test/token"
+	p.lookPath = func(string) (string, error) { return binaryPath, nil }
 	p.client = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() == p.tokenURL {
+			refreshes++
+			if err := req.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if req.Form.Get("client_id") == "884354919052-business.apps.googleusercontent.com" {
+				return jsonStatusResponse(http.StatusBadRequest, `{"error":"invalid_client"}`), nil
+			}
+			if req.Form.Get("client_id") != "1071006060591-cli.apps.googleusercontent.com" ||
+				req.Form.Get("client_secret") != testOAuthSecret() ||
+				req.Form.Get("refresh_token") != "test-refresh" {
+				t.Fatal("refresh request did not use the installed agy OAuth client")
+			}
+			return jsonResponse(`{"access_token":"fresh","expires_in":3600}`), nil
+		}
 		if req.Header.Get("Authorization") != "Bearer fresh" {
-			t.Fatalf("provider did not reread refreshed token")
+			t.Fatalf("Authorization = %q, want refreshed token", req.Header.Get("Authorization"))
 		}
 		body := `{"cloudaicompanionProject":"p"}`
 		if strings.Contains(req.URL.Path, "retrieveUserQuotaSummary") {
@@ -108,8 +130,76 @@ func TestFetchUsageRefreshesExpiredTokenThroughOfficialCLI(t *testing.T) {
 	if _, err := p.FetchUsage(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if runs != 1 {
-		t.Fatalf("agy models runs = %d, want 1", runs)
+	if _, err := p.FetchUsage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if refreshes != 2 {
+		t.Fatalf("OAuth refreshes = %d, want two candidate attempts and then in-memory reuse", refreshes)
+	}
+	after, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("Clawmeter rewrote the agy credential file")
+	}
+}
+
+func TestParseOAuthClientsUsesExactSecretBoundary(t *testing.T) {
+	clients, err := parseOAuthClients(testOAuthBinary())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("clients = %+v", clients)
+	}
+	for _, client := range clients {
+		if client.Secret != testOAuthSecret() {
+			t.Fatalf("client secret length = %d, want %d", len(client.Secret), oauthSecretLength)
+		}
+	}
+}
+
+func TestExpiredTokenFailsSoftWhenRefreshResponseIsInvalid(t *testing.T) {
+	home := t.TempDir()
+	writeToken(t, home, "expired", time.Now().Add(-time.Hour))
+	binaryPath := filepath.Join(home, "agy")
+	if err := os.WriteFile(binaryPath, testOAuthBinary(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := newTestProvider(home, "http://unused.invalid")
+	p.lookPath = func(string) (string, error) { return binaryPath, nil }
+	p.client = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(`{"expires_in":3600}`), nil
+	})
+
+	_, err := p.FetchUsage(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid login refresh") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestOAuthServiceFailureDoesNotTryEveryClient(t *testing.T) {
+	home := t.TempDir()
+	writeToken(t, home, "expired", time.Now().Add(-time.Hour))
+	binaryPath := filepath.Join(home, "agy")
+	if err := os.WriteFile(binaryPath, testOAuthBinary(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := newTestProvider(home, "http://unused.invalid")
+	p.lookPath = func(string) (string, error) { return binaryPath, nil }
+	requests := 0
+	p.client = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return jsonStatusResponse(http.StatusServiceUnavailable, `{}`), nil
+	})
+
+	_, err := p.FetchUsage(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
 	}
 }
 
@@ -144,7 +234,7 @@ func TestParseQuotaSummarySkipsDisabledAndRejectsConflictingDuplicates(t *testin
 }
 
 func TestProviderNeverUsesMutationOrConsumeEndpoint(t *testing.T) {
-	for _, path := range []string{loadCodeAssistPath, quotaSummaryPath} {
+	for _, path := range []string{loadCodeAssistPath, quotaSummaryPath, defaultTokenURL} {
 		lower := strings.ToLower(path)
 		if strings.Contains(lower, "consume") || strings.Contains(lower, "redeem") || strings.Contains(lower, "set") {
 			t.Fatalf("provider endpoint is not read-only: %s", path)
@@ -223,7 +313,6 @@ func newTestProvider(home, baseURL string) *Provider {
 	p.homeDir = func() (string, error) { return home, nil }
 	p.baseURL = baseURL
 	p.lookPath = func(string) (string, error) { return "/bin/agy", nil }
-	p.runCLI = func(context.Context) error { return nil }
 	return p
 }
 
@@ -236,8 +325,9 @@ func writeToken(t *testing.T, home, accessToken string, expiry time.Time) {
 	payload := map[string]any{
 		"auth_method": "consumer",
 		"token": map[string]any{
-			"access_token": accessToken,
-			"expiry":       expiry.Format(time.RFC3339Nano),
+			"access_token":  accessToken,
+			"refresh_token": "test-refresh",
+			"expiry":        expiry.Format(time.RFC3339Nano),
 		},
 	}
 	data, err := json.Marshal(payload)
@@ -247,6 +337,17 @@ func writeToken(t *testing.T, home, accessToken string, expiry time.Time) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func testOAuthBinary() []byte {
+	return []byte(
+		"\x00" + testOAuthSecret() + "adjacent-packed-data\x00" +
+			"884354919052-business.apps.googleusercontent.com\x00" +
+			"1071006060591-cli.apps.googleusercontent.com\x00")
+}
+
+func testOAuthSecret() string {
+	return "GOCSPX-" + strings.Repeat("x", oauthSecretLength-len("GOCSPX-"))
 }
 
 func assertWindow(t *testing.T, got provider.UsageWindow, name, display string, utilization float64) {
@@ -261,8 +362,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
 func jsonResponse(body string) *http.Response {
+	return jsonStatusResponse(http.StatusOK, body)
+}
+
+func jsonStatusResponse(status int, body string) *http.Response {
 	return &http.Response{
-		StatusCode: http.StatusOK,
+		StatusCode: status,
 		Body:       ioNopCloser{strings.NewReader(body)},
 		Header:     make(http.Header),
 	}

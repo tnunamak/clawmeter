@@ -65,7 +65,8 @@ Setup installs the mainstream local surface Clawmeter can verify today: a Claude
 - Compare current usage with expected pace for the reset window.
 - See Codex banked reset credits and their earliest known expiry when available.
 - Cycle the tray icon between concrete provider/quota windows.
-- Reuse existing credentials without rewriting or refreshing provider tokens.
+- Reuse existing credentials without rewriting them. When required, Clawmeter
+  refreshes short-lived access tokens only against the provider's own OAuth service.
 
 ## Read The Icon
 

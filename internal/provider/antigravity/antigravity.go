@@ -10,12 +10,15 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -26,8 +29,10 @@ const (
 	defaultBaseURL     = "https://daily-cloudcode-pa.googleapis.com"
 	loadCodeAssistPath = "/v1internal:loadCodeAssist"
 	quotaSummaryPath   = "/v1internal:retrieveUserQuotaSummary"
+	defaultTokenURL    = "https://oauth2.googleapis.com/token"
 	requestTimeout     = 12 * time.Second
 	maxResponseBytes   = 1 << 20
+	oauthSecretLength  = 35
 )
 
 type httpClient interface {
@@ -37,24 +42,28 @@ type httpClient interface {
 // Provider reads the Antigravity CLI's existing login and fetches its two
 // provider-reported weekly usage pools.
 type Provider struct {
-	baseURL  string
-	client   httpClient
-	homeDir  func() (string, error)
-	lookPath func(string) (string, error)
-	runCLI   func(context.Context) error
-	now      func() time.Time
+	baseURL     string
+	tokenURL    string
+	client      httpClient
+	homeDir     func() (string, error)
+	lookPath    func(string) (string, error)
+	readFile    func(string) ([]byte, error)
+	now         func() time.Time
+	tokenMu     sync.Mutex
+	memoryToken storedToken
 }
 
 // New creates an Antigravity provider.
 func New() *Provider {
 	p := &Provider{
 		baseURL:  defaultBaseURL,
+		tokenURL: defaultTokenURL,
 		client:   &http.Client{Timeout: requestTimeout},
 		homeDir:  os.UserHomeDir,
 		lookPath: exec.LookPath,
+		readFile: os.ReadFile,
 		now:      time.Now,
 	}
-	p.runCLI = p.runModels
 	return p
 }
 
@@ -134,14 +143,16 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 }
 
 type storedToken struct {
-	AccessToken string
-	Expiry      time.Time
+	AccessToken  string
+	RefreshToken string
+	Expiry       time.Time
 }
 
 type tokenFile struct {
 	Token struct {
-		AccessToken string    `json:"access_token"`
-		Expiry      time.Time `json:"expiry"`
+		AccessToken  string    `json:"access_token"`
+		RefreshToken string    `json:"refresh_token"`
+		Expiry       time.Time `json:"expiry"`
 	} `json:"token"`
 }
 
@@ -151,25 +162,22 @@ func (p *Provider) validAccessToken(ctx context.Context) (string, error) {
 		return token.AccessToken, nil
 	}
 
-	refreshCtx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	if err := p.runCLI(refreshCtx); err != nil {
-		return "", fmt.Errorf("Antigravity login unavailable; run `agy` to sign in")
-	}
-	token, err = p.readToken()
 	if errors.Is(err, errTokenPermissions) {
 		return "", fmt.Errorf("Antigravity login file must be accessible only to its owner")
 	}
 	if errors.Is(err, errTokenMalformed) {
 		return "", fmt.Errorf("Antigravity login is unreadable; run `agy` to sign in again")
 	}
-	if err != nil || token.AccessToken == "" {
+	if err != nil {
 		return "", fmt.Errorf("Antigravity login is not available to Clawmeter; run `agy` to sign in")
 	}
-	if token.Expiry.IsZero() || !token.Expiry.After(p.now().Add(time.Minute)) {
+	if cached := p.validMemoryToken(); cached != "" {
+		return cached, nil
+	}
+	if token.RefreshToken == "" {
 		return "", fmt.Errorf("Antigravity login expired; run `agy` to sign in")
 	}
-	return token.AccessToken, nil
+	return p.refreshAccessToken(ctx, token.RefreshToken)
 }
 
 var (
@@ -190,7 +198,7 @@ func (p *Provider) readToken() (storedToken, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return storedToken{}, errTokenPermissions
 	}
-	data, err := os.ReadFile(path)
+	data, err := p.readFile(path)
 	if err != nil {
 		return storedToken{}, err
 	}
@@ -199,21 +207,183 @@ func (p *Provider) readToken() (storedToken, error) {
 		return storedToken{}, fmt.Errorf("%w: %v", errTokenMalformed, err)
 	}
 	return storedToken{
-		AccessToken: strings.TrimSpace(stored.Token.AccessToken),
-		Expiry:      stored.Token.Expiry,
+		AccessToken:  strings.TrimSpace(stored.Token.AccessToken),
+		RefreshToken: strings.TrimSpace(stored.Token.RefreshToken),
+		Expiry:       stored.Token.Expiry,
 	}, nil
 }
 
-func (p *Provider) runModels(ctx context.Context) error {
+func (p *Provider) validMemoryToken() string {
+	p.tokenMu.Lock()
+	defer p.tokenMu.Unlock()
+	if p.memoryToken.AccessToken != "" && p.memoryToken.Expiry.After(p.now().Add(time.Minute)) {
+		return p.memoryToken.AccessToken
+	}
+	return ""
+}
+
+type oauthClient struct {
+	ID     string
+	Secret string
+}
+
+func (p *Provider) refreshAccessToken(ctx context.Context, refreshToken string) (string, error) {
+	clients, err := p.resolveOAuthClients()
+	if err != nil {
+		return "", fmt.Errorf("Antigravity login expired and its OAuth client could not be read; update `agy` or sign in again")
+	}
+	for _, client := range clients {
+		token, retry, err := p.refreshAccessTokenWithClient(ctx, refreshToken, client)
+		if err == nil {
+			return token, nil
+		}
+		if !retry {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("Antigravity login expired; run `agy` to sign in")
+}
+
+func (p *Provider) refreshAccessTokenWithClient(
+	ctx context.Context,
+	refreshToken string,
+	client oauthClient,
+) (string, bool, error) {
+	form := url.Values{
+		"client_id":     {client.ID},
+		"client_secret": {client.Secret},
+		"refresh_token": {refreshToken},
+		"grant_type":    {"refresh_token"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "Clawmeter Antigravity quota monitor")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("refresh Antigravity login: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return "", false, fmt.Errorf("read Antigravity login refresh: %w", err)
+	}
+	if len(body) > maxResponseBytes {
+		return "", false, fmt.Errorf("Antigravity login refresh exceeded size limit")
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized {
+			return "", true, fmt.Errorf("Antigravity login refresh rejected")
+		}
+		return "", false, fmt.Errorf("Antigravity OAuth service returned HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil ||
+		strings.TrimSpace(result.AccessToken) == "" ||
+		result.ExpiresIn <= 60 {
+		return "", false, fmt.Errorf("Antigravity returned an invalid login refresh")
+	}
+	token := storedToken{
+		AccessToken: strings.TrimSpace(result.AccessToken),
+		Expiry:      p.now().Add(time.Duration(result.ExpiresIn) * time.Second),
+	}
+	p.tokenMu.Lock()
+	p.memoryToken = token
+	p.tokenMu.Unlock()
+	return token.AccessToken, false, nil
+}
+
+func (p *Provider) resolveOAuthClients() ([]oauthClient, error) {
+	if id := strings.TrimSpace(os.Getenv("ANTIGRAVITY_OAUTH_CLIENT_ID")); id != "" {
+		if secret := strings.TrimSpace(os.Getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET")); secret != "" {
+			return []oauthClient{{ID: id, Secret: secret}}, nil
+		}
+	}
 	path, err := p.lookPath("agy")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, path, "models")
-	hideSubprocessWindow(cmd)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run()
+	data, err := p.readFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseOAuthClients(data)
+}
+
+func parseOAuthClients(data []byte) ([]oauthClient, error) {
+	ids := oauthClientIDs(data)
+	secrets := oauthClientSecrets(data)
+	if len(ids) == 0 || len(secrets) == 0 {
+		return nil, fmt.Errorf("OAuth client metadata not found")
+	}
+	if len(ids) > 8 || len(secrets) > 8 {
+		return nil, fmt.Errorf("too many OAuth client candidates")
+	}
+	clients := make([]oauthClient, 0, len(ids)*len(secrets))
+	for _, id := range ids {
+		for _, secret := range secrets {
+			clients = append(clients, oauthClient{ID: id, Secret: secret})
+		}
+	}
+	return clients, nil
+}
+
+func oauthClientIDs(data []byte) []string {
+	pattern := regexp.MustCompile(`[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com`)
+	var values []string
+	for _, match := range pattern.FindAll(data, -1) {
+		values = appendUnique(values, string(match))
+	}
+	return values
+}
+
+func oauthClientSecrets(data []byte) []string {
+	const prefix = "GOCSPX-"
+	var values []string
+	for offset := 0; offset < len(data); {
+		index := bytes.Index(data[offset:], []byte(prefix))
+		if index < 0 {
+			break
+		}
+		start := offset + index
+		end := start + oauthSecretLength
+		if end <= len(data) {
+			candidate := data[start:end]
+			valid := true
+			for _, value := range candidate[len(prefix):] {
+				if !isOAuthByte(value) {
+					valid = false
+					break
+				}
+			}
+			if valid {
+				values = appendUnique(values, string(candidate))
+			}
+		}
+		offset = start + len(prefix)
+	}
+	return values
+}
+
+func isOAuthByte(value byte) bool {
+	return value >= '0' && value <= '9' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= 'a' && value <= 'z' ||
+		value == '-' || value == '_'
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 var errUnauthorized = errors.New("unauthorized")
