@@ -2,6 +2,7 @@ package shellpath
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -68,6 +69,77 @@ func TestCapturePathFromShellUsesMarkedOutputEvenWhenShellExitsNonzero(t *testin
 	got := capturePathFromShell(shell)
 	if len(got) != 2 || got[0] != "/tmp/codex/bin" || got[1] != "/usr/bin" {
 		t.Fatalf("capturePathFromShell() = %#v, want marked PATH despite nonzero exit", got)
+	}
+}
+
+func TestCapturePathFromShellFallsBackToNonInteractiveZsh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("not applicable on Windows")
+	}
+
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "zsh")
+	count := filepath.Join(dir, "count")
+	script := "#!/bin/sh\nprintf x >> '" + count + "'\nif [ \"$2\" = \"-i\" ]; then exit 7; fi\nprintf '__CLAWMETER_PATH__/home/user/.nvm/versions/node/v22/bin:/usr/bin__CLAWMETER_PATH__'\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+
+	got := capturePathFromShell(shell)
+	if len(got) != 2 || got[0] != "/home/user/.nvm/versions/node/v22/bin" || got[1] != "/usr/bin" {
+		t.Fatalf("capturePathFromShell() = %#v, want fallback PATH", got)
+	}
+	if data, err := os.ReadFile(count); err != nil || string(data) != "xx" {
+		t.Fatalf("shell invocation count = %q, %v; want interactive and fallback", data, err)
+	}
+}
+
+func TestCapturePathFromShellDoesNotRunFallbackAfterSuccessfulCapture(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("not applicable on Windows")
+	}
+
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "zsh")
+	count := filepath.Join(dir, "count")
+	script := "#!/bin/sh\nprintf x >> '" + count + "'\nprintf '__CLAWMETER_PATH__/home/user/.nvm/bin:/usr/bin__CLAWMETER_PATH__'\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+
+	got := capturePathFromShell(shell)
+	if len(got) != 2 || got[0] != "/home/user/.nvm/bin" || got[1] != "/usr/bin" {
+		t.Fatalf("capturePathFromShell() = %#v, want marked PATH", got)
+	}
+	if data, err := os.ReadFile(count); err != nil || string(data) != "x" {
+		t.Fatalf("shell invocation count = %q, %v; want one attempt", data, err)
+	}
+}
+
+func TestCapturePathFromShellRecoversFromRealZshStartupFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("not applicable on Windows")
+	}
+
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+
+	zdotdir := t.TempDir()
+	t.Setenv("ZDOTDIR", zdotdir)
+	zshrc := `if [[ -o interactive ]]; then
+  exit 7
+fi
+export PATH="/home/user/.nvm/versions/node/v22/bin:$PATH"
+`
+	if err := os.WriteFile(filepath.Join(zdotdir, ".zshrc"), []byte(zshrc), 0o600); err != nil {
+		t.Fatalf("write isolated .zshrc: %v", err)
+	}
+
+	got := capturePathFromShell(zsh)
+	if len(got) == 0 || got[0] != "/home/user/.nvm/versions/node/v22/bin" {
+		t.Fatalf("capturePathFromShell() = %#v, want PATH recovered from .zshrc", got)
 	}
 }
 

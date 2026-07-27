@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -61,18 +62,38 @@ func capturePathFromShell(shell string) []string {
 	marker := "__CLAWMETER_PATH__"
 	cmd := fmt.Sprintf(`printf '%s%%s%s' "$PATH"`, marker, marker)
 
-	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
-	defer cancel()
+	run := func(args ...string) []byte {
+		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+		defer cancel()
 
-	proc := exec.CommandContext(ctx, shell, "-l", "-i", "-c", cmd)
-	proc.Stdin = nil
-	// Suppress stderr (shell init may print warnings/motd)
-	proc.Stderr = io.Discard
+		proc := exec.CommandContext(ctx, shell, args...)
+		proc.Stdin = nil
+		// Suppress stderr (shell init may print warnings/motd)
+		proc.Stderr = io.Discard
+		out, _ := proc.Output()
+		return out
+	}
 
 	// Some shell init files print the marker and then exit nonzero because
 	// interactive-only commands failed. Keep stdout if it contains the PATH.
-	out, _ := proc.Output()
+	out := run("-l", "-i", "-c", cmd)
+	if path := parseMarkedPath(out, marker); len(path) > 0 {
+		return path
+	}
 
+	if filepath.Base(shell) != "zsh" {
+		return nil
+	}
+
+	// Plasma can make zsh's interactive startup fail before it reaches the
+	// marker. Source zshrc explicitly in a bounded non-interactive shell so
+	// PATH changes from tools such as nvm are still captured.
+	fallbackCmd := fmt.Sprintf(`source "${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true; printf '%s%%s%s' "$PATH"`, marker, marker)
+	out = run("-l", "-c", fallbackCmd)
+	return parseMarkedPath(out, marker)
+}
+
+func parseMarkedPath(out []byte, marker string) []string {
 	// Extract the PATH between markers.
 	markerBytes := []byte(marker)
 	start := bytes.Index(out, markerBytes)
