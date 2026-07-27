@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ func TestCapturePathFromShellUsesMarkedOutputEvenWhenShellExitsNonzero(t *testin
 	}
 
 	dir := t.TempDir()
-	shell := filepath.Join(dir, "fake-shell")
+	shell := filepath.Join(dir, "sh")
 	script := "#!/bin/sh\nprintf 'noise __CLAWMETER_PATH__/tmp/codex/bin:/usr/bin__CLAWMETER_PATH__'\nexit 7\n"
 	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake shell: %v", err)
@@ -157,23 +158,104 @@ func TestLoginShellFromPasswdMatchesUIDOrUsername(t *testing.T) {
 	}
 }
 
-func TestExistingUniqueShellsFiltersMissingDuplicatesAndNonExecutables(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not applicable on Windows")
+func TestLoginShellCandidatesUsesSHELLThenFallback(t *testing.T) {
+	if got := loginShellCandidatesFrom(" /custom/fish ", "/usr/bin/bash"); !reflect.DeepEqual(got, []string{"/custom/fish", "/usr/bin/bash", "/bin/sh"}) {
+		t.Fatalf("loginShellCandidatesFrom() = %#v", got)
 	}
+	if got := loginShellCandidatesFrom("", "/usr/bin/bash"); !reflect.DeepEqual(got, []string{"/usr/bin/bash", "/bin/sh"}) {
+		t.Fatalf("loginShellCandidatesFrom() = %#v", got)
+	}
+	if got := loginShellCandidatesFrom("/bin/nu", "/usr/bin/bash"); !reflect.DeepEqual(got, []string{"/bin/nu", "/usr/bin/bash", "/bin/sh"}) {
+		t.Fatalf("loginShellCandidatesFrom() = %#v", got)
+	}
+}
 
+func TestAuthoritativeLoginShellResolvesThroughInheritedPATH(t *testing.T) {
 	dir := t.TempDir()
-	executable := filepath.Join(dir, "zsh")
-	plain := filepath.Join(dir, "plain")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o755); err != nil {
-		t.Fatalf("write executable: %v", err)
+	shell := filepath.Join(dir, "bash")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
 	}
-	if err := os.WriteFile(plain, []byte("nope"), 0o644); err != nil {
-		t.Fatalf("write plain file: %v", err)
+	t.Setenv("SHELL", "bash")
+	t.Setenv("PATH", dir)
+
+	if got := authoritativeLoginShell(); got != shell {
+		t.Fatalf("authoritativeLoginShell() = %q, want %q", got, shell)
+	}
+}
+
+func TestAuthoritativeLoginShellSkipsUnsupportedSHELL(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"nu", "bash"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake shell: %v", err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	got := authoritativeLoginShellFrom(loginShellCandidatesFrom("nu", "bash"))
+	if got != filepath.Join(dir, "bash") {
+		t.Fatalf("authoritativeLoginShellFrom() = %q, want passwd shell", got)
+	}
+}
+
+func TestCaptureMergeAndLookPathPreserveInheritedPrecedence(t *testing.T) {
+	root := t.TempDir()
+	inherited := filepath.Join(root, "inherited")
+	captured := filepath.Join(root, "captured")
+	if err := os.MkdirAll(inherited, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(captured, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{filepath.Join(inherited, "same-name"), filepath.Join(captured, "captured-cli")} {
+		if err := os.WriteFile(file, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shell := filepath.Join(root, "bash")
+	script := "#!/bin/sh\nprintf '__CLAWMETER_PATH__" + captured + "__CLAWMETER_PATH__'\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
 	}
 
-	got := existingUniqueShells([]string{"", executable, executable, plain, filepath.Join(dir, "missing")})
-	if len(got) != 1 || got[0] != executable {
-		t.Fatalf("existingUniqueShells() = %#v, want only executable once", got)
+	t.Setenv("PATH", inherited)
+	pathFromShell := capturePathFromShell(shell)
+	merge(pathFromShell)
+	if got := os.Getenv("PATH"); got != inherited+string(os.PathListSeparator)+captured {
+		t.Fatalf("merged PATH = %q", got)
+	}
+	if got, err := exec.LookPath("captured-cli"); err != nil || got != filepath.Join(captured, "captured-cli") {
+		t.Fatalf("captured CLI lookup = %q, %v", got, err)
+	}
+	if got, err := exec.LookPath("same-name"); err != nil || got != filepath.Join(inherited, "same-name") {
+		t.Fatalf("inherited CLI lookup = %q, %v", got, err)
+	}
+}
+
+func TestProbeForShellUsesShellSpecificProtocol(t *testing.T) {
+	for _, name := range []string{"zsh", "bash", "sh", "dash", "ksh"} {
+		probe, ok := probeForShell("/bin/" + name)
+		if !ok {
+			t.Fatalf("probeForShell(%q) not supported", name)
+		}
+		args := probe.loginInteractiveArgs
+		if len(args) != 4 || args[0] != "-l" || args[1] != "-i" || args[2] != "-c" || !strings.Contains(args[3], "$PATH") {
+			t.Fatalf("%s probe args = %#v", name, args)
+		}
+	}
+
+	fish, ok := probeForShell("/usr/bin/fish")
+	if !ok || !strings.Contains(fish.loginInteractiveArgs[3], "string join : -- $PATH") {
+		t.Fatalf("fish probe = %#v, want fish list join", fish)
+	}
+}
+
+func TestUnsupportedShellFailsSoftWithoutProbe(t *testing.T) {
+	if _, ok := probeForShell("/bin/nu"); ok {
+		t.Fatal("nushell unexpectedly accepted")
+	}
+	if got := capturePathFromShell("/bin/nu"); got != nil {
+		t.Fatalf("capturePathFromShell(nu) = %#v, want nil", got)
 	}
 }

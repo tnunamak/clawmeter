@@ -49,18 +49,21 @@ func Init() {
 
 // captureLoginShell runs the user's login shell to get PATH.
 func captureLoginShell() []string {
-	for _, shell := range loginShellCandidates() {
-		if path := capturePathFromShell(shell); len(path) > 0 {
-			return path
-		}
+	shell := authoritativeLoginShell()
+	if shell == "" {
+		return nil
+	}
+	if path := capturePathFromShell(shell); len(path) > 0 {
+		return path
 	}
 	return nil
 }
 
 func capturePathFromShell(shell string) []string {
-	// Use a marker to extract PATH cleanly from any shell noise.
-	marker := "__CLAWMETER_PATH__"
-	cmd := fmt.Sprintf(`printf '%s%%s%s' "$PATH"`, marker, marker)
+	probe, ok := probeForShell(shell)
+	if !ok {
+		return nil
+	}
 
 	run := func(args ...string) []byte {
 		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
@@ -76,7 +79,7 @@ func capturePathFromShell(shell string) []string {
 
 	// Some shell init files print the marker and then exit nonzero because
 	// interactive-only commands failed. Keep stdout if it contains the PATH.
-	out := run("-l", "-i", "-c", cmd)
+	out := run(probe.loginInteractiveArgs...)
 	if path := parseMarkedPath(out, marker); len(path) > 0 {
 		return path
 	}
@@ -85,12 +88,42 @@ func capturePathFromShell(shell string) []string {
 		return nil
 	}
 
-	// Plasma can make zsh's interactive startup fail before it reaches the
+	// A GUI/non-TTY launch can make zsh startup fail before it reaches the
 	// marker. Source zshrc explicitly in a bounded non-interactive shell so
-	// PATH changes from tools such as nvm are still captured.
-	fallbackCmd := fmt.Sprintf(`source "${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true; printf '%s%%s%s' "$PATH"`, marker, marker)
-	out = run("-l", "-c", fallbackCmd)
+	// PATH changes are still captured.
+	out = run(probe.zshRecoveryArgs...)
 	return parseMarkedPath(out, marker)
+}
+
+const marker = "__CLAWMETER_PATH__"
+
+type shellProbe struct {
+	loginInteractiveArgs []string
+	zshRecoveryArgs      []string
+}
+
+func probeForShell(shell string) (shellProbe, bool) {
+	base := filepath.Base(shell)
+	posix := fmt.Sprintf(`printf '%s%%s%s' "$PATH"`, marker, marker)
+	probes := map[string]shellProbe{
+		"zsh":  {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
+		"bash": {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
+		"sh":   {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
+		"dash": {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
+		"ksh":  {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
+		// fish PATH is a list; string join turns it into the platform PATH
+		// representation before printf emits the marker-delimited value.
+		"fish": {loginInteractiveArgs: []string{"-l", "-i", "-c", fmt.Sprintf(`printf '%s%%s%s' (string join : -- $PATH)`, marker, marker)}},
+	}
+	probe, ok := probes[base]
+	if !ok {
+		return shellProbe{}, false
+	}
+	if base == "zsh" {
+		fallback := fmt.Sprintf(`source "${ZDOTDIR:-$HOME}/.zshrc" >/dev/null 2>&1 || true; printf '%s%%s%s' "$PATH"`, marker, marker)
+		probe.zshRecoveryArgs = []string{"-l", "-c", fallback}
+	}
+	return probe, true
 }
 
 func parseMarkedPath(out []byte, marker string) []string {
@@ -115,32 +148,34 @@ func parseMarkedPath(out []byte, marker string) []string {
 }
 
 func loginShellCandidates() []string {
-	candidates := []string{
-		os.Getenv("SHELL"),
-		passwdLoginShell(),
-		"/bin/zsh",
-		"/usr/bin/zsh",
-		"/opt/homebrew/bin/zsh",
-		"/bin/bash",
-		"/usr/bin/bash",
-		"/bin/sh",
-	}
-	return existingUniqueShells(candidates)
+	return loginShellCandidatesFrom(os.Getenv("SHELL"), passwdLoginShell())
 }
 
-func existingUniqueShells(candidates []string) []string {
-	seen := make(map[string]bool)
-	out := make([]string, 0, len(candidates))
+func authoritativeLoginShell() string {
+	return authoritativeLoginShellFrom(loginShellCandidates())
+}
+
+func authoritativeLoginShellFrom(candidates []string) string {
 	for _, shell := range candidates {
-		shell = strings.TrimSpace(shell)
-		if shell == "" || seen[shell] {
-			continue
+		if resolved, err := exec.LookPath(shell); err == nil {
+			if _, supported := probeForShell(resolved); supported {
+				return resolved
+			}
 		}
-		if info, err := os.Stat(shell); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-			continue
+	}
+	return ""
+}
+
+func loginShellCandidatesFrom(shell, passwdShell string) []string {
+	candidates := []string{shell, passwdShell, "/bin/sh"}
+	seen := make(map[string]bool, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate != "" && !seen[candidate] {
+			seen[candidate] = true
+			out = append(out, candidate)
 		}
-		seen[shell] = true
-		out = append(out, shell)
 	}
 	return out
 }
@@ -185,15 +220,17 @@ func merge(extra []string) {
 	var parts []string
 
 	for _, p := range strings.Split(existing, string(os.PathListSeparator)) {
-		if p != "" && !seen[p] {
-			seen[p] = true
+		key := pathEntryKey(p)
+		if key != "" && !seen[key] {
+			seen[key] = true
 			parts = append(parts, p)
 		}
 	}
 
 	for _, p := range extra {
-		if p != "" && !seen[p] {
-			seen[p] = true
+		key := pathEntryKey(p)
+		if key != "" && !seen[key] {
+			seen[key] = true
 			parts = append(parts, p)
 		}
 	}

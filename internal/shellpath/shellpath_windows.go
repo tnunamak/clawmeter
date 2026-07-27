@@ -2,6 +2,7 @@ package shellpath
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -31,12 +32,23 @@ func readRegistryPath(root registry.Key, path string) []string {
 
 	// Path values may be REG_EXPAND_SZ with %SystemRoot% etc. — use the
 	// expand variant so callers get a usable filesystem path.
-	value, _, err := k.GetStringValue("Path")
+	value, valueType, err := k.GetStringValue("Path")
 	if err != nil {
 		return nil
 	}
-	expanded := os.ExpandEnv(value)
-	parts := strings.Split(expanded, string(os.PathListSeparator))
+	return expandAndSplitRegistryPath(value, valueType)
+}
+
+func expandAndSplitRegistryPath(value string, valueType uint32) []string {
+	if valueType == registry.EXPAND_SZ {
+		expanded, err := registry.ExpandString(value)
+		if err != nil {
+			return nil
+		}
+		value = expanded
+	}
+
+	parts := strings.Split(value, string(os.PathListSeparator))
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if p != "" {
@@ -44,4 +56,27 @@ func readRegistryPath(root registry.Key, path string) []string {
 		}
 	}
 	return out
+}
+
+func pathEntryKey(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	volume := filepath.VolumeName(path)
+	rest := path[len(volume):]
+	trimmed := strings.TrimRight(rest, `\\/`)
+	switch {
+	case trimmed != "":
+		path = volume + trimmed
+	case rest != "":
+		// Preserve a root separator instead of collapsing C:\ to C:.
+		path = volume + `\`
+	case strings.HasPrefix(volume, `\\`):
+		// A UNC share names its root even without the optional final slash.
+		path = volume + `\`
+	default:
+		path = volume
+	}
+	return strings.ToLower(path)
 }
