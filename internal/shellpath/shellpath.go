@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -66,14 +65,7 @@ func capturePathFromShell(shell string) []string {
 	}
 
 	run := func(args ...string) []byte {
-		ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
-		defer cancel()
-
-		proc := exec.CommandContext(ctx, shell, args...)
-		proc.Stdin = nil
-		// Suppress stderr (shell init may print warnings/motd)
-		proc.Stderr = io.Discard
-		out, _ := proc.Output()
+		out, _ := runShellCommand(context.Background(), shell, args, captureTimeout)
 		return out
 	}
 
