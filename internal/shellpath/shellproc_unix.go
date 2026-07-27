@@ -5,6 +5,7 @@ package shellpath
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -19,9 +20,10 @@ type shellCommandResult struct {
 	err error
 }
 
-// runShellCommand bounds capture at timeout plus processWaitDelay. Before
-// Wait starts, group signaling is safe because the root PID cannot be reused;
-// after stdout EOF, only the root is killed because no process retains stdout.
+// runShellCommand bounds capture at timeout plus processWaitDelay. The shell
+// owns a private process group so every same-group descendant is terminated
+// before the root is reaped. Escaped descendants cannot hold this function
+// open after stdout EOF, but are outside the cleanup guarantee.
 func runShellCommand(ctx context.Context, shell string, args []string, timeout time.Duration) ([]byte, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -35,12 +37,20 @@ func runShellCommand(ctx context.Context, shell string, args []string, timeout t
 	proc := exec.Command(shell, args...)
 	proc.Stdin = nil
 	proc.Stdout = writePipe
-	proc.Stderr = io.Discard
-	proc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := proc.Start(); err != nil {
+	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		_ = readPipe.Close()
 		_ = writePipe.Close()
 		return nil, err
 	}
+	proc.Stderr = stderr
+	proc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := proc.Start(); err != nil {
+		_ = stderr.Close()
+		_ = writePipe.Close()
+		return nil, err
+	}
+	_ = stderr.Close()
 	_ = writePipe.Close()
 
 	readDone := make(chan shellCommandResult, 1)
@@ -52,36 +62,38 @@ func runShellCommand(ctx context.Context, shell string, args []string, timeout t
 
 	select {
 	case result := <-readDone:
-		// No process retains stdout. Waiting is now safe; a timeout can only
-		// require killing this root process, never an entire process group.
 		return waitAfterStdoutEOF(commandCtx, proc, readPipe, result)
 	case <-commandCtx.Done():
 		// Wait has not started. Kill the private group before reaping the root.
-		if err := syscall.Kill(-proc.Process.Pid, syscall.SIGKILL); err != nil {
-			_ = proc.Process.Kill()
-		}
+		killPrivateProcessGroup(proc)
 		_ = readPipe.Close()
 		return reapAfterGroupKill(commandCtx.Err(), proc, readDone)
 	}
 }
 
 func waitAfterStdoutEOF(ctx context.Context, proc *exec.Cmd, readPipe *os.File, result shellCommandResult) ([]byte, error) {
+	// EOF only proves that no process currently holds the capture pipe. The
+	// root may still be alive, so observe its exit without reaping it first.
+	// This keeps the group signal before Wait in both the normal and canceled
+	// paths, while preserving the root's real exit status on normal completion.
+	// A failed liveness observation returns immediately, so cleanup remains
+	// bounded and Wait reports the root's actual result.
+	waitForRootExitOrContext(ctx, proc.Process.Pid)
+	killPrivateProcessGroup(proc)
+
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- proc.Wait() }()
+	reapTimer := time.NewTimer(processWaitDelay)
+	defer reapTimer.Stop()
+	var waitErr error
 	select {
-	case waitErr := <-waitDone:
+	case waitErr = <-waitDone:
+	case <-reapTimer.C:
 		_ = readPipe.Close()
-		return result.out, chooseCommandError(ctx, waitErr)
-	case <-ctx.Done():
-		_ = proc.Process.Kill()
-		_ = readPipe.Close()
-		select {
-		case waitErr := <-waitDone:
-			return result.out, chooseCommandError(ctx, waitErr)
-		case <-time.After(processWaitDelay):
-			return result.out, ctx.Err()
-		}
+		return result.out, chooseCommandError(ctx, exec.ErrWaitDelay)
 	}
+	_ = readPipe.Close()
+	return result.out, chooseCommandError(ctx, waitErr)
 }
 
 func reapAfterGroupKill(timeoutErr error, proc *exec.Cmd, readDone <-chan shellCommandResult) ([]byte, error) {
@@ -109,4 +121,12 @@ func chooseCommandError(ctx context.Context, waitErr error) error {
 		return err
 	}
 	return waitErr
+}
+
+func killPrivateProcessGroup(proc *exec.Cmd) {
+	if err := syscall.Kill(-proc.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		// If group signaling fails for a live root, retain the root-only fallback.
+		// The root remains unreaped here, so this cannot target a reused PID.
+		_ = proc.Process.Kill()
+	}
 }

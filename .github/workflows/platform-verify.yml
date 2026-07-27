@@ -249,6 +249,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Run macOS shellpath unit tests
+        run: go test ./internal/shellpath
+
       - name: Build tray binary
         run: go build -tags tray -o /tmp/clawmeter ./cmd/clawmeter
 

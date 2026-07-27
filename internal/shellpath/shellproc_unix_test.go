@@ -65,6 +65,56 @@ func TestRunShellCommandRootExitWithPipeHoldingDescendantReturnsBoundedly(t *tes
 	waitForProcessGone(t, pid)
 }
 
+func TestRunShellCommandSuccessKillsSameGroupClosedStdoutDescendant(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not installed")
+	}
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	registerPIDFileCleanup(t, pidFile)
+	script := "sleep 30 >/dev/null 2>&1 & child=$!; echo $child > " + shellQuote(pidFile) + "; printf marker"
+
+	out, err := runShellCommand(context.Background(), shell, []string{"-c", script}, time.Second)
+	if err != nil {
+		t.Fatalf("runShellCommand error = %v, want success", err)
+	}
+	if string(out) != "marker" {
+		t.Fatalf("output = %q, want marker", out)
+	}
+	data := waitForPIDFile(t, pidFile)
+	childPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse child pid %q: %v", data, err)
+	}
+	waitForProcessGone(t, childPID)
+}
+
+func TestRunShellCommandTimeoutAfterStdoutEOFKillsSameGroupDescendant(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not installed")
+	}
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	registerPIDFileCleanup(t, pidFile)
+	// The root closes stdout, then remains alive waiting for a same-group child.
+	script := "exec 1>&-; sleep 30 & child=$!; echo $child > " + shellQuote(pidFile) + "; wait"
+
+	started := time.Now()
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("timed-out command returned after %s", elapsed)
+	}
+	data := waitForPIDFile(t, pidFile)
+	childPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse child pid %q: %v", data, err)
+	}
+	waitForProcessGone(t, childPID)
+}
+
 func TestRunShellCommandDirectlyKillsRootAfterStdoutEOF(t *testing.T) {
 	shell, err := exec.LookPath("sh")
 	if err != nil {
@@ -103,7 +153,7 @@ func TestRunShellCommandCallerCancellationAfterStdoutEOF(t *testing.T) {
 		t.Fatalf("parse root pid %q: %v", pidData, err)
 	}
 	// The shell closes stdout before sleeping; allow that EOF to be observed,
-	// then cancellation must take the direct-root-kill branch.
+	// then cancellation must still terminate the root promptly.
 	time.Sleep(50 * time.Millisecond)
 	started := time.Now()
 	cancel()
@@ -149,6 +199,35 @@ func TestRunShellCommandEscapedDescendantStillReturnsBoundedly(t *testing.T) {
 	}
 	// Escaped descendants are not expected to be killed by production cleanup.
 	_ = pid
+}
+
+func TestRunShellCommandEscapedDescendantUsesDirectStderrFile(t *testing.T) {
+	setsid, err := exec.LookPath("setsid")
+	if err != nil {
+		t.Skip("setsid not installed")
+	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not installed")
+	}
+	tempDir := t.TempDir()
+	pidFile := filepath.Join(tempDir, "escaped.pid")
+	stderrFile := filepath.Join(tempDir, "stderr-target")
+	registerPIDFileCleanup(t, pidFile)
+	childScript := "test /dev/fd/2 -ef /dev/null && echo direct > " + shellQuote(stderrFile) + " || echo pipe > " + shellQuote(stderrFile) + "; sleep 30"
+	script := shellQuote(setsid) + " " + shellQuote(shell) + " -c " + shellQuote(childScript) + " & child=$!; echo $child > " + shellQuote(pidFile) + "; wait"
+
+	started := time.Now()
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("escaped stderr holder held command for %s", elapsed)
+	}
+	if got := strings.TrimSpace(string(waitForPIDFile(t, stderrFile))); got != "direct" {
+		t.Fatalf("escaped child stderr target = %q, want direct /dev/null", got)
+	}
 }
 
 func TestRunShellCommandSuccess(t *testing.T) {
