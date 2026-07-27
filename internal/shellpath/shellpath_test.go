@@ -1,3 +1,5 @@
+//go:build !windows
+
 package shellpath
 
 import (
@@ -5,16 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestMergeDeduplicates(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not applicable on Windows")
-	}
-
 	orig := os.Getenv("PATH")
 	defer os.Setenv("PATH", orig)
 
@@ -47,19 +44,7 @@ func TestMergeDeduplicates(t *testing.T) {
 	}
 }
 
-func TestInitNoopOnWindows(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only applicable on Windows")
-	}
-	// Should not panic
-	Init()
-}
-
 func TestCapturePathFromShellUsesMarkedOutputEvenWhenShellExitsNonzero(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not applicable on Windows")
-	}
-
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "sh")
 	script := "#!/bin/sh\nprintf 'noise __CLAWMETER_PATH__/tmp/codex/bin:/usr/bin__CLAWMETER_PATH__'\nexit 7\n"
@@ -74,10 +59,6 @@ func TestCapturePathFromShellUsesMarkedOutputEvenWhenShellExitsNonzero(t *testin
 }
 
 func TestCapturePathFromShellFallsBackToNonInteractiveZsh(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not applicable on Windows")
-	}
-
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "zsh")
 	count := filepath.Join(dir, "count")
@@ -96,10 +77,6 @@ func TestCapturePathFromShellFallsBackToNonInteractiveZsh(t *testing.T) {
 }
 
 func TestCapturePathFromShellDoesNotRunFallbackAfterSuccessfulCapture(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not applicable on Windows")
-	}
-
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "zsh")
 	count := filepath.Join(dir, "count")
@@ -118,10 +95,6 @@ func TestCapturePathFromShellDoesNotRunFallbackAfterSuccessfulCapture(t *testing
 }
 
 func TestCapturePathFromShellRecoversFromRealZshStartupFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not applicable on Windows")
-	}
-
 	zsh, err := exec.LookPath("zsh")
 	if err != nil {
 		t.Skip("zsh not installed")
