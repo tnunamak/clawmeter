@@ -396,6 +396,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Run Windows unit tests
+        run: go test ./...
+
       - name: Create temp dir
         run: New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
 
