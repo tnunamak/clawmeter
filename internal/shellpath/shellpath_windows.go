@@ -23,6 +23,10 @@ func capture() []string {
 	return parts
 }
 
+func terminalAvailable() bool {
+	return false
+}
+
 func readRegistryPath(root registry.Key, path string) []string {
 	k, err := registry.OpenKey(root, path, registry.QUERY_VALUE)
 	if err != nil {

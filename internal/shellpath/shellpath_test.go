@@ -3,13 +3,18 @@
 package shellpath
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+const shellPathSubprocessTest = "CLAWMETER_SHELLPATH_SUBPROCESS_TEST"
 
 func TestMergeDeduplicates(t *testing.T) {
 	orig := os.Getenv("PATH")
@@ -52,9 +57,107 @@ func TestCapturePathFromShellUsesMarkedOutputEvenWhenShellExitsNonzero(t *testin
 		t.Fatalf("write fake shell: %v", err)
 	}
 
-	got := capturePathFromShell(shell)
+	got := capturePathFromShellWithPolicy(shell, true, runShellCommand)
 	if len(got) != 2 || got[0] != "/tmp/codex/bin" || got[1] != "/usr/bin" {
 		t.Fatalf("capturePathFromShell() = %#v, want marked PATH despite nonzero exit", got)
+	}
+}
+
+func TestCapturePathFromShellSkipsInteractiveZshWithoutTerminal(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "zsh")
+	count := filepath.Join(dir, "count")
+	script := "#!/bin/sh\nprintf x >> '" + count + "'\nif [ \"$2\" = \"-i\" ]; then exit 7; fi\nsleep 0.05\nprintf '__CLAWMETER_PATH__/home/user/.nvm/versions/node/v22/bin:/usr/bin__CLAWMETER_PATH__'\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+
+	got := capturePathFromShellWithPolicy(shell, false, runShellCommand)
+	if len(got) != 2 || got[0] != "/home/user/.nvm/versions/node/v22/bin" || got[1] != "/usr/bin" {
+		t.Fatalf("capturePathFromShell() = %#v, want recovered PATH", got)
+	}
+	if data, err := os.ReadFile(count); err != nil || string(data) != "x" {
+		t.Fatalf("shell invocation count = %q, %v; want recovery only", data, err)
+	}
+}
+
+func TestCapturePathFromShellNoTTYSlowRecoverySubprocess(t *testing.T) {
+	if os.Getenv(shellPathSubprocessTest) == "1" {
+		runNoTTYSlowRecoveryChild(t)
+		return
+	}
+
+	dir := t.TempDir()
+	markerFile := filepath.Join(dir, "probe-marker")
+	shell := filepath.Join(dir, "zsh")
+	script := "#!/bin/sh\n" +
+		"case \" $* \" in\n" +
+		"  *\" -i \"*) printf interactive > \"$CLAWMETER_SHELLPATH_MARKER\"; exit 7 ;;\n" +
+		"esac\n" +
+		"printf recovery > \"$CLAWMETER_SHELLPATH_MARKER\"\n" +
+		"sleep 4\n" +
+		"printf '__CLAWMETER_PATH__/home/user/.nvm/versions/node/v22/bin:/usr/bin__CLAWMETER_PATH__'\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake zsh: %v", err)
+	}
+
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCapturePathFromShellNoTTYSlowRecoverySubprocess$")
+	cmd.Stdin = devNull
+	cmd.Env = append(os.Environ(),
+		shellPathSubprocessTest+"=1",
+		"CLAWMETER_SHELLPATH_SHELL="+shell,
+		"CLAWMETER_SHELLPATH_MARKER="+markerFile,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v\n%s", err, output)
+	}
+
+	if got := string(output); !strings.Contains(got, "terminal=false") || !strings.Contains(got, "path=/home/user/.nvm/versions/node/v22/bin:/usr/bin") {
+		t.Fatalf("subprocess output = %q, want terminal=false and recovered PATH", got)
+	}
+	if got, err := os.ReadFile(markerFile); err != nil || string(got) != "recovery" {
+		t.Fatalf("probe marker = %q, %v; want recovery only", got, err)
+	}
+}
+
+func runNoTTYSlowRecoveryChild(t *testing.T) {
+	t.Helper()
+	if terminalAvailable() {
+		t.Fatalf("terminalAvailable() = true with child stdin connected to %s", os.DevNull)
+	}
+
+	path := capturePathFromShell(os.Getenv("CLAWMETER_SHELLPATH_SHELL"))
+	fmt.Fprintf(os.Stdout, "terminal=%t\npath=%s\n", terminalAvailable(), strings.Join(path, string(os.PathListSeparator)))
+}
+
+func TestCapturePathFromShellAllowsSlowZshRecoveryWithinRecoveryBound(t *testing.T) {
+	var calls [][]string
+	var timeouts []time.Duration
+	run := func(_ context.Context, _ string, args []string, timeout time.Duration) ([]byte, error) {
+		calls = append(calls, args)
+		timeouts = append(timeouts, timeout)
+		if timeout <= 3*time.Second {
+			return nil, context.DeadlineExceeded
+		}
+		return []byte("__CLAWMETER_PATH__/slow/recovery/bin__CLAWMETER_PATH__"), nil
+	}
+
+	got := capturePathFromShellWithPolicy("/bin/zsh", false, run)
+	if !reflect.DeepEqual(got, []string{"/slow/recovery/bin"}) {
+		t.Fatalf("capturePathFromShell() = %#v, want slow recovery PATH", got)
+	}
+	if len(calls) != 1 || calls[0][1] != "-c" {
+		t.Fatalf("zsh calls = %#v, want recovery only", calls)
+	}
+	if !reflect.DeepEqual(timeouts, []time.Duration{zshRecoveryTimeout}) {
+		t.Fatalf("zsh timeouts = %#v, want [%s]", timeouts, zshRecoveryTimeout)
 	}
 }
 
@@ -67,7 +170,7 @@ func TestCapturePathFromShellFallsBackToNonInteractiveZsh(t *testing.T) {
 		t.Fatalf("write fake shell: %v", err)
 	}
 
-	got := capturePathFromShell(shell)
+	got := capturePathFromShellWithPolicy(shell, true, runShellCommand)
 	if len(got) != 2 || got[0] != "/home/user/.nvm/versions/node/v22/bin" || got[1] != "/usr/bin" {
 		t.Fatalf("capturePathFromShell() = %#v, want fallback PATH", got)
 	}
@@ -85,7 +188,7 @@ func TestCapturePathFromShellDoesNotRunFallbackAfterSuccessfulCapture(t *testing
 		t.Fatalf("write fake shell: %v", err)
 	}
 
-	got := capturePathFromShell(shell)
+	got := capturePathFromShellWithPolicy(shell, true, runShellCommand)
 	if len(got) != 2 || got[0] != "/home/user/.nvm/bin" || got[1] != "/usr/bin" {
 		t.Fatalf("capturePathFromShell() = %#v, want marked PATH", got)
 	}
@@ -216,6 +319,13 @@ func TestProbeForShellUsesShellSpecificProtocol(t *testing.T) {
 		if len(args) != 4 || args[0] != "-l" || args[1] != "-i" || args[2] != "-c" || !strings.Contains(args[3], "$PATH") {
 			t.Fatalf("%s probe args = %#v", name, args)
 		}
+		if probe.interactiveTimeout != captureTimeout {
+			t.Fatalf("%s interactive timeout = %s, want %s", name, probe.interactiveTimeout, captureTimeout)
+		}
+	}
+	zsh, _ := probeForShell("/bin/zsh")
+	if zsh.recoveryTimeout != zshRecoveryTimeout {
+		t.Fatalf("zsh recovery timeout = %s, want %s", zsh.recoveryTimeout, zshRecoveryTimeout)
 	}
 
 	fish, ok := probeForShell("/usr/bin/fish")

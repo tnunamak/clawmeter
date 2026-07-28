@@ -27,7 +27,14 @@ import (
 	"time"
 )
 
-const captureTimeout = 3 * time.Second
+const (
+	// captureTimeout bounds ordinary shell probes, including interactive
+	// probes when the tray was started from a terminal.
+	captureTimeout = 3 * time.Second
+	// zshRecoveryTimeout allows real version-manager initialization to finish
+	// while still bounding the non-interactive recovery independently.
+	zshRecoveryTimeout = 8 * time.Second
+)
 
 var (
 	once     sync.Once
@@ -59,21 +66,29 @@ func captureLoginShell() []string {
 }
 
 func capturePathFromShell(shell string) []string {
+	return capturePathFromShellWithPolicy(shell, terminalAvailable(), runShellCommand)
+}
+
+type shellCommandRunner func(context.Context, string, []string, time.Duration) ([]byte, error)
+
+func capturePathFromShellWithPolicy(shell string, terminal bool, runShell shellCommandRunner) []string {
 	probe, ok := probeForShell(shell)
 	if !ok {
 		return nil
 	}
 
-	run := func(args ...string) []byte {
-		out, _ := runShellCommand(context.Background(), shell, args, captureTimeout)
+	run := func(args []string, timeout time.Duration) []byte {
+		out, _ := runShell(context.Background(), shell, args, timeout)
 		return out
 	}
 
 	// Some shell init files print the marker and then exit nonzero because
 	// interactive-only commands failed. Keep stdout if it contains the PATH.
-	out := run(probe.loginInteractiveArgs...)
-	if path := parseMarkedPath(out, marker); len(path) > 0 {
-		return path
+	if terminal || filepath.Base(shell) != "zsh" {
+		out := run(probe.loginInteractiveArgs, probe.interactiveTimeout)
+		if path := parseMarkedPath(out, marker); len(path) > 0 {
+			return path
+		}
 	}
 
 	if filepath.Base(shell) != "zsh" {
@@ -83,7 +98,7 @@ func capturePathFromShell(shell string) []string {
 	// A GUI/non-TTY launch can make zsh startup fail before it reaches the
 	// marker. Source zshrc explicitly in a bounded non-interactive shell so
 	// PATH changes are still captured.
-	out = run(probe.zshRecoveryArgs...)
+	out := run(probe.zshRecoveryArgs, probe.recoveryTimeout)
 	return parseMarkedPath(out, marker)
 }
 
@@ -92,20 +107,22 @@ const marker = "__CLAWMETER_PATH__"
 type shellProbe struct {
 	loginInteractiveArgs []string
 	zshRecoveryArgs      []string
+	interactiveTimeout   time.Duration
+	recoveryTimeout      time.Duration
 }
 
 func probeForShell(shell string) (shellProbe, bool) {
 	base := filepath.Base(shell)
 	posix := fmt.Sprintf(`printf '%s%%s%s' "$PATH"`, marker, marker)
 	probes := map[string]shellProbe{
-		"zsh":  {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
-		"bash": {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
-		"sh":   {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
-		"dash": {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
-		"ksh":  {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}},
+		"zsh":  {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}, interactiveTimeout: captureTimeout, recoveryTimeout: zshRecoveryTimeout},
+		"bash": {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}, interactiveTimeout: captureTimeout},
+		"sh":   {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}, interactiveTimeout: captureTimeout},
+		"dash": {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}, interactiveTimeout: captureTimeout},
+		"ksh":  {loginInteractiveArgs: []string{"-l", "-i", "-c", posix}, interactiveTimeout: captureTimeout},
 		// fish PATH is a list; string join turns it into the platform PATH
 		// representation before printf emits the marker-delimited value.
-		"fish": {loginInteractiveArgs: []string{"-l", "-i", "-c", fmt.Sprintf(`printf '%s%%s%s' (string join : -- $PATH)`, marker, marker)}},
+		"fish": {loginInteractiveArgs: []string{"-l", "-i", "-c", fmt.Sprintf(`printf '%s%%s%s' (string join : -- $PATH)`, marker, marker)}, interactiveTimeout: captureTimeout},
 	}
 	probe, ok := probes[base]
 	if !ok {
