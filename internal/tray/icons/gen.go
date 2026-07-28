@@ -44,6 +44,8 @@ var (
 	ProviderSynthetic []byte
 	//go:embed provider-zai.png
 	ProviderZAI []byte
+	//go:embed provider-alibaba.png
+	ProviderAlibaba []byte
 )
 
 // ProviderLogos maps provider name to its embedded logo PNG.
@@ -62,6 +64,7 @@ var ProviderLogos = map[string][]byte{
 	"jetbrains":  ProviderJetBrains,
 	"synthetic":  ProviderSynthetic,
 	"zai":        ProviderZAI,
+	"alibaba":    ProviderAlibaba,
 }
 
 type logoTreatment struct {
@@ -82,6 +85,7 @@ var providerLogoTreatments = map[string]logoTreatment{
 	"synthetic":   {darkenMonochrome: true},
 	"zai":         {darkenMonochrome: true},
 	"antigravity": {darkenMonochrome: true},
+	"alibaba":     {contrastPlate: true},
 }
 
 const (

@@ -11,6 +11,7 @@ type ProviderMaturity struct {
 const providerMaturityLearnMore = "https://github.com/tnunamak/clawmeter/blob/main/docs/provider-maturity.md"
 
 var experimentalProviderByName = map[string]bool{
+	"alibaba":     true,
 	"antigravity": true,
 	"claude":      false,
 	"openai":      false,
