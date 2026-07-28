@@ -15,6 +15,7 @@ Clawmeter reuses credentials that the provider's own tools already store locally
 | GitHub Copilot | `COPILOT_API_TOKEN` | Reads the token from the environment when configured. |
 | Kimi | Kimi config, `KIMI_ACCESS_TOKEN`, or `KIMI_K2_API_KEY` | OAuth mode may refresh access and write the provider's normal credential file. |
 | OpenRouter | `OPENROUTER_API_KEY` or config | API-key based. |
+| Alibaba | `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, `DASHSCOPE_API_KEY`, or `~/.qwen/settings.json` | API-key based. Reads Qwen Code settings for credential discovery. |
 
 Clawmeter does not send provider credentials to Tim Nunamaker, GitHub, SignPath, or any Clawmeter service.
 

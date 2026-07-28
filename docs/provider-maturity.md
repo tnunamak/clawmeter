@@ -11,7 +11,7 @@ an audit covered a provider:
 | Providers | Maturity |
 |---|---|
 | Claude, Codex (`openai`), Gemini | not experimental |
-| Antigravity, Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
+| Alibaba, Antigravity, Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
 
 The experimental group reflects the current provider audit's documented
 contract or semantic risks. Antigravity has been validated against one live

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/provider/alibaba"
 	"github.com/tnunamak/clawmeter/internal/provider/anthropic"
 	"github.com/tnunamak/clawmeter/internal/provider/antigravity"
 	"github.com/tnunamak/clawmeter/internal/provider/copilot"
@@ -24,12 +25,15 @@ import (
 )
 
 var aliases = map[string]string{
-	"codex":  "openai",
-	"grok":   "xai",
-	"x.ai":   "xai",
-	"x-ai":   "xai",
-	"xai":    "xai",
-	"openai": "openai",
+	"codex":     "openai",
+	"grok":      "xai",
+	"x.ai":      "xai",
+	"x-ai":      "xai",
+	"xai":       "xai",
+	"openai":    "openai",
+	"qwen":      "alibaba",
+	"bailian":   "alibaba",
+	"dashscope": "alibaba",
 }
 
 // Register registers all known providers with the given registry and wires
@@ -38,6 +42,7 @@ var aliases = map[string]string{
 func Register(registry *provider.Registry, cfg *config.Config) {
 	registry.SetEnabledFilter(cfg)
 	for _, fn := range []func(*provider.Registry, *config.Config) error{
+		alibaba.Register,
 		antigravity.Register,
 		anthropic.Register,
 		kimi.Register,
