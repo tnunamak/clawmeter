@@ -29,7 +29,8 @@ const (
 	intlCommodityCode = "sfm_codingplan_public_intl"
 	cnCommodityCode   = "sfm_codingplan_public_cn"
 
-	quotaAction = "zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2"
+	quotaAction  = "zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2"
+	quotaAPIName = "queryCodingPlanInstanceInfoV2"
 
 	timeout     = 12 * time.Second
 	maxBodySize = 2 << 20 // 2 MiB
@@ -52,9 +53,17 @@ type Provider struct {
 
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
-		cfg:    cfg,
-		client: &http.Client{Timeout: timeout},
-		now:    time.Now,
+		cfg: cfg,
+		client: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				req.Header.Del("Authorization")
+				req.Header.Del("x-api-key")
+				req.Header.Del("X-DashScope-API-Key")
+				return nil
+			},
+		},
+		now: time.Now,
 	}
 }
 
@@ -86,13 +95,23 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	if err != nil && shouldRetryRegion(err) {
 		data, err = p.fetchRegion(ctx, key, cnHost, cnRegionID, cnCommodityCode)
 	}
+	if err != nil && isAuthFailure(err) {
+		return &provider.UsageData{
+			Provider:              p.Name(),
+			FetchedAt:             p.now(),
+			IsExpired:             true,
+			InvalidatesPriorUsage: true,
+			Error:                 "unauthorized — check API key",
+		}, nil
+	}
 	return data, err
 }
 
 // regionError wraps fetch errors with a flag for region-retry eligibility.
 type regionError struct {
-	err     error
-	retryable bool
+	err         error
+	retryable   bool
+	authFailure bool
 }
 
 func (e *regionError) Error() string { return e.err.Error() }
@@ -102,6 +121,14 @@ func shouldRetryRegion(err error) bool {
 	var re *regionError
 	if ok := asRegionError(err, &re); ok {
 		return re.retryable
+	}
+	return false
+}
+
+func isAuthFailure(err error) bool {
+	var re *regionError
+	if ok := asRegionError(err, &re); ok {
+		return re.authFailure
 	}
 	return false
 }
@@ -126,7 +153,7 @@ func (p *Provider) fetchRegion(ctx context.Context, key, host, regionID, commodi
 	if endpoint == "" {
 		endpoint = fmt.Sprintf(
 			"%s/data/api.json?action=%s&product=broadscope-bailian&api=%s&currentRegionId=%s",
-			host, quotaAction, quotaAction, regionID,
+			host, quotaAction, quotaAPIName, regionID,
 		)
 	}
 
@@ -153,12 +180,11 @@ func (p *Provider) fetchRegion(ctx context.Context, key, host, regionID, commodi
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return &provider.UsageData{
-			Provider:  p.Name(),
-			FetchedAt: p.now(),
-			IsExpired: true,
-			Error:     "unauthorized — check API key",
-		}, nil
+		return nil, &regionError{
+			err:         fmt.Errorf("unauthorized (HTTP %d) — key may not be valid in this region", resp.StatusCode),
+			retryable:   true,
+			authFailure: true,
+		}
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
@@ -378,8 +404,9 @@ func searchKey(v any, key string) any {
 	return nil
 }
 
-// findQuotaInfo locates the codingPlanQuotaInfo dict within the response,
-// trying instance selection first, then falling back to a recursive search.
+// findQuotaInfo locates the codingPlanQuotaInfo dict within the response.
+// When an instance list is present, quota is read only from the selected
+// instance — never from sibling instances that may be expired.
 func findQuotaInfo(v any) map[string]any {
 	instances := searchKey(v, "codingPlanInstanceInfos")
 	if instances == nil {
@@ -399,8 +426,9 @@ func findQuotaInfo(v any) map[string]any {
 				}
 			}
 		}
+		return nil
 	}
-	// Fallback: find any dict containing quota field names.
+	// No instance list — search the whole response.
 	if q := searchKey(v, "codingPlanQuotaInfo"); q != nil {
 		if qm, ok := q.(map[string]any); ok {
 			return qm

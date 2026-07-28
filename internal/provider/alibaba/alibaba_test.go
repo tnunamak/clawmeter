@@ -3,6 +3,7 @@ package alibaba
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -172,6 +173,9 @@ func TestFetchUsage_Unauthorized(t *testing.T) {
 	if !data.IsExpired {
 		t.Fatal("expected IsExpired=true for 401")
 	}
+	if !data.InvalidatesPriorUsage {
+		t.Error("expected InvalidatesPriorUsage=true for auth failure")
+	}
 	if data.Error == "" {
 		t.Error("expected non-empty error message")
 	}
@@ -192,6 +196,9 @@ func TestFetchUsage_Forbidden(t *testing.T) {
 	}
 	if !data.IsExpired {
 		t.Fatal("expected IsExpired=true for 403")
+	}
+	if !data.InvalidatesPriorUsage {
+		t.Error("expected InvalidatesPriorUsage=true for auth failure")
 	}
 }
 
@@ -463,6 +470,7 @@ func TestIsConfigured_QwenSettings(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	qwenDir := filepath.Join(home, ".qwen")
 	os.MkdirAll(qwenDir, 0o755)
@@ -484,7 +492,9 @@ func TestSetupStatus(t *testing.T) {
 	for _, name := range envVarNames {
 		t.Setenv(name, "")
 	}
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	p := New(config.ProviderConfig{})
 	status := p.SetupStatus()
@@ -563,4 +573,117 @@ func TestExpandJSON(t *testing.T) {
 	if _, ok := nested["deep"].([]any); !ok {
 		t.Error("deep should be expanded to slice")
 	}
+}
+
+func TestGeneratedURL(t *testing.T) {
+	endpoint := fmt.Sprintf(
+		"%s/data/api.json?action=%s&product=broadscope-bailian&api=%s&currentRegionId=%s",
+		intlHost, quotaAction, quotaAPIName, intlRegionID,
+	)
+	want := "https://modelstudio.console.alibabacloud.com/data/api.json" +
+		"?action=zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2" +
+		"&product=broadscope-bailian" +
+		"&api=queryCodingPlanInstanceInfoV2" +
+		"&currentRegionId=ap-southeast-1"
+	if endpoint != want {
+		t.Errorf("generated URL:\n  got  %s\n  want %s", endpoint, want)
+	}
+}
+
+func TestRedirectStripsCredentials(t *testing.T) {
+	var redirectHeaders http.Header
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectHeaders = r.Header.Clone()
+		json.NewEncoder(w).Encode(quotaResponse())
+	}))
+	defer backend.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, backend.URL, http.StatusFound)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(srv.URL)
+	p.cfg.APIKey = "secret-key"
+
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage after redirect: %v", err)
+	}
+	if data.IsExpired {
+		t.Fatal("unexpected IsExpired after redirect")
+	}
+	for _, header := range []string{"Authorization", "x-api-key", "X-DashScope-API-Key"} {
+		if redirectHeaders.Get(header) != "" {
+			t.Errorf("credential header %q forwarded across redirect", header)
+		}
+	}
+}
+
+func TestRegionFallbackOn401(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		json.NewEncoder(w).Encode(quotaResponse())
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(srv.URL)
+	p.cfg.APIKey = "test-key"
+
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("FetchUsage with region fallback: %v", err)
+	}
+	if data.IsExpired {
+		t.Fatal("expected successful fallback, got IsExpired")
+	}
+	if requests != 2 {
+		t.Errorf("expected 2 requests (intl + cn fallback), got %d", requests)
+	}
+	if len(data.Windows) != 3 {
+		t.Fatalf("expected 3 windows from fallback, got %d", len(data.Windows))
+	}
+}
+
+func TestExpiredInstanceQuotaNotUsed(t *testing.T) {
+	resp := map[string]any{
+		"codingPlanInstanceInfos": []any{
+			map[string]any{
+				"status": "EXPIRED",
+				"codingPlanQuotaInfo": map[string]any{
+					"per5HourUsedQuota":  float64(999),
+					"per5HourTotalQuota": float64(999),
+				},
+			},
+			map[string]any{
+				"status":   "VALID",
+				"isActive": true,
+			},
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(srv.URL)
+	p.cfg.APIKey = "test-key"
+
+	data, err := p.FetchUsage(context.Background())
+	// The active instance has no quota, so the provider must report no data
+	// rather than falling back to the expired instance's quota.
+	if err == nil {
+		for _, w := range data.Windows {
+			if w.Used == 999 {
+				t.Fatal("quota from expired instance must not be used")
+			}
+		}
+	}
+	// An error ("no coding plan quota data found") is the correct outcome:
+	// the selected active instance lacks quota and we refuse to search siblings.
 }
