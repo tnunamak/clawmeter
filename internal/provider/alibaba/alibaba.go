@@ -50,6 +50,8 @@ type Provider struct {
 	cfg                        config.ProviderConfig
 	client                     *http.Client
 	usageURL                   string // overridable for tests; empty means build from region
+	consoleConfigPath          string // overridable for tests; empty uses Coding Plan console profiles
+	consoleEndpoint            string // overridable for tests; empty uses the console gateway
 	now                        func() time.Time
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
 }
@@ -80,26 +82,46 @@ func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnviro
 }
 
 func (p *Provider) IsConfigured() bool {
+	if _, ok := p.consoleSession(); ok {
+		return true
+	}
 	key, _ := p.apiKey()
 	return key != ""
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
+	if _, ok := p.consoleSession(); ok {
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "Model Studio console session found"}
+	}
 	if key, err := p.apiKey(); err == nil && key != "" {
-		return provider.SetupStatus{State: provider.SetupReady, Detail: "API key found"}
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "Coding Plan API key found"}
 	}
 	if _, err := p.apiKey(); err != nil && !strings.Contains(err.Error(), "no API key found") {
 		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: err.Error()}
 	}
-	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "set ALIBABA_CODING_PLAN_API_KEY"}
+	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "run `bl auth login --console` or set ALIBABA_CODING_PLAN_API_KEY"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
+	if session, ok := p.consoleSession(); ok {
+		data, err := p.fetchConsoleUsage(ctx, session)
+		if err == nil {
+			return data, nil
+		}
+		if key, keyErr := p.apiKey(); keyErr == nil && key != "" {
+			return p.fetchAPIUsage(ctx, key)
+		}
+		return p.consoleErrorData(err), nil
+	}
+
 	key, err := p.apiKey()
 	if err != nil {
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
+	return p.fetchAPIUsage(ctx, key)
+}
 
+func (p *Provider) fetchAPIUsage(ctx context.Context, key string) (*provider.UsageData, error) {
 	data, err := p.fetchRegion(ctx, key, intlHost, intlRegionID, intlCommodityCode)
 	if err != nil && shouldRetryRegion(err) {
 		data, err = p.fetchRegion(ctx, key, cnHost, cnRegionID, cnCommodityCode)
@@ -531,7 +553,7 @@ func scoreInstance(v any) int {
 }
 
 func isLoginRequired(v any) bool {
-	for _, key := range []string{"code", "status", "statusCode"} {
+	for _, key := range []string{"code", "status", "statusCode", "errorCode", "message", "msg", "statusMessage", "errorMsg"} {
 		if s := searchKey(v, key); s != nil {
 			if str, ok := s.(string); ok {
 				lower := strings.ToLower(str)

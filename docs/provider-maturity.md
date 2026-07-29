@@ -14,10 +14,11 @@ an audit covered a provider:
 | Alibaba Coding Plan, Alibaba Token Plan, Antigravity, Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
 
 The experimental group reflects the current provider audit's documented
-contract or semantic risks. Alibaba Token Plan uses the console session
-created by Alibaba's official `bl auth login --console` command and read-only
-Personal Plan console operations; Alibaba has not documented that operation
-contract as a public API. Antigravity has been validated against one live
+contract or semantic risks. Alibaba Token Plan and Alibaba Coding Plan use the
+console session created by Alibaba's official `bl auth login --console` command
+and a narrowly allowlisted read-only quota operation; Alibaba has not
+documented that operation contract as a public API, and no entitled Coding Plan
+account has yet provided live quota-field validation. Antigravity has been validated against one live
 consumer account, but its CLI-owned credential storage and internal quota API
 still need live validation on macOS and Windows. Grok is experimental because
 its live endpoint has omitted the usage percentage even while the account was

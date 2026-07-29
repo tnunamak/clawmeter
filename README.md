@@ -237,13 +237,19 @@ brew services stop clawmeter
 | OpenRouter | `OPENROUTER_API_KEY` or config; optional `OPENROUTER_MANAGEMENT_KEY` for wallet credits |
 | JetBrains AI | IDE config files |
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
-| Alibaba Coding Plan | `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, or `~/.qwen/settings.json` (dedicated Coding Plan key only) |
+| Alibaba Coding Plan | Dedicated Model Studio console login (`bl auth login --console`) or `ALIBABA_CODING_PLAN_API_KEY` / `BAILIAN_CODING_PLAN_API_KEY` (Coding Plan key only) |
 
 For Grok/xAI, `grok login` enables Grok weekly usage-pool tracking from the
 read-only grok.com billing surface. `XAI_MANAGEMENT_API_KEY` enables xAI API
 prepaid-credit tracking from the Management API; use a Management API key from
 xAI Console settings, not the model-serving `XAI_API_KEY`. Clawmeter does not
 create, rotate, delete, top up, or spend anything.
+
+For Alibaba Coding Plan, Clawmeter reads the official Model Studio CLI's
+console-login session from its dedicated Coding Plan profile or `~/.bailian`.
+It sends only the read-only quota query, never reads browser cookies and never
+calls a model or plan-management endpoint. Personal Token Plan remains a
+separate provider and session profile.
 
 </details>
 

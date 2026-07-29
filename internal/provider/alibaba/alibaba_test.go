@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,116 @@ func TestFetchUsage_HappyPath(t *testing.T) {
 		if w.ResetsAt.IsZero() {
 			t.Errorf("window %d resetsAt should not be zero", i)
 		}
+	}
+}
+
+func TestFetchUsage_ConsoleSessionUsesOnlyReadOnlyQuotaOperation(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"active_config":"coding-plan","coding-plan":{"access_token":"console-token","console_region":"ap-southeast-1","console_site":"international"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer console-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		params := r.Form.Get("params")
+		if !strings.Contains(params, codingPlanConsoleOperation) {
+			t.Fatalf("unexpected console operation: %s", params)
+		}
+		if strings.Contains(params, "/consume") || strings.Contains(params, "/use") || strings.Contains(params, "purchase") {
+			t.Fatalf("unsafe console operation: %s", params)
+		}
+		if !strings.Contains(params, intlCommodityCode) || !strings.Contains(params, `"onlyLatestOne":true`) {
+			t.Fatalf("console request missing Coding Plan query: %s", params)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(quotaResponse())
+	}))
+	defer server.Close()
+
+	p := newTestProvider("")
+	p.consoleConfigPath = configPath
+	p.consoleEndpoint = server.URL
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Windows) != 3 || data.Windows[0].Utilization != 25 {
+		t.Fatalf("console usage = %#v", data)
+	}
+}
+
+func TestFetchUsage_ConsoleSessionWithoutPlanStaysQuiet(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"access_token":"console-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"DataV2":{"data":{"data":{"codingPlanInstanceInfos":[]}}}}}`))
+	}))
+	defer server.Close()
+
+	p := newTestProvider("")
+	p.consoleConfigPath = configPath
+	p.consoleEndpoint = server.URL
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Error != "" || len(data.Windows) != 0 || data.IsExpired {
+		t.Fatalf("no-plan console data = %#v", data)
+	}
+}
+
+func TestFetchUsage_ExpiredConsoleSessionInvalidatesUsage(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"access_token":"console-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"success":false,"errorCode":"BailianGateway.Login.NotLogined"}}`))
+	}))
+	defer server.Close()
+
+	p := newTestProvider("")
+	p.consoleConfigPath = configPath
+	p.consoleEndpoint = server.URL
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !data.IsExpired || !data.InvalidatesPriorUsage || !strings.Contains(data.Error, "expired") {
+		t.Fatalf("expired console data = %#v", data)
+	}
+}
+
+func TestFetchUsage_ConsoleRejectionIsNotTreatedAsMissingPlan(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"access_token":"console-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"success":false,"errorCode":"BailianGateway.Permission.Denied"}}`))
+	}))
+	defer server.Close()
+
+	p := newTestProvider("")
+	p.consoleConfigPath = configPath
+	p.consoleEndpoint = server.URL
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Error == "" || data.IsExpired {
+		t.Fatalf("rejected console data = %#v", data)
 	}
 }
 
