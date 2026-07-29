@@ -1020,7 +1020,7 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 		ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
 		RiskPct:      proj.ProjectedPct,
 		ShowExpected: true,
-		Label:        windowBadgeLabel(window.Name),
+		Label:        windowBadgeLabelForWindow(window),
 	}
 }
 
@@ -1118,6 +1118,13 @@ func windowBadgeLabel(name string) string {
 		return "--"
 	}
 	return b.String()
+}
+
+func windowBadgeLabelForWindow(window provider.UsageWindow) string {
+	if label := strings.TrimSpace(window.DisplayName); label != "" {
+		return windowBadgeLabel(label)
+	}
+	return windowBadgeLabel(window.Name)
 }
 
 func updateTrayTooltip(results map[string]*provider.UsageData, displayNames map[string]string) {

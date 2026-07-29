@@ -869,6 +869,22 @@ func TestWindowBadgeLabelUsesTwoCharacterQuotaCode(t *testing.T) {
 	}
 }
 
+func TestWindowBadgeLabelForWindowPrefersProviderDisplayCode(t *testing.T) {
+	tests := []struct {
+		window provider.UsageWindow
+		want   string
+	}{
+		{window: provider.UsageWindow{Name: "session_5h", DisplayName: "5h"}, want: "5H"},
+		{window: provider.UsageWindow{Name: "weekly", DisplayName: "7d"}, want: "7D"},
+		{window: provider.UsageWindow{Name: "7d Sonnet"}, want: "7S"},
+	}
+	for _, tt := range tests {
+		if got := windowBadgeLabelForWindow(tt.window); got != tt.want {
+			t.Fatalf("windowBadgeLabelForWindow(%+v) = %q, want %q", tt.window, got, tt.want)
+		}
+	}
+}
+
 func TestExpectedUsagePctClampsToResetWindow(t *testing.T) {
 	if got := expectedUsagePct(time.Now().Add(forecast.SevenDayWindow+time.Hour), forecast.SevenDayWindow); got != 0 {
 		t.Fatalf("future-before-window expected usage = %.1f, want 0", got)
