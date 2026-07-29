@@ -50,6 +50,21 @@ type Provider struct {
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
 }
 
+// consoleConfigPaths orders Clawmeter's dedicated console-session store before
+// the official CLI's default store. The dedicated store is populated only by
+// an explicit connect flow and never needs the model-inference API key after
+// the browser callback completes.
+func consoleConfigPaths() []string {
+	paths := make([]string, 0, 2)
+	if configDir, err := os.UserConfigDir(); err == nil {
+		paths = append(paths, filepath.Join(configDir, "clawmeter", "alibaba-token-plan", "config.json"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".bailian", "config.json"))
+	}
+	return paths
+}
+
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
 		cfg:    cfg,
@@ -127,14 +142,19 @@ type consoleSession struct {
 }
 
 func (p *Provider) consoleSession() (consoleSession, bool) {
-	path := p.configPath
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return consoleSession{}, false
-		}
-		path = filepath.Join(home, ".bailian", "config.json")
+	paths := consoleConfigPaths()
+	if p.configPath != "" {
+		paths = []string{p.configPath}
 	}
+	for _, path := range paths {
+		if session, ok := readConsoleSession(path); ok {
+			return session, true
+		}
+	}
+	return consoleSession{}, false
+}
+
+func readConsoleSession(path string) (consoleSession, bool) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return consoleSession{}, false
