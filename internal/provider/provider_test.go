@@ -279,7 +279,7 @@ func TestShouldShowInPrimaryUI(t *testing.T) {
 		{"auto nil hidden", nil, false, false, false},
 		{"auto healthy shown", healthy, false, false, true},
 		{"auto error without history hidden", errorOnly, false, false, false},
-		{"auto expired without history hidden", expired, false, false, false},
+		{"auto expired without history shown", expired, false, false, true},
 		{"auto expired with history shown", expired, true, false, true},
 		{"auto stale windows shown", staleWithWindows, false, false, true},
 		{"explicit nil shown", nil, false, true, true},

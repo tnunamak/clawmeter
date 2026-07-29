@@ -269,14 +269,18 @@ func (u *UsageData) EstablishesPrimaryUIHistory() bool {
 
 // ShouldShowInPrimaryUI decides whether a provider belongs in the main tray
 // or default status output. Auto-detected providers must prove usefulness
-// before they take visual space; explicitly enabled providers remain visible
-// so their setup errors are actionable.
+// before they take visual space. A credential rejection is the exception: it
+// is actionable evidence that an auto-detected provider needs attention, not
+// a transient polling failure to hide.
 func ShouldShowInPrimaryUI(data *UsageData, hadPriorUsefulData, explicitlyEnabled bool) bool {
 	if explicitlyEnabled {
 		return true
 	}
 	if data == nil {
 		return false
+	}
+	if data.IsExpired {
+		return true
 	}
 	if data.IsHealthy() && data.HasPresentableUsage() {
 		return true

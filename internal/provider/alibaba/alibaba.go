@@ -212,7 +212,11 @@ func (p *Provider) fetchRegion(ctx context.Context, key, host, regionID, commodi
 	parsed = expandJSON(parsed)
 
 	if isLoginRequired(parsed) {
-		return nil, &regionError{err: fmt.Errorf("login required (key may not be valid in this region)"), retryable: true}
+		return nil, &regionError{
+			err:         fmt.Errorf("login required (key may not be valid in this region)"),
+			retryable:   true,
+			authFailure: true,
+		}
 	}
 
 	quota := findQuotaInfo(parsed)

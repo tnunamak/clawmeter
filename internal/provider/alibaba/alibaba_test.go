@@ -204,6 +204,28 @@ func TestFetchUsage_Forbidden(t *testing.T) {
 	}
 }
 
+func TestFetchUsage_LoginRequiredMarksCredentialsExpired(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":"LoginRequired","Message":"login required"}`))
+	}))
+	defer srv.Close()
+
+	p := newTestProvider(srv.URL)
+	p.cfg.APIKey = "test-key"
+
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error for login-required response, got %v", err)
+	}
+	if !data.IsExpired || !data.InvalidatesPriorUsage {
+		t.Fatalf("login-required data = %+v, want expired and invalidating", data)
+	}
+	if data.Error == "" {
+		t.Fatal("expected an actionable error")
+	}
+}
+
 func TestFetchUsage_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -321,9 +343,12 @@ func TestFetchUsage_LoginRequired(t *testing.T) {
 	p := newTestProvider(srv.URL)
 	p.cfg.APIKey = "test-key"
 
-	_, err := p.FetchUsage(context.Background())
-	if err == nil {
-		t.Fatal("expected error for login-required response")
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("expected structured auth failure, got %v", err)
+	}
+	if !data.IsExpired || !data.InvalidatesPriorUsage {
+		t.Fatalf("login-required data = %+v, want expired and invalidating", data)
 	}
 }
 
