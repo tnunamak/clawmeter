@@ -27,6 +27,16 @@ func terminalAvailable() bool {
 	return false
 }
 
+func readCurrentUserEnv(name string) (string, bool) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Environment`, registry.QUERY_VALUE)
+	if err != nil {
+		return "", false
+	}
+	defer k.Close()
+	value, _, err := k.GetStringValue(name)
+	return value, err == nil
+}
+
 func readRegistryPath(root registry.Key, path string) []string {
 	k, err := registry.OpenKey(root, path, registry.QUERY_VALUE)
 	if err != nil {

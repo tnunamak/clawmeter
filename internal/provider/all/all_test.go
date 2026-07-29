@@ -2,7 +2,16 @@ package all
 
 import (
 	"testing"
+
+	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+type registryResolver struct{}
+
+func (registryResolver) ResolveSessionEnvironment(provider.SessionEnvironmentRequest) map[string]string {
+	return nil
+}
 
 func TestNames_IncludesKnownProviders(t *testing.T) {
 	got := Names()
@@ -18,6 +27,27 @@ func TestNames_IncludesKnownProviders(t *testing.T) {
 	for _, want := range required {
 		if !have[want] {
 			t.Errorf("expected %q in Names(), got %v", want, got)
+		}
+	}
+}
+
+func TestRegisterInjectsResolverIntoEveryEnvCredentialProvider(t *testing.T) {
+	registry := provider.NewRegistry()
+	resolver := registryResolver{}
+	Register(registry, config.DefaultConfig(), resolver)
+
+	want := map[string]bool{
+		"alibaba": true, "antigravity": true, "claude": true, "copilot": true,
+		"kimi": true, "kimik2": true, "openrouter": true, "synthetic": true,
+		"xai": true, "zai": true,
+	}
+	for name := range want {
+		p, ok := registry.Get(name)
+		if !ok {
+			t.Fatalf("registered provider %q is missing", name)
+		}
+		if _, ok := p.(provider.SessionEnvironmentResolverConsumer); !ok {
+			t.Errorf("provider %q does not accept the credential resolver", name)
 		}
 	}
 }

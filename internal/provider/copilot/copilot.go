@@ -23,7 +23,12 @@ const (
 
 // Provider implements the provider.Provider interface for GitHub Copilot.
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg                        config.ProviderConfig
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 // New creates a new Copilot provider.
@@ -98,7 +103,14 @@ func (p *Provider) getToken() (string, error) {
 
 	// 2. Copilot-specific env var (not GITHUB_TOKEN — a generic GitHub
 	// token doesn't grant Copilot API access and causes false positives)
-	if token := os.Getenv("COPILOT_API_TOKEN"); token != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"COPILOT_API_TOKEN"}, AllowSessionEnvironmentFallback: true,
+		})
+		if token := values["COPILOT_API_TOKEN"]; token != "" {
+			return token, nil
+		}
+	} else if token := os.Getenv("COPILOT_API_TOKEN"); token != "" {
 		return token, nil
 	}
 

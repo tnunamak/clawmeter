@@ -45,10 +45,11 @@ var envVarNames = []string{
 }
 
 type Provider struct {
-	cfg      config.ProviderConfig
-	client   *http.Client
-	usageURL string // overridable for tests; empty means build from region
-	now      func() time.Time
+	cfg                        config.ProviderConfig
+	client                     *http.Client
+	usageURL                   string // overridable for tests; empty means build from region
+	now                        func() time.Time
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
 }
 
 func New(cfg config.ProviderConfig) *Provider {
@@ -72,6 +73,9 @@ func (p *Provider) DisplayName() string      { return "Alibaba" }
 func (p *Provider) Description() string      { return "Alibaba Cloud Model Studio Coding Plan" }
 func (p *Provider) DashboardURL() string     { return "https://modelstudio.console.alibabacloud.com" }
 func (p *Provider) SafeForAutoPolling() bool { return true }
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
+}
 
 func (p *Provider) IsConfigured() bool {
 	key, _ := p.apiKey()
@@ -310,6 +314,19 @@ func (p *Provider) apiKey() (string, error) {
 	for _, name := range envVarNames {
 		if key := strings.Trim(strings.TrimSpace(os.Getenv(name)), `"' `); key != "" {
 			return key, nil
+		}
+	}
+	if p.sessionEnvironmentResolver != nil {
+		recovered := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames:                        append([]string(nil), envVarNames...),
+			AllowSessionEnvironmentFallback: true,
+		})
+		for _, name := range envVarNames {
+			if raw, ok := recovered[name]; ok {
+				if key := strings.Trim(strings.TrimSpace(raw), `"' `); key != "" {
+					return key, nil
+				}
+			}
 		}
 	}
 	if key := qwenSettingsKey(); key != "" {

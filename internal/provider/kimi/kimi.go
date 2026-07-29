@@ -27,11 +27,16 @@ const (
 
 // Provider implements the provider.Provider interface for Kimi Code.
 type Provider struct {
-	cfg        config.ProviderConfig
-	httpClient *http.Client
-	usageURL   string
-	tokenURL   string
-	now        func() time.Time
+	cfg                        config.ProviderConfig
+	httpClient                 *http.Client
+	usageURL                   string
+	tokenURL                   string
+	now                        func() time.Time
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 // New creates a new Kimi provider.
@@ -225,11 +230,15 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 	}
 
 	// Check environment variable
-	if token := os.Getenv("KIMI_ACCESS_TOKEN"); token != "" {
-		return &Credentials{
-			AccessToken: token,
-			TokenType:   "Bearer",
-		}, nil
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"KIMI_ACCESS_TOKEN"}, AllowSessionEnvironmentFallback: true,
+		})
+		if token := values["KIMI_ACCESS_TOKEN"]; token != "" {
+			return &Credentials{AccessToken: token, TokenType: "Bearer"}, nil
+		}
+	} else if token := os.Getenv("KIMI_ACCESS_TOKEN"); token != "" {
+		return &Credentials{AccessToken: token, TokenType: "Bearer"}, nil
 	}
 
 	// Read from credentials file

@@ -24,9 +24,16 @@ const (
 	maxBodySize    = 1 << 20
 )
 
+var credentialEnvNames = []string{"Z_AI_API_KEY", "Z_AI_QUOTA_URL", "Z_AI_API_HOST", "Z_AI_REGION"}
+
 type Provider struct {
-	cfg    config.ProviderConfig
-	client *http.Client
+	cfg                        config.ProviderConfig
+	client                     *http.Client
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 func New(cfg config.ProviderConfig) *Provider {
@@ -97,30 +104,51 @@ func (p *Provider) getAPIKey() (string, error) {
 	if p.cfg.APIKey != "" {
 		return p.cfg.APIKey, nil
 	}
-	if key := os.Getenv("Z_AI_API_KEY"); key != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.credentialEnvValues()
+		if key := values["Z_AI_API_KEY"]; key != "" {
+			return strings.Trim(key, "\" "), nil
+		}
+	} else if key := os.Getenv("Z_AI_API_KEY"); key != "" {
 		return strings.Trim(key, "\" "), nil
 	}
 	return "", fmt.Errorf("no API key found")
 }
 
 func (p *Provider) getQuotaURL() string {
-	if raw := strings.TrimSpace(os.Getenv("Z_AI_QUOTA_URL")); raw != "" {
+	values := map[string]string{}
+	if p.sessionEnvironmentResolver != nil {
+		values = p.credentialEnvValues()
+	} else {
+		values = map[string]string{
+			"Z_AI_QUOTA_URL": os.Getenv("Z_AI_QUOTA_URL"),
+			"Z_AI_API_HOST":  os.Getenv("Z_AI_API_HOST"),
+			"Z_AI_REGION":    os.Getenv("Z_AI_REGION"),
+		}
+	}
+	if raw := strings.TrimSpace(values["Z_AI_QUOTA_URL"]); raw != "" {
 		if endpoint, ok := safeEndpoint(raw); ok {
 			return endpoint
 		}
 		return ""
 	}
-	if raw := strings.TrimSpace(os.Getenv("Z_AI_API_HOST")); raw != "" {
+	if raw := strings.TrimSpace(values["Z_AI_API_HOST"]); raw != "" {
 		if endpoint, ok := safeEndpoint(raw); ok {
 			return strings.TrimRight(endpoint, "/") + quotaPath
 		}
 		return ""
 	}
 	base := defaultBaseURL
-	if strings.EqualFold(os.Getenv("Z_AI_REGION"), "cn") {
+	if strings.EqualFold(values["Z_AI_REGION"], "cn") {
 		base = "https://open.bigmodel.cn"
 	}
 	return base + quotaPath
+}
+
+func (p *Provider) credentialEnvValues() map[string]string {
+	return p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+		EnvNames: append([]string(nil), credentialEnvNames...), AllowSessionEnvironmentFallback: true,
+	})
 }
 
 func safeEndpoint(raw string) (string, bool) {

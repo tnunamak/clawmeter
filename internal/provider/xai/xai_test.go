@@ -11,11 +11,23 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+type xaiSessionEnvironmentResolver struct {
+	values  map[string]string
+	request provider.SessionEnvironmentRequest
+}
+
+func (r *xaiSessionEnvironmentResolver) ResolveSessionEnvironment(request provider.SessionEnvironmentRequest) map[string]string {
+	r.request = request
+	return r.values
+}
 
 func TestTransformBalance_ComputesCreditUsage(t *testing.T) {
 	p := New(config.ProviderConfig{})
@@ -178,6 +190,24 @@ func TestConfiguredTeamID_FromEnv(t *testing.T) {
 	}
 	if got != "team-env" {
 		t.Fatalf("team id = %q, want team-env", got)
+	}
+}
+
+func TestSessionEnvironmentResolverProvidesManagementKeyAndTeamID(t *testing.T) {
+	resolver := &xaiSessionEnvironmentResolver{values: map[string]string{
+		"XAI_MANAGEMENT_API_KEY": "test-management-key",
+		"XAI_TEAM_ID":            "test-team",
+	}}
+	p := New(config.ProviderConfig{})
+	p.SetSessionEnvironmentResolver(resolver)
+	if key, err := p.managementKey(); err != nil || key != "test-management-key" {
+		t.Fatalf("management key = %q, %v", key, err)
+	}
+	if team, err := p.configuredTeamID(); err != nil || team != "test-team" {
+		t.Fatalf("team id = %q, %v", team, err)
+	}
+	if !resolver.request.AllowSessionEnvironmentFallback || !reflect.DeepEqual(resolver.request.EnvNames, []string{"XAI_MANAGEMENT_API_KEY", "XAI_TEAM_ID"}) {
+		t.Fatalf("resolver request = %+v", resolver.request)
 	}
 }
 

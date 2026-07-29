@@ -31,10 +31,15 @@ const (
 
 // Provider implements the provider.Provider interface for xAI.
 type Provider struct {
-	cfg            config.ProviderConfig
-	baseURL        string
-	grokBillingURL string
-	client         *http.Client
+	cfg                        config.ProviderConfig
+	baseURL                    string
+	grokBillingURL             string
+	client                     *http.Client
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 // New creates a new xAI provider.
@@ -221,7 +226,12 @@ func (p *Provider) managementKey() (string, error) {
 	if p.cfg.APIKey != "" {
 		return strings.TrimSpace(p.cfg.APIKey), nil
 	}
-	if key := os.Getenv("XAI_MANAGEMENT_API_KEY"); strings.TrimSpace(key) != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.credentialEnvValues()
+		if key := strings.TrimSpace(values["XAI_MANAGEMENT_API_KEY"]); key != "" {
+			return key, nil
+		}
+	} else if key := os.Getenv("XAI_MANAGEMENT_API_KEY"); strings.TrimSpace(key) != "" {
 		return strings.TrimSpace(key), nil
 	}
 	return "", fmt.Errorf("no management key found")
@@ -235,10 +245,21 @@ func (p *Provider) configuredTeamID() (string, error) {
 			}
 		}
 	}
-	if id := os.Getenv("XAI_TEAM_ID"); strings.TrimSpace(id) != "" {
+	if p.sessionEnvironmentResolver != nil {
+		if id := strings.TrimSpace(p.credentialEnvValues()["XAI_TEAM_ID"]); id != "" {
+			return id, nil
+		}
+	} else if id := os.Getenv("XAI_TEAM_ID"); strings.TrimSpace(id) != "" {
 		return strings.TrimSpace(id), nil
 	}
 	return "", fmt.Errorf("no team id found")
+}
+
+func (p *Provider) credentialEnvValues() map[string]string {
+	return p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+		EnvNames:                        []string{"XAI_MANAGEMENT_API_KEY", "XAI_TEAM_ID"},
+		AllowSessionEnvironmentFallback: true,
+	})
 }
 
 func (p *Provider) teamID(ctx context.Context, key string) (string, error) {

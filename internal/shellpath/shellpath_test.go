@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
 const shellPathSubprocessTest = "CLAWMETER_SHELLPATH_SUBPROCESS_TEST"
@@ -47,6 +49,108 @@ func TestMergeDeduplicates(t *testing.T) {
 			t.Errorf("duplicate entry: %s", p)
 		}
 	}
+}
+
+func TestMissingEnvNamesFiltersInvalidPresentAndDuplicateNames(t *testing.T) {
+	t.Setenv("CLAWMETER_PRESENT", "value")
+	got := missingEnvNames([]string{"CLAWMETER_PRESENT", "CLAWMETER_MISSING", "CLAWMETER_MISSING", "bad-name"})
+	if !reflect.DeepEqual(got, []string{"CLAWMETER_MISSING"}) {
+		t.Fatalf("missingEnvNames() = %#v, want only the absent valid name", got)
+	}
+}
+
+func TestParseMarkedEnvReturnsOnlyRequestedValues(t *testing.T) {
+	out := []byte("noise\x00" + envMarker + "REQUESTED\x00test-value\x00" + envMarker + "UNREQUESTED\x00other" + envMarker + "test-value")
+	got := parseMarkedEnv(out, []string{"REQUESTED"})
+	if got["REQUESTED"] != "test-value" || len(got) != 1 {
+		t.Fatalf("parseMarkedEnv() returned unexpected requested-value presence")
+	}
+}
+
+func TestSessionEnvironmentResolverCachesValuesAndMissesByNameSet(t *testing.T) {
+	calls := 0
+	resolver := newSessionEnvironmentResolver(func(request provider.SessionEnvironmentRequest) map[string]string {
+		calls++
+		return map[string]string{"CLAWMETER_REQUESTED": "cached"}
+	})
+	first := resolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_MISSING", "CLAWMETER_REQUESTED"}, AllowSessionEnvironmentFallback: true})
+	second := resolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_REQUESTED", "CLAWMETER_MISSING"}, AllowSessionEnvironmentFallback: true})
+	if calls != 1 || first["CLAWMETER_REQUESTED"] != "cached" || second["CLAWMETER_REQUESTED"] != "cached" {
+		t.Fatalf("calls = %d, values = %#v / %#v; want one cached resolution", calls, first, second)
+	}
+	if _, ok := second["CLAWMETER_MISSING"]; ok {
+		t.Fatal("cached miss unexpectedly became a value")
+	}
+}
+
+func TestSessionEnvironmentResolverCachesValuesAndMisses(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "zsh")
+	count := filepath.Join(dir, "count")
+	script := "#!/bin/sh\nprintf x >> '" + count + "'\n"
+	if err := os.WriteFile(shell, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELL", shell)
+	t.Setenv("CLAWMETER_REQUESTED", "")
+	t.Setenv("CLAWMETER_MISSING", "")
+	resolver := NewSessionEnvironmentResolver()
+	request := provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_MISSING", "CLAWMETER_REQUESTED"}, AllowSessionEnvironmentFallback: true}
+	first := resolver.ResolveSessionEnvironment(request)
+	second := resolver.ResolveSessionEnvironment(request)
+	if len(first) != 0 || len(second) != 0 {
+		t.Fatalf("resolver values = %#v, %#v; want cached misses", first, second)
+	}
+	if got, err := os.ReadFile(count); err != nil || string(got) != "x" {
+		t.Fatalf("shell probe count = %q, %v; want exactly one probe", got, err)
+	}
+	if os.Getenv("CLAWMETER_REQUESTED") != "" {
+		t.Fatal("resolver leaked a recovered value into the process environment")
+	}
+}
+
+func TestSessionEnvironmentResolverIsLazyAndImportsOnlyRequestedValues(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	if os.Getenv(shellPathSubprocessTest) == "1" {
+		sessionEnvironmentResolverChild(t)
+		return
+	}
+
+	zdotdir := t.TempDir()
+	countFile := filepath.Join(t.TempDir(), "count")
+	if err := os.WriteFile(filepath.Join(zdotdir, ".zshrc"), []byte("printf x >> \"$CLAWMETER_TEST_COUNT\"\nexport CLAWMETER_REQUESTED_SECRET='test-value'\nexport CLAWMETER_UNREQUESTED_SECRET='must-not-import'\n"), 0o600); err != nil {
+		t.Fatalf("write isolated .zshrc: %v", err)
+	}
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSessionEnvironmentResolverIsLazyAndImportsOnlyRequestedValues$")
+	cmd.Stdin = devNull
+	cmd.Env = append(os.Environ(), shellPathSubprocessTest+"=1", "SHELL="+zsh, "ZDOTDIR="+zdotdir, "CLAWMETER_TEST_COUNT="+countFile, "CLAWMETER_REQUESTED_SECRET=", "CLAWMETER_UNREQUESTED_SECRET=")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess failed: %v\n%s", err, output)
+	}
+	if got := string(output); !strings.HasPrefix(got, "before=false\nrecovered=true\nglobal=false\nunrequested=false\n") {
+		t.Fatalf("subprocess output = %q, want lazy presence flags only", got)
+	}
+}
+
+func sessionEnvironmentResolverChild(t *testing.T) {
+	t.Helper()
+	_, beforeErr := os.Stat(os.Getenv("CLAWMETER_TEST_COUNT"))
+	resolver := NewSessionEnvironmentResolver()
+	recovered := resolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+		EnvNames:                        []string{"CLAWMETER_REQUESTED_SECRET"},
+		AllowSessionEnvironmentFallback: true,
+	})
+	_, requested := recovered["CLAWMETER_REQUESTED_SECRET"]
+	fmt.Fprintf(os.Stdout, "before=%t\nrecovered=%t\nglobal=%t\nunrequested=%t\n", beforeErr == nil, requested, os.Getenv("CLAWMETER_REQUESTED_SECRET") != "", os.Getenv("CLAWMETER_UNREQUESTED_SECRET") != "")
 }
 
 func TestCapturePathFromShellUsesMarkedOutputEvenWhenShellExitsNonzero(t *testing.T) {

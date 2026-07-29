@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/shellpath"
 )
 
 var testNow = time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -485,6 +487,31 @@ func TestIsConfigured_QwenSettings(t *testing.T) {
 	p := New(config.ProviderConfig{})
 	if !p.IsConfigured() {
 		t.Error("expected IsConfigured()=true from ~/.qwen/settings.json")
+	}
+}
+
+func TestIsConfigured_RecoversDeclaredEnvFromLoginShell(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	for _, name := range envVarNames {
+		t.Setenv(name, "")
+	}
+	zdotdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(zdotdir, ".zshrc"), []byte("export BAILIAN_CODING_PLAN_API_KEY='provider-test-value'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHELL", zsh)
+	t.Setenv("ZDOTDIR", zdotdir)
+
+	p := New(config.ProviderConfig{})
+	p.SetSessionEnvironmentResolver(shellpath.NewSessionEnvironmentResolver())
+	if !p.IsConfigured() {
+		t.Fatal("Alibaba provider did not become configured from its declared shell environment")
+	}
+	if os.Getenv("BAILIAN_CODING_PLAN_API_KEY") != "" {
+		t.Fatal("recovered Alibaba credential leaked into the process environment")
 	}
 }
 

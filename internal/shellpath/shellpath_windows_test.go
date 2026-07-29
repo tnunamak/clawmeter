@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/tnunamak/clawmeter/internal/provider"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -69,5 +70,41 @@ func TestMergeWindowsDeduplicatesCaseAndTrailingSeparators(t *testing.T) {
 	want := `C:\Tools;C:\Windows;C:\New`
 	if got := os.Getenv("PATH"); got != want {
 		t.Fatalf("PATH = %q, want %q", got, want)
+	}
+}
+
+func TestSessionEnvironmentResolverDoesNotUseShellOnWindows(t *testing.T) {
+	t.Setenv("CLAWMETER_WINDOWS_CREDENTIAL", "")
+	got := NewSessionEnvironmentResolver().ResolveSessionEnvironment(provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_WINDOWS_CREDENTIAL"}, AllowSessionEnvironmentFallback: true})
+	if len(got) != 0 {
+		t.Fatalf("recovered environment = %#v, want empty on Windows", got)
+	}
+	if got := os.Getenv("CLAWMETER_WINDOWS_CREDENTIAL"); got != "" {
+		t.Fatalf("credential environment changed to %q", got)
+	}
+}
+
+func TestSessionEnvironmentResolverUsesInheritedBeforeExactRegistryNames(t *testing.T) {
+	t.Setenv("CLAWMETER_INHERITED", "process-value")
+	t.Setenv("CLAWMETER_PERSISTED", "")
+	var lookedUp []string
+	resolver := newSessionEnvironmentResolverWithRegistryLookup(func(name string) (string, bool) {
+		lookedUp = append(lookedUp, name)
+		if name == "CLAWMETER_PERSISTED" {
+			return "persistent-value", true
+		}
+		return "", false
+	})
+	request := provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_MISSING", "CLAWMETER_PERSISTED", "CLAWMETER_INHERITED"}, AllowSessionEnvironmentFallback: true}
+	got := resolver.ResolveSessionEnvironment(request)
+	if got["CLAWMETER_INHERITED"] != "process-value" || got["CLAWMETER_PERSISTED"] != "persistent-value" {
+		t.Fatalf("resolved values = %#v, want inherited and persisted values", got)
+	}
+	if !reflect.DeepEqual(lookedUp, []string{"CLAWMETER_MISSING", "CLAWMETER_PERSISTED"}) {
+		t.Fatalf("registry names = %#v, want exact inherited misses", lookedUp)
+	}
+	resolver.ResolveSessionEnvironment(request)
+	if len(lookedUp) != 2 {
+		t.Fatalf("registry lookup count = %d, want cached second lookup", len(lookedUp))
 	}
 }

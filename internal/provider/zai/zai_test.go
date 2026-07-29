@@ -4,13 +4,25 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+type zaiSessionEnvironmentResolver struct {
+	values  map[string]string
+	request provider.SessionEnvironmentRequest
+}
+
+func (r *zaiSessionEnvironmentResolver) ResolveSessionEnvironment(request provider.SessionEnvironmentRequest) map[string]string {
+	r.request = request
+	return r.values
+}
 
 func TestSafeEndpoint(t *testing.T) {
 	tests := []struct {
@@ -45,6 +57,32 @@ func TestGetQuotaURLRegionsAndInvalidOverride(t *testing.T) {
 	t.Setenv("Z_AI_QUOTA_URL", "http://127.0.0.1:1")
 	if got := New(config.ProviderConfig{}).getQuotaURL(); got != "" {
 		t.Fatal("unsafe override accepted")
+	}
+}
+
+func TestSessionEnvironmentResolverProvidesZAISettingsAndKeepsValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+		want   string
+	}{
+		{"quota URL", map[string]string{"Z_AI_QUOTA_URL": "https://api.z.ai/custom"}, "https://api.z.ai/custom"},
+		{"API host", map[string]string{"Z_AI_API_HOST": "https://api.z.ai/host"}, "https://api.z.ai/host" + quotaPath},
+		{"region", map[string]string{"Z_AI_REGION": "cn"}, "https://open.bigmodel.cn" + quotaPath},
+		{"invalid quota URL", map[string]string{"Z_AI_QUOTA_URL": "http://127.0.0.1:1"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := &zaiSessionEnvironmentResolver{values: tt.values}
+			p := New(config.ProviderConfig{})
+			p.SetSessionEnvironmentResolver(resolver)
+			if got := p.getQuotaURL(); got != tt.want {
+				t.Fatalf("getQuotaURL() = %q, want %q", got, tt.want)
+			}
+			if !resolver.request.AllowSessionEnvironmentFallback || !reflect.DeepEqual(resolver.request.EnvNames, credentialEnvNames) {
+				t.Fatalf("resolver request = %+v", resolver.request)
+			}
+		})
 	}
 }
 

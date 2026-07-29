@@ -20,7 +20,12 @@ const (
 )
 
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg                        config.ProviderConfig
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 func New(cfg config.ProviderConfig) *Provider {
@@ -121,9 +126,19 @@ func (p *Provider) getAPIKey() (string, error) {
 	if p.cfg.APIKey != "" {
 		return p.cfg.APIKey, nil
 	}
-	for _, env := range []string{"KIMI_K2_API_KEY", "KIMI_API_KEY", "KIMI_KEY"} {
-		if key := os.Getenv(env); key != "" {
-			return key, nil
+	envNames := []string{"KIMI_K2_API_KEY", "KIMI_API_KEY", "KIMI_KEY"}
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{EnvNames: envNames, AllowSessionEnvironmentFallback: true})
+		for _, env := range envNames {
+			if key := values[env]; key != "" {
+				return key, nil
+			}
+		}
+	} else {
+		for _, env := range envNames {
+			if key := os.Getenv(env); key != "" {
+				return key, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("no API key found")

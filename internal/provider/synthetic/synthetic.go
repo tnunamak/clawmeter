@@ -26,9 +26,14 @@ const (
 )
 
 type Provider struct {
-	cfg        config.ProviderConfig
-	httpClient *http.Client
-	endpoint   string
+	cfg                        config.ProviderConfig
+	httpClient                 *http.Client
+	endpoint                   string
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 func New(cfg config.ProviderConfig) *Provider {
@@ -99,7 +104,14 @@ func (p *Provider) getAPIKey() (string, error) {
 	if p.cfg.APIKey != "" {
 		return p.cfg.APIKey, nil
 	}
-	if key := os.Getenv("SYNTHETIC_API_KEY"); key != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"SYNTHETIC_API_KEY"}, AllowSessionEnvironmentFallback: true,
+		})
+		if key := values["SYNTHETIC_API_KEY"]; key != "" {
+			return strings.Trim(key, "\" "), nil
+		}
+	} else if key := os.Getenv("SYNTHETIC_API_KEY"); key != "" {
 		return strings.Trim(key, "\" "), nil
 	}
 	return "", fmt.Errorf("no API key found")

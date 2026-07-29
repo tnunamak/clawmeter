@@ -53,6 +53,41 @@ func Init() {
 	})
 }
 
+func missingEnvNames(names []string) []string {
+	_, missing := inheritedEnv(names)
+	return missing
+}
+
+func inheritedEnv(names []string) (map[string]string, []string) {
+	seen := make(map[string]bool, len(names))
+	values := make(map[string]string)
+	missing := make([]string, 0, len(names))
+	for _, name := range names {
+		if !validEnvName(name) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if value := os.Getenv(name); value != "" {
+			values[name] = value
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	return values, missing
+}
+
+func validEnvName(name string) bool {
+	if name == "" || !(name[0] == '_' || name[0] >= 'A' && name[0] <= 'Z' || name[0] >= 'a' && name[0] <= 'z') {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if name[i] != '_' && !(name[i] >= 'A' && name[i] <= 'Z') && !(name[i] >= 'a' && name[i] <= 'z') && !(name[i] >= '0' && name[i] <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
 // captureLoginShell runs the user's login shell to get PATH.
 func captureLoginShell() []string {
 	shell := authoritativeLoginShell()

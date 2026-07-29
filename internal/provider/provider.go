@@ -32,6 +32,27 @@ type Provider interface {
 	FetchUsage(ctx context.Context) (*UsageData, error)
 }
 
+// SessionEnvironmentRequest describes one provider's explicit session-environment
+// lookup. Resolvers return values only for EnvNames and never mutate the
+// process environment.
+type SessionEnvironmentRequest struct {
+	EnvNames                        []string
+	AllowSessionEnvironmentFallback bool
+}
+
+// SessionEnvironmentResolver resolves explicitly requested session environment values.
+// Providers call it lazily after their native/configured credential sources.
+type SessionEnvironmentResolver interface {
+	ResolveSessionEnvironment(SessionEnvironmentRequest) map[string]string
+}
+
+// SessionEnvironmentResolverConsumer accepts the process-local resolver during
+// provider registration. Providers that do not use environment credentials
+// do not implement it.
+type SessionEnvironmentResolverConsumer interface {
+	SetSessionEnvironmentResolver(SessionEnvironmentResolver)
+}
+
 // UsageWindow represents a single usage limit window.
 type UsageWindow struct {
 	Name        string    `json:"name"`                   // e.g., "5h", "7d", "daily", "monthly"
@@ -364,9 +385,10 @@ func (u *UsageData) GetWindow(name string) (*UsageWindow, bool) {
 // filter may change at runtime (e.g. when the tray reloads config) and is
 // guarded by filterMu.
 type Registry struct {
-	providers map[string]Provider
-	filterMu  sync.RWMutex
-	filter    EnabledFilter
+	providers                  map[string]Provider
+	sessionEnvironmentResolver SessionEnvironmentResolver
+	filterMu                   sync.RWMutex
+	filter                     EnabledFilter
 }
 
 // NewRegistry creates a new provider registry.
@@ -374,6 +396,12 @@ func NewRegistry() *Registry {
 	return &Registry{
 		providers: make(map[string]Provider),
 	}
+}
+
+// SetSessionEnvironmentResolver injects the lazy resolver used by providers that
+// declare environment-backed authentication. It does not resolve anything.
+func (r *Registry) SetSessionEnvironmentResolver(resolver SessionEnvironmentResolver) {
+	r.sessionEnvironmentResolver = resolver
 }
 
 // SetEnabledFilter records an optional filter consulted by GetConfigured to
@@ -395,6 +423,11 @@ func (r *Registry) enabledFilter() EnabledFilter {
 
 // Register adds a provider to the registry.
 func (r *Registry) Register(p Provider) error {
+	if r.sessionEnvironmentResolver != nil {
+		if consumer, ok := p.(SessionEnvironmentResolverConsumer); ok {
+			consumer.SetSessionEnvironmentResolver(r.sessionEnvironmentResolver)
+		}
+	}
 	name := p.Name()
 	if name == "" {
 		return fmt.Errorf("provider name cannot be empty")

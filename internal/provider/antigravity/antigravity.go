@@ -42,15 +42,20 @@ type httpClient interface {
 // Provider reads the Antigravity CLI's existing login and fetches its two
 // provider-reported weekly usage pools.
 type Provider struct {
-	baseURL     string
-	tokenURL    string
-	client      httpClient
-	homeDir     func() (string, error)
-	lookPath    func(string) (string, error)
-	readFile    func(string) ([]byte, error)
-	now         func() time.Time
-	tokenMu     sync.Mutex
-	memoryToken storedToken
+	baseURL                    string
+	tokenURL                   string
+	client                     httpClient
+	homeDir                    func() (string, error)
+	lookPath                   func(string) (string, error)
+	readFile                   func(string) ([]byte, error)
+	now                        func() time.Time
+	tokenMu                    sync.Mutex
+	memoryToken                storedToken
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 // New creates an Antigravity provider.
@@ -299,7 +304,16 @@ func (p *Provider) refreshAccessTokenWithClient(
 }
 
 func (p *Provider) resolveOAuthClients() ([]oauthClient, error) {
-	if id := strings.TrimSpace(os.Getenv("ANTIGRAVITY_OAUTH_CLIENT_ID")); id != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"ANTIGRAVITY_OAUTH_CLIENT_ID", "ANTIGRAVITY_OAUTH_CLIENT_SECRET"}, AllowSessionEnvironmentFallback: true,
+		})
+		if id := strings.TrimSpace(values["ANTIGRAVITY_OAUTH_CLIENT_ID"]); id != "" {
+			if secret := strings.TrimSpace(values["ANTIGRAVITY_OAUTH_CLIENT_SECRET"]); secret != "" {
+				return []oauthClient{{ID: id, Secret: secret}}, nil
+			}
+		}
+	} else if id := strings.TrimSpace(os.Getenv("ANTIGRAVITY_OAUTH_CLIENT_ID")); id != "" {
 		if secret := strings.TrimSpace(os.Getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET")); secret != "" {
 			return []oauthClient{{ID: id, Secret: secret}}, nil
 		}

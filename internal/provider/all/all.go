@@ -39,8 +39,11 @@ var aliases = map[string]string{
 // Register registers all known providers with the given registry and wires
 // the user's config as the registry's enabled-filter so explicitly disabled
 // providers are skipped by GetConfigured / FetchAllParallel.
-func Register(registry *provider.Registry, cfg *config.Config) {
+func Register(registry *provider.Registry, cfg *config.Config, resolvers ...provider.SessionEnvironmentResolver) {
 	registry.SetEnabledFilter(cfg)
+	if len(resolvers) > 0 {
+		registry.SetSessionEnvironmentResolver(resolvers[0])
+	}
 	for _, fn := range []func(*provider.Registry, *config.Config) error{
 		alibaba.Register,
 		antigravity.Register,

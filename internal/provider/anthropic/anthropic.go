@@ -29,7 +29,12 @@ const (
 
 // Provider implements the provider.Provider interface for Anthropic/Claude.
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg                        config.ProviderConfig
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
 }
 
 // New creates a new Anthropic provider.
@@ -267,7 +272,14 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 	}
 
 	// 2. Environment variable (for backward compatibility)
-	if token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); token != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"CLAUDE_CODE_OAUTH_TOKEN"}, AllowSessionEnvironmentFallback: true,
+		})
+		if token := values["CLAUDE_CODE_OAUTH_TOKEN"]; token != "" {
+			return &Credentials{tokenOnly: token}, nil
+		}
+	} else if token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); token != "" {
 		return &Credentials{tokenOnly: token}, nil
 	}
 

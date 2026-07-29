@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -23,10 +24,29 @@ const (
 )
 
 type Provider struct {
-	cfg                config.ProviderConfig
-	client             *http.Client
-	creditsURL, keyURL string
-	managementKey      string
+	cfg                        config.ProviderConfig
+	client                     *http.Client
+	creditsURL, keyURL         string
+	managementKey              string
+	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+	credentialEnvOnce          sync.Once
+	credentialEnv              map[string]string
+}
+
+func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
+	p.sessionEnvironmentResolver = resolver
+}
+
+func (p *Provider) credentialEnvValues() map[string]string {
+	if p.sessionEnvironmentResolver == nil {
+		return nil
+	}
+	p.credentialEnvOnce.Do(func() {
+		p.credentialEnv = p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"OPENROUTER_API_KEY", "OPENROUTER_MANAGEMENT_KEY"}, AllowSessionEnvironmentFallback: true,
+		})
+	})
+	return p.credentialEnv
 }
 
 type apiError int
@@ -83,7 +103,12 @@ func (p *Provider) standardKey() string {
 	if strings.TrimSpace(p.cfg.APIKey) != "" {
 		return strings.TrimSpace(p.cfg.APIKey)
 	}
-	if key := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")); key != "" {
+	if p.sessionEnvironmentResolver != nil {
+		values := p.credentialEnvValues()
+		if key := strings.TrimSpace(values["OPENROUTER_API_KEY"]); key != "" {
+			return key
+		}
+	} else if key := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")); key != "" {
 		return key
 	}
 	return ""
@@ -91,6 +116,10 @@ func (p *Provider) standardKey() string {
 func (p *Provider) managementAPIKey() string {
 	if strings.TrimSpace(p.managementKey) != "" {
 		return strings.TrimSpace(p.managementKey)
+	}
+	if p.sessionEnvironmentResolver != nil {
+		values := p.credentialEnvValues()
+		return strings.TrimSpace(values["OPENROUTER_MANAGEMENT_KEY"])
 	}
 	return strings.TrimSpace(os.Getenv("OPENROUTER_MANAGEMENT_KEY"))
 }

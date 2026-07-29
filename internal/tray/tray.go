@@ -109,7 +109,7 @@ func onReady() {
 
 	// Create registry and register providers
 	registry := provider.NewRegistry()
-	all.Register(registry, cfg)
+	all.Register(registry, cfg, shellpath.NewSessionEnvironmentResolver())
 
 	// Build a menu group for every registered provider, ordered
 	// deterministically. The systray library can't insert menu items between
