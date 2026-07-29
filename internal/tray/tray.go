@@ -574,7 +574,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 				indicator = window.ResetPolicy
 			}
 			menu.windowItems[i].SetTitle(fmt.Sprintf("%s: %.0f%% — %s — %s",
-				window.Name, window.Utilization, resetStr, indicator))
+				trayWindowLabel(window), window.Utilization, resetStr, indicator))
 			menu.windowItems[i].Show()
 
 		}
@@ -1273,6 +1273,15 @@ func humanWindowLabel(window provider.UsageWindow) string {
 		return "7-Day Sonnet"
 	}
 	return label
+}
+
+// trayWindowLabel preserves provider-supplied compact labels such as "5h" and
+// "7d" for the constrained tray menu, falling back to the stable internal name.
+func trayWindowLabel(window provider.UsageWindow) string {
+	if label := strings.TrimSpace(window.DisplayName); label != "" {
+		return label
+	}
+	return strings.TrimSpace(window.Name)
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {

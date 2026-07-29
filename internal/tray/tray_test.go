@@ -835,6 +835,23 @@ func TestHumanWindowLabelUsesReadableQuotaNames(t *testing.T) {
 	}
 }
 
+func TestTrayWindowLabelPrefersCompactProviderLabel(t *testing.T) {
+	tests := []struct {
+		window provider.UsageWindow
+		want   string
+	}{
+		{window: provider.UsageWindow{Name: "session_5h", DisplayName: "5h"}, want: "5h"},
+		{window: provider.UsageWindow{Name: "weekly", DisplayName: "7d"}, want: "7d"},
+		{window: provider.UsageWindow{Name: "monthly"}, want: "monthly"},
+	}
+
+	for _, tt := range tests {
+		if got := trayWindowLabel(tt.window); got != tt.want {
+			t.Fatalf("trayWindowLabel(%+v) = %q, want %q", tt.window, got, tt.want)
+		}
+	}
+}
+
 func TestWindowBadgeLabelUsesTwoCharacterQuotaCode(t *testing.T) {
 	tests := map[string]string{
 		"7d All":     "7A",
