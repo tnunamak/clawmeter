@@ -29,8 +29,7 @@ const (
 	defaultSite   = "domestic"
 	maxBodySize   = 2 << 20
 
-	internationalDashboardURL = "https://modelstudio.console.alibabacloud.com"
-	domesticDashboardURL      = "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/overview"
+	domesticDashboardURL = "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/overview"
 )
 
 // These are the Personal Token Plan console operations observed in Alibaba's
@@ -87,6 +86,9 @@ func (p *Provider) DashboardURL() string {
 	}
 	return domesticDashboardURL
 }
+
+const internationalDashboardURL = "https://modelstudio.console.alibabacloud.com/?tab=plan#/efm/subscription/token-plan/personal"
+
 func (p *Provider) SafeForAutoPolling() bool { return true }
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
 	p.sessionEnvironmentResolver = resolver
@@ -273,17 +275,27 @@ func parseUsage(raw any, now time.Time) (*provider.UsageData, error) {
 		{"session_5h", "5h", "per5HourPercentage", "per5HourResetTime"},
 		{"weekly", "7d", "per1WeekPercentage", "per1WeekResetTime"},
 	} {
-		percent, ok := findNumber(raw, spec.pct)
+		utilization, ok := findNumber(raw, spec.pct)
 		if !ok {
 			continue
 		}
 		reset, _ := findValue(raw, spec.reset)
-		result.Windows = append(result.Windows, provider.UsageWindow{Name: spec.name, DisplayName: spec.display, Utilization: math.Max(0, math.Min(100, percent)), ResetsAt: parseTime(reset)})
+		result.Windows = append(result.Windows, provider.UsageWindow{Name: spec.name, DisplayName: spec.display, Utilization: normalizeUtilization(utilization), ResetsAt: parseTime(reset)})
 	}
 	if len(result.Windows) == 0 {
 		return nil, fmt.Errorf("no Personal Token Plan quota data found")
 	}
 	return result, nil
+}
+
+// The Personal Token Plan console currently returns utilization as a fraction
+// (for example 0.2561 means 25.61%). Accept percentage points as a defensive
+// fallback if Alibaba changes the undocumented console contract.
+func normalizeUtilization(value float64) float64 {
+	if value >= 0 && value <= 1 {
+		value *= 100
+	}
+	return math.Max(0, math.Min(100, value))
 }
 
 func parseResetCards(raw any, now time.Time) *provider.UsageResetCredits {

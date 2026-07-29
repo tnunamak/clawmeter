@@ -3,6 +3,7 @@ package alibabatoken
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,7 +33,7 @@ func TestDashboardURLFollowsConsoleSite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
-	if err := os.WriteFile(path, []byte(`{"access_token":"test","console_site":"international"}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"access_token":"test","console_region":"ap-southeast-1","console_site":"international"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	p := New(config.ProviderConfig{})
@@ -46,6 +47,22 @@ func TestDashboardURLFollowsConsoleSite(t *testing.T) {
 	}
 	if got := p.DashboardURL(); got != domesticDashboardURL {
 		t.Fatalf("DashboardURL() = %q, want domestic dashboard", got)
+	}
+}
+
+func TestParseUsageNormalizesFractionalUtilization(t *testing.T) {
+	data, err := parseUsage(map[string]any{"data": map[string]any{
+		"per5HourPercentage": 0.2561,
+		"per1WeekPercentage": 0.4212,
+	}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := data.Windows[0].Utilization; math.Abs(got-25.61) > 0.000001 {
+		t.Fatalf("5h utilization = %v, want 25.61", got)
+	}
+	if got := data.Windows[1].Utilization; math.Abs(got-42.12) > 0.000001 {
+		t.Fatalf("7d utilization = %v, want 42.12", got)
 	}
 }
 
