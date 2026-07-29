@@ -65,7 +65,7 @@ func (p *Provider) DashboardURL() string {
 	return "https://www.kimi.com/code/console"
 }
 
-func (p *Provider) AutoPollByDefault() bool {
+func (p *Provider) SafeForAutoPolling() bool {
 	return false
 }
 

@@ -31,7 +31,7 @@ func (p *Provider) Name() string         { return "kimik2" }
 func (p *Provider) DisplayName() string  { return "Kimi K2" }
 func (p *Provider) Description() string  { return "Kimi K2 (via KIMI_K2_API_KEY)" }
 func (p *Provider) DashboardURL() string { return "https://kimi-k2.ai/my-credits" }
-func (p *Provider) AutoPollByDefault() bool {
+func (p *Provider) SafeForAutoPolling() bool {
 	return false
 }
 

@@ -73,7 +73,7 @@ func (p *Provider) Description() string {
 	return "Google Antigravity weekly model pools (via agy login)"
 }
 func (p *Provider) DashboardURL() string { return "https://antigravity.google" }
-func (p *Provider) AutoPollByDefault() bool {
+func (p *Provider) SafeForAutoPolling() bool {
 	return p.SetupStatus().IsReady()
 }
 

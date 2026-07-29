@@ -37,7 +37,7 @@ func (p *Provider) Name() string         { return "zai" }
 func (p *Provider) DisplayName() string  { return "z.ai" }
 func (p *Provider) Description() string  { return "Zhipu AI / GLM (via Z_AI_API_KEY)" }
 func (p *Provider) DashboardURL() string { return "https://z.ai/manage-apikey/subscription" }
-func (p *Provider) AutoPollByDefault() bool {
+func (p *Provider) SafeForAutoPolling() bool {
 	return false
 }
 

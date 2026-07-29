@@ -12,7 +12,18 @@ import (
 type stubProvider struct {
 	name       string
 	configured bool
-	autoPoll   *bool
+	safeLookup *bool
+}
+
+type providerWithoutCapability struct{}
+
+func (providerWithoutCapability) Name() string         { return "legacy" }
+func (providerWithoutCapability) DisplayName() string  { return "legacy" }
+func (providerWithoutCapability) Description() string  { return "" }
+func (providerWithoutCapability) DashboardURL() string { return "" }
+func (providerWithoutCapability) IsConfigured() bool   { return true }
+func (providerWithoutCapability) FetchUsage(context.Context) (*UsageData, error) {
+	return &UsageData{Provider: "legacy"}, nil
 }
 
 func (s *stubProvider) Name() string         { return s.name }
@@ -20,11 +31,11 @@ func (s *stubProvider) DisplayName() string  { return s.name }
 func (s *stubProvider) Description() string  { return "" }
 func (s *stubProvider) DashboardURL() string { return "" }
 func (s *stubProvider) IsConfigured() bool   { return s.configured }
-func (s *stubProvider) AutoPollByDefault() bool {
-	if s.autoPoll == nil {
+func (s *stubProvider) SafeForAutoPolling() bool {
+	if s.safeLookup == nil {
 		return true
 	}
-	return *s.autoPoll
+	return *s.safeLookup
 }
 func (s *stubProvider) FetchUsage(ctx context.Context) (*UsageData, error) {
 	return &UsageData{Provider: s.name, FetchedAt: time.Now()}, nil
@@ -101,7 +112,7 @@ func TestGetConfigured_RequiresExplicitEnablementForOptInProviders(t *testing.T)
 	noAuto := false
 	r := NewRegistry()
 	_ = r.Register(&stubProvider{name: "default", configured: true})
-	_ = r.Register(&stubProvider{name: "optin", configured: true, autoPoll: &noAuto})
+	_ = r.Register(&stubProvider{name: "optin", configured: true, safeLookup: &noAuto})
 
 	names := providerNames(r.GetConfigured())
 	if want := []string{"default"}; !equalSlice(names, want) {
@@ -112,6 +123,17 @@ func TestGetConfigured_RequiresExplicitEnablementForOptInProviders(t *testing.T)
 	names = providerNames(r.GetConfigured())
 	if want := []string{"default", "optin"}; !equalSlice(names, want) {
 		t.Fatalf("with explicit opt-in: got %v, want %v", names, want)
+	}
+}
+
+func TestGetConfigured_DefaultsToSafeWithoutCapability(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(providerWithoutCapability{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if names := providerNames(r.GetConfigured()); !equalSlice(names, []string{"legacy"}) {
+		t.Fatalf("without capability: got %v, want [legacy]", names)
 	}
 }
 

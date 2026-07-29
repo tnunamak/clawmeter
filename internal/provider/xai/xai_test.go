@@ -201,21 +201,21 @@ func TestSetupStatus_GrokLoginCredentials(t *testing.T) {
 	}
 }
 
-func TestAutoPollByDefault_GrokLoginCredentials(t *testing.T) {
+func TestSafeForAutoPolling_GrokLoginCredentials(t *testing.T) {
 	writeGrokAuth(t, "grok-token", time.Now().Add(time.Hour))
 	p := New(config.ProviderConfig{})
 
-	if !p.AutoPollByDefault() {
+	if !p.SafeForAutoPolling() {
 		t.Fatal("grok login credentials should auto-poll by default")
 	}
 }
 
-func TestAutoPollByDefault_ManagementKeyOnlyIsOptIn(t *testing.T) {
+func TestSafeForAutoPolling_ManagementKeyOnlyIsOptIn(t *testing.T) {
 	t.Setenv("XAI_MANAGEMENT_API_KEY", "key")
 	t.Setenv("GROK_HOME", t.TempDir())
 	p := New(config.ProviderConfig{})
 
-	if p.AutoPollByDefault() {
+	if p.SafeForAutoPolling() {
 		t.Fatal("management API keys should remain opt-in")
 	}
 }

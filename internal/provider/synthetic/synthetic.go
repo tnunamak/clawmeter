@@ -39,7 +39,7 @@ func (p *Provider) Name() string         { return "synthetic" }
 func (p *Provider) DisplayName() string  { return "Synthetic" }
 func (p *Provider) Description() string  { return "Synthetic (via SYNTHETIC_API_KEY)" }
 func (p *Provider) DashboardURL() string { return "https://synthetic.new" }
-func (p *Provider) AutoPollByDefault() bool {
+func (p *Provider) SafeForAutoPolling() bool {
 	return false
 }
 

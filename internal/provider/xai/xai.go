@@ -51,7 +51,7 @@ func (p *Provider) Name() string         { return "xai" }
 func (p *Provider) DisplayName() string  { return "Grok" }
 func (p *Provider) Description() string  { return "Grok weekly usage pool or xAI API prepaid credits" }
 func (p *Provider) DashboardURL() string { return "https://grok.com/?_s=usage" }
-func (p *Provider) AutoPollByDefault() bool {
+func (p *Provider) SafeForAutoPolling() bool {
 	_, err := p.grokCredentials()
 	return err == nil
 }

@@ -36,12 +36,12 @@ func (e apiError) Error() string { return fmt.Sprintf("API returned %d", int(e))
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{cfg: cfg, client: &http.Client{Timeout: timeout}, creditsURL: creditsURL, keyURL: keyURL}
 }
-func (p *Provider) Name() string            { return "openrouter" }
-func (p *Provider) DisplayName() string     { return "OpenRouter" }
-func (p *Provider) Description() string     { return "OpenRouter (via OPENROUTER_API_KEY)" }
-func (p *Provider) DashboardURL() string    { return "https://openrouter.ai/credits" }
-func (p *Provider) AutoPollByDefault() bool { return false }
-func (p *Provider) IsConfigured() bool      { return p.standardKey() != "" || p.managementAPIKey() != "" }
+func (p *Provider) Name() string             { return "openrouter" }
+func (p *Provider) DisplayName() string      { return "OpenRouter" }
+func (p *Provider) Description() string      { return "OpenRouter (via OPENROUTER_API_KEY)" }
+func (p *Provider) DashboardURL() string     { return "https://openrouter.ai/credits" }
+func (p *Provider) SafeForAutoPolling() bool { return false }
+func (p *Provider) IsConfigured() bool       { return p.standardKey() != "" || p.managementAPIKey() != "" }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	standardKey, managementKey := p.standardKey(), p.managementAPIKey()

@@ -33,14 +33,14 @@ func quotaResponse() map[string]any {
 					"status":   "VALID",
 					"planName": "Pro",
 					"codingPlanQuotaInfo": map[string]any{
-						"per5HourUsedQuota":            float64(50),
-						"per5HourTotalQuota":           float64(200),
-						"per5HourQuotaNextRefreshTime": float64(testNow.Add(3 * time.Hour).UnixMilli()),
-						"perWeekUsedQuota":             float64(500),
-						"perWeekTotalQuota":            float64(2000),
-						"perWeekQuotaNextRefreshTime":  float64(testNow.Add(5 * 24 * time.Hour).UnixMilli()),
-						"perBillMonthUsedQuota":        float64(1000),
-						"perBillMonthTotalQuota":       float64(8000),
+						"per5HourUsedQuota":                float64(50),
+						"per5HourTotalQuota":               float64(200),
+						"per5HourQuotaNextRefreshTime":     float64(testNow.Add(3 * time.Hour).UnixMilli()),
+						"perWeekUsedQuota":                 float64(500),
+						"perWeekTotalQuota":                float64(2000),
+						"perWeekQuotaNextRefreshTime":      float64(testNow.Add(5 * 24 * time.Hour).UnixMilli()),
+						"perBillMonthUsedQuota":            float64(1000),
+						"perBillMonthTotalQuota":           float64(8000),
 						"perBillMonthQuotaNextRefreshTime": float64(testNow.Add(20 * 24 * time.Hour).UnixMilli()),
 					},
 				},
@@ -122,12 +122,12 @@ func TestFetchUsage_AltFieldNames(t *testing.T) {
 			map[string]any{
 				"status": "VALID",
 				"codingPlanQuotaInfo": map[string]any{
-					"perFiveHourUsedQuota":      float64(10),
-					"perFiveHourTotalQuota":     float64(100),
-					"perWeekUsedQuota":          float64(20),
-					"perWeekTotalQuota":         float64(500),
-					"perMonthUsedQuota":         float64(30),
-					"perMonthTotalQuota":        float64(3000),
+					"perFiveHourUsedQuota":         float64(10),
+					"perFiveHourTotalQuota":        float64(100),
+					"perWeekUsedQuota":             float64(20),
+					"perWeekTotalQuota":            float64(500),
+					"perMonthUsedQuota":            float64(30),
+					"perMonthTotalQuota":           float64(3000),
 					"perMonthQuotaNextRefreshTime": "2026-08-15T00:00:00Z",
 				},
 			},
@@ -371,9 +371,9 @@ func TestFetchUsage_PartialWindows(t *testing.T) {
 			map[string]any{
 				"status": "VALID",
 				"codingPlanQuotaInfo": map[string]any{
-					"per5HourUsedQuota":  float64(10),
-					"perWeekUsedQuota":   float64(100),
-					"perWeekTotalQuota":  float64(1000),
+					"per5HourUsedQuota":      float64(10),
+					"perWeekUsedQuota":       float64(100),
+					"perWeekTotalQuota":      float64(1000),
 					"perBillMonthTotalQuota": float64(5000),
 				},
 			},
@@ -517,8 +517,8 @@ func TestProviderMetadata(t *testing.T) {
 	if p.DisplayName() != "Alibaba" {
 		t.Errorf("DisplayName() = %q", p.DisplayName())
 	}
-	if p.AutoPollByDefault() {
-		t.Error("AutoPollByDefault() should be false")
+	if !p.SafeForAutoPolling() {
+		t.Error("SafeForAutoPolling() should be true for read-only quota metadata")
 	}
 }
 

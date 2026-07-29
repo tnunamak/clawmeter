@@ -67,11 +67,11 @@ func New(cfg config.ProviderConfig) *Provider {
 	}
 }
 
-func (p *Provider) Name() string            { return "alibaba" }
-func (p *Provider) DisplayName() string     { return "Alibaba" }
-func (p *Provider) Description() string     { return "Alibaba Cloud Model Studio Coding Plan" }
-func (p *Provider) DashboardURL() string    { return "https://modelstudio.console.alibabacloud.com" }
-func (p *Provider) AutoPollByDefault() bool { return false }
+func (p *Provider) Name() string             { return "alibaba" }
+func (p *Provider) DisplayName() string      { return "Alibaba" }
+func (p *Provider) Description() string      { return "Alibaba Cloud Model Studio Coding Plan" }
+func (p *Provider) DashboardURL() string     { return "https://modelstudio.console.alibabacloud.com" }
+func (p *Provider) SafeForAutoPolling() bool { return true }
 
 func (p *Provider) IsConfigured() bool {
 	key, _ := p.apiKey()

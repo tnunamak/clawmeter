@@ -611,7 +611,7 @@ func providerPollingState(p provider.Provider, cfg *config.Config) string {
 		return "enabled"
 	case hasEntry && pc.Enabled:
 		return "setup_needed"
-	case setup.IsReady() && provider.AutoPollByDefault(p):
+	case setup.IsReady() && provider.SafeForAutoPolling(p):
 		return "detected"
 	case setup.IsReady():
 		return "available"

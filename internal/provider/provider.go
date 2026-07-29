@@ -454,17 +454,18 @@ type ExplicitEnablementFilter interface {
 	IsProviderExplicitlyEnabled(name string) bool
 }
 
-// AutoPollController can be implemented by providers whose credentials should
-// be discoverable but not polled by default.
-type AutoPollController interface {
-	AutoPollByDefault() bool
+// UsageLookupCapability describes whether a provider's usage lookup is safe
+// to run automatically when credentials are detected.
+type UsageLookupCapability interface {
+	SafeForAutoPolling() bool
 }
 
-// AutoPollByDefault reports whether credentials alone should opt a provider
-// into default polling.
-func AutoPollByDefault(p Provider) bool {
-	if controller, ok := p.(AutoPollController); ok {
-		return controller.AutoPollByDefault()
+// SafeForAutoPolling reports whether credentials alone should opt a provider
+// into default polling. Providers without an explicit capability retain the
+// historical default of automatic polling.
+func SafeForAutoPolling(p Provider) bool {
+	if capability, ok := p.(UsageLookupCapability); ok {
+		return capability.SafeForAutoPolling()
 	}
 	return true
 }
@@ -486,7 +487,7 @@ func (r *Registry) GetConfigured() []Provider {
 		if explicitFilter, ok := filter.(ExplicitEnablementFilter); ok {
 			explicitlyEnabled = explicitFilter.IsProviderExplicitlyEnabled(p.Name())
 		}
-		if !explicitlyEnabled && !AutoPollByDefault(p) {
+		if !explicitlyEnabled && !SafeForAutoPolling(p) {
 			continue
 		}
 		result = append(result, p)
