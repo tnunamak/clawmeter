@@ -130,7 +130,8 @@ clawmeter tray           # run the tray in this session
 | OpenRouter | Wallet credit balance and finite API-key limits |
 | JetBrains AI | Monthly credits |
 | Kimi K2 | Credit balance |
-| Alibaba | Coding Plan 5-hour, weekly, and monthly quotas |
+| Alibaba Coding Plan | Coding Plan 5-hour, weekly, and monthly quotas |
+| Alibaba Token Plan | Personal Token Plan 5-hour, 7-day, and reset-credit data after `bl auth login --console` |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 

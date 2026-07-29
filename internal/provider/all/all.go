@@ -10,6 +10,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/alibaba"
+	"github.com/tnunamak/clawmeter/internal/provider/alibabatoken"
 	"github.com/tnunamak/clawmeter/internal/provider/anthropic"
 	"github.com/tnunamak/clawmeter/internal/provider/antigravity"
 	"github.com/tnunamak/clawmeter/internal/provider/copilot"
@@ -25,15 +26,16 @@ import (
 )
 
 var aliases = map[string]string{
-	"codex":     "openai",
-	"grok":      "xai",
-	"x.ai":      "xai",
-	"x-ai":      "xai",
-	"xai":       "xai",
-	"openai":    "openai",
-	"qwen":      "alibaba",
-	"bailian":   "alibaba",
-	"dashscope": "alibaba",
+	"codex":      "openai",
+	"grok":       "xai",
+	"x.ai":       "xai",
+	"x-ai":       "xai",
+	"xai":        "xai",
+	"openai":     "openai",
+	"qwen":       "alibaba",
+	"bailian":    "alibaba",
+	"dashscope":  "alibaba",
+	"token-plan": "alibaba_token",
 }
 
 // Register registers all known providers with the given registry and wires
@@ -46,6 +48,7 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 	}
 	for _, fn := range []func(*provider.Registry, *config.Config) error{
 		alibaba.Register,
+		alibabatoken.Register,
 		antigravity.Register,
 		anthropic.Register,
 		kimi.Register,

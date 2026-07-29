@@ -56,15 +56,16 @@ var ProviderLogos = map[string][]byte{
 	"gemini":      ProviderGemini,
 	"kimi":        ProviderKimi,
 	// Kimi K2 is a model/service under the Kimi provider identity.
-	"kimik2":     ProviderKimi,
-	"codex":      ProviderCodex,
-	"copilot":    ProviderCopilot,
-	"xai":        ProviderGrok,
-	"openrouter": ProviderOpenRouter,
-	"jetbrains":  ProviderJetBrains,
-	"synthetic":  ProviderSynthetic,
-	"zai":        ProviderZAI,
-	"alibaba":    ProviderAlibaba,
+	"kimik2":        ProviderKimi,
+	"codex":         ProviderCodex,
+	"copilot":       ProviderCopilot,
+	"xai":           ProviderGrok,
+	"openrouter":    ProviderOpenRouter,
+	"jetbrains":     ProviderJetBrains,
+	"synthetic":     ProviderSynthetic,
+	"zai":           ProviderZAI,
+	"alibaba":       ProviderAlibaba,
+	"alibaba_token": ProviderAlibaba,
 }
 
 type logoTreatment struct {
@@ -77,15 +78,16 @@ type logoTreatment struct {
 // they don't disappear on dark trays. Colorful marks (claude, gemini, kimi)
 // are left alone so their brand color survives.
 var providerLogoTreatments = map[string]logoTreatment{
-	"codex":       {contrastPlate: true},
-	"copilot":     {contrastPlate: true},
-	"openai":      {contrastPlate: true},
-	"openrouter":  {contrastPlate: true},
-	"jetbrains":   {darkenMonochrome: true},
-	"synthetic":   {darkenMonochrome: true},
-	"zai":         {darkenMonochrome: true},
-	"antigravity": {darkenMonochrome: true},
-	"alibaba":     {contrastPlate: true},
+	"codex":         {contrastPlate: true},
+	"copilot":       {contrastPlate: true},
+	"openai":        {contrastPlate: true},
+	"openrouter":    {contrastPlate: true},
+	"jetbrains":     {darkenMonochrome: true},
+	"synthetic":     {darkenMonochrome: true},
+	"zai":           {darkenMonochrome: true},
+	"antigravity":   {darkenMonochrome: true},
+	"alibaba":       {contrastPlate: true},
+	"alibaba_token": {contrastPlate: true},
 }
 
 const (

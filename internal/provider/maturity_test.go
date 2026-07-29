@@ -4,7 +4,7 @@ import "testing"
 
 func TestGetMaturityUsesExplicitAuditClassification(t *testing.T) {
 	tests := map[string]bool{
-		"alibaba": true, "antigravity": true, "claude": false, "openai": false, "gemini": false, "xai": true,
+		"alibaba": true, "alibaba_token": true, "antigravity": true, "claude": false, "openai": false, "gemini": false, "xai": true,
 		"kimi": true, "kimik2": true, "copilot": true, "openrouter": true,
 		"jetbrains": true, "synthetic": true, "zai": true,
 	}

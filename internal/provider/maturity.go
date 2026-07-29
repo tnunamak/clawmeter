@@ -11,19 +11,20 @@ type ProviderMaturity struct {
 const providerMaturityLearnMore = "https://github.com/tnunamak/clawmeter/blob/main/docs/provider-maturity.md"
 
 var experimentalProviderByName = map[string]bool{
-	"alibaba":     true,
-	"antigravity": true,
-	"claude":      false,
-	"openai":      false,
-	"gemini":      false,
-	"xai":         true,
-	"kimi":        true,
-	"kimik2":      true,
-	"copilot":     true,
-	"openrouter":  true,
-	"jetbrains":   true,
-	"synthetic":   true,
-	"zai":         true,
+	"alibaba":       true,
+	"alibaba_token": true,
+	"antigravity":   true,
+	"claude":        false,
+	"openai":        false,
+	"gemini":        false,
+	"xai":           true,
+	"kimi":          true,
+	"kimik2":        true,
+	"copilot":       true,
+	"openrouter":    true,
+	"jetbrains":     true,
+	"synthetic":     true,
+	"zai":           true,
 }
 
 // GetMaturity returns the conservative audit classification for a known

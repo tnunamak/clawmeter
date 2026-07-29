@@ -19,7 +19,7 @@ func TestNames_IncludesKnownProviders(t *testing.T) {
 		t.Fatal("expected at least one provider")
 	}
 	// Sanity-check a handful of canonical names.
-	required := []string{"alibaba", "antigravity", "claude", "openai", "gemini", "kimi", "kimik2", "xai"}
+	required := []string{"alibaba", "alibaba_token", "antigravity", "claude", "openai", "gemini", "kimi", "kimik2", "xai"}
 	have := make(map[string]bool, len(got))
 	for _, n := range got {
 		have[n] = true
@@ -37,7 +37,7 @@ func TestRegisterInjectsResolverIntoEveryEnvCredentialProvider(t *testing.T) {
 	Register(registry, config.DefaultConfig(), resolver)
 
 	want := map[string]bool{
-		"alibaba": true, "antigravity": true, "claude": true, "copilot": true,
+		"alibaba": true, "alibaba_token": true, "antigravity": true, "claude": true, "copilot": true,
 		"kimi": true, "kimik2": true, "openrouter": true, "synthetic": true,
 		"xai": true, "zai": true,
 	}
