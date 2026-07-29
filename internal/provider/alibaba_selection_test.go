@@ -10,7 +10,7 @@ import (
 
 func TestRegistryGetConfigured_SelectsAlibabaCodingPlan(t *testing.T) {
 	registry := provider.NewRegistry()
-	if err := registry.Register(alibaba.New(config.ProviderConfig{APIKey: "coding-plan-key"})); err != nil {
+	if err := registry.Register(alibaba.New(config.ProviderConfig{APIKey: "sk-sp-coding-plan-key"})); err != nil {
 		t.Fatal(err)
 	}
 

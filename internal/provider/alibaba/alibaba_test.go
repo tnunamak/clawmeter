@@ -71,7 +71,7 @@ func TestFetchUsage_HappyPath(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -141,7 +141,7 @@ func TestFetchUsage_AltFieldNames(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -166,7 +166,7 @@ func TestFetchUsage_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "bad-key"
+	p.cfg.APIKey = "sk-sp-bad-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -190,7 +190,7 @@ func TestFetchUsage_Forbidden(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "bad-key"
+	p.cfg.APIKey = "sk-sp-bad-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -212,7 +212,7 @@ func TestFetchUsage_LoginRequiredMarksCredentialsExpired(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -233,7 +233,7 @@ func TestFetchUsage_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	_, err := p.FetchUsage(context.Background())
 	if err == nil {
@@ -248,7 +248,7 @@ func TestFetchUsage_MalformedJSON(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	_, err := p.FetchUsage(context.Background())
 	if err == nil {
@@ -263,7 +263,7 @@ func TestFetchUsage_MissingQuotaData(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	_, err := p.FetchUsage(context.Background())
 	if err == nil {
@@ -283,7 +283,7 @@ func TestFetchUsage_DoubleEncodedJSON(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -320,7 +320,7 @@ func TestFetchUsage_InstanceSelection(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -341,7 +341,7 @@ func TestFetchUsage_LoginRequired(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -373,7 +373,7 @@ func TestFetchUsage_FiveHourResetNormalization(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -412,7 +412,7 @@ func TestFetchUsage_PartialWindows(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -444,7 +444,7 @@ func TestFetchUsage_ZeroTotalSkipped(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -466,10 +466,12 @@ func TestIsConfigured(t *testing.T) {
 		envVal string
 		want   bool
 	}{
-		{"config key", "sk-test", "", "", true},
-		{"env ALIBABA_CODING_PLAN_API_KEY", "", "ALIBABA_CODING_PLAN_API_KEY", "sk-env", true},
-		{"env BAILIAN_CODING_PLAN_API_KEY", "", "BAILIAN_CODING_PLAN_API_KEY", "sk-env", true},
-		{"env DASHSCOPE_API_KEY", "", "DASHSCOPE_API_KEY", "sk-env", true},
+		{"config key", "sk-sp-test", "", "", true},
+		{"env ALIBABA_CODING_PLAN_API_KEY", "", "ALIBABA_CODING_PLAN_API_KEY", "sk-sp-env", true},
+		{"env BAILIAN_CODING_PLAN_API_KEY", "", "BAILIAN_CODING_PLAN_API_KEY", "sk-sp-env", true},
+		{"generic DashScope key ignored", "", "DASHSCOPE_API_KEY", "sk-sp-env", false},
+		{"Token Plan key ignored", "", "BAILIAN_TOKEN_PLAN_API_KEY", "sk-sp-token-plan", false},
+		{"wrong Coding Plan key shape", "", "BAILIAN_CODING_PLAN_API_KEY", "sk-ws-env", false},
 		{"nothing", "", "", "", false},
 	}
 	for _, tt := range tests {
@@ -477,7 +479,7 @@ func TestIsConfigured(t *testing.T) {
 			if tt.envVar != "" {
 				t.Setenv(tt.envVar, tt.envVal)
 			}
-			// Clear other env vars that might interfere.
+			// Clear other Coding Plan variables that might interfere.
 			for _, name := range envVarNames {
 				if name != tt.envVar {
 					t.Setenv(name, "")
@@ -503,7 +505,7 @@ func TestIsConfigured_QwenSettings(t *testing.T) {
 	os.MkdirAll(qwenDir, 0o755)
 	settings := map[string]any{
 		"env": map[string]string{
-			"BAILIAN_CODING_PLAN_API_KEY": "sk-from-settings",
+			"BAILIAN_CODING_PLAN_API_KEY": "sk-sp-from-settings",
 		},
 	}
 	raw, _ := json.Marshal(settings)
@@ -524,7 +526,7 @@ func TestIsConfigured_RecoversDeclaredEnvFromLoginShell(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	zdotdir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(zdotdir, ".zshrc"), []byte("export BAILIAN_CODING_PLAN_API_KEY='provider-test-value'\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(zdotdir, ".zshrc"), []byte("export BAILIAN_CODING_PLAN_API_KEY='sk-sp-provider-test-value'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELL", zsh)
@@ -554,10 +556,34 @@ func TestSetupStatus(t *testing.T) {
 		t.Errorf("expected needs_auth, got %s", status.State)
 	}
 
-	p.cfg.APIKey = "sk-test"
+	p.cfg.APIKey = "sk-sp-test"
 	status = p.SetupStatus()
 	if status.State != provider.SetupReady {
 		t.Errorf("expected ready, got %s", status.State)
+	}
+}
+
+func TestIsConfigured_IgnoresTokenPlanKeyInQwenSettings(t *testing.T) {
+	for _, name := range envVarNames {
+		t.Setenv(name, "")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	qwenDir := filepath.Join(home, ".qwen")
+	if err := os.MkdirAll(qwenDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"env": map[string]string{"BAILIAN_TOKEN_PLAN_API_KEY": "sk-sp-token-plan"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(qwenDir, "settings.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if New(config.ProviderConfig{}).IsConfigured() {
+		t.Fatal("Token Plan key must not configure the Coding Plan provider")
 	}
 }
 
@@ -656,7 +682,7 @@ func TestRedirectStripsCredentials(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "secret-key"
+	p.cfg.APIKey = "sk-sp-secret-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -685,7 +711,7 @@ func TestRegionFallbackOn401(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
@@ -724,7 +750,7 @@ func TestExpiredInstanceQuotaNotUsed(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestProvider(srv.URL)
-	p.cfg.APIKey = "test-key"
+	p.cfg.APIKey = "sk-sp-test-key"
 
 	data, err := p.FetchUsage(context.Background())
 	// The active instance has no quota, so the provider must report no data

@@ -36,13 +36,15 @@ const (
 	maxBodySize = 2 << 20 // 2 MiB
 )
 
-// envVarNames are checked in priority order for the Coding Plan API key.
+// envVarNames are the only environment names that explicitly declare a
+// Coding Plan key. Token Plan and general Model Studio keys use separate
+// products and must never be sent to the Coding Plan quota surface.
 var envVarNames = []string{
 	"ALIBABA_CODING_PLAN_API_KEY",
 	"BAILIAN_CODING_PLAN_API_KEY",
-	"ALIBABA_QWEN_API_KEY",
-	"DASHSCOPE_API_KEY",
 }
+
+const codingPlanKeyPrefix = "sk-sp-"
 
 type Provider struct {
 	cfg                        config.ProviderConfig
@@ -83,8 +85,11 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	if key, _ := p.apiKey(); key != "" {
+	if key, err := p.apiKey(); err == nil && key != "" {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "API key found"}
+	}
+	if _, err := p.apiKey(); err != nil && !strings.Contains(err.Error(), "no API key found") {
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: err.Error()}
 	}
 	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "set ALIBABA_CODING_PLAN_API_KEY"}
 }
@@ -312,12 +317,17 @@ func (p *Provider) transformQuota(quota map[string]any) *provider.UsageData {
 // apiKey resolves the Coding Plan API key from config, environment, or
 // Qwen Code's settings.json.
 func (p *Provider) apiKey() (string, error) {
-	if p.cfg.APIKey != "" {
-		return p.cfg.APIKey, nil
+	if key := normalizeCodingPlanKey(p.cfg.APIKey); key != "" {
+		return key, nil
+	} else if strings.TrimSpace(p.cfg.APIKey) != "" {
+		return "", fmt.Errorf("Coding Plan key must start with %s", codingPlanKeyPrefix)
 	}
 	for _, name := range envVarNames {
-		if key := strings.Trim(strings.TrimSpace(os.Getenv(name)), `"' `); key != "" {
-			return key, nil
+		if raw := strings.TrimSpace(os.Getenv(name)); raw != "" {
+			if key := normalizeCodingPlanKey(raw); key != "" {
+				return key, nil
+			}
+			return "", fmt.Errorf("Coding Plan key must start with %s", codingPlanKeyPrefix)
 		}
 	}
 	if p.sessionEnvironmentResolver != nil {
@@ -326,17 +336,29 @@ func (p *Provider) apiKey() (string, error) {
 			AllowSessionEnvironmentFallback: true,
 		})
 		for _, name := range envVarNames {
-			if raw, ok := recovered[name]; ok {
-				if key := strings.Trim(strings.TrimSpace(raw), `"' `); key != "" {
+			if raw, ok := recovered[name]; ok && strings.TrimSpace(raw) != "" {
+				if key := normalizeCodingPlanKey(raw); key != "" {
 					return key, nil
 				}
+				return "", fmt.Errorf("Coding Plan key must start with %s", codingPlanKeyPrefix)
 			}
 		}
 	}
-	if key := qwenSettingsKey(); key != "" {
-		return key, nil
+	if raw := qwenSettingsKey(); raw != "" {
+		if key := normalizeCodingPlanKey(raw); key != "" {
+			return key, nil
+		}
+		return "", fmt.Errorf("Coding Plan key must start with %s", codingPlanKeyPrefix)
 	}
 	return "", fmt.Errorf("no API key found (set ALIBABA_CODING_PLAN_API_KEY)")
+}
+
+func normalizeCodingPlanKey(raw string) string {
+	key := strings.Trim(strings.TrimSpace(raw), `"' `)
+	if !strings.HasPrefix(key, codingPlanKeyPrefix) {
+		return ""
+	}
+	return key
 }
 
 // qwenSettingsKey reads the API key from ~/.qwen/settings.json env block.
@@ -355,7 +377,7 @@ func qwenSettingsKey() string {
 	if err := json.Unmarshal(raw, &settings); err != nil {
 		return ""
 	}
-	for _, key := range []string{"BAILIAN_CODING_PLAN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY"} {
+	for _, key := range []string{"BAILIAN_CODING_PLAN_API_KEY"} {
 		if v := strings.TrimSpace(settings.Env[key]); v != "" {
 			return v
 		}

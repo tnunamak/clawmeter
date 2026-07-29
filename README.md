@@ -236,7 +236,7 @@ brew services stop clawmeter
 | OpenRouter | `OPENROUTER_API_KEY` or config; optional `OPENROUTER_MANAGEMENT_KEY` for wallet credits |
 | JetBrains AI | IDE config files |
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
-| Alibaba | `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, `DASHSCOPE_API_KEY`, or `~/.qwen/settings.json` |
+| Alibaba Coding Plan | `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, or `~/.qwen/settings.json` (dedicated Coding Plan key only) |
 
 For Grok/xAI, `grok login` enables Grok weekly usage-pool tracking from the
 read-only grok.com billing surface. `XAI_MANAGEMENT_API_KEY` enables xAI API
