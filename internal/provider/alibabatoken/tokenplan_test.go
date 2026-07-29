@@ -28,6 +28,27 @@ func TestConsoleSessionUsesActiveProfile(t *testing.T) {
 	}
 }
 
+func TestDashboardURLFollowsConsoleSite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	if err := os.WriteFile(path, []byte(`{"access_token":"test","console_site":"international"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New(config.ProviderConfig{})
+	p.configPath = path
+	if got := p.DashboardURL(); got != internationalDashboardURL {
+		t.Fatalf("DashboardURL() = %q, want international dashboard", got)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"access_token":"test","console_site":"domestic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.DashboardURL(); got != domesticDashboardURL {
+		t.Fatalf("DashboardURL() = %q, want domestic dashboard", got)
+	}
+}
+
 func TestFetchUsageOnlyCallsReadOnlyOperations(t *testing.T) {
 	var calls []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

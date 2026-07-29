@@ -28,6 +28,9 @@ const (
 	defaultRegion = "cn-beijing"
 	defaultSite   = "domestic"
 	maxBodySize   = 2 << 20
+
+	internationalDashboardURL = "https://modelstudio.console.alibabacloud.com"
+	domesticDashboardURL      = "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/overview"
 )
 
 // These are the Personal Token Plan console operations observed in Alibaba's
@@ -79,7 +82,10 @@ func (p *Provider) Description() string {
 	return "Alibaba Personal Token Plan (via Model Studio console login)"
 }
 func (p *Provider) DashboardURL() string {
-	return "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/overview"
+	if session, ok := p.consoleSession(); ok && session.site == "international" {
+		return internationalDashboardURL
+	}
+	return domesticDashboardURL
 }
 func (p *Provider) SafeForAutoPolling() bool { return true }
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
