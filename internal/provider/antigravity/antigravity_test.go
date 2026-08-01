@@ -16,9 +16,11 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
+var testNow = time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+
 func TestFetchUsageReturnsAuthoritativeWeeklyPools(t *testing.T) {
 	home := t.TempDir()
-	writeToken(t, home, "test-token", time.Now().Add(time.Hour))
+	writeToken(t, home, "test-token", testNow.Add(time.Hour))
 
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +88,7 @@ func TestFetchUsageReturnsAuthoritativeWeeklyPools(t *testing.T) {
 
 func TestFetchUsageRefreshesExpiredTokenWithoutWritingLoginFile(t *testing.T) {
 	home := t.TempDir()
-	writeToken(t, home, "expired", time.Now().Add(-time.Hour))
+	writeToken(t, home, "expired", testNow.Add(-time.Hour))
 	tokenPath := filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	before, err := os.ReadFile(tokenPath)
 	if err != nil {
@@ -162,7 +164,7 @@ func TestParseOAuthClientsUsesExactSecretBoundary(t *testing.T) {
 
 func TestExpiredTokenFailsSoftWhenRefreshResponseIsInvalid(t *testing.T) {
 	home := t.TempDir()
-	writeToken(t, home, "expired", time.Now().Add(-time.Hour))
+	writeToken(t, home, "expired", testNow.Add(-time.Hour))
 	binaryPath := filepath.Join(home, "agy")
 	if err := os.WriteFile(binaryPath, testOAuthBinary(), 0o700); err != nil {
 		t.Fatal(err)
@@ -181,7 +183,7 @@ func TestExpiredTokenFailsSoftWhenRefreshResponseIsInvalid(t *testing.T) {
 
 func TestOAuthServiceFailureDoesNotTryEveryClient(t *testing.T) {
 	home := t.TempDir()
-	writeToken(t, home, "expired", time.Now().Add(-time.Hour))
+	writeToken(t, home, "expired", testNow.Add(-time.Hour))
 	binaryPath := filepath.Join(home, "agy")
 	if err := os.WriteFile(binaryPath, testOAuthBinary(), 0o700); err != nil {
 		t.Fatal(err)
@@ -212,7 +214,7 @@ func TestFetchUsageFailsInsteadOfInventingZero(t *testing.T) {
 	}
 	for name, payload := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := parseQuotaSummary([]byte(payload), time.Now())
+			_, err := parseQuotaSummary([]byte(payload), testNow)
 			if err == nil {
 				t.Fatal("expected an error")
 			}
@@ -228,7 +230,7 @@ func TestParseQuotaSummarySkipsDisabledAndRejectsConflictingDuplicates(t *testin
 			{"bucketId":"gemini-weekly","remainingFraction":0.7,"resetTime":"2026-07-30T17:47:46Z"}
 		]}
 	]}`)
-	if _, err := parseQuotaSummary(payload, time.Now()); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := parseQuotaSummary(payload, testNow); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -244,7 +246,7 @@ func TestProviderNeverUsesMutationOrConsumeEndpoint(t *testing.T) {
 
 func TestUnauthorizedInvalidatesCachedQuota(t *testing.T) {
 	home := t.TempDir()
-	writeToken(t, home, "test-token", time.Now().Add(time.Hour))
+	writeToken(t, home, "test-token", testNow.Add(time.Hour))
 	p := newTestProvider(home, "http://unused.invalid")
 	p.client = roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -276,7 +278,7 @@ func TestSetupStatusRequiresCLIAndUsableToken(t *testing.T) {
 		t.Fatalf("without token: %+v", got)
 	}
 
-	writeToken(t, home, "token", time.Now().Add(time.Hour))
+	writeToken(t, home, "token", testNow.Add(time.Hour))
 	if got := p.SetupStatus(); got.State != provider.SetupReady {
 		t.Fatalf("with token: %+v", got)
 	}
@@ -288,7 +290,7 @@ func TestSetupStatusExplainsUnsafeOrMalformedLoginFile(t *testing.T) {
 	}
 	home := t.TempDir()
 	p := newTestProvider(home, "http://unused.invalid")
-	writeToken(t, home, "token", time.Now().Add(time.Hour))
+	writeToken(t, home, "token", testNow.Add(time.Hour))
 	path := filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
@@ -313,6 +315,7 @@ func newTestProvider(home, baseURL string) *Provider {
 	p.homeDir = func() (string, error) { return home, nil }
 	p.baseURL = baseURL
 	p.lookPath = func(string) (string, error) { return "/bin/agy", nil }
+	p.now = func() time.Time { return testNow }
 	return p
 }
 

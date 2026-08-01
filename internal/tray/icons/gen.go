@@ -117,16 +117,20 @@ type MeterState struct {
 // dark tray backgrounds, but the provider logo remains the base identity layer.
 func GenerateProviderIcon(providerName string, usagePct float64, size int) []byte {
 	return GenerateProviderIconWithMeter(providerName, MeterState{
-		UsagePct:    usagePct,
-		ExpectedPct: usagePct,
-		RiskPct:     usagePct,
+		UsagePct:     usagePct,
+		ExpectedPct:  usagePct,
+		RiskPct:      usagePct,
+		ShowExpected: true,
 	}, size)
 }
 
 // GenerateProviderIconWithMeter composites a provider logo with a richer
 // Clawmeter overlay. The provider logo remains the base identity layer.
 func GenerateProviderIconWithMeter(providerName string, meter MeterState, size int) []byte {
-	return generateIcon(ProviderLogos[providerName], meter, size, providerLogoTreatments[providerName])
+	if ProviderLogos[providerName] == nil {
+		return plainCrawfish(meter.UsagePct, size)
+	}
+	return encodePNG(renderProviderFrameIcon(providerName, meter, size))
 }
 
 // GenerateIcon is the lower-level entry point used by callers that pass a raw
@@ -359,6 +363,9 @@ func normalizeMeterState(meter MeterState) MeterState {
 }
 
 func clampPct(pct float64) float64 {
+	if math.IsNaN(pct) {
+		return 0
+	}
 	if pct < 0 {
 		return 0
 	}

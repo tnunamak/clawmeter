@@ -102,11 +102,11 @@ func TestProviderMarkRemainsVisibleAtTraySize(t *testing.T) {
 	}
 }
 
-func TestProviderLogoKeepsBaseLayerScale(t *testing.T) {
+func TestProviderFrameUsesTheNativeIconArea(t *testing.T) {
 	img := decodePNG(t, GenerateProviderIcon("claude", 0, 128))
 	bounds := alphaBounds(img)
-	if bounds.Dx() < 110 || bounds.Dy() < 110 {
-		t.Fatalf("provider logo rendered too small: bounds=%v", bounds)
+	if bounds.Dx() < 110 || bounds.Dy() < 88 {
+		t.Fatalf("native frame rendered too small: bounds=%v", bounds)
 	}
 }
 
@@ -146,25 +146,40 @@ func TestProviderIconsIncludeQuotaLabelAtTraySize(t *testing.T) {
 }
 
 func TestProviderIconsIncludeUpdateBadgeAtTraySize(t *testing.T) {
-	img := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
-		UsagePct:        44,
-		ExpectedPct:     20,
-		RiskPct:         131,
-		ShowExpected:    true,
-		Label:           "7D",
-		UpdateAvailable: true,
-	}, 22))
+	for _, size := range []int{22, 32} {
+		t.Run(itoa(size), func(t *testing.T) {
+			img := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+				UsagePct:        44,
+				ExpectedPct:     20,
+				RiskPct:         131,
+				ShowExpected:    true,
+				Label:           "7D",
+				UpdateAvailable: true,
+			}, size))
 
-	if countBlueDominantPixels(img) < 4 {
-		t.Fatal("update badge is not visible at tray size")
+			bounds := blueDominantBounds(img)
+			want := image.Rect(19, 19, 21, 21)
+			if size == 32 {
+				want = image.Rect(28, 28, 31, 31)
+			}
+			if bounds != want {
+				t.Fatalf("update badge bounds = %v, want %v", bounds, want)
+			}
+		})
 	}
+}
 
-	bounds := blueDominantBounds(img)
-	if bounds.Empty() {
-		t.Fatal("update badge bounds are empty")
-	}
-	if bounds.Min.X < 17 || bounds.Max.Y > 6 {
-		t.Fatalf("update badge bounds = %v, want clipped top-right corner", bounds)
+func TestProviderFrameTreatsInvalidUsageAsZero(t *testing.T) {
+	zero := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{ShowExpected: true}, 22))
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		got := decodePNG(t, GenerateProviderIconWithMeter("openai", MeterState{
+			UsagePct: value, ExpectedPct: value, ShowExpected: true,
+		}, 22))
+		if math.IsNaN(value) || math.IsInf(value, -1) {
+			if countVisiblyDifferentPixels(zero, got) != 0 {
+				t.Fatalf("invalid usage %v did not normalize to zero", value)
+			}
+		}
 	}
 }
 

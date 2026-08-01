@@ -84,13 +84,10 @@ func dynamicIconName() string {
 	return fmt.Sprintf("clawmeter-dyn-v%d", dynamicIconVersion)
 }
 
-func dynamicIconData(providerName string, meter icons.MeterState, data128 []byte, size int) []byte {
-	if size == 128 && len(data128) > 0 {
-		return data128
-	}
-	if len(data128) > 0 {
-		return resizePNG(data128, size)
-	}
+func dynamicIconData(providerName string, meter icons.MeterState, _ []byte, size int) []byte {
+	// The V10 icon has independently drawn 22px and 32px forms. Do not
+	// downsample a 128px composite: that destroys the native microtype and
+	// half-pixel meter geometry on the common Linux tray sizes.
 	return icons.GenerateProviderIconWithMeter(providerName, meter, size)
 }
 

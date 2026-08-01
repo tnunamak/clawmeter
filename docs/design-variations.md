@@ -6,6 +6,8 @@ Preview images are in [`docs/design-variations/`](design-variations/). The enlar
 
 The enlarged sheet is for concept comparison only. It should not be used to judge tray legibility. The 22px and 32px sheets are closer to what a real user sees in a system tray, depending on platform, panel scale, and tray implementation.
 
+The current all-provider review sheets are [provider-contact-sheet-real-22px.png](design-variations/provider-contact-sheet-real-22px.png), [provider-contact-sheet-real-32px.png](design-variations/provider-contact-sheet-real-32px.png), and the nearest-neighbor enlargement [provider-contact-sheet.png](design-variations/provider-contact-sheet.png). Regenerate them with `go run ./cmd/icon-sheet`.
+
 ## Ordered Variations
 
 1. **AI-generated standalone claw meter**
@@ -151,6 +153,16 @@ The enlarged sheet is for concept comparison only. It should not be used to judg
    Feedback / issue: this directly follows the next design direction: circular logos for all providers, centered old-style labels, and a gray/empty/solid-color ring rather than projection-only gray/amber/red or desaturated proportional colors. The trade-off is that the centered label again competes with provider identity, especially at 22px, but this version avoids the previous white marker/bookend clutter.
 
    Research documented: no new external research; this is a directed iteration from user feedback after reviewing the simplified projection prototype.
+
+13. **Claw Frame V10**
+
+   Concept: replace the circular chip and centered banner with a single open U-shaped pace scale. The provider mark occupies the protected center, the selected window uses dedicated bitmap microtype below it, and a detached lower-right square signals an available update. The path runs lower-left, up, across the rounded top, and down to lower-right; its common portion is neutral, the pace delta is green/red, the inward tick is expected pace, and the rounded cap is actual usage.
+
+   Implementation: native 22px and 32px renderer in `internal/tray/icons/frame.go`; exact hand-tuned provider marks are embedded separately. Linux now supplies renderer-native pixmaps rather than downsampling a 128px composite.
+
+   Source: July 31, 2026 designer handoff `clawmeter-full-design-assets.zip`; the archive is deliberately not committed. Its V10 validation covered all provider/window/state combinations at 22px and 32px.
+
+   Integration note: the handoff supplied distinct dark/light provider-mark treatments, while Clawmeter emits one transparent raster across host themes. The implementation keeps the dark-tray mark geometry and adds only a thin dark outline for light-panel legibility; it does not reintroduce a chip, pill, or overlay marker.
 
 ## Open Design Questions For Review
 
