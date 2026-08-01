@@ -17,3 +17,15 @@ func TestDynamicIconDataUsesNativeProviderRenderer(t *testing.T) {
 		t.Fatal("32px Linux pixmap was not rendered from the native icon geometry")
 	}
 }
+
+func TestDynamicIconSizesLeadWithNativeV10Rasters(t *testing.T) {
+	want := []int{22, 32, 64, 128}
+	if len(dynamicIconSizes) != len(want) {
+		t.Fatalf("dynamic icon sizes = %v, want %v", dynamicIconSizes, want)
+	}
+	for i, size := range want {
+		if dynamicIconSizes[i] != size {
+			t.Fatalf("dynamic icon sizes = %v, want %v", dynamicIconSizes, want)
+		}
+	}
+}

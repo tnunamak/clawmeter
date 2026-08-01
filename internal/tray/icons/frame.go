@@ -180,27 +180,6 @@ func frameProviderMark(dst *image.RGBA, providerName string, size int, g frameGe
 	}
 	x := int(math.Round(g.providerX)) - mark.Bounds().Dx()/2
 	y := int(math.Round(g.providerY)) - mark.Bounds().Dy()/2
-	// A one-pixel dark outline preserves the dark-theme native marks on a
-	// light host panel without adding a chip or changing their geometry.
-	for py := 0; py < mark.Bounds().Dy(); py++ {
-		for px := 0; px < mark.Bounds().Dx(); px++ {
-			_, _, _, a := mark.At(px, py).RGBA()
-			if a < 0x6000 {
-				continue
-			}
-			for oy := -1; oy <= 1; oy++ {
-				for ox := -1; ox <= 1; ox++ {
-					if ox == 0 && oy == 0 {
-						continue
-					}
-					dx, dy := x+px+ox, y+py+oy
-					if image.Pt(dx, dy).In(dst.Bounds()) {
-						blendNRGBA(dst, dx, dy, color.NRGBA{R: 16, G: 20, B: 25, A: 115})
-					}
-				}
-			}
-		}
-	}
 	draw.Draw(dst, image.Rect(x, y, x+mark.Bounds().Dx(), y+mark.Bounds().Dy()), mark, mark.Bounds().Min, draw.Over)
 }
 

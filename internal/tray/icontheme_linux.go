@@ -21,6 +21,11 @@ var currentIconName string
 
 const dynamicIconVersion = 33
 
+// The Claw Frame artwork is designed natively at these two tray sizes. Keep
+// the 22px form first: some SNI implementations retain the first pixmap as
+// their initial/fallback icon, and 22px is the smallest approved raster.
+var dynamicIconSizes = []int{22, 32, 64, 128}
+
 var iconSet = map[string][]byte{
 	"green":  icons.Green,
 	"yellow": icons.Yellow,
@@ -73,8 +78,8 @@ func setIconDynamic(providerName string, meter icons.MeterState, data128 []byte)
 	iconName := dynamicIconName()
 	currentIconName = iconName
 
-	pixmaps := make([][]byte, 0, 4)
-	for _, size := range []int{16, 32, 64, 128} {
+	pixmaps := make([][]byte, 0, len(dynamicIconSizes))
+	for _, size := range dynamicIconSizes {
 		pixmaps = append(pixmaps, dynamicIconData(providerName, meter, data128, size))
 	}
 	systray.SetIconNameWithPixmap("", pixmaps)
