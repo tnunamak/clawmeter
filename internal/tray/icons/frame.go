@@ -1,14 +1,17 @@
 package icons
 
 import (
+	"archive/zip"
 	"bytes"
 	"embed"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
 	"math"
 	"strconv"
+	"sync"
 
 	xdraw "golang.org/x/image/draw"
 )
@@ -18,6 +21,35 @@ import (
 //
 //go:embed provider-frame/*.png
 var frameAssets embed.FS
+
+// V10's approved native meter is compiled from the supplied reference
+// renderer. Each archive contains 101 usage rows with all 101 expected-pace
+// positions, so the tray uses the literal V10 raster without a runtime Python
+// dependency or a second hand-drawn raster engine.
+//
+//go:embed v10-atlas/*.zip provider-frame-v10/*/*/*.png
+var v10Assets embed.FS
+
+type frameTheme string
+
+const (
+	frameThemeDark  frameTheme = "dark"
+	frameThemeLight frameTheme = "light"
+)
+
+type v10Atlas struct {
+	once  sync.Once
+	data  []byte
+	files map[int]*zip.File
+	err   error
+}
+
+var v10Atlases = map[string]*v10Atlas{
+	"22-dark":  {},
+	"22-light": {},
+	"32-dark":  {},
+	"32-light": {},
+}
 
 type frameGeometry struct {
 	size, supersample                     int
@@ -90,7 +122,7 @@ type framePoint struct{ x, y float64 }
 // renderProviderFrameIcon implements the native 22px/32px Claw Frame V10
 // geometry. Other requested sizes use the nearest intended native rendition,
 // because the operating-system tray selects from the supplied pixmaps.
-func renderProviderFrameIcon(providerName string, meter MeterState, size int) image.Image {
+func renderProviderFrameIcon(providerName string, meter MeterState, size int, theme frameTheme) image.Image {
 	if _, ok := frameProviderAsset[providerName]; !ok {
 		return resize(decodeProviderLogo(ProviderLogos[providerName]), size)
 	}
@@ -98,13 +130,152 @@ func renderProviderFrameIcon(providerName string, meter MeterState, size int) im
 	if size <= 22 {
 		sourceSize = 22
 	}
-	native := renderNativeFrame(providerName, normalizeMeterState(meter), sourceSize)
+	native := renderV10NativeFrame(providerName, normalizeMeterState(meter), sourceSize, theme)
 	if size == sourceSize {
 		return native
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, size, size))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), native, native.Bounds(), draw.Over, nil)
 	return dst
+}
+
+func frameThemeForPalette(palette TrayPalette) frameTheme {
+	if palette == TrayPaletteLight {
+		return frameThemeLight
+	}
+	return frameThemeDark
+}
+
+func renderV10NativeFrame(providerName string, meter MeterState, size int, theme frameTheme) image.Image {
+	canvas := image.NewNRGBA(image.Rect(0, 0, size, size))
+	meterImage, err := v10MeterRaster(size, theme, meter)
+	if err != nil {
+		// The pre-V10 implementation is a fail-soft visual fallback only. The
+		// embedded source-derived atlases are always expected in release builds.
+		return renderNativeFrame(providerName, meter, size)
+	}
+	draw.Draw(canvas, canvas.Bounds(), meterImage, meterImage.Bounds().Min, draw.Src)
+	v10ProviderMark(canvas, providerName, size, theme)
+	v10WindowLabel(canvas, frameDisplayLabel(meter.Label), size, theme)
+	if meter.UpdateAvailable {
+		box := frameGeometries[size].update
+		fill := frameBlue
+		if theme == frameThemeLight {
+			fill = color.NRGBA{R: 0, G: 102, B: 204, A: 255}
+		}
+		draw.Draw(canvas, box, image.NewUniform(fill), image.Point{}, draw.Src)
+	}
+	return canvas
+}
+
+func v10MeterRaster(size int, theme frameTheme, meter MeterState) (image.Image, error) {
+	usage := int(math.Round(min(100, max(0, meter.UsagePct))))
+	expectedValue := meter.UsagePct
+	if meter.ShowExpected {
+		expectedValue = meter.ExpectedPct
+	}
+	expected := int(math.Round(min(100, max(0, expectedValue))))
+	atlas, err := loadV10Atlas(size, theme)
+	if err != nil {
+		return nil, err
+	}
+	file := atlas.files[usage]
+	if file == nil {
+		return nil, fmt.Errorf("V10 meter row %d is missing", usage)
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	row, err := png.Decode(reader)
+	if err != nil {
+		return nil, err
+	}
+	result := image.NewNRGBA(image.Rect(0, 0, size, size))
+	source := image.Rect(expected*size, 0, (expected+1)*size, size)
+	draw.Draw(result, result.Bounds(), row, source.Min, draw.Src)
+	return result, nil
+}
+
+func loadV10Atlas(size int, theme frameTheme) (*v10Atlas, error) {
+	key := fmt.Sprintf("%d-%s", size, theme)
+	atlas, ok := v10Atlases[key]
+	if !ok {
+		return nil, fmt.Errorf("unsupported V10 atlas %s", key)
+	}
+	atlas.once.Do(func() {
+		atlas.data, atlas.err = v10Assets.ReadFile("v10-atlas/meter-" + key + ".zip")
+		if atlas.err != nil {
+			return
+		}
+		reader, err := zip.NewReader(bytes.NewReader(atlas.data), int64(len(atlas.data)))
+		if err != nil {
+			atlas.err = err
+			return
+		}
+		atlas.files = make(map[int]*zip.File, len(reader.File))
+		for _, file := range reader.File {
+			usage, err := strconv.Atoi(file.Name[:3])
+			if err == nil {
+				atlas.files[usage] = file
+			}
+		}
+	})
+	return atlas, atlas.err
+}
+
+func v10ProviderMark(dst draw.Image, providerName string, size int, theme frameTheme) {
+	asset := frameProviderAsset[providerName]
+	if asset == "" {
+		return
+	}
+	path := fmt.Sprintf("provider-frame-v10/%s/%d/provider-%s.png", theme, size, asset)
+	data, err := v10Assets.ReadFile(path)
+	if err != nil {
+		return
+	}
+	mark, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	g := frameGeometries[size]
+	// Python's reference renderer uses round(), which rounds half values to
+	// even. The 32px mark's vertical origin is exactly 6.5, so math.Round
+	// would move it one pixel away from the approved raster.
+	x := int(math.RoundToEven(g.providerX - float64(mark.Bounds().Dx())/2))
+	y := int(math.RoundToEven(g.providerY - float64(mark.Bounds().Dy())/2))
+	draw.Draw(dst, image.Rect(x, y, x+mark.Bounds().Dx(), y+mark.Bounds().Dy()), mark, mark.Bounds().Min, draw.Over)
+}
+
+func v10WindowLabel(dst draw.Image, label string, size int, theme frameTheme) {
+	if label == "" {
+		return
+	}
+	data, err := v10Assets.ReadFile(fmt.Sprintf("provider-frame-v10/%s/%d/label-%s.png", theme, size, labelToSourceCode(label)))
+	if err != nil {
+		return
+	}
+	mark, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	g := frameGeometries[size]
+	x := int(math.RoundToEven(g.providerX - float64(mark.Bounds().Dx())/2))
+	draw.Draw(dst, image.Rect(x, g.labelY, x+mark.Bounds().Dx(), g.labelY+mark.Bounds().Dy()), mark, mark.Bounds().Min, draw.Over)
+}
+
+func labelToSourceCode(label string) string {
+	switch label {
+	case "5h":
+		return "5H"
+	case "7d":
+		return "7D"
+	case "mo":
+		return "MO"
+	default:
+		return label
+	}
 }
 
 func renderNativeFrame(providerName string, meter MeterState, size int) *image.RGBA {

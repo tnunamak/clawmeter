@@ -112,9 +112,15 @@ type MeterState struct {
 	UpdateAvailable bool
 }
 
-// GenerateProviderIcon composites a provider logo with the Clawmeter overlay.
-// Dark monochrome provider marks get a light plate so they remain legible on
-// dark tray backgrounds, but the provider logo remains the base identity layer.
+// TrayPalette selects the V10 artwork's supplied appearance palette.
+type TrayPalette string
+
+const (
+	TrayPaletteDark  TrayPalette = "dark"
+	TrayPaletteLight TrayPalette = "light"
+)
+
+// GenerateProviderIcon renders a provider icon with Clawmeter telemetry.
 func GenerateProviderIcon(providerName string, usagePct float64, size int) []byte {
 	return GenerateProviderIconWithMeter(providerName, MeterState{
 		UsagePct:     usagePct,
@@ -124,13 +130,18 @@ func GenerateProviderIcon(providerName string, usagePct float64, size int) []byt
 	}, size)
 }
 
-// GenerateProviderIconWithMeter composites a provider logo with a richer
-// Clawmeter overlay. The provider logo remains the base identity layer.
+// GenerateProviderIconWithMeter renders the default dark-tray artwork.
 func GenerateProviderIconWithMeter(providerName string, meter MeterState, size int) []byte {
+	return GenerateProviderIconWithMeterPalette(providerName, meter, size, TrayPaletteDark)
+}
+
+// GenerateProviderIconWithMeterPalette renders the V10 artwork in the given
+// host appearance palette. Unknown values fail safely to the dark default.
+func GenerateProviderIconWithMeterPalette(providerName string, meter MeterState, size int, palette TrayPalette) []byte {
 	if ProviderLogos[providerName] == nil {
 		return plainCrawfish(meter.UsagePct, size)
 	}
-	return encodePNG(renderProviderFrameIcon(providerName, meter, size))
+	return encodePNG(renderProviderFrameIcon(providerName, meter, size, frameThemeForPalette(palette)))
 }
 
 // GenerateIcon is the lower-level entry point used by callers that pass a raw

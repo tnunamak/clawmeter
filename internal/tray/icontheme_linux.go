@@ -18,6 +18,7 @@ import (
 )
 
 var currentIconName string
+var trayPalette = icons.TrayPaletteDark
 
 const dynamicIconVersion = 33
 
@@ -34,6 +35,7 @@ var iconSet = map[string][]byte{
 }
 
 func setupIconTheme() {
+	trayPalette = resolveTrayPalette()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -93,7 +95,7 @@ func dynamicIconData(providerName string, meter icons.MeterState, _ []byte, size
 	// The V10 icon has independently drawn 22px and 32px forms. Do not
 	// downsample a 128px composite: that destroys the native microtype and
 	// half-pixel meter geometry on the common Linux tray sizes.
-	return icons.GenerateProviderIconWithMeter(providerName, meter, size)
+	return icons.GenerateProviderIconWithMeterPalette(providerName, meter, size, trayPalette)
 }
 
 func resizePNG(data []byte, size int) []byte {

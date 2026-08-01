@@ -9,7 +9,9 @@ import (
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 )
 
-func setupIconTheme()   {}
+var trayPalette = icons.TrayPaletteDark
+
+func setupIconTheme()   { trayPalette = resolveTrayPalette() }
 func cleanupIconTheme() {}
 
 // Windows tray displays one HICON at the system tray icon size. Passing in
@@ -23,7 +25,7 @@ func setIconByName(_ string, data []byte) {
 
 func setIconDynamic(providerName string, meter icons.MeterState, _ []byte) {
 	size := systemTrayIconSize()
-	icon := icons.GenerateProviderIconWithMeter(providerName, meter, size)
+	icon := icons.GenerateProviderIconWithMeterPalette(providerName, meter, size, trayPalette)
 	systray.SetIcon(icon)
 }
 

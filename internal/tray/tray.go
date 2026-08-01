@@ -989,8 +989,10 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 	}
 	meter.UpdateAvailable = updateAvailable()
 
-	iconData := icons.GenerateProviderIconWithMeter(worstProvider, meter, 128)
-	setIconDynamic(worstProvider, meter, iconData)
+	// Each platform renders from its closest native V10 raster. Linux supplies
+	// the 22px and 32px forms as SNI pixmaps; Windows and macOS receive the
+	// closest source form for their own final compositor scaling.
+	setIconDynamic(worstProvider, meter, nil)
 }
 
 // iconMeterState maps provider usage into the tray icon's three visual

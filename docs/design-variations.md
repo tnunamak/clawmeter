@@ -158,11 +158,11 @@ The current all-provider review sheets are [provider-contact-sheet-real-22px.png
 
    Concept: replace the circular chip and centered banner with a single open U-shaped pace scale. The provider mark occupies the protected center, the selected window uses dedicated bitmap microtype below it, and a detached lower-right square signals an available update. The path runs lower-left, up, across the rounded top, and down to lower-right; its common portion is neutral, the pace delta is green/red, the inward tick is expected pace, and the rounded cap is actual usage.
 
-   Implementation: native 22px and 32px renderer in `internal/tray/icons/frame.go`; exact hand-tuned provider marks are embedded separately. Linux now supplies renderer-native pixmaps rather than downsampling a 128px composite.
+   Implementation: the supplied V10 renderer is compiled into native 22px and 32px raster atlases in `internal/tray/icons/frame.go`; the exact hand-tuned provider marks and bitmap labels are embedded separately. Linux supplies both native pixmaps through SNI; Windows and macOS receive the closest source form for their final compositor scaling. The actual and expected values are rounded to the nearest percentage point for the icon only; textual quota reporting remains precise.
 
    Source: July 31, 2026 designer handoff `clawmeter-full-design-assets.zip`; the archive is deliberately not committed. Its V10 validation covered all provider/window/state combinations at 22px and 32px.
 
-   Integration note: the handoff supplied distinct dark/light provider-mark treatments, while Clawmeter emits one transparent raster across host themes. The implementation keeps the dark-tray mark geometry and adds only a thin dark outline for light-panel legibility; it does not reintroduce a chip, pill, or overlay marker.
+   Theme note: the handoff supplied distinct dark and light treatments. Clawmeter selects the corresponding source-derived palette from the desktop appearance setting, with `CLAWMETER_TRAY_PALETTE=dark|light` as an explicit recovery override. It does not reintroduce a chip, pill, outline, or overlay marker.
 
 ## Open Design Questions For Review
 
