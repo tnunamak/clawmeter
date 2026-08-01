@@ -24,8 +24,9 @@ var frameAssets embed.FS
 
 // V10's approved native meter is compiled from the supplied reference
 // renderer. Each archive contains 101 usage rows with all 101 expected-pace
-// positions, so the tray uses the literal V10 raster without a runtime Python
-// dependency or a second hand-drawn raster engine.
+// positions, so the tray uses the literal V10 raster for its selected display
+// state without a runtime Python dependency or a second hand-drawn raster
+// engine.
 //
 //go:embed v10-atlas/*.zip provider-frame-v10/*/*/*.png
 var v10Assets embed.FS

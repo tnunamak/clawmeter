@@ -36,6 +36,10 @@ jobs:
       - name: go test (tray)
         run: go test -race -tags tray ./...
 
+      - name: go test (tray bridge)
+        working-directory: systray-fork
+        run: go test -race ./...
+
       - name: Build smoke (no tray)
         run: go build ./cmd/clawmeter
 
