@@ -1,5 +1,5 @@
-// Package alibabatoken reads Alibaba Personal Token Plan usage through the
-// console session created by the official `bl auth login --console` command.
+// Package alibabatoken reads Alibaba Personal Token Plan usage through a
+// read-only Model Studio console session.
 package alibabatoken
 
 import (
@@ -52,17 +52,17 @@ type Provider struct {
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
 }
 
-// consoleConfigPaths orders Clawmeter's dedicated console-session store before
-// the official CLI's default store. The dedicated store is populated only by
-// an explicit connect flow and never needs the model-inference API key after
-// the browser callback completes.
+// consoleConfigPaths treats the official CLI's store as authoritative after a
+// reconnect, with Clawmeter's dedicated store as a compatibility fallback.
+// Neither store contains the model-inference API key; the quota session is a
+// separate browser-authorized credential.
 func consoleConfigPaths() []string {
 	paths := make([]string, 0, 2)
-	if configDir, err := os.UserConfigDir(); err == nil {
-		paths = append(paths, filepath.Join(configDir, "clawmeter", "alibaba-token-plan", "config.json"))
-	}
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".bailian", "config.json"))
+	}
+	if configDir, err := os.UserConfigDir(); err == nil {
+		paths = append(paths, filepath.Join(configDir, "clawmeter", "alibaba-token-plan", "config.json"))
 	}
 	return paths
 }
@@ -104,15 +104,15 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "Model Studio console session found"}
 	}
 	if p.hasTokenPlanKey() {
-		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "Token Plan key found; run `bl auth login --console`"}
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "Token Plan key found; connect quota access with `clawmeter providers connect token-plan`"}
 	}
-	return provider.SetupStatus{State: provider.SetupUnavailable, Detail: "set BAILIAN_TOKEN_PLAN_API_KEY and run `bl auth login --console`"}
+	return provider.SetupStatus{State: provider.SetupUnavailable, Detail: "no Token Plan key or console session; connect quota access with `clawmeter providers connect token-plan`"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	session, ok := p.consoleSession()
 	if !ok {
-		return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: true, InvalidatesPriorUsage: true, Error: "Model Studio console login required — run `bl auth login --console`"}, nil
+		return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: true, InvalidatesPriorUsage: true, Error: "Model Studio quota access is not connected; run `clawmeter providers connect token-plan`"}, nil
 	}
 
 	usage, err := p.call(ctx, session, usageOperation)
@@ -136,7 +136,7 @@ func (p *Provider) errorData(err error) *provider.UsageData {
 	message := "Token Plan usage unavailable"
 	expired := false
 	if strings.Contains(strings.ToLower(err.Error()), "login") || strings.Contains(strings.ToLower(err.Error()), "unauthorized") || strings.Contains(strings.ToLower(err.Error()), "forbidden") {
-		message = "Model Studio console session expired — run `bl auth login --console`"
+		message = "Model Studio quota access expired; run `clawmeter providers connect token-plan --force`"
 		expired = true
 	}
 	return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: expired, InvalidatesPriorUsage: expired, Error: message}

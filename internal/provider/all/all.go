@@ -26,16 +26,19 @@ import (
 )
 
 var aliases = map[string]string{
-	"codex":      "openai",
-	"grok":       "xai",
-	"x.ai":       "xai",
-	"x-ai":       "xai",
-	"xai":        "xai",
-	"openai":     "openai",
-	"qwen":       "alibaba",
-	"bailian":    "alibaba",
-	"dashscope":  "alibaba",
-	"token-plan": "alibaba_token",
+	"codex":              "openai",
+	"grok":               "xai",
+	"x.ai":               "xai",
+	"x-ai":               "xai",
+	"xai":                "xai",
+	"openai":             "openai",
+	"qwen":               "alibaba",
+	"bailian":            "alibaba",
+	"dashscope":          "alibaba",
+	"token-plan":         "alibaba_token",
+	"alibaba-token-plan": "alibaba_token",
+	"alibaba-token":      "alibaba_token",
+	"bailian-token-plan": "alibaba_token",
 }
 
 // Register registers all known providers with the given registry and wires

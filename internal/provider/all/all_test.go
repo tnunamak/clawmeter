@@ -88,6 +88,8 @@ func TestCanonicalName(t *testing.T) {
 		{"Codex", "openai"},
 		{"grok", "xai"},
 		{"x.ai", "xai"},
+		{"token-plan", "alibaba_token"},
+		{"Alibaba-Token-Plan", "alibaba_token"},
 	}
 	for _, tt := range tests {
 		got, ok := CanonicalName(tt.in)

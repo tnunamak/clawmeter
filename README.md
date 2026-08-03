@@ -131,7 +131,7 @@ clawmeter tray           # run the tray in this session
 | JetBrains AI | Monthly credits |
 | Kimi K2 | Credit balance |
 | Alibaba Coding Plan | Coding Plan 5-hour, weekly, and monthly quotas |
-| Alibaba Token Plan | Personal Token Plan 5-hour, 7-day, and reset-credit data after `bl auth login --console` |
+| Alibaba Token Plan | Personal Token Plan 5-hour, 7-day, and reset-credit data after one-time Model Studio quota connection |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 
@@ -238,6 +238,7 @@ brew services stop clawmeter
 | JetBrains AI | IDE config files |
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
 | Alibaba Coding Plan | Dedicated Model Studio console login (`bl auth login --console`) or `ALIBABA_CODING_PLAN_API_KEY` / `BAILIAN_CODING_PLAN_API_KEY` (Coding Plan key only) |
+| Alibaba Token Plan | One-time Model Studio quota connection via `clawmeter providers connect token-plan`; existing `~/.bailian` session is reused |
 
 For Grok/xAI, `grok login` enables Grok weekly usage-pool tracking from the
 read-only grok.com billing surface. `XAI_MANAGEMENT_API_KEY` enables xAI API
@@ -250,6 +251,14 @@ console-login session from its dedicated Coding Plan profile or `~/.bailian`.
 It sends only the read-only quota query, never reads browser cookies and never
 calls a model or plan-management endpoint. Personal Token Plan remains a
 separate provider and session profile.
+
+For Alibaba Token Plan, run `clawmeter providers connect token-plan` once to
+authorize the official Model Studio console session. Clawmeter then reads only
+the read-only quota and reset-card operations. `BAILIAN_TOKEN_PLAN_API_KEY`
+continues to be useful for model requests, but it does not provide account-level
+Token Plan quota and is never treated as quota authorization. If the official
+Bailian CLI is missing, Clawmeter prints Alibaba's documented install command;
+it does not silently download executable code.
 
 </details>
 

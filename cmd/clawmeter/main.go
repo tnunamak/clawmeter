@@ -15,6 +15,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/diagnose"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/provider/alibabatoken"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	"github.com/tnunamak/clawmeter/internal/tray"
 	"github.com/tnunamak/clawmeter/internal/update"
@@ -449,8 +450,10 @@ func providersCmd(args []string) int {
 			return configEnableCmd(args[1:], false)
 		case "diagnose":
 			return providersDiagnoseCmd(args[1:])
+		case "connect":
+			return providersConnectCmd(args[1:])
 		case "help", "--help", "-h":
-			fmt.Println("Usage: clawmeter providers [enable|disable <provider>|diagnose <provider|all>]")
+			fmt.Println("Usage: clawmeter providers [enable|disable <provider>|connect <provider> [--force]|diagnose <provider|all>]")
 			fmt.Println()
 			fmt.Println("Without arguments, lists provider auth status.")
 			fmt.Println("Detected providers run automatically. Enable is for opt-in providers or manual overrides.")
@@ -459,11 +462,12 @@ func providersCmd(args []string) int {
 			fmt.Println("  clawmeter grok")
 			fmt.Println("  clawmeter providers enable openrouter")
 			fmt.Println("  clawmeter providers disable codex")
+			fmt.Println("  clawmeter providers connect token-plan")
 			fmt.Println("  clawmeter providers diagnose codex --pretty")
 			return 0
 		default:
 			fmt.Fprintf(os.Stderr, "clawmeter: unknown providers command %q\n", args[0])
-			fmt.Fprintln(os.Stderr, "Usage: clawmeter providers [enable|disable <provider>|diagnose <provider|all>]")
+			fmt.Fprintln(os.Stderr, "Usage: clawmeter providers [enable|disable <provider>|connect <provider> [--force]|diagnose <provider|all>]")
 			return 1
 		}
 	}
@@ -512,6 +516,57 @@ func providersCmd(args []string) int {
 	fmt.Println("Detected/enabled providers are polled automatically.")
 	fmt.Println("Use 'clawmeter providers enable <provider>' to opt available providers in,")
 	fmt.Println("or 'clawmeter providers disable <provider>' to opt out.")
+	return 0
+}
+
+func providersConnectCmd(args []string) int {
+	providerName := ""
+	force := false
+	for _, arg := range args {
+		switch arg {
+		case "--force":
+			force = true
+		case "help", "--help", "-h":
+			fmt.Println("Usage: clawmeter providers connect <provider> [--force]")
+			fmt.Println()
+			fmt.Println("Connects provider quota access using an explicit browser authorization flow.")
+			fmt.Println("Currently supported: token-plan (Alibaba Personal Token Plan)")
+			return 0
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "clawmeter: unknown connect flag %q\n", arg)
+				return 1
+			}
+			if providerName != "" {
+				fmt.Fprintln(os.Stderr, "clawmeter: connect accepts one provider")
+				return 1
+			}
+			providerName = arg
+		}
+	}
+	if providerName == "" {
+		fmt.Fprintln(os.Stderr, "clawmeter: connect requires a provider")
+		fmt.Fprintln(os.Stderr, "Usage: clawmeter providers connect <provider> [--force]")
+		return 1
+	}
+
+	canonical, ok := all.CanonicalName(providerName)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", providerName)
+		return 1
+	}
+	if canonical != "alibaba_token" {
+		fmt.Fprintf(os.Stderr, "clawmeter: quota connect is not available for %s\n", providerName)
+		fmt.Fprintln(os.Stderr, "Currently supported: token-plan (Alibaba Personal Token Plan)")
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := alibabatoken.Connect(ctx, force, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -695,7 +750,7 @@ Commands:
   status                    Show usage for all configured providers (default)
   statusline                Print a compact statusline segment
   <provider>                Show usage for a specific provider
-  providers                 List available providers
+  providers                 List, connect, or configure providers
   setup                     Install or show local integrations
   doctor                    Check provider and integration readiness
   tray                      Run as system tray icon
@@ -719,6 +774,8 @@ Config commands:
   config disable <provider> Disable a provider
   providers enable <provider>
                             Enable a provider alias from provider listing
+  providers connect <provider> [--force]
+                            Connect provider quota access (currently token-plan)
 
 Tray flags:
   --install                 Enable launch at login
