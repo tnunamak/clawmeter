@@ -103,6 +103,22 @@ func TestProviderConnectionMenuState(t *testing.T) {
 	}
 }
 
+func TestProviderConnectFailureMessageIdentifiesMissingCLI(t *testing.T) {
+	got := providerConnectFailureMessage("", "Alibaba's official Bailian CLI is not installed or is not on PATH")
+	for _, want := range []string{"Bailian CLI is missing", "Node.js 22.12+", "npm install --global bailian-cli"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("providerConnectFailureMessage() = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestProviderConnectFailureMessageDoesNotEchoUnknownOutput(t *testing.T) {
+	got := providerConnectFailureMessage("secret-looking output", "unexpected provider failure")
+	if strings.Contains(got, "secret-looking") || strings.Contains(got, "unexpected provider failure") {
+		t.Fatalf("providerConnectFailureMessage() echoed command output: %q", got)
+	}
+}
+
 func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
 	oldRelease := currentPendingRelease()
 	defer setPendingRelease(oldRelease)

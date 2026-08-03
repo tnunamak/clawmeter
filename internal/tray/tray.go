@@ -3,9 +3,9 @@
 package tray
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -414,7 +414,7 @@ func onReady() {
 					if err := connectProviderFromTray(providerName); err != nil {
 						menu.connectItem.SetTitle("Retry quota access")
 						menu.connectItem.Enable()
-						notify(menu.provider.DisplayName(), "Quota access was not connected. Run `clawmeter providers connect token-plan --force` in a terminal for details.", "normal")
+						notify(menu.provider.DisplayName(), err.Error(), "normal")
 						return
 					}
 					notify(menu.provider.DisplayName(), "Quota access connected. Refreshing...", "low")
@@ -579,16 +579,32 @@ func connectProviderFromTray(providerName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, executable, "providers", "connect", tokenPlanConnectTarget, "--force")
+	var stdout, stderr bytes.Buffer
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return fmt.Errorf("Alibaba authorization timed out. Try again in a terminal.")
 		}
-		return err
+		return fmt.Errorf("%s", providerConnectFailureMessage(stdout.String(), stderr.String()))
 	}
 	return nil
+}
+
+func providerConnectFailureMessage(stdout, stderr string) string {
+	output := strings.ToLower(stdout + "\n" + stderr)
+	switch {
+	case strings.Contains(output, "official bailian cli is not installed") ||
+		strings.Contains(output, "command not found: bl"):
+		return "Bailian CLI is missing. Install Node.js 22.12+ and run `npm install --global bailian-cli`, then retry."
+	case strings.Contains(output, "no console session was found"):
+		return "Alibaba authorization finished without a quota session. Complete `bl auth login --console` in a terminal, then retry."
+	case strings.Contains(output, "authorization did not complete"):
+		return "Alibaba authorization did not complete. Retry from a terminal so its browser-login details are visible."
+	default:
+		return "Alibaba quota access could not be connected. Retry from a terminal for details."
+	}
 }
 
 func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
