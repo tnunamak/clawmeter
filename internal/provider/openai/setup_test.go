@@ -31,10 +31,17 @@ func TestSetupStatus(t *testing.T) {
 		wantSub   string // substring expected in Detail
 	}{
 		{
-			name:      "no codex CLI on PATH",
+			name:      "no codex CLI or auth",
 			fakeCLI:   false,
 			wantState: provider.SetupUnavailable,
 			wantSub:   "not installed",
+		},
+		{
+			name:      "no codex CLI with ChatGPT auth uses direct read",
+			fakeCLI:   false,
+			auth:      `{"tokens":{"access_token":"at","refresh_token":"rt"}}`,
+			wantState: provider.SetupReady,
+			wantSub:   "direct quota read",
 		},
 		{
 			name:      "CLI present, no auth file",

@@ -33,21 +33,20 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	if _, err := codexExecutablePath(); err != nil {
-		return provider.SetupStatus{
-			State:  provider.SetupUnavailable,
-			Detail: "codex CLI not installed — see https://github.com/openai/codex",
-		}
-	}
-
 	auth, err := readAuthFile(codexHome())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
+		if _, cliErr := codexExecutablePath(); cliErr != nil {
+			return codexCLIUnavailableStatus()
+		}
 		return provider.SetupStatus{
 			State:  provider.SetupNeedsAuth,
 			Detail: "run `codex login` to sign in",
 		}
 	case err != nil:
+		if _, cliErr := codexExecutablePath(); cliErr != nil {
+			return codexCLIUnavailableStatus()
+		}
 		return provider.SetupStatus{
 			State:  provider.SetupNeedsAuth,
 			Detail: "codex auth file unreadable — run `codex login`",
@@ -55,14 +54,27 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 	}
 
 	if strings.TrimSpace(auth.OpenAIAPIKey) != "" {
+		if _, err := codexExecutablePath(); err != nil {
+			return codexCLIUnavailableStatus()
+		}
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "Codex auth API key"}
 	}
 	if auth.Tokens != nil && strings.TrimSpace(auth.Tokens.AccessToken) != "" {
-		return provider.SetupStatus{State: provider.SetupReady, Detail: "ChatGPT account"}
+		if _, err := codexExecutablePath(); err == nil {
+			return provider.SetupStatus{State: provider.SetupReady, Detail: "ChatGPT account"}
+		}
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "ChatGPT account (direct quota read)"}
 	}
 	return provider.SetupStatus{
 		State:  provider.SetupNeedsAuth,
 		Detail: "codex auth file has no credentials — run `codex login`",
+	}
+}
+
+func codexCLIUnavailableStatus() provider.SetupStatus {
+	return provider.SetupStatus{
+		State:  provider.SetupUnavailable,
+		Detail: "codex CLI not installed — required when ChatGPT auth is unavailable",
 	}
 }
 

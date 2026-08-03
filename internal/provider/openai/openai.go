@@ -40,14 +40,14 @@ func New(cfg config.ProviderConfig) *Provider {
 
 func (p *Provider) Name() string         { return "openai" } // stable config key
 func (p *Provider) DisplayName() string  { return "Codex" }
-func (p *Provider) Description() string  { return "Codex quota (via codex CLI)" }
+func (p *Provider) Description() string  { return "Codex quota (via local Codex auth)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
 
 // FetchUsage retrieves rate limit data by launching codex as a JSON-RPC subprocess.
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	codexPath, err := codexExecutablePath()
 	if err != nil {
-		return nil, fmt.Errorf("codex not found on PATH")
+		return p.fetchUsageWithoutCLI(ctx)
 	}
 
 	var lastErr error
@@ -72,7 +72,23 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			return nil, ctx.Err()
 		}
 	}
+	if data, directErr := p.fetchUsageWithoutCLI(ctx); directErr == nil {
+		return data, nil
+	}
 	return nil, lastErr
+}
+
+func (p *Provider) fetchUsageWithoutCLI(ctx context.Context) (*provider.UsageData, error) {
+	auth, err := readAuthFile(codexHome())
+	if err != nil {
+		return nil, fmt.Errorf("codex not found on PATH")
+	}
+	data, err := p.fetchUsageDirect(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	p.attachResetCredits(ctx, data)
+	return data, nil
 }
 
 func (p *Provider) fetchUsageOnce(ctx context.Context, codexPath string) (*provider.UsageData, error) {
