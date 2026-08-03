@@ -5,11 +5,14 @@ package tray
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -30,7 +33,9 @@ import (
 )
 
 const (
-	updateCheckInterval = 30 * time.Minute
+	updateCheckInterval    = 30 * time.Minute
+	tokenPlanProviderName  = "alibaba_token"
+	tokenPlanConnectTarget = "token-plan"
 )
 
 type state struct {
@@ -119,9 +124,10 @@ func onReady() {
 	// after launch (e.g. user runs `codex login` after starting the tray)
 	// appears on the next refresh without needing a restart.
 	providerMenus := make(map[string]*providerMenuItems)
+	providerConnectActions := make(chan string, 1)
 	for _, p := range registry.GetAll() {
 		explicit := cfg.IsProviderExplicitlyEnabled(p.Name())
-		menu := createProviderMenuItems(p, explicit)
+		menu := createProviderMenuItems(p, explicit, providerConnectActions)
 		hideProviderMenu(menu)
 		providerMenus[p.Name()] = menu
 	}
@@ -393,6 +399,28 @@ func onReady() {
 				cycleIconSelection(providerMenus, mIconProvider)
 			case <-mIconAutoMode.ClickedCh:
 				toggleIconAutoMode(providerMenus, mIconProvider, mIconAutoMode)
+			case providerName := <-providerConnectActions:
+				menu := providerMenus[providerName]
+				if menu == nil || menu.connectItem == nil {
+					continue
+				}
+				if !menu.connecting.CompareAndSwap(false, true) {
+					continue
+				}
+				menu.connectItem.SetTitle("Connecting...")
+				menu.connectItem.Disable()
+				go func(providerName string, menu *providerMenuItems) {
+					defer menu.connecting.Store(false)
+					if err := connectProviderFromTray(providerName); err != nil {
+						menu.connectItem.SetTitle("Retry quota access")
+						menu.connectItem.Enable()
+						notify(menu.provider.DisplayName(), "Quota access was not connected. Run `clawmeter providers connect token-plan --force` in a terminal for details.", "normal")
+						return
+					}
+					notify(menu.provider.DisplayName(), "Quota access connected. Refreshing...", "low")
+					go refresh(true)
+					go refreshStatus()
+				}(providerName, menu)
 			case <-mUpdate.ClickedCh:
 				applyUpdate()
 			case <-mAutostart.ClickedCh:
@@ -410,16 +438,18 @@ type providerMenuItems struct {
 	provider          provider.Provider
 	headerItem        *systray.MenuItem
 	statusItem        *systray.MenuItem
+	connectItem       *systray.MenuItem
 	windowItems       []*systray.MenuItem
 	balanceItems      []*systray.MenuItem
 	dashboardItem     *systray.MenuItem
 	everHealthy       bool // true once we've seen useful quota data
 	explicitlyEnabled bool
+	connecting        atomic.Bool
 }
 
 const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
 
-func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *providerMenuItems {
+func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string) *providerMenuItems {
 	// Provider header (disabled)
 	header := systray.AddMenuItem(p.DisplayName(), "")
 	header.Disable()
@@ -427,6 +457,19 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *provi
 	// Status item (shows loading/error)
 	statusItem := systray.AddMenuItem("Loading...", "")
 	statusItem.Disable()
+
+	var connectItem *systray.MenuItem
+	if p.Name() == tokenPlanProviderName && connectActions != nil {
+		connectItem = systray.AddMenuItem("Connect quota access", "")
+		go func() {
+			for range connectItem.ClickedCh {
+				select {
+				case connectActions <- p.Name():
+				default:
+				}
+			}
+		}()
+	}
 
 	// Pre-create window items (hidden until populated)
 	windowItems := make([]*systray.MenuItem, maxWindowItems)
@@ -459,6 +502,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *provi
 		provider:          p,
 		headerItem:        header,
 		statusItem:        statusItem,
+		connectItem:       connectItem,
 		windowItems:       windowItems,
 		balanceItems:      balanceItems,
 		dashboardItem:     dashboardItem,
@@ -469,6 +513,9 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool) *provi
 func hideProviderMenu(menu *providerMenuItems) {
 	menu.headerItem.Hide()
 	menu.statusItem.Hide()
+	if menu.connectItem != nil {
+		menu.connectItem.Hide()
+	}
 	hideProviderWindows(menu)
 	menu.dashboardItem.Hide()
 }
@@ -484,6 +531,64 @@ func hideProviderWindows(menu *providerMenuItems) {
 
 func showProviderHeader(menu *providerMenuItems) {
 	menu.headerItem.Show()
+}
+
+func providerConnectionMenuState(name string, data *provider.UsageData, explicitlyEnabled, setupReady bool) (status, action string, show bool) {
+	if name != tokenPlanProviderName {
+		return "", "", false
+	}
+	if data == nil && explicitlyEnabled && !setupReady {
+		return "Quota access not connected", "Connect quota access", true
+	}
+	if data == nil || !data.IsExpired {
+		return "", "", false
+	}
+	if strings.Contains(strings.ToLower(data.Error), "not connected") {
+		return "Quota access not connected", "Connect quota access", true
+	}
+	return "Quota access expired", "Reconnect quota access", true
+}
+
+func setProviderConnectionItem(menu *providerMenuItems, action string, show bool) {
+	if menu.connectItem == nil {
+		return
+	}
+	if menu.connecting.Load() {
+		menu.connectItem.SetTitle("Connecting...")
+		menu.connectItem.Disable()
+		menu.connectItem.Show()
+		return
+	}
+	if !show {
+		menu.connectItem.Hide()
+		return
+	}
+	menu.connectItem.SetTitle(action)
+	menu.connectItem.Enable()
+	menu.connectItem.Show()
+}
+
+func connectProviderFromTray(providerName string) error {
+	if providerName != tokenPlanProviderName {
+		return fmt.Errorf("quota connection is not available for %s", providerName)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "providers", "connect", tokenPlanConnectTarget, "--force")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	return nil
 }
 
 func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
@@ -504,6 +609,12 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			hideProviderMenu(menu)
 			continue
 		}
+		setupReady := true
+		if name == tokenPlanProviderName {
+			setupReady = provider.GetSetupStatus(menu.provider).IsReady()
+		}
+		connectionStatus, connectionAction, showConnection := providerConnectionMenuState(name, data, menu.explicitlyEnabled, setupReady)
+		setProviderConnectionItem(menu, connectionAction, showConnection)
 		visibleProviderCount++
 		if data != nil {
 			activeResults[name] = data
@@ -512,7 +623,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		if data == nil {
 			showProviderHeader(menu)
 			statusTitle := "No data"
-			if menu.explicitlyEnabled {
+			if connectionStatus != "" {
+				statusTitle = connectionStatus
+			}
+			if connectionStatus == "" && menu.explicitlyEnabled {
 				if setup := provider.GetSetupStatus(menu.provider); !setup.IsReady() && setup.Detail != "" {
 					statusTitle = setup.Detail
 				}
@@ -531,8 +645,13 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			showProviderHeader(menu)
 			hideProviderWindows(menu)
 			expiredMsg := "Token expired"
+			if connectionStatus != "" {
+				expiredMsg = connectionStatus
+			}
 			if data.Error != "" {
-				expiredMsg = format.HumanizeError(data.Error)
+				if connectionStatus == "" {
+					expiredMsg = format.HumanizeError(data.Error)
+				}
 			}
 			menu.statusItem.SetTitle(expiredMsg)
 			menu.statusItem.Show()

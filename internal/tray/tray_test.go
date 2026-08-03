@@ -27,6 +27,82 @@ func TestConfigureNotificationIdentity(t *testing.T) {
 	}
 }
 
+func TestProviderConnectionMenuState(t *testing.T) {
+	tests := []struct {
+		name         string
+		providerName string
+		data         *provider.UsageData
+		explicit     bool
+		setupReady   bool
+		wantStatus   string
+		wantAction   string
+		wantShow     bool
+	}{
+		{
+			name:         "missing session",
+			providerName: tokenPlanProviderName,
+			explicit:     true,
+			wantStatus:   "Quota access not connected",
+			wantAction:   "Connect quota access",
+			wantShow:     true,
+		},
+		{
+			name:         "no data with ready session is not a reconnect prompt",
+			providerName: tokenPlanProviderName,
+			explicit:     true,
+			setupReady:   true,
+			wantShow:     false,
+		},
+		{
+			name:         "expired session",
+			providerName: tokenPlanProviderName,
+			data: &provider.UsageData{
+				IsExpired: true,
+				Error:     "Model Studio quota access expired",
+			},
+			wantStatus: "Quota access expired",
+			wantAction: "Reconnect quota access",
+			wantShow:   true,
+		},
+		{
+			name:         "missing session returned as expired",
+			providerName: tokenPlanProviderName,
+			data: &provider.UsageData{
+				IsExpired: true,
+				Error:     "Model Studio quota access is not connected",
+			},
+			wantStatus: "Quota access not connected",
+			wantAction: "Connect quota access",
+			wantShow:   true,
+		},
+		{
+			name:         "healthy provider",
+			providerName: tokenPlanProviderName,
+			data: &provider.UsageData{
+				Windows: []provider.UsageWindow{{Name: "5h"}},
+			},
+			wantShow: false,
+		},
+		{
+			name:         "other provider",
+			providerName: "openai",
+			data: &provider.UsageData{
+				IsExpired: true,
+			},
+			wantShow: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, action, show := providerConnectionMenuState(tt.providerName, tt.data, tt.explicit, tt.setupReady)
+			if status != tt.wantStatus || action != tt.wantAction || show != tt.wantShow {
+				t.Fatalf("providerConnectionMenuState() = (%q, %q, %v), want (%q, %q, %v)", status, action, show, tt.wantStatus, tt.wantAction, tt.wantShow)
+			}
+		})
+	}
+}
+
 func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
 	oldRelease := currentPendingRelease()
 	defer setPendingRelease(oldRelease)
