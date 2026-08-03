@@ -17,6 +17,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/alibabatoken"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
+	"github.com/tnunamak/clawmeter/internal/shellpath"
 	"github.com/tnunamak/clawmeter/internal/tray"
 	"github.com/tnunamak/clawmeter/internal/update"
 )
@@ -563,6 +564,10 @@ func providersConnectCmd(args []string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	// The tray and desktop launchers may inherit a stale PATH that does not
+	// include user-managed Node installations. Recover the login-shell PATH
+	// before looking for Alibaba's `bl` CLI.
+	shellpath.Init()
 	if err := alibabatoken.Connect(ctx, force, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
