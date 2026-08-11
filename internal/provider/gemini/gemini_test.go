@@ -40,6 +40,115 @@ func TestTransformQuotaPreservesExplicitZeroAndUnknownReset(t *testing.T) {
 	}
 }
 
+func TestSourceCapabilityListsAndValidatesGeminiKinds(t *testing.T) {
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("Gemini should expose source capability")
+	}
+	if len(capability.SourceKinds()) != 2 {
+		t.Fatalf("source kinds = %#v, want native and config-dir", capability.SourceKinds())
+	}
+	for _, tc := range []struct {
+		name  string
+		src   config.SourceConfig
+		valid bool
+	}{
+		{"native default", config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}, true},
+		{"native named", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "native"}}, false},
+		{"absolute config dir", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: t.TempDir()}}, true},
+		{"relative config dir", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: "relative"}}, false},
+		{"unknown kind", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "GEMINI_CONFIG_DIR"}}, false},
+	} {
+		err := capability.ValidateSource(tc.src)
+		if (err == nil) != tc.valid {
+			t.Fatalf("%s ValidateSource() err = %v, valid = %v", tc.name, err, tc.valid)
+		}
+	}
+}
+
+func TestExplicitSourcesUseExactGeminiConfigDirWithoutFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeGeminiCredentials(t, home, "home-access", "home-refresh", time.Now().Add(time.Hour))
+	writeGeminiSettings(t, home, "oauth-personal")
+
+	one := t.TempDir()
+	two := t.TempDir()
+	writeGeminiCredentialsInDir(t, one, "one-access", "one-refresh", time.Now().Add(time.Hour))
+	writeGeminiSettingsInDir(t, one, "oauth-personal")
+	writeGeminiCredentialsInDir(t, two, "two-access", "two-refresh", time.Now().Add(time.Hour))
+
+	p1 := NewSource(config.ProviderConfig{OAuthToken: "ambient-config-token"}, config.SourceConfig{ID: "one", Label: "One", Credential: config.CredentialRef{Kind: "config-dir", Ref: one}})
+	p2 := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "two", Label: "Two", Credential: config.CredentialRef{Kind: "config-dir", Ref: two}})
+
+	if p1.SourceID() != "one" || p1.SourceLabel() != "One" || !p1.IsEnrolledSource() {
+		t.Fatalf("p1 source identity = %q/%q enrolled=%v", p1.SourceID(), p1.SourceLabel(), p1.IsEnrolledSource())
+	}
+	if !p1.IsConfigured() {
+		t.Fatal("source one should be configured from its own config dir")
+	}
+	if p2.IsConfigured() {
+		t.Fatal("source two without exact settings.json must not fall back to HOME settings")
+	}
+	creds, err := p1.readCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.AccessToken != "one-access" {
+		t.Fatalf("access token = %q, want exact source token", creds.AccessToken)
+	}
+	data := p1.transformQuota(&quotaResponse{})
+	if data.SourceID != "one" || data.SourceLabel != "One" {
+		t.Fatalf("usage source identity = %q/%q", data.SourceID, data.SourceLabel)
+	}
+}
+
+func TestSourceRevisionIsStableSecretFreeAndChangesWithGeminiFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeGeminiCredentialsInDir(t, dir, "one-access", "one-refresh", time.Now().Add(time.Hour))
+	writeGeminiSettingsInDir(t, dir, "oauth-personal")
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}})
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, dir) {
+		t.Fatalf("revision = %q, want opaque non-path value", first)
+	}
+	writeGeminiSettingsInDir(t, dir, "api-key")
+	second := p.SourceRevision()
+	if second == first {
+		t.Fatal("settings file change did not change source revision")
+	}
+	if err := os.Remove(filepath.Join(dir, "oauth_creds.json")); err != nil {
+		t.Fatal(err)
+	}
+	missing := p.SourceRevision()
+	if missing == "" || missing == second || strings.Contains(missing, dir) {
+		t.Fatalf("missing-file revision = %q, want distinct opaque provenance", missing)
+	}
+}
+
+func TestRegisterExpandsGeminiSources(t *testing.T) {
+	disabled := false
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{
+		"gemini": {
+			Sources: []config.SourceConfig{
+				{ID: "two", Label: "Two", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir2}},
+				{ID: "one", Label: "One", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir1}},
+				{ID: "off", Enabled: &disabled, Credential: config.CredentialRef{Kind: "config-dir", Ref: t.TempDir()}},
+			},
+		},
+	}}
+	registry := provider.NewRegistry()
+	if err := Register(registry, cfg); err != nil {
+		t.Fatal(err)
+	}
+	all := registry.GetAll()
+	if len(all) != 2 || provider.SourceKey(all[0]) != "gemini:one" || provider.SourceKey(all[1]) != "gemini:two" {
+		t.Fatalf("registered sources = %#v", all)
+	}
+}
+
 func TestSetupStatus_InstalledWithoutLoginNeedsAuth(t *testing.T) {
 	home := t.TempDir()
 	binDir := t.TempDir()
@@ -149,7 +258,11 @@ func TestIsConfigured_ExpiredTokenWithoutRefreshSupportNeedsSetup(t *testing.T) 
 
 func writeGeminiCredentials(t *testing.T, home, access, refresh string, expiry time.Time) {
 	t.Helper()
-	dir := filepath.Join(home, ".gemini")
+	writeGeminiCredentialsInDir(t, filepath.Join(home, ".gemini"), access, refresh, expiry)
+}
+
+func writeGeminiCredentialsInDir(t *testing.T, dir, access, refresh string, expiry time.Time) {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +274,11 @@ func writeGeminiCredentials(t *testing.T, home, access, refresh string, expiry t
 
 func writeGeminiSettings(t *testing.T, home, authType string) {
 	t.Helper()
-	dir := filepath.Join(home, ".gemini")
+	writeGeminiSettingsInDir(t, filepath.Join(home, ".gemini"), authType)
+}
+
+func writeGeminiSettingsInDir(t *testing.T, dir, authType string) {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}

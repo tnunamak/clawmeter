@@ -6,9 +6,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
+
+// MinimumPollIntervalSeconds bounds automatic tray polling. Manual refreshes
+// remain available when the user needs an immediate reading.
+const MinimumPollIntervalSeconds = 300
 
 // Config holds the application configuration.
 type Config struct {
@@ -32,6 +40,117 @@ type ProviderConfig struct {
 
 	// Extra holds provider-specific configuration
 	Extra map[string]interface{} `yaml:"extra,omitempty"`
+
+	// Sources are explicit credential or quota-observation routes. They are
+	// displayed independently; Clawmeter never infers that their quotas combine.
+	// The credential reference is opaque to the core and interpreted by the
+	// provider adapter that owns it.
+	Sources []SourceConfig `yaml:"sources,omitempty"`
+}
+
+type CredentialRef struct {
+	Kind string `yaml:"kind"`
+	Ref  string `yaml:"ref,omitempty"`
+}
+
+type SourceConfig struct {
+	ID         string        `yaml:"id"`
+	Label      string        `yaml:"label,omitempty"`
+	Enabled    *bool         `yaml:"enabled,omitempty"`
+	Credential CredentialRef `yaml:"credential"`
+}
+
+// SourceValidator applies provider-owned selector rules without coupling the
+// neutral config package to provider implementations.
+type SourceValidator func(family string, sources []SourceConfig) error
+
+func (s SourceConfig) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
+
+func Bool(value bool) *bool { return &value }
+
+var sourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+var sensitiveMetadataPrefixes = []string{
+	"akia", "asia", "aiza", "eyj", "ghp_", "github_pat_", "glpat-",
+	"sk-", "sk_", "sk-ant-", "xoxb-", "xoxp-", "xoxa-", "xoxr-", "ya29.",
+}
+
+func looksSensitiveMetadata(value string) bool {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	for _, prefix := range sensitiveMetadataPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if strings.IndexFunc(value, unicode.IsSpace) >= 0 {
+		return false
+	}
+	compact := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, value)
+	if len(compact) < 24 {
+		return false
+	}
+	hasLetter, hasDigit := false, false
+	for _, r := range compact {
+		hasLetter = hasLetter || unicode.IsLetter(r)
+		hasDigit = hasDigit || unicode.IsDigit(r)
+	}
+	return hasLetter && hasDigit
+}
+
+func (c *Config) ValidateSources(validators ...SourceValidator) error {
+	for family, pc := range c.Providers {
+		seenIDs := map[string]bool{}
+		seenRefs := map[string]bool{}
+		for _, source := range pc.Sources {
+			id := strings.TrimSpace(source.ID)
+			if !sourceIDPattern.MatchString(id) || id != strings.ToLower(id) || looksSensitiveMetadata(id) {
+				return fmt.Errorf("provider %q has an invalid source id", family)
+			}
+			if seenIDs[id] {
+				return fmt.Errorf("provider %q has duplicate source id %q", family, id)
+			}
+			seenIDs[id] = true
+			label := strings.TrimSpace(source.Label)
+			if source.Label != label || utf8.RuneCountInString(label) > 40 || strings.ContainsAny(label, "/\\@:=\r\n\t") || strings.IndexFunc(label, unicode.IsControl) >= 0 || looksSensitiveMetadata(label) {
+				return fmt.Errorf("provider %q source %q has an unsafe display label", family, id)
+			}
+			kind := strings.TrimSpace(source.Credential.Kind)
+			if kind == "" {
+				return fmt.Errorf("provider %q source %q has empty credential kind", family, id)
+			}
+			ref := strings.TrimSpace(source.Credential.Ref)
+			if ref != "" {
+				if looksSensitiveMetadata(ref) && !filepath.IsAbs(ref) && !strings.ContainsAny(ref, `/\\`) {
+					return fmt.Errorf("provider %q source %q has unsafe credential reference", family, id)
+				}
+				canonical := ref
+				if filepath.IsAbs(ref) {
+					canonical = filepath.Clean(ref)
+					if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+						canonical = resolved
+					}
+				}
+				if seenRefs[canonical] {
+					return fmt.Errorf("provider %q has duplicate credential reference", family)
+				}
+				seenRefs[canonical] = true
+			}
+		}
+		for _, validator := range validators {
+			if validator != nil {
+				if err := validator(family, pc.Sources); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // GlobalSettings holds application-wide settings.
@@ -57,7 +176,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Providers: make(map[string]ProviderConfig),
 		Settings: GlobalSettings{
-			PollInterval: 300, // 5 minutes
+			PollInterval: MinimumPollIntervalSeconds,
 			NotificationThresholds: NotificationConfig{
 				Warning:  80,
 				Critical: 95,
@@ -129,7 +248,7 @@ func legacyConfigPath() (string, error) {
 // (~/.config/clawmeter/config.yaml) is present and differs, Load migrates
 // by copying the legacy file to the canonical path. The legacy file is
 // left in place so a rollback to an older binary still works.
-func Load() (*Config, error) {
+func Load(validators ...SourceValidator) (*Config, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
@@ -155,6 +274,9 @@ func Load() (*Config, error) {
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if err := cfg.ValidateSources(validators...); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
@@ -189,7 +311,10 @@ func migrateLegacyConfig(canonical string) (bool, error) {
 }
 
 // Save writes configuration to the config file.
-func (c *Config) Save() error {
+func (c *Config) Save(validators ...SourceValidator) error {
+	if err := c.ValidateSources(validators...); err != nil {
+		return err
+	}
 	path, err := configPath()
 	if err != nil {
 		return err

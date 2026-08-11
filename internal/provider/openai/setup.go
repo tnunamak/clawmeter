@@ -1,8 +1,10 @@
 package openai
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,12 +30,19 @@ type authFile struct {
 	} `json:"tokens"`
 }
 
+func (p *Provider) authDirectory() string {
+	if p.explicitSource {
+		return p.codexHome
+	}
+	return codexHome()
+}
+
 func (p *Provider) IsConfigured() bool {
 	return p.SetupStatus().IsReady()
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	auth, err := readAuthFile(codexHome())
+	auth, err := readAuthFile(p.authDirectory())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		if _, cliErr := codexExecutablePath(); cliErr != nil {
@@ -98,6 +107,40 @@ func codexHome() string {
 		}
 	}
 	return filepath.Join(home, ".codex")
+}
+
+// replaceEnv sets one environment variable without leaving an ambient value
+// behind. Windows environment names are case-insensitive; Unix names are not.
+func replaceEnv(env []string, key, value string, windows bool) []string {
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && ((windows && strings.EqualFold(name, key)) || (!windows && name == key)) {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, key+"="+value)
+}
+
+func (p *Provider) sourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	path := filepath.Join(p.codexHome, "auth.json")
+	canonical, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+		canonical = resolved
+	}
+	info, err := os.Stat(path)
+	metadata := "unavailable"
+	if err == nil {
+		metadata = fmt.Sprintf("%d\x00%d\x00%o", info.Size(), info.ModTime().UnixNano(), info.Mode().Perm())
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical+"\x00"+metadata)))
 }
 
 func readAuthFile(dir string) (*authFile, error) {

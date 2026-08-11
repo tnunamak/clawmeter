@@ -3,12 +3,17 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/config"
 )
 
 // Provider is the interface that all AI service providers must implement.
@@ -30,6 +35,175 @@ type Provider interface {
 
 	// FetchUsage retrieves current usage data from the provider's API
 	FetchUsage(ctx context.Context) (*UsageData, error)
+}
+
+// UsageSource is an optional capability implemented by providers with an
+// explicitly enrolled source instance. Existing providers are the legacy
+// default source and need not implement it.
+type UsageSource interface {
+	SourceID() string
+	SourceLabel() string
+}
+
+// SourceRevision is an optional non-secret identity of the credential source.
+type SourceRevisionCapability interface{ SourceRevision() string }
+
+// CredentialSourceRevision returns a stable, one-way credential fingerprint.
+// API credentials are high-entropy secrets; hashing lets separate Clawmeter
+// processes validate the private (0600) cache without persisting the secret.
+func CredentialSourceRevision(route, credential string) string {
+	if credential == "" {
+		credential = "unavailable"
+	}
+	revision := sha256.Sum256([]byte(route + "\x00" + credential))
+	return fmt.Sprintf("%x", revision)
+}
+
+// EnrolledSourceCapability marks a source the user explicitly put in config.
+// Enrolled sources remain visible when credentials become temporarily unreadable.
+type EnrolledSourceCapability interface{ IsEnrolledSource() bool }
+
+// SourceKind describes one provider-owned, non-secret source selector.
+type SourceKind struct {
+	Kind               string
+	Summary            string
+	RefUsage           string
+	RefRequired        bool
+	RefIsPath          bool
+	RefCaseInsensitive bool
+}
+
+// SourceCapability is implemented by providers that can safely bind an
+// enrolled source to an independent credential route.
+type SourceCapability interface {
+	SourceKinds() []SourceKind
+	DefaultSource() (config.SourceConfig, bool)
+	ValidateSource(config.SourceConfig) error
+	NewSource(config.ProviderConfig, config.SourceConfig) (Provider, error)
+}
+
+// SourceCapabilityOf returns the provider-owned source capability, if any.
+func SourceCapabilityOf(p Provider) (SourceCapability, bool) {
+	capability, ok := p.(SourceCapability)
+	return capability, ok
+}
+
+// ValidateSourceConfigs applies provider-owned selector validation and rejects
+// two source IDs that resolve to the same credential route.
+func ValidateSourceConfigs(capability SourceCapability, sources []config.SourceConfig) error {
+	seenRefs := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		if err := capability.ValidateSource(source); err != nil {
+			return err
+		}
+		ref := canonicalSourceReference(capability, source)
+		if ref == "" {
+			continue
+		}
+		if _, exists := seenRefs[ref]; exists {
+			return fmt.Errorf("duplicate credential reference")
+		}
+		seenRefs[ref] = struct{}{}
+	}
+	return nil
+}
+
+func canonicalSourceReference(capability SourceCapability, source config.SourceConfig) string {
+	ref := strings.TrimSpace(source.Credential.Ref)
+	if ref == "" {
+		return ""
+	}
+	for _, kind := range capability.SourceKinds() {
+		if kind.Kind != source.Credential.Kind {
+			continue
+		}
+		if kind.RefIsPath {
+			ref = canonicalPath(ref)
+		}
+		if kind.RefCaseInsensitive {
+			ref = strings.ToLower(ref)
+		}
+		break
+	}
+	return ref
+}
+
+func canonicalPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	if runtime.GOOS == "windows" {
+		path = strings.ToLower(path)
+	}
+	return path
+}
+
+// RegisterConfigured registers a legacy provider or its explicitly enrolled
+// sources. Source construction is provider-owned; core code only expands
+// identity and applies the common registration rules.
+func RegisterConfigured(registry *Registry, cfg config.ProviderConfig, base Provider) error {
+	if len(cfg.Sources) == 0 {
+		return registry.Register(base)
+	}
+
+	capability, ok := SourceCapabilityOf(base)
+	if !ok {
+		return fmt.Errorf("provider %q does not support enrolled sources", base.Name())
+	}
+	if err := ValidateSourceConfigs(capability, cfg.Sources); err != nil {
+		return fmt.Errorf("provider %q sources: %w", base.Name(), err)
+	}
+
+	sources := append([]config.SourceConfig(nil), cfg.Sources...)
+	sort.SliceStable(sources, func(i, j int) bool { return sources[i].ID < sources[j].ID })
+	for _, source := range sources {
+		if !source.IsEnabled() {
+			continue
+		}
+		sourced, err := capability.NewSource(cfg, source)
+		if err != nil {
+			return fmt.Errorf("provider %q source %q: %w", base.Name(), source.ID, err)
+		}
+		if err := registry.Register(sourced); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func SourceID(p Provider) string {
+	if source, ok := p.(UsageSource); ok && strings.TrimSpace(source.SourceID()) != "" {
+		return strings.TrimSpace(source.SourceID())
+	}
+	return "default"
+}
+func SourceLabel(p Provider) string {
+	if source, ok := p.(UsageSource); ok && strings.TrimSpace(source.SourceLabel()) != "" {
+		return strings.TrimSpace(source.SourceLabel())
+	}
+	return ""
+}
+func SourceKey(p Provider) string {
+	id := SourceID(p)
+	if id == "default" {
+		return p.Name()
+	}
+	return p.Name() + ":" + id
+}
+
+func SourceRevision(p Provider) string {
+	if source, ok := p.(SourceRevisionCapability); ok {
+		return source.SourceRevision()
+	}
+	return ""
+}
+
+func IsEnrolledSource(p Provider) bool {
+	if source, ok := p.(EnrolledSourceCapability); ok {
+		return source.IsEnrolledSource()
+	}
+	return false
 }
 
 // SessionEnvironmentRequest describes one provider's explicit session-environment
@@ -172,7 +346,9 @@ func (r *UsageResetCredits) EarliestExpiry(now time.Time) (time.Time, bool) {
 
 // UsageData contains usage information for a provider.
 type UsageData struct {
-	Provider     string             `json:"provider"`                // Provider name
+	Provider     string             `json:"provider"` // Provider name
+	SourceID     string             `json:"source_id,omitempty"`
+	SourceLabel  string             `json:"source_label,omitempty"`
 	FetchedAt    time.Time          `json:"fetched_at"`              // When this data was fetched
 	Windows      []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
 	Balances     []UsageBalance     `json:"balances,omitempty"`      // Non-resetting balances
@@ -432,7 +608,7 @@ func (r *Registry) Register(p Provider) error {
 			consumer.SetSessionEnvironmentResolver(r.sessionEnvironmentResolver)
 		}
 	}
-	name := p.Name()
+	name := SourceKey(p)
 	if name == "" {
 		return fmt.Errorf("provider name cannot be empty")
 	}
@@ -446,7 +622,25 @@ func (r *Registry) Register(p Provider) error {
 // Get retrieves a provider by name.
 func (r *Registry) Get(name string) (Provider, bool) {
 	p, ok := r.providers[name]
+	if !ok {
+		for _, candidate := range r.providers {
+			if candidate.Name() == name && SourceID(candidate) == "default" {
+				return candidate, true
+			}
+		}
+	}
 	return p, ok
+}
+
+func (r *Registry) GetFamily(family string) []Provider {
+	result := make([]Provider, 0)
+	for _, p := range r.providers {
+		if p.Name() == family {
+			result = append(result, p)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return SourceKey(result[i]) < SourceKey(result[j]) })
+	return result
 }
 
 // GetAll returns all registered providers in deterministic order.
@@ -456,15 +650,22 @@ func (r *Registry) GetAll() []Provider {
 		result = append(result, p)
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name() < result[j].Name()
+		return SourceKey(result[i]) < SourceKey(result[j])
 	})
 	return result
 }
 
 // Has returns true if a provider with the given name is registered.
 func (r *Registry) Has(name string) bool {
-	_, ok := r.providers[name]
-	return ok
+	if _, ok := r.providers[name]; ok {
+		return true
+	}
+	for _, p := range r.providers {
+		if p.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ConfiguredNames returns the names of providers GetConfigured would return,
@@ -473,7 +674,7 @@ func (r *Registry) ConfiguredNames() []string {
 	configured := r.GetConfigured()
 	names := make([]string, 0, len(configured))
 	for _, p := range configured {
-		names = append(names, p.Name())
+		names = append(names, SourceKey(p))
 	}
 	return names
 }
@@ -514,7 +715,7 @@ func (r *Registry) GetConfigured() []Provider {
 	filter := r.enabledFilter()
 	result := make([]Provider, 0)
 	for _, p := range r.providers {
-		if !p.IsConfigured() {
+		if !p.IsConfigured() && !IsEnrolledSource(p) {
 			continue
 		}
 		if filter != nil && filter.IsProviderDisabled(p.Name()) {
@@ -530,7 +731,7 @@ func (r *Registry) GetConfigured() []Provider {
 		result = append(result, p)
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name() < result[j].Name()
+		return SourceKey(result[i]) < SourceKey(result[j])
 	})
 	return result
 }
@@ -602,8 +803,10 @@ func (g *FailureGate) InBackoff(name string) bool {
 
 // MultiFetchResult contains results from fetching multiple providers.
 type MultiFetchResult struct {
-	Results   map[string]*UsageData
-	FetchedAt time.Time
+	Results         map[string]*UsageData
+	SourceRevisions map[string]string
+	Errors          map[string]error
+	FetchedAt       time.Time
 }
 
 // FetchAllParallel fetches usage from all configured providers in parallel.
@@ -616,8 +819,10 @@ func FetchAllParallel(ctx context.Context, registry *Registry) *MultiFetchResult
 // FetchProvidersParallel fetches usage from the given providers in parallel.
 func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFetchResult {
 	result := &MultiFetchResult{
-		Results:   make(map[string]*UsageData, len(providers)),
-		FetchedAt: time.Now(),
+		Results:         make(map[string]*UsageData, len(providers)),
+		SourceRevisions: make(map[string]string, len(providers)),
+		Errors:          make(map[string]error, len(providers)),
+		FetchedAt:       time.Now(),
 	}
 
 	if len(providers) == 0 {
@@ -625,29 +830,90 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 	}
 
 	type fetchResult struct {
-		name string
-		data *UsageData
+		name     string
+		data     *UsageData
+		revision string
+		err      error
 	}
 	resultCh := make(chan fetchResult, len(providers))
 
 	for _, p := range providers {
 		go func(provider Provider) {
-			data, err := provider.FetchUsage(ctx)
-			if err != nil {
-				data = &UsageData{
-					Provider:  provider.Name(),
-					FetchedAt: time.Now(),
-					Error:     err.Error(),
+			var data *UsageData
+			var err error
+			var revisionAfter string
+			for attempt := 0; attempt < 2; attempt++ {
+				revisionBefore := SourceRevision(provider)
+				data, err = provider.FetchUsage(ctx)
+				revisionAfter = SourceRevision(provider)
+				if revisionBefore == revisionAfter {
+					break
+				}
+				if attempt == 1 {
+					err = fmt.Errorf("credential source changed during refresh")
+					data = &UsageData{
+						Provider: provider.Name(), SourceID: SourceID(provider), SourceLabel: SourceLabel(provider),
+						FetchedAt: time.Now(), Error: "credential source changed during refresh; retry",
+						InvalidatesPriorUsage: true,
+					}
 				}
 			}
-			resultCh <- fetchResult{name: provider.Name(), data: data}
+			if err != nil {
+				if data == nil {
+					data = &UsageData{
+						Provider: provider.Name(), SourceID: SourceID(provider), SourceLabel: SourceLabel(provider),
+						FetchedAt: time.Now(),
+						Error:     SafeFetchError(err),
+					}
+				}
+			}
+			if data != nil {
+				data.Provider = provider.Name()
+				data.SourceID = SourceID(provider)
+				data.SourceLabel = SourceLabel(provider)
+			}
+			resultCh <- fetchResult{name: SourceKey(provider), data: data, revision: revisionAfter, err: err}
 		}(p)
 	}
 
 	for i := 0; i < len(providers); i++ {
 		res := <-resultCh
 		result.Results[res.name] = res.data
+		if res.err != nil {
+			result.Errors[res.name] = res.err
+		}
+		if res.revision != "" {
+			result.SourceRevisions[res.name] = res.revision
+		}
 	}
 
 	return result
+}
+
+// SafeFetchError reduces provider and transport errors to a closed, non-secret
+// message before they enter status output or the persistent cache.
+func SafeFetchError(err error) string {
+	if err == nil {
+		return ""
+	}
+	lower := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lower, "rate limit"), strings.Contains(lower, "429"):
+		return "rate limited"
+	case strings.Contains(lower, "unauthor"), strings.Contains(lower, "forbidden"),
+		strings.Contains(lower, "expired"), strings.Contains(lower, "credential"),
+		strings.Contains(lower, "token"), strings.Contains(lower, "401"), strings.Contains(lower, "403"):
+		return "authentication failed"
+	case strings.Contains(lower, "timeout"), strings.Contains(lower, "deadline"):
+		return "connection timed out"
+	case strings.Contains(lower, "connection"), strings.Contains(lower, "network"),
+		strings.Contains(lower, "no such host"), strings.Contains(lower, "dns"),
+		strings.Contains(lower, "no response"), strings.Contains(lower, "eof"):
+		return "connection failed"
+	case strings.Contains(lower, "decode"), strings.Contains(lower, "parse"),
+		strings.Contains(lower, "malformed"), strings.Contains(lower, "invalid character"):
+		return "provider response unavailable"
+	default:
+		return "provider request failed"
+	}
 }

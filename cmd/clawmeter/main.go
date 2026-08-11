@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -70,7 +72,7 @@ func run() int {
 		return 0
 	default:
 		// Check if it's a provider name (e.g., "clawmeter claude --json")
-		if providerName, ok := all.CanonicalName(os.Args[1]); ok && newRegistry().Has(providerName) {
+		if providerName, ok := all.CanonicalName(os.Args[1]); ok {
 			return providerCmd(providerName, os.Args[2:])
 		}
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown command %q\n", os.Args[1])
@@ -86,7 +88,8 @@ func isStatusShortcutFlag(arg string) bool {
 		"--agent", "-agent",
 		"--check", "-check",
 		"--all", "-all",
-		"--provider", "-provider":
+		"--provider", "-provider",
+		"--source", "-source":
 		return true
 	default:
 		return false
@@ -94,11 +97,7 @@ func isStatusShortcutFlag(arg string) bool {
 }
 
 // newRegistry creates a registry with all providers registered.
-func newRegistry() *provider.Registry {
-	cfg, err := config.Load()
-	if err != nil {
-		cfg = config.DefaultConfig()
-	}
+func newRegistry(cfg *config.Config) *provider.Registry {
 	registry := provider.NewRegistry()
 	all.Register(registry, cfg)
 	return registry
@@ -111,6 +110,7 @@ func statusCmd(args []string) int {
 	agentMode := fs.Bool("agent", false, "token-efficient all-quota summary for AI agents")
 	checkMode := fs.Bool("check", false, "exit 0=healthy, 1=warning, 2=critical/expired/error")
 	providerFlag := fs.String("provider", "", "show only specific provider")
+	sourceFlag := fs.String("source", "", "show only the source id")
 	showAll := fs.Bool("all", false, "show all providers including unavailable ones")
 	fs.Parse(args)
 
@@ -121,7 +121,7 @@ func statusCmd(args []string) int {
 		return cli.StatusAgent(*showAll)
 	}
 	if *providerFlag != "" {
-		return cli.SingleProviderStatus(*providerFlag, *jsonMode, *plainMode)
+		return cli.SingleProviderStatusSource(*providerFlag, *sourceFlag, *jsonMode, *plainMode)
 	}
 	return cli.Status(*jsonMode, *plainMode, *showAll)
 }
@@ -137,9 +137,10 @@ func providerCmd(providerName string, args []string) int {
 	fs := flag.NewFlagSet(providerName, flag.ExitOnError)
 	jsonMode := fs.Bool("json", false, "output JSON")
 	plainMode := fs.Bool("plain", false, "plain text (no color)")
+	sourceFlag := fs.String("source", "", "show only the source id")
 	fs.Parse(args)
 
-	return cli.SingleProviderStatus(providerName, *jsonMode, *plainMode)
+	return cli.SingleProviderStatusSource(providerName, *sourceFlag, *jsonMode, *plainMode)
 }
 
 func trayCmd(args []string) int {
@@ -262,7 +263,7 @@ func configCmd(args []string) int {
 }
 
 func configShowCmd(args []string) int {
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
@@ -317,7 +318,7 @@ func configSetCmd(args []string) int {
 		return 1
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
@@ -331,8 +332,8 @@ func configSetCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
 			return 1
 		}
-		if seconds < 60 {
-			fmt.Fprintf(os.Stderr, "clawmeter: poll_interval must be >= 60 seconds\n")
+		if seconds < config.MinimumPollIntervalSeconds {
+			fmt.Fprintf(os.Stderr, "clawmeter: poll_interval must be >= %d seconds\n", config.MinimumPollIntervalSeconds)
 			return 1
 		}
 		cfg.Settings.PollInterval = seconds
@@ -405,7 +406,7 @@ func configEnableCmd(args []string, enable bool) int {
 		return 1
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
@@ -425,7 +426,7 @@ func configEnableCmd(args []string, enable bool) int {
 	fmt.Printf("%s provider: %s\n", verb, providerName)
 
 	if enable {
-		if p, ok := newRegistry().Get(providerName); ok {
+		if p, ok := newRegistry(cfg).Get(providerName); ok {
 			st := provider.GetSetupStatus(p)
 			if !st.IsReady() {
 				if st.Detail != "" {
@@ -453,8 +454,10 @@ func providersCmd(args []string) int {
 			return providersDiagnoseCmd(args[1:])
 		case "connect":
 			return providersConnectCmd(args[1:])
+		case "source":
+			return providerSourceCmd(args[1:])
 		case "help", "--help", "-h":
-			fmt.Println("Usage: clawmeter providers [enable|disable <provider>|connect <provider> [--force]|diagnose <provider|all>]")
+			fmt.Println("Usage: clawmeter providers [enable|disable <provider>|source list [provider]|source add <provider> <id> <kind> <ref> [--label <label>]|source remove <provider> <id>|connect <provider> [--force]|diagnose <provider|all>]")
 			fmt.Println()
 			fmt.Println("Without arguments, lists provider auth status.")
 			fmt.Println("Detected providers run automatically. Enable is for opt-in providers or manual overrides.")
@@ -473,12 +476,12 @@ func providersCmd(args []string) int {
 		}
 	}
 
-	registry := newRegistry()
-
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
-		cfg = config.DefaultConfig()
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
 	}
+	registry := newRegistry(cfg)
 
 	fmt.Println("Available providers:")
 	fmt.Println()
@@ -517,6 +520,291 @@ func providersCmd(args []string) int {
 	fmt.Println("Detected/enabled providers are polled automatically.")
 	fmt.Println("Use 'clawmeter providers enable <provider>' to opt available providers in,")
 	fmt.Println("or 'clawmeter providers disable <provider>' to opt out.")
+	return 0
+}
+
+func providerSourceCmd(args []string) int {
+	if len(args) == 0 {
+		return providerSourceListCmd(nil)
+	}
+	if args[0] == "list" {
+		return providerSourceListCmd(args[1:])
+	}
+	switch args[0] {
+	case "add":
+		return providerSourceAddCmd(args[1:])
+	case "remove":
+		return providerSourceRemoveCmd(args[1:])
+	case "help", "--help", "-h":
+		fmt.Println("Usage: clawmeter providers source list [provider]")
+		fmt.Println("       clawmeter providers source add <provider> <id> <kind> [ref] [--label <label>]")
+		fmt.Println("       clawmeter providers source remove <provider> <id>")
+		return providerSourceHelpCmd(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown source command %q\n", args[0])
+		return 1
+	}
+}
+
+func providerSourceHelpCmd(args []string) int {
+	if len(args) > 1 {
+		fmt.Fprintln(os.Stderr, "clawmeter: source help accepts at most one provider")
+		return 1
+	}
+	if len(args) == 0 {
+		fmt.Println("Supported source kinds:")
+		for _, name := range all.Names() {
+			if capability, ok := all.SourceCapability(name); ok {
+				printSourceKinds(os.Stdout, name, capability)
+			}
+		}
+		return 0
+	}
+	family, ok := all.CanonicalName(args[0])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", args[0])
+		return 1
+	}
+	capability, ok := all.SourceCapability(family)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider %q does not support enrolled sources\n", family)
+		fmt.Fprintln(os.Stderr, "  enrolled sources are not available for this provider")
+		return 1
+	}
+	printSourceKinds(os.Stdout, family, capability)
+	return 0
+}
+
+func printSourceKinds(w io.Writer, family string, capability provider.SourceCapability) {
+	fmt.Fprintf(w, "Supported source kinds for %s:\n", family)
+	for _, kind := range capability.SourceKinds() {
+		ref := "no ref"
+		if kind.RefRequired {
+			ref = "ref: " + kind.RefUsage
+		}
+		fmt.Fprintf(w, "  %-10s %s (%s)\n", kind.Kind, kind.Summary, ref)
+	}
+}
+
+func providerSourceListCmd(args []string) int {
+	if len(args) > 1 {
+		fmt.Fprintln(os.Stderr, "clawmeter: source list accepts at most one provider")
+		return 1
+	}
+	cfg, err := config.Load(all.SourceValidator())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	if err := cfg.ValidateSources(all.SourceValidator()); err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	family := ""
+	if len(args) == 1 {
+		var ok bool
+		family, ok = all.CanonicalName(args[0])
+		if !ok {
+			fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", args[0])
+			return 1
+		}
+	}
+	names := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		pc := cfg.Providers[name]
+		if family != "" && name != family {
+			continue
+		}
+		sources := append([]config.SourceConfig(nil), pc.Sources...)
+		sort.SliceStable(sources, func(i, j int) bool { return sources[i].ID < sources[j].ID })
+		for _, source := range sources {
+			label := source.Label
+			if label == "" {
+				label = source.ID
+			}
+			state := "enabled"
+			if !source.IsEnabled() {
+				state = "disabled"
+			}
+			fmt.Printf("%s\t%s\t%s\n", name, source.ID, label+" ("+state+")")
+		}
+	}
+	return 0
+}
+
+func providerSourceAddCmd(args []string) int {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: clawmeter providers source add <provider> <id> <kind> [ref] [--label <label>]")
+		return 1
+	}
+	family, id, kind := args[0], strings.ToLower(strings.TrimSpace(args[1])), strings.TrimSpace(args[2])
+	canonical, ok := all.CanonicalName(family)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", family)
+		return 1
+	}
+	family = canonical
+	capability, ok := all.SourceCapability(family)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider %q does not support enrolled sources\n", family)
+		fmt.Fprintln(os.Stderr, "  enrolled sources are not available for this provider")
+		return 1
+	}
+	var kindMetadata provider.SourceKind
+	kindFound := false
+	for _, candidate := range capability.SourceKinds() {
+		if candidate.Kind == kind {
+			kindMetadata = candidate
+			kindFound = true
+			break
+		}
+	}
+	if !kindFound {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider %q does not support source kind %q\n", family, kind)
+		printSourceKinds(os.Stderr, family, capability)
+		return 1
+	}
+	ref := ""
+	nextArg := 3
+	if kindMetadata.RefRequired {
+		if nextArg >= len(args) || strings.HasPrefix(args[nextArg], "--") {
+			fmt.Fprintf(os.Stderr, "clawmeter: source kind %q requires a reference (%s)\n", kind, kindMetadata.RefUsage)
+			return 1
+		}
+		ref = args[nextArg]
+		nextArg++
+	} else if nextArg < len(args) && !strings.HasPrefix(args[nextArg], "--") {
+		fmt.Fprintf(os.Stderr, "clawmeter: source kind %q does not accept a reference\n", kind)
+		return 1
+	}
+	label := ""
+	for i := nextArg; i < len(args); i++ {
+		if args[i] == "--label" && i+1 < len(args) {
+			label = strings.TrimSpace(args[i+1])
+			i++
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown source add argument %q\n", args[i])
+		return 1
+	}
+	cfg, err := config.Load(all.SourceValidator())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	pc, existed := cfg.Providers[family]
+	if !existed {
+		pc.Enabled = true
+	}
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "clawmeter: source id cannot be empty")
+		return 1
+	}
+	if kindMetadata.RefIsPath {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "clawmeter:", err)
+			return 1
+		}
+		if ref == "~" {
+			ref = home
+		} else if strings.HasPrefix(ref, "~/") || strings.HasPrefix(ref, `~\`) {
+			ref = filepath.Join(home, ref[2:])
+		}
+		if !filepath.IsAbs(ref) {
+			ref, err = filepath.Abs(ref)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "clawmeter:", err)
+				return 1
+			}
+		}
+		ref = filepath.Clean(ref)
+	}
+	if err := capability.ValidateSource(config.SourceConfig{ID: id, Label: label, Credential: config.CredentialRef{Kind: kind, Ref: ref}}); err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		printSourceKinds(os.Stderr, family, capability)
+		return 1
+	}
+	if len(pc.Sources) == 0 && id != "default" {
+		defaultSource, ok := capability.DefaultSource()
+		if ok {
+			native, err := capability.NewSource(pc, defaultSource)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "clawmeter: provider %q default source: %v\n", family, err)
+				return 1
+			}
+			if native.IsConfigured() {
+				pc.Sources = append(pc.Sources, defaultSource)
+			}
+		}
+	}
+	pc.Sources = append(pc.Sources, config.SourceConfig{ID: id, Label: label, Credential: config.CredentialRef{Kind: kind, Ref: ref}})
+	cfg.Providers[family] = pc
+	if err := cfg.Save(all.SourceValidator()); err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	fmt.Printf("Added %s source %s. Restart a running tray to apply.\n", family, id)
+	return 0
+}
+
+func providerSourceRemoveCmd(args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "Usage: clawmeter providers source remove <provider> <id>")
+		return 1
+	}
+	family, id := args[0], strings.ToLower(strings.TrimSpace(args[1]))
+	canonical, ok := all.CanonicalName(family)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", family)
+		return 1
+	}
+	family = canonical
+	cfg, err := config.Load(all.SourceValidator())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	if err := cfg.ValidateSources(all.SourceValidator()); err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	pc, ok := cfg.Providers[family]
+	if !ok {
+		fmt.Fprintln(os.Stderr, "clawmeter: source not found")
+		return 1
+	}
+	found := false
+	kept := pc.Sources[:0]
+	for _, source := range pc.Sources {
+		if source.ID == id {
+			found = true
+			continue
+		}
+		kept = append(kept, source)
+	}
+	if !found {
+		fmt.Fprintln(os.Stderr, "clawmeter: source not found")
+		return 1
+	}
+	pc.Sources = kept
+	if len(kept) == 0 {
+		pc.Enabled = false
+	}
+	cfg.Providers[family] = pc
+	if err := cfg.Save(all.SourceValidator()); err != nil {
+		fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		return 1
+	}
+	if len(kept) == 0 {
+		fmt.Printf("Removed %s source %s and disabled the provider (credentials unchanged). Restart a running tray to apply.\n", family, id)
+	} else {
+		fmt.Printf("Removed %s source %s (credentials unchanged). Restart a running tray to apply.\n", family, id)
+	}
 	return 0
 }
 
@@ -607,7 +895,7 @@ func providersDiagnoseCmd(args []string) int {
 		return 1
 	}
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: load config: %v\n", err)
 		return 1
@@ -770,6 +1058,7 @@ Status flags:
   --agent                   Token-efficient all-quota summary for AI agents
   --check                   Exit 0=healthy, 1=warning, 2=critical/error
   --provider <name>         Show only specific provider
+  --source <id>             With --provider, show only one enrolled source
   --all                     Include unavailable providers
 
 Config commands:

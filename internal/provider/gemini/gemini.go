@@ -4,6 +4,7 @@ package gemini
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +31,12 @@ const (
 
 // Provider implements the provider.Provider interface for Google Gemini.
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg            config.ProviderConfig
+	sourceID       string
+	sourceLabel    string
+	configDir      string
+	explicitSource bool
+	enrolledSource bool
 }
 
 // New creates a new Gemini provider.
@@ -38,6 +44,99 @@ func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
 		cfg: cfg,
 	}
+}
+
+func NewNativeSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	if strings.TrimSpace(source.Credential.Kind) == "" {
+		source.Credential.Kind = "native"
+	}
+	p, _ := newSource(cfg, source)
+	return p
+}
+
+func NewSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	p, _ := newSource(cfg, source)
+	return p
+}
+
+func newSource(cfg config.ProviderConfig, source config.SourceConfig) (*Provider, error) {
+	p, err := (sourceCapability{}).NewSource(cfg, source)
+	if err != nil {
+		return nil, err
+	}
+	return p.(*Provider), nil
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "config-dir", Summary: "Gemini credential directory containing oauth_creds.json and settings.json; absolute path required", RefUsage: "/absolute/path", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind := strings.TrimSpace(source.Credential.Kind)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || strings.TrimSpace(source.Credential.Ref) != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "gemini", source.ID)
+		}
+	case "config-dir":
+		ref := strings.TrimSpace(source.Credential.Ref)
+		if ref == "" {
+			return fmt.Errorf("provider %q source %q has empty config directory", "gemini", source.ID)
+		}
+		if !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q has relative config directory", "gemini", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "gemini", source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := &Provider{cfg: cfg, sourceID: strings.TrimSpace(source.ID), sourceLabel: strings.TrimSpace(source.Label), enrolledSource: true}
+	if strings.TrimSpace(source.Credential.Kind) == "config-dir" {
+		p.configDir = strings.TrimSpace(source.Credential.Ref)
+		p.explicitSource = true
+	}
+	return p, nil
+}
+
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	return sourceRevision(filepath.Join(p.configDir, "oauth_creds.json"), filepath.Join(p.configDir, "settings.json"))
 }
 
 func (p *Provider) Name() string         { return "gemini" }
@@ -50,7 +149,7 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	if p.cfg.OAuthToken != "" {
+	if !p.explicitSource && p.cfg.OAuthToken != "" {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "OAuth token configured"}
 	}
 
@@ -68,7 +167,14 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 		return provider.SetupStatus{State: provider.SetupUnavailable, Detail: "no OAuth credentials"}
 	}
 
-	if !p.isOAuthEnabled() {
+	oauthEnabled, oauthErr := p.isOAuthEnabled()
+	if oauthErr != nil {
+		return provider.SetupStatus{
+			State:  provider.SetupNeedsAuth,
+			Detail: "Gemini OAuth settings unavailable",
+		}
+	}
+	if !oauthEnabled {
 		return provider.SetupStatus{
 			State:  provider.SetupNeedsAuth,
 			Detail: "Gemini is not using Google account OAuth",
@@ -109,7 +215,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 	if status.ConsumerTierDeprecated() {
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			Error:     consumerTierErr,
 		}, nil
@@ -139,7 +245,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			IsExpired: true,
 			Error:     "unauthorized — reauth in Gemini Code Assist",
@@ -150,7 +256,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		if isConsumerTierDeprecationSignal(body) {
 			return &provider.UsageData{
-				Provider:  p.Name(),
+				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 				FetchedAt: time.Now(),
 				Error:     consumerTierErr,
 			}, nil
@@ -243,7 +349,7 @@ func isConsumerTierDeprecationSignal(body []byte) bool {
 // getAccessToken returns a valid access token, refreshing if needed.
 func (p *Provider) getAccessToken(ctx context.Context) (string, error) {
 	// Check config OAuth token
-	if p.cfg.OAuthToken != "" {
+	if !p.explicitSource && p.cfg.OAuthToken != "" {
 		return p.cfg.OAuthToken, nil
 	}
 
@@ -253,7 +359,11 @@ func (p *Provider) getAccessToken(ctx context.Context) (string, error) {
 	}
 
 	// Check if settings require oauth-personal
-	if !p.isOAuthEnabled() {
+	oauthEnabled, err := p.isOAuthEnabled()
+	if err != nil {
+		return "", fmt.Errorf("gemini oauth settings: %w", err)
+	}
+	if !oauthEnabled {
 		return "", fmt.Errorf("gemini oauth not enabled in settings")
 	}
 
@@ -290,12 +400,11 @@ func (c *oauthCredentials) isExpired() bool {
 }
 
 func (p *Provider) readCredentials() (*oauthCredentials, error) {
-	home, err := os.UserHomeDir()
+	path, err := p.credentialsPath()
 	if err != nil {
-		return nil, fmt.Errorf("home dir: %w", err)
+		return nil, err
 	}
-
-	data, err := os.ReadFile(filepath.Join(home, ".gemini", "oauth_creds.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read credentials: %w", err)
 	}
@@ -312,6 +421,17 @@ func (p *Provider) readCredentials() (*oauthCredentials, error) {
 	return &creds, nil
 }
 
+func (p *Provider) credentialsPath() (string, error) {
+	if p.explicitSource {
+		return filepath.Join(p.configDir, "oauth_creds.json"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, ".gemini", "oauth_creds.json"), nil
+}
+
 type geminiSettings struct {
 	Security struct {
 		Auth struct {
@@ -320,27 +440,40 @@ type geminiSettings struct {
 	} `json:"security"`
 }
 
-func (p *Provider) isOAuthEnabled() bool {
-	home, err := os.UserHomeDir()
+func (p *Provider) isOAuthEnabled() (bool, error) {
+	path, explicit, err := p.settingsPath()
 	if err != nil {
-		return true // assume enabled if can't check
+		return false, err
 	}
-
-	data, err := os.ReadFile(filepath.Join(home, ".gemini", "settings.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return true // assume enabled if no settings file
+		if explicit {
+			return false, fmt.Errorf("read settings: %w", err)
+		}
+		return true, nil // legacy fallback: assume enabled if no settings file
 	}
-
 	var settings geminiSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return true
+		if explicit {
+			return false, fmt.Errorf("parse settings: %w", err)
+		}
+		return true, nil
 	}
-
-	// If settings specify a type, it must be oauth-personal
 	if settings.Security.Auth.SelectedType != "" {
-		return settings.Security.Auth.SelectedType == "oauth-personal"
+		return settings.Security.Auth.SelectedType == "oauth-personal", nil
 	}
-	return true
+	return true, nil
+}
+
+func (p *Provider) settingsPath() (string, bool, error) {
+	if p.explicitSource {
+		return filepath.Join(p.configDir, "settings.json"), true, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false, fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, ".gemini", "settings.json"), false, nil
 }
 
 // API response types
@@ -357,7 +490,7 @@ type quotaBucket struct {
 
 func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 	data := &provider.UsageData{
-		Provider:  p.Name(),
+		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
@@ -481,5 +614,27 @@ func discoverOAuthCredentials() (*appOAuthCreds, error) {
 // Register registers the Gemini provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("gemini")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }
+
+func sourceRevision(paths ...string) string {
+	h := sha256.New()
+	for _, path := range paths {
+		canonical, err := filepath.Abs(path)
+		if err != nil {
+			canonical = path
+		}
+		if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+			canonical = resolved
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Fprintf(h, "%s\x00unavailable\x00", canonical)
+			continue
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00%d\x00%o\x00", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm())
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+var _ provider.SourceCapability = (*Provider)(nil)

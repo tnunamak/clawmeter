@@ -212,7 +212,10 @@ func (p *Provider) consoleErrorData(err error) *provider.UsageData {
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "login") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "forbidden") {
 		message = "Model Studio console session expired — run `bl auth login --console`"
+		if p.explicitSource {
+			message = "enrolled Model Studio console session expired"
+		}
 		expired = true
 	}
-	return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: expired, InvalidatesPriorUsage: expired, Error: message}
+	return &provider.UsageData{Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(), FetchedAt: p.now(), IsExpired: expired, InvalidatesPriorUsage: expired, Error: message}
 }

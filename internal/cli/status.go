@@ -52,6 +52,9 @@ func bar(pct float64) string {
 type ProviderFormatter struct {
 	Name              string
 	Display           string
+	Family            string
+	SourceID          string
+	SourceLabel       string
 	Data              *provider.UsageData
 	Status            *status.ProviderStatus
 	ExplicitlyEnabled bool
@@ -627,9 +630,21 @@ type JSONOutput struct {
 // ProviderJSONOutput is the JSON representation for a single provider.
 type ProviderJSONOutput struct {
 	Usage    *provider.UsageData       `json:"usage,omitempty"`
+	Sources  []JSONSourceOutput        `json:"sources,omitempty"`
 	Forecast *JSONForecast             `json:"forecast,omitempty"`
 	Status   *status.ProviderStatus    `json:"status,omitempty"`
 	Maturity provider.ProviderMaturity `json:"maturity"`
+}
+
+type JSONSourceOutput struct {
+	Source   JSONSourceIdentity     `json:"source"`
+	Usage    *provider.UsageData    `json:"usage,omitempty"`
+	Forecast *JSONForecast          `json:"forecast,omitempty"`
+	Status   *status.ProviderStatus `json:"status,omitempty"`
+}
+type JSONSourceIdentity struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
 }
 
 // JSONForecast contains forecast data.
@@ -663,14 +678,38 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 		out.FetchedAt = time.Now()
 	}
 
+	grouped := make(map[string][]ProviderFormatter)
 	for _, pf := range m.Providers {
+		family := pf.Family
+		if family == "" && pf.Data != nil {
+			family = pf.Data.Provider
+		}
+		if family == "" {
+			family = pf.Name
+		}
+		grouped[family] = append(grouped[family], pf)
+	}
+	for family, group := range grouped {
+		sort.SliceStable(group, func(i, j int) bool { return group[i].SourceID < group[j].SourceID })
+		if len(group) > 1 {
+			base := &ProviderJSONOutput{Maturity: provider.GetMaturity(family)}
+			for _, pf := range group {
+				base.Sources = append(base.Sources, makeJSONSource(pf))
+				if pf.SourceID == "default" {
+					base.Usage, base.Forecast, base.Status = legacyUsage(pf.Data), forecastFor(pf.Data), pf.Status
+				}
+			}
+			out.Providers[family] = base
+			continue
+		}
+		pf := group[0]
 		if pf.Data == nil {
 			continue
 		}
 
 		providerOut := &ProviderJSONOutput{
-			Usage:    pf.Data,
-			Maturity: provider.GetMaturity(pf.Name),
+			Usage:    legacyUsage(pf.Data),
+			Maturity: provider.GetMaturity(family),
 		}
 
 		// Add forecasts for each window
@@ -692,7 +731,7 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 			providerOut.Status = pf.Status
 		}
 
-		out.Providers[pf.Name] = providerOut
+		out.Providers[family] = providerOut
 	}
 
 	data, err := json.MarshalIndent(out, "", "  ")
@@ -701,6 +740,38 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 		return
 	}
 	fmt.Println(string(data))
+}
+
+func makeJSONSource(pf ProviderFormatter) JSONSourceOutput {
+	return JSONSourceOutput{Source: JSONSourceIdentity{ID: pf.SourceID, Label: pf.SourceLabel}, Usage: pf.Data, Forecast: forecastFor(pf.Data), Status: pf.Status}
+}
+
+func legacyUsage(data *provider.UsageData) *provider.UsageData {
+	if data == nil {
+		return nil
+	}
+	copy := data.Clone()
+	if copy.SourceID == "default" {
+		copy.SourceID = ""
+		copy.SourceLabel = ""
+	}
+	return copy
+}
+
+func forecastFor(data *provider.UsageData) *JSONForecast {
+	if data == nil {
+		return nil
+	}
+	windows := data.UsableWindows()
+	if len(windows) == 0 {
+		return nil
+	}
+	result := &JSONForecast{Windows: make(map[string]JSONProjection)}
+	for _, window := range windows {
+		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+		result.Windows[window.Name] = JSONProjection{ProjectedPct: roundPct(proj.ProjectedPct), Indicator: proj.Indicator()}
+	}
+	return result
 }
 
 // Status fetches and displays usage status for all configured providers.
@@ -734,7 +805,7 @@ func StatusAgent(showAll bool) int {
 }
 
 func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return nil, nil, 1
@@ -750,7 +821,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 	// `codex login` after the last fetch) we'd return stale-by-membership
 	// data and the user would see nothing for ~60s.
 	configuredNames := registry.ConfiguredNames()
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) && !cacheEntry.HasStaleData(configuredNames) {
+	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
 		output := buildOutputFromCache(registry, cfg, cacheEntry)
 		if showAll {
 			output.IncludeAllProviders(registry, cfg)
@@ -776,7 +847,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
 				if data != nil && data.Error != "" && !data.HasPresentableUsage() {
-					if cached, ok := staleFallback(cacheEntry, name, data); ok {
+					if cached, ok := staleFallback(cacheEntry, name, data, result.SourceRevisions[name]); ok {
 						result.Results[name] = cached
 					}
 				}
@@ -787,8 +858,13 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 		done <- struct{}{}
 	}()
 	go func() {
+		seen := make(map[string]struct{})
 		var names []string
 		for _, p := range registry.GetConfigured() {
+			if _, ok := seen[p.Name()]; ok {
+				continue
+			}
+			seen[p.Name()] = struct{}{}
 			names = append(names, p.Name())
 		}
 		statuses = status.FetchAll(ctx, names)
@@ -809,7 +885,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 }
 
 func loadCachedStatusOutput(showAll bool) (*MultiProviderOutput, int) {
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return nil, 1
@@ -841,24 +917,31 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 		seen[pf.Name] = struct{}{}
 	}
 	for _, p := range registry.GetAll() {
-		if _, ok := seen[p.Name()]; ok {
+		key := provider.SourceKey(p)
+		if _, ok := seen[key]; ok {
 			continue
 		}
 		m.Providers = append(m.Providers, ProviderFormatter{
-			Name:              p.Name(),
-			Display:           p.DisplayName(),
+			Name:    key,
+			Display: sourceDisplay(p, familyCounts(registry.GetAll())),
+			Family:  p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
 		})
 	}
 }
 
-func staleFallback(cacheEntry *cache.Entry, name string, current *provider.UsageData) (*provider.UsageData, bool) {
+func staleFallback(cacheEntry *cache.Entry, name string, current *provider.UsageData, revisions ...string) (*provider.UsageData, bool) {
 	if current == nil || current.InvalidatesPriorUsage {
 		return nil, false
 	}
 	cached, ok := cacheEntry.GetProvider(name)
 	if !ok || cached == nil || !cached.HasPresentableUsage() {
 		return nil, false
+	}
+	if len(revisions) > 0 {
+		if !cache.SourceRevisionMatches(cacheEntry.SourceRevisions, name, revisions[0]) {
+			return nil, false
+		}
 	}
 	cached = cached.Clone()
 	cached.MarkStale(current.Error)
@@ -882,7 +965,7 @@ func staleSummary(data *provider.UsageData) string {
 
 // Check fetches usage and returns an exit code: 0=healthy, 1=warning, 2=critical/expired/error.
 func Check() int {
-	cfg, err := config.Load()
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 2
@@ -900,7 +983,7 @@ func Check() int {
 	// cached entry yet (same stale-by-membership concern as Status()).
 	configuredNames := registry.ConfiguredNames()
 	var output *MultiProviderOutput
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.Covers(configuredNames) && !cacheEntry.HasStaleData(configuredNames) {
+	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
 		output = buildOutputFromCache(registry, cfg, cacheEntry)
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -909,7 +992,7 @@ func Check() int {
 		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
 			for name, data := range result.Results {
 				if data != nil && data.Error != "" && !data.HasPresentableUsage() {
-					if cached, ok := staleFallback(cacheEntry, name, data); ok {
+					if cached, ok := staleFallback(cacheEntry, name, data, result.SourceRevisions[name]); ok {
 						result.Results[name] = cached
 					}
 				}
@@ -950,11 +1033,17 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 	}
 
 	// Only show configured providers
-	for _, p := range registry.GetConfigured() {
-		data, _ := cacheEntry.GetProvider(p.Name())
+	configured := registry.GetConfigured()
+	counts := familyCounts(configured)
+	for _, p := range configured {
+		key := provider.SourceKey(p)
+		data, _ := cacheEntry.GetProvider(key)
+		if !cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
+			data = nil
+		}
 		output.Providers = append(output.Providers, ProviderFormatter{
-			Name:              p.Name(),
-			Display:           p.DisplayName(),
+			Name: key, Family: p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			Display:           sourceDisplay(p, counts),
 			Data:              data,
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
 		})
@@ -970,14 +1059,17 @@ func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, resu
 	}
 
 	// Only show configured providers that have data
-	for _, p := range registry.GetConfigured() {
-		data, ok := result.Results[p.Name()]
+	configured := registry.GetConfigured()
+	counts := familyCounts(configured)
+	for _, p := range configured {
+		key := provider.SourceKey(p)
+		data, ok := result.Results[key]
 		if !ok {
 			continue
 		}
 		output.Providers = append(output.Providers, ProviderFormatter{
-			Name:              p.Name(),
-			Display:           p.DisplayName(),
+			Name: key, Family: p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			Display:           sourceDisplay(p, counts),
 			Data:              data,
 			Status:            statuses[p.Name()],
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
@@ -985,6 +1077,34 @@ func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, resu
 	}
 
 	return output
+}
+
+func familyCounts(providers []provider.Provider) map[string]int {
+	counts := map[string]int{}
+	for _, p := range providers {
+		counts[p.Name()]++
+	}
+	return counts
+}
+
+func sourceRevisions(providers []provider.Provider) map[string]string {
+	revisions := make(map[string]string)
+	for _, p := range providers {
+		if revision := provider.SourceRevision(p); revision != "" {
+			revisions[provider.SourceKey(p)] = revision
+		}
+	}
+	return revisions
+}
+func sourceDisplay(p provider.Provider, counts map[string]int) string {
+	label := provider.SourceLabel(p)
+	if label == "" {
+		label = provider.SourceID(p)
+	}
+	if (counts[p.Name()] <= 1 && provider.SourceID(p) == "default") || label == "" {
+		return p.DisplayName()
+	}
+	return p.DisplayName() + " · " + label
 }
 
 // providerUrgency classifies a provider for sorting and summary.
@@ -1214,7 +1334,11 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 
 // SingleProviderStatus fetches status for a single provider (backward compatibility).
 func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
-	cfg, err := config.Load()
+	return SingleProviderStatusSource(providerName, "", jsonMode, plainMode)
+}
+
+func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMode bool) int {
+	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
@@ -1223,19 +1347,42 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 	registry := provider.NewRegistry()
 	all.Register(registry, cfg)
 
-	p, ok := registry.Get(providerName)
+	family, ok := all.CanonicalName(providerName)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", providerName)
 		return 1
 	}
-
-	if cfg.IsProviderDisabled(providerName) {
-		fmt.Fprintf(os.Stderr, "clawmeter: provider %q is disabled (run 'clawmeter config enable %s')\n", providerName, providerName)
+	providers := registry.GetFamily(family)
+	counts := familyCounts(providers)
+	if sourceID != "" {
+		sourceID = strings.ToLower(strings.TrimSpace(sourceID))
+		filtered := providers[:0]
+		for _, candidate := range providers {
+			if provider.SourceID(candidate) == sourceID {
+				filtered = append(filtered, candidate)
+			}
+		}
+		providers = filtered
+	}
+	if len(providers) == 0 {
+		fmt.Fprintf(os.Stderr, "clawmeter: source %q is not configured for provider %q\n", sourceID, family)
 		return 2
 	}
 
-	if !p.IsConfigured() {
-		fmt.Fprintf(os.Stderr, "clawmeter: provider %q is not configured\n", providerName)
+	configured := configuredSources(providers)
+	for _, p := range providers {
+		if cfg.IsProviderDisabled(p.Name()) {
+			fmt.Fprintf(os.Stderr, "clawmeter: provider %q is disabled\n", family)
+			return 2
+		}
+		if sourceID != "" && !p.IsConfigured() && !provider.IsEnrolledSource(p) {
+			fmt.Fprintf(os.Stderr, "clawmeter: provider %q source %q is not configured\n", family, provider.SourceID(p))
+			return 2
+		}
+	}
+	providers = configured
+	if len(providers) == 0 {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider %q has no configured sources\n", family)
 		return 2
 	}
 
@@ -1243,43 +1390,19 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 	defer cancel()
 
 	// Fetch usage and status in parallel
-	var data *provider.UsageData
-	var fetchErr error
+	result := provider.FetchProvidersParallel(ctx, providers)
+	cacheEntry, _ := cache.Read()
+	hadFetchError := applySourceFallbacks(providers, result, cacheEntry)
 	var ps *status.ProviderStatus
-	done := make(chan struct{}, 2)
-
+	done := make(chan struct{}, 1)
 	go func() {
-		data, fetchErr = p.FetchUsage(ctx)
-		done <- struct{}{}
-	}()
-	go func() {
-		ps = status.Fetch(ctx, providerName)
+		ps = status.Fetch(ctx, family)
 		done <- struct{}{}
 	}()
 	<-done
-	<-done
-
-	if fetchErr != nil {
-		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", fetchErr)
-		return 1
-	}
-	if data != nil && data.Error != "" && !data.HasPresentableUsage() {
-		if cacheEntry, err := cache.Read(); err == nil && cacheEntry != nil {
-			if cached, ok := staleFallback(cacheEntry, p.Name(), data); ok {
-				data = cached
-			}
-		}
-	}
-
-	pf := ProviderFormatter{
-		Name:    p.Name(),
-		Display: p.DisplayName(),
-		Data:    data,
-		Status:  ps,
-	}
-
-	output := &MultiProviderOutput{
-		Providers: []ProviderFormatter{pf},
+	output := &MultiProviderOutput{Providers: make([]ProviderFormatter, 0, len(providers))}
+	for _, p := range providers {
+		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}
 
 	if jsonMode {
@@ -1290,5 +1413,35 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 		output.PrintColor()
 	}
 
+	if hadFetchError {
+		return 1
+	}
 	return 0
+}
+
+func applySourceFallbacks(providers []provider.Provider, result *provider.MultiFetchResult, cacheEntry *cache.Entry) bool {
+	hadFetchError := false
+	for _, p := range providers {
+		key := provider.SourceKey(p)
+		data := result.Results[key]
+		if data != nil && data.Error != "" && !data.HasPresentableUsage() && cacheEntry != nil {
+			if cached, ok := staleFallback(cacheEntry, key, data, result.SourceRevisions[key]); ok {
+				result.Results[key] = cached
+			}
+		}
+		if result.Errors[key] != nil {
+			hadFetchError = true
+		}
+	}
+	return hadFetchError
+}
+
+func configuredSources(providers []provider.Provider) []provider.Provider {
+	configured := make([]provider.Provider, 0, len(providers))
+	for _, p := range providers {
+		if p.IsConfigured() || provider.IsEnrolledSource(p) {
+			configured = append(configured, p)
+		}
+	}
+	return configured
 }

@@ -2,6 +2,7 @@ package kimi
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,99 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+type kimiSessionEnvironmentResolver struct {
+	request provider.SessionEnvironmentRequest
+	values  map[string]string
+}
+
+func (r *kimiSessionEnvironmentResolver) ResolveSessionEnvironment(request provider.SessionEnvironmentRequest) map[string]string {
+	r.request = request
+	return r.values
+}
+
+func TestSourceCapabilityListsAndValidatesKimiKinds(t *testing.T) {
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("Kimi provider did not expose source capability")
+	}
+	kinds := capability.SourceKinds()
+	if len(kinds) != 3 || kinds[0].Kind != "native" || kinds[1].Kind != "env-name" || kinds[2].Kind != "credential-file" {
+		t.Fatalf("source kinds = %#v", kinds)
+	}
+	for _, tc := range []struct {
+		name   string
+		source config.SourceConfig
+		valid  bool
+	}{
+		{"native default", config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}, true},
+		{"native named", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "native"}}, false},
+		{"env name", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "KIMI_WORK_TOKEN"}}, true},
+		{"bad env name", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "KIMI-WORK-TOKEN"}}, false},
+		{"exact credential file", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "credential-file", Ref: filepath.Join(t.TempDir(), "kimi-code.json")}}, true},
+		{"credential dir", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "credential-file", Ref: t.TempDir()}}, false},
+		{"relative credential file", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "credential-file", Ref: "kimi-code.json"}}, false},
+	} {
+		err := capability.ValidateSource(tc.source)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s: error = %v, valid = %v", tc.name, err, tc.valid)
+		}
+	}
+}
+
+func TestExplicitCredentialFileReadsOnlyExactFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeKimiCredentials(t, home, Credentials{AccessToken: "native"})
+	exact := filepath.Join(t.TempDir(), "kimi-code.json")
+	writeKimiCredentialsFile(t, exact, Credentials{AccessToken: "explicit"})
+
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "credential-file", Ref: exact}})
+	creds, err := p.readCredentials()
+	if err != nil || creds.AccessToken != "explicit" {
+		t.Fatalf("explicit file credentials = %+v, %v", creds, err)
+	}
+	if p.SourceID() != "work" || p.SourceLabel() != "Work" || !p.IsEnrolledSource() {
+		t.Fatalf("source identity = %q/%q enrolled=%t", p.SourceID(), p.SourceLabel(), p.IsEnrolledSource())
+	}
+}
+
+func TestExplicitEnvNameUsesOnlyResolverSelection(t *testing.T) {
+	t.Setenv("KIMI_SELECTED_TOKEN", "ambient")
+	resolver := &kimiSessionEnvironmentResolver{values: map[string]string{"KIMI_SELECTED_TOKEN": "resolved"}}
+	p := NewSource(config.ProviderConfig{OAuthToken: "configured"}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "KIMI_SELECTED_TOKEN"}})
+	p.SetSessionEnvironmentResolver(resolver)
+
+	creds, err := p.readCredentials()
+	if err != nil || creds.AccessToken != "resolved" {
+		t.Fatalf("env credentials = %+v, %v", creds, err)
+	}
+	if len(resolver.request.EnvNames) != 1 || resolver.request.EnvNames[0] != "KIMI_SELECTED_TOKEN" || !resolver.request.AllowSessionEnvironmentFallback {
+		t.Fatalf("resolver request = %#v", resolver.request)
+	}
+}
+
+func TestSourceRevisionIsSecretFreeAndChangesWithCredentialFileStat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kimi-code.json")
+	writeKimiCredentialsFile(t, path, Credentials{AccessToken: "one", RefreshToken: "refresh"})
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "credential-file", Ref: path}})
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, "one") || strings.Contains(first, path) {
+		t.Fatalf("revision = %q, want opaque secret-free value", first)
+	}
+	time.Sleep(time.Nanosecond)
+	writeKimiCredentialsFile(t, path, Credentials{AccessToken: "two", RefreshToken: "refresh"})
+	second := p.SourceRevision()
+	if second == first || strings.Contains(second, "two") {
+		t.Fatalf("changed revision = %q first=%q", second, first)
+	}
+	env := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "env", Credential: config.CredentialRef{Kind: "env-name", Ref: "KIMI_SECRET_TOKEN"}})
+	if rev := env.SourceRevision(); rev == "" || strings.Contains(rev, "KIMI_SECRET_TOKEN") {
+		t.Fatalf("env revision = %q, want opaque nonce-bound value", rev)
+	}
+}
 
 func TestRefreshIsInMemoryAndPreservesOmittedRefreshToken(t *testing.T) {
 	home := t.TempDir()
@@ -210,6 +303,20 @@ func writeKimiCredentials(t *testing.T, home string, creds Credentials) {
 	}
 	data := []byte(`{"access_token":"` + creds.AccessToken + `","refresh_token":"` + creds.RefreshToken + `","expires_at":` + formatFloat(creds.ExpiresAt) + `}`)
 	if err := os.WriteFile(filepath.Join(dir, "kimi-code.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeKimiCredentialsFile(t *testing.T, path string, creds Credentials) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

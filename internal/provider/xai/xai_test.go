@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,6 +212,139 @@ func TestSessionEnvironmentResolverProvidesManagementKeyAndTeamID(t *testing.T) 
 	}
 }
 
+func TestSourceCapabilityListsAndValidatesXAIKinds(t *testing.T) {
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("xAI provider did not expose source capability")
+	}
+	kinds := capability.SourceKinds()
+	if len(kinds) != 2 || kinds[0].Kind != "native" || kinds[1].Kind != "grok-home" {
+		t.Fatalf("source kinds = %#v", kinds)
+	}
+	for _, tc := range []struct {
+		name   string
+		source config.SourceConfig
+		valid  bool
+	}{
+		{"native default", config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}, true},
+		{"native named", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "native"}}, false},
+		{"absolute grok home", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "grok-home", Ref: "/tmp/grok-work"}}, true},
+		{"relative grok home", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "grok-home", Ref: ".grok"}}, false},
+		{"unknown kind", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "GROK_HOME"}}, false},
+	} {
+		err := capability.ValidateSource(tc.source)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s: error = %v, valid = %v", tc.name, err, tc.valid)
+		}
+	}
+}
+
+func TestGrokHomeSourcesAreIsolatedTaggedAndDoNotUseAmbientManagement(t *testing.T) {
+	one := writeGrokAuthDir(t, "one-token", time.Now().Add(time.Hour))
+	two := writeGrokAuthDir(t, "two-token", time.Now().Add(time.Hour))
+	t.Setenv("XAI_MANAGEMENT_API_KEY", "ambient-management-key")
+	t.Setenv("XAI_TEAM_ID", "ambient-team")
+	reset := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer one-token" && auth != "Bearer two-token" {
+			t.Fatalf("Authorization = %q, want source Grok token", auth)
+		}
+		w.Header().Set("Content-Type", "application/grpc-web+proto")
+		_, _ = w.Write(grokGRPCWebResponse(grokBillingPayload(25, reset)))
+	}))
+	defer srv.Close()
+
+	p1 := NewSource(config.ProviderConfig{APIKey: "configured-management-key", Extra: map[string]interface{}{"team_id": "configured-team"}}, config.SourceConfig{ID: "one", Label: "One", Credential: config.CredentialRef{Kind: "grok-home", Ref: one}})
+	p2 := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "two", Label: "Two", Credential: config.CredentialRef{Kind: "grok-home", Ref: two}})
+	p1.grokBillingURL = srv.URL
+	p2.grokBillingURL = srv.URL
+	p1.baseURL = srv.URL
+	p2.baseURL = srv.URL
+	p1.client = srv.Client()
+	p2.client = srv.Client()
+
+	data1, err := p1.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data2, err := p2.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data1.SourceID != "one" || data1.SourceLabel != "One" || data2.SourceID != "two" || data2.SourceLabel != "Two" {
+		t.Fatalf("source metadata = %#v / %#v", data1, data2)
+	}
+	if len(paths) != 2 || paths[0] != "/" || paths[1] != "/" {
+		t.Fatalf("paths = %#v, want only Grok billing route and no management fallback", paths)
+	}
+}
+
+func TestGrokHomeUnavailableResultIsTagged(t *testing.T) {
+	dir := writeGrokAuthDir(t, "expired-token", time.Now().Add(-time.Hour))
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "grok-home", Ref: dir}})
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !data.IsExpired || data.SourceID != "work" || data.SourceLabel != "Work" {
+		t.Fatalf("expired source data = %#v", data)
+	}
+}
+
+func TestGrokHomeSourceRevisionChangesAndUnavailableIsDistinct(t *testing.T) {
+	dir := writeGrokAuthDir(t, "one", time.Now().Add(time.Hour))
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "grok-home", Ref: dir}})
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, dir) {
+		t.Fatalf("revision = %q, want opaque value", first)
+	}
+	writeGrokAuthFile(t, dir, "two", time.Now().Add(time.Hour))
+	second := p.SourceRevision()
+	if second == first {
+		t.Fatal("auth.json change did not change source revision")
+	}
+	if err := os.Remove(filepath.Join(dir, "auth.json")); err != nil {
+		t.Fatal(err)
+	}
+	missing := p.SourceRevision()
+	if missing == "" || missing == second || strings.Contains(missing, dir) {
+		t.Fatalf("missing revision = %q, want distinct opaque unavailable state", missing)
+	}
+}
+
+func TestRegisterExpandsConfiguredXAISources(t *testing.T) {
+	disabled := false
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{
+		"xai": {
+			Enabled: true,
+			Sources: []config.SourceConfig{
+				{ID: "default", Credential: config.CredentialRef{Kind: "native"}},
+				{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "grok-home", Ref: t.TempDir()}},
+				{ID: "off", Enabled: &disabled, Credential: config.CredentialRef{Kind: "grok-home", Ref: t.TempDir()}},
+			},
+		},
+	}}
+	registry := provider.NewRegistry()
+	if err := Register(registry, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("xai"); !ok {
+		t.Fatal("default source was not registered")
+	}
+	if got, ok := registry.Get("xai:work"); !ok || provider.SourceLabel(got) != "Work" || !provider.IsEnrolledSource(got) {
+		t.Fatalf("work source = %#v, registered=%v", got, ok)
+	}
+	if _, ok := registry.Get("xai:off"); ok {
+		t.Fatal("disabled source was registered")
+	}
+}
+
 func TestManagementKey_DoesNotUseInferenceAPIKey(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "inference-key")
 	p := New(config.ProviderConfig{})
@@ -407,6 +541,18 @@ func writeGrokAuth(t *testing.T, token string, expiresAt time.Time) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("GROK_HOME", dir)
+	writeGrokAuthFile(t, dir, token, expiresAt)
+}
+
+func writeGrokAuthDir(t *testing.T, token string, expiresAt time.Time) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeGrokAuthFile(t, dir, token, expiresAt)
+	return dir
+}
+
+func writeGrokAuthFile(t *testing.T, dir, token string, expiresAt time.Time) {
+	t.Helper()
 	data := map[string]map[string]string{
 		"https://auth.x.ai::client": {
 			"key":        token,

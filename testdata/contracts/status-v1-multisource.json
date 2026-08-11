@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "claude": {
+      "maturity": {"experimental": false},
+      "usage": {"provider": "claude", "fetched_at": "2026-08-11T12:00:00Z", "windows": []},
+      "sources": [
+        {"source": {"id": "default", "label": "Default"}, "usage": {"provider": "claude", "source_id": "default", "source_label": "Default", "fetched_at": "2026-08-11T12:00:00Z", "windows": []}},
+        {"source": {"id": "personal", "label": "Personal"}, "usage": {"provider": "claude", "source_id": "personal", "source_label": "Personal", "fetched_at": "2026-08-11T12:00:00Z", "windows": []}},
+        {"source": {"id": "work", "label": "Work"}, "usage": {"provider": "claude", "source_id": "work", "source_label": "Work", "fetched_at": "2026-08-11T12:00:00Z", "windows": [], "stale": true}}
+      ]
+    }
+  }
+}

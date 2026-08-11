@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -57,6 +58,7 @@ func TestConnectReusesExistingSessionWithoutLookingUpCLI(t *testing.T) {
 
 func TestSetupStatusKeepsUndetectedProviderQuietAndExplainsKeySetup(t *testing.T) {
 	isolateConsoleHome(t)
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("BAILIAN_TOKEN_PLAN_API_KEY", "")
 	p := New(config.ProviderConfig{})
 	status := p.SetupStatus()
@@ -68,6 +70,47 @@ func TestSetupStatusKeepsUndetectedProviderQuietAndExplainsKeySetup(t *testing.T
 	status = p.SetupStatus()
 	if status.State != provider.SetupNeedsAuth || !strings.Contains(status.Detail, TokenPlanConnectCommand) {
 		t.Fatalf("with a Token Plan key, status = %#v", status)
+	}
+}
+
+func TestSetupStatusRecognizesInstalledBailianCLIWithoutSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture needs a Windows command shim")
+	}
+	isolateConsoleHome(t)
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "bl"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	t.Setenv("BAILIAN_TOKEN_PLAN_API_KEY", "")
+
+	status := New(config.ProviderConfig{}).SetupStatus()
+	if status.State != provider.SetupNeedsAuth {
+		t.Fatalf("with bl installed, state = %q, want needs_auth", status.State)
+	}
+	if !strings.Contains(status.Detail, "Bailian CLI found") {
+		t.Fatalf("detail = %q, want installed CLI explanation", status.Detail)
+	}
+}
+
+func TestEnrolledTokenPlanSourceUsesOnlyItsConsoleFile(t *testing.T) {
+	home := isolateConsoleHome(t)
+	writeConsoleSession(t, home)
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("Token Plan did not expose source capability")
+	}
+	sourced, err := capability.NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "console-file", Ref: filepath.Join(home, "missing.json")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourced.IsConfigured() {
+		t.Fatal("explicit Token Plan source borrowed the ambient console session")
+	}
+	data, err := sourced.FetchUsage(context.Background())
+	if err != nil || data.SourceID != "work" || data.SourceLabel != "Work" || !data.IsExpired {
+		t.Fatalf("missing explicit source result = %#v, %v", data, err)
 	}
 }
 

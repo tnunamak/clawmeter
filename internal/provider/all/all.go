@@ -41,6 +41,28 @@ var aliases = map[string]string{
 	"bailian-token-plan": "alibaba_token",
 }
 
+type registration struct {
+	name string
+	new  func(config.ProviderConfig) provider.Provider
+}
+
+var registrations = []registration{
+	{name: "alibaba", new: func(cfg config.ProviderConfig) provider.Provider { return alibaba.New(cfg) }},
+	{name: "alibaba_token", new: func(cfg config.ProviderConfig) provider.Provider { return alibabatoken.New(cfg) }},
+	{name: "antigravity", new: func(config.ProviderConfig) provider.Provider { return antigravity.New() }},
+	{name: "kimi", new: func(cfg config.ProviderConfig) provider.Provider { return kimi.New(cfg) }},
+	{name: "kimik2", new: func(cfg config.ProviderConfig) provider.Provider { return kimik2.New(cfg) }},
+	{name: "openai", new: func(cfg config.ProviderConfig) provider.Provider { return openai.New(cfg) }},
+	{name: "gemini", new: func(cfg config.ProviderConfig) provider.Provider { return gemini.New(cfg) }},
+	{name: "copilot", new: func(cfg config.ProviderConfig) provider.Provider { return copilot.New(cfg) }},
+	{name: "openrouter", new: func(cfg config.ProviderConfig) provider.Provider { return openrouter.New(cfg) }},
+	{name: "jetbrains", new: func(cfg config.ProviderConfig) provider.Provider { return jetbrains.New(cfg) }},
+	{name: "synthetic", new: func(cfg config.ProviderConfig) provider.Provider { return synthetic.New(cfg) }},
+	{name: "xai", new: func(cfg config.ProviderConfig) provider.Provider { return xai.New(cfg) }},
+	{name: "zai", new: func(cfg config.ProviderConfig) provider.Provider { return zai.New(cfg) }},
+	{name: "claude", new: func(cfg config.ProviderConfig) provider.Provider { return anthropic.New(cfg) }},
+}
+
 // Register registers all known providers with the given registry and wires
 // the user's config as the registry's enabled-filter so explicitly disabled
 // providers are skipped by GetConfigured / FetchAllParallel.
@@ -49,26 +71,56 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 	if len(resolvers) > 0 {
 		registry.SetSessionEnvironmentResolver(resolvers[0])
 	}
-	for _, fn := range []func(*provider.Registry, *config.Config) error{
-		alibaba.Register,
-		alibabatoken.Register,
-		antigravity.Register,
-		anthropic.Register,
-		kimi.Register,
-		kimik2.Register,
-		openai.Register,
-		gemini.Register,
-		copilot.Register,
-		openrouter.Register,
-		jetbrains.Register,
-		synthetic.Register,
-		xai.Register,
-		zai.Register,
-	} {
-		if err := fn(registry, cfg); err != nil {
+	for _, registration := range registrations {
+		providerCfg := cfg.Providers[registration.name]
+		base := registration.new(providerCfg)
+		if err := provider.RegisterConfigured(registry, providerCfg, base); err != nil {
 			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 		}
 	}
+}
+
+// SourceCapability returns the provider-owned enrollment capability, if any.
+func SourceCapability(name string) (provider.SourceCapability, bool) {
+	canonical, ok := canonicalRegistrationName(name)
+	if !ok {
+		return nil, false
+	}
+	for _, registration := range registrations {
+		if registration.name != canonical {
+			continue
+		}
+		return provider.SourceCapabilityOf(registration.new(config.ProviderConfig{}))
+	}
+	return nil, false
+}
+
+// SourceValidator assembles provider-specific validation without making
+// config depend on provider implementations.
+func SourceValidator() config.SourceValidator {
+	return func(family string, sources []config.SourceConfig) error {
+		capability, ok := SourceCapability(family)
+		if !ok {
+			return fmt.Errorf("provider %q does not support enrolled sources", family)
+		}
+		if err := provider.ValidateSourceConfigs(capability, sources); err != nil {
+			return fmt.Errorf("provider %q sources: %w", family, err)
+		}
+		return nil
+	}
+}
+
+func canonicalRegistrationName(name string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if alias, ok := aliases[normalized]; ok {
+		return alias, true
+	}
+	for _, registration := range registrations {
+		if registration.name == normalized {
+			return normalized, true
+		}
+	}
+	return "", false
 }
 
 // Names returns the canonical names of every known provider, sorted.

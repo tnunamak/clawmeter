@@ -3,6 +3,7 @@ package anthropic
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,11 @@ const (
 type Provider struct {
 	cfg                        config.ProviderConfig
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+	sourceID                   string
+	sourceLabel                string
+	configDir                  string
+	explicitSource             bool
+	enrolledSource             bool
 }
 
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
@@ -42,6 +48,115 @@ func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
 		cfg: cfg,
 	}
+}
+
+// NewNativeSource preserves the legacy Claude credential resolution chain while
+// attaching an explicit identity to the compatibility default source.
+func NewNativeSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	if strings.TrimSpace(source.Credential.Kind) == "" {
+		source.Credential.Kind = "native"
+	}
+	p, _ := newSource(cfg, source)
+	return p
+}
+
+func NewSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	p, _ := newSource(cfg, source)
+	return p
+}
+
+func newSource(cfg config.ProviderConfig, source config.SourceConfig) (*Provider, error) {
+	p, err := (&sourceCapability{}).NewSource(cfg, source)
+	if err != nil {
+		return nil, err
+	}
+	return p.(*Provider), nil
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "config-dir", Summary: "Claude Code credential directory; absolute path required", RefUsage: "/absolute/path", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{
+		ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"},
+	}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind := strings.TrimSpace(source.Credential.Kind)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || strings.TrimSpace(source.Credential.Ref) != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "claude", source.ID)
+		}
+	case "config-dir":
+		ref := strings.TrimSpace(source.Credential.Ref)
+		if ref == "" {
+			return fmt.Errorf("provider %q source %q has empty config directory", "claude", source.ID)
+		}
+		if !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q has relative config directory", "claude", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "claude", source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := &Provider{cfg: cfg, sourceID: strings.TrimSpace(source.ID), sourceLabel: strings.TrimSpace(source.Label), enrolledSource: true}
+	if source.Credential.Kind == "config-dir" {
+		p.configDir = strings.TrimSpace(source.Credential.Ref)
+		p.explicitSource = true
+	}
+	return p, nil
+}
+
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	path := filepath.Join(p.configDir, ".credentials.json")
+	canonical, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+		canonical = resolved
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical+"\x00unavailable")))
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%o", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm()))))
 }
 
 // Name returns the provider identifier.
@@ -84,7 +199,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 				creds = refreshed
 			} else {
 				return &provider.UsageData{
-					Provider:  p.Name(),
+					Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 					FetchedAt: time.Now(),
 					IsExpired: true,
 					Error:     "token expired — run `claude` to reauth",
@@ -92,7 +207,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			}
 		} else {
 			return &provider.UsageData{
-				Provider:  p.Name(),
+				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 				FetchedAt: time.Now(),
 				IsExpired: true,
 				Error:     "token expired — run `claude` to reauth",
@@ -117,7 +232,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnauthorized {
 			return &provider.UsageData{
-				Provider:  p.Name(),
+				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 				FetchedAt: time.Now(),
 				IsExpired: true,
 				Error:     "unauthorized — run `claude` to reauth",
@@ -125,7 +240,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			return &provider.UsageData{
-				Provider:  p.Name(),
+				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 				FetchedAt: time.Now(),
 				Error:     "rate limited (429)",
 			}, nil
@@ -140,14 +255,14 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 
 	if apiResp.usageUnavailable() {
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			Error:     "usage unavailable",
 		}, nil
 	}
 
 	data := &provider.UsageData{
-		Provider:  p.Name(),
+		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
@@ -245,7 +360,8 @@ type Credentials struct {
 		RateLimitTier    string   `json:"rateLimitTier"`
 	} `json:"claudeAiOauth"`
 
-	tokenOnly string // set when credentials come from env var or raw keychain value
+	tokenOnly   string // set when credentials come from env var or raw keychain value
+	persistPath string
 }
 
 // AccessToken returns the OAuth access token.
@@ -266,6 +382,9 @@ func (c *Credentials) IsExpired() bool {
 
 // readCredentials tries multiple sources to find credentials.
 func (p *Provider) readCredentials() (*Credentials, error) {
+	if p.explicitSource {
+		return p.readCredentialsFile(p.configDir)
+	}
 	// 1. Config file (explicit OAuth token)
 	if p.cfg.OAuthToken != "" {
 		return &Credentials{tokenOnly: p.cfg.OAuthToken}, nil
@@ -291,7 +410,7 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 	}
 
 	// 4. Credentials file (Linux/Claude Code default)
-	return p.readCredentialsFile()
+	return p.readCredentialsFile(legacyCredentialsDir())
 }
 
 func (p *Provider) readKeychain() (*Credentials, error) {
@@ -309,23 +428,36 @@ func (p *Provider) readKeychain() (*Credentials, error) {
 		// Might be a raw token string
 		return &Credentials{tokenOnly: data}, nil
 	}
+	// Keychain values are capabilities, not file ownership. They must never be persisted.
 	return &creds, nil
 }
 
-func (p *Provider) readCredentialsFile() (*Credentials, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("home dir: %w", err)
+func (p *Provider) readCredentialsFile(configDir string) (*Credentials, error) {
+	path := filepath.Join(configDir, ".credentials.json")
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude", ".credentials.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read credentials: %w", err)
+		return nil, fmt.Errorf("read credentials: credentials file unavailable")
 	}
 	var creds Credentials
 	if err := json.Unmarshal(data, &creds); err != nil {
-		return nil, fmt.Errorf("parse credentials: %w", err)
+		return nil, fmt.Errorf("parse credentials: credentials file invalid")
 	}
+	creds.persistPath = path
 	return &creds, nil
+}
+
+func legacyCredentialsDir() string {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".claude")
+	}
+	return filepath.Join(home, ".claude")
 }
 
 // refreshToken attempts to refresh the OAuth access token using the refresh token.
@@ -378,9 +510,11 @@ func (p *Provider) refreshToken(ctx context.Context, creds *Credentials) (*Crede
 	}
 	creds.ClaudeAiOauth.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UnixMilli()
 
-	// Write back to credentials file
-	if err := p.writeCredentials(creds); err != nil {
-		fmt.Fprintf(os.Stderr, "clawmeter: warning: failed to save refreshed credentials: %v\n", err)
+	// Write back only through the credential source that supplied the token.
+	if creds.tokenOnly == "" && creds.persistPath != "" {
+		if err := p.writeCredentials(creds); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: warning: failed to save refreshed credentials: %v\n", err)
+		}
 	}
 
 	return creds, nil
@@ -388,17 +522,19 @@ func (p *Provider) refreshToken(ctx context.Context, creds *Credentials) (*Crede
 
 // writeCredentials writes updated credentials back to the credentials file.
 func (p *Provider) writeCredentials(creds *Credentials) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("home dir: %w", err)
+	if creds == nil || creds.tokenOnly != "" {
+		return fmt.Errorf("credential source cannot persist")
 	}
-	path := filepath.Join(home, ".claude", ".credentials.json")
+	path := creds.persistPath
+	if path == "" {
+		return fmt.Errorf("credential source cannot persist")
+	}
 
 	// Read existing file to preserve other fields (e.g., mcpOAuth)
 	existing := make(map[string]json.RawMessage)
 	if data, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(data, &existing); err != nil {
-			return fmt.Errorf("parse existing credentials: %w", err)
+			return fmt.Errorf("credentials file is not writable")
 		}
 	}
 
@@ -417,10 +553,10 @@ func (p *Provider) writeCredentials(creds *Credentials) error {
 	// Atomic write
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
+		return fmt.Errorf("credentials file is not writable")
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("rename credentials: %w", err)
+		return fmt.Errorf("credentials file is not writable")
 	}
 	return nil
 }
@@ -516,5 +652,7 @@ func cents(value *float64) int {
 // Register registers the Anthropic provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("claude")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }
+
+var _ provider.SourceCapability = (*Provider)(nil)

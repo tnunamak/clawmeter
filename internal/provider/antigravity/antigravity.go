@@ -4,6 +4,7 @@ package antigravity
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,10 @@ type Provider struct {
 	now                        func() time.Time
 	tokenMu                    sync.Mutex
 	memoryToken                storedToken
+	sourceID                   string
+	sourceLabel                string
+	tokenPath                  string
+	enrolledSource             bool
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
 }
 
@@ -87,10 +92,12 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	if _, err := p.lookPath("agy"); err != nil {
-		return provider.SetupStatus{
-			State:  provider.SetupUnavailable,
-			Detail: "Antigravity CLI is not installed",
+	if p.tokenPath == "" {
+		if _, err := p.lookPath("agy"); err != nil {
+			return provider.SetupStatus{
+				State:  provider.SetupUnavailable,
+				Detail: "Antigravity CLI is not installed",
+			}
 		}
 	}
 	token, err := p.readToken()
@@ -124,14 +131,14 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	project, err := p.loadProject(ctx, token)
 	if err != nil {
 		if errors.Is(err, errUnauthorized) {
-			return expiredUsage(p.now()), nil
+			return p.withSource(expiredUsage(p.now())), nil
 		}
 		return nil, err
 	}
 	body, err := p.postJSON(ctx, quotaSummaryPath, token, map[string]string{"project": project})
 	if err != nil {
 		if errors.Is(err, errUnauthorized) {
-			return expiredUsage(p.now()), nil
+			return p.withSource(expiredUsage(p.now())), nil
 		}
 		return nil, err
 	}
@@ -140,11 +147,112 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &provider.UsageData{
+	return p.withSource(&provider.UsageData{
 		Provider:  p.Name(),
 		FetchedAt: p.now(),
 		Windows:   windows,
-	}, nil
+	}), nil
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(_ config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(config.ProviderConfig{}, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "token-file", Summary: "Antigravity OAuth token file; absolute path required", RefUsage: "/absolute/path/to/antigravity-oauth-token", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind := strings.TrimSpace(source.Credential.Kind)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || strings.TrimSpace(source.Credential.Ref) != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "antigravity", source.ID)
+		}
+	case "token-file":
+		ref := strings.TrimSpace(source.Credential.Ref)
+		if ref == "" {
+			return fmt.Errorf("provider %q source %q has empty token file", "antigravity", source.ID)
+		}
+		if !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q has relative token file", "antigravity", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "antigravity", source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(_ config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := New()
+	p.sourceID = strings.TrimSpace(source.ID)
+	p.sourceLabel = strings.TrimSpace(source.Label)
+	p.enrolledSource = true
+	if strings.TrimSpace(source.Credential.Kind) == "token-file" {
+		p.tokenPath = strings.TrimSpace(source.Credential.Ref)
+	}
+	return p, nil
+}
+
+func NewSource(source config.SourceConfig) *Provider {
+	p, _ := (sourceCapability{}).NewSource(config.ProviderConfig{}, source)
+	return p.(*Provider)
+}
+
+func (p *Provider) SourceID() string {
+	if strings.TrimSpace(p.sourceID) == "" {
+		return "default"
+	}
+	return strings.TrimSpace(p.sourceID)
+}
+
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+
+func (p *Provider) SourceRevision() string {
+	if strings.TrimSpace(p.tokenPath) == "" {
+		return ""
+	}
+	canonical, err := filepath.Abs(p.tokenPath)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+		canonical = resolved
+	}
+	info, err := os.Stat(p.tokenPath)
+	if err != nil {
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical+"\x00unavailable")))
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%o", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm()))))
+}
+
+func (p *Provider) withSource(data *provider.UsageData) *provider.UsageData {
+	if data == nil {
+		return nil
+	}
+	data.SourceID = p.SourceID()
+	data.SourceLabel = p.SourceLabel()
+	return data
 }
 
 type storedToken struct {
@@ -191,11 +299,14 @@ var (
 )
 
 func (p *Provider) readToken() (storedToken, error) {
-	home, err := p.homeDir()
-	if err != nil {
-		return storedToken{}, fmt.Errorf("locate Antigravity login: %w", err)
+	path := strings.TrimSpace(p.tokenPath)
+	if path == "" {
+		home, err := p.homeDir()
+		if err != nil {
+			return storedToken{}, fmt.Errorf("locate Antigravity login: %w", err)
+		}
+		path = filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	}
-	path := filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
 	info, err := os.Stat(path)
 	if err != nil {
 		return storedToken{}, err
@@ -587,6 +698,7 @@ func expiredUsage(now time.Time) *provider.UsageData {
 }
 
 // Register registers the Antigravity provider with the registry.
-func Register(registry *provider.Registry, _ *config.Config) error {
-	return registry.Register(New())
+func Register(registry *provider.Registry, cfg *config.Config) error {
+	providerCfg, _ := cfg.GetProvider("antigravity")
+	return provider.RegisterConfigured(registry, providerCfg, New())
 }

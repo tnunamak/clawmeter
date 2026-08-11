@@ -17,6 +17,19 @@ successful process exit does not imply that every provider refreshed successfull
 Status JSON is local automation data, not a redacted issue-report artifact; use the
 diagnostic command below when sharing troubleshooting output.
 
+Source enrollment changes apply after restarting a running tray.
+
+When a family has more than one enrolled source, its provider object keeps the legacy
+family key and adds a `sources` array. Each array item contains only the configured
+source `id` and optional `label`, plus that source's usage, forecast, and status. The
+array is never aggregated. A single source keeps the existing shape. Source IDs and
+labels are user-chosen display metadata and are emitted deliberately. Clawmeter rejects
+common path, email, known key-prefix, and long high-entropy forms, but users must not put
+secrets or account identifiers in them. Credential references and discovered paths,
+tokens, emails, and account identifiers are not emitted. Raw fetch errors are reduced to
+a closed, non-secret message before entering status output or the cache; provider-authored
+status messages may still be present.
+
 Consumers should:
 
 - require a supported top-level `schema_version`;

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -161,5 +162,29 @@ func replaceResetCreditTransport(url string, client *http.Client) func() {
 	return func() {
 		resetCreditsURL = oldURL
 		resetCreditsHTTPClient = oldClient
+	}
+}
+
+func TestFetchResetCreditsDoesNotFollowRedirect(t *testing.T) {
+	var consumeRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/consume" {
+			consumeRequests.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Redirect(w, r, "/consume", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+
+	restore := replaceResetCreditTransport(server.URL+resetCreditsPath, newReadOnlyHTTPClient(time.Second))
+	t.Cleanup(restore)
+
+	_, err := fetchResetCredits(context.Background(), testAuth("test-access", "test-account"))
+	if err == nil || !strings.Contains(err.Error(), "http 307") {
+		t.Fatalf("error = %v, want redirect rejected", err)
+	}
+	if consumeRequests.Load() != 0 {
+		t.Fatalf("consume endpoint received %d requests", consumeRequests.Load())
 	}
 }

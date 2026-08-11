@@ -2,11 +2,170 @@ package anthropic
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+func writeTestCredentials(t *testing.T, dir, access, refresh string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"claudeAiOauth": map[string]any{"accessToken": access, "refreshToken": refresh, "expiresAt": 4102444800000}})
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSourceCapabilityListsAndValidatesClaudeKinds(t *testing.T) {
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("Claude provider did not expose source capability")
+	}
+	kinds := capability.SourceKinds()
+	if len(kinds) != 2 || kinds[0].Kind != "native" || kinds[1].Kind != "config-dir" {
+		t.Fatalf("source kinds = %#v", kinds)
+	}
+	for _, tc := range []struct {
+		name   string
+		source config.SourceConfig
+		valid  bool
+	}{
+		{"native default", config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}, true},
+		{"native named", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "native"}}, false},
+		{"absolute config dir", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: "/tmp/claude-work"}}, true},
+		{"relative config dir", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: "relative"}}, false},
+		{"unknown kind", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "CLAUDE_CONFIG_DIR"}}, false},
+	} {
+		err := capability.ValidateSource(tc.source)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s: error = %v, valid = %v", tc.name, err, tc.valid)
+		}
+	}
+}
+
+func TestExplicitSourcesReadAndWriteOnlyTheirProfile(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	writeTestCredentials(t, one, "one", "refresh-one")
+	writeTestCredentials(t, two, "two", "refresh-two")
+	cfg := config.ProviderConfig{}
+	p1 := NewSource(cfg, config.SourceConfig{ID: "one", Label: "One", Credential: config.CredentialRef{Kind: "config-dir", Ref: one}})
+	p2 := NewSource(cfg, config.SourceConfig{ID: "two", Label: "Two", Credential: config.CredentialRef{Kind: "config-dir", Ref: two}})
+	c1, err := p1.readCredentials()
+	if err != nil || c1.AccessToken() != "one" {
+		t.Fatalf("profile one read = %v, %v", c1, err)
+	}
+	c2, err := p2.readCredentials()
+	if err != nil || c2.AccessToken() != "two" {
+		t.Fatalf("profile two read = %v, %v", c2, err)
+	}
+	c1.ClaudeAiOauth.AccessToken = "one-updated"
+	if err := p1.writeCredentials(c1); err != nil {
+		t.Fatal(err)
+	}
+	read2, err := p2.readCredentials()
+	if err != nil || read2.AccessToken() != "two" {
+		t.Fatalf("profile two changed after profile one write: %v, %v", read2, err)
+	}
+	read1, _ := p1.readCredentials()
+	if read1.AccessToken() != "one-updated" {
+		t.Fatalf("profile one was not updated: %s", read1.AccessToken())
+	}
+}
+
+func TestSymlinkedCredentialsPreserveWriteProvenance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires Windows developer mode")
+	}
+	targetDir, linkDir := t.TempDir(), t.TempDir()
+	writeTestCredentials(t, targetDir, "before", "refresh")
+	target := filepath.Join(targetDir, ".credentials.json")
+	link := filepath.Join(linkDir, ".credentials.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: linkDir}})
+	creds, err := p.readCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds.ClaudeAiOauth.AccessToken = "after"
+	if err := p.writeCredentials(creds); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("credential symlink was replaced: info=%v err=%v", info, err)
+	}
+	updated, err := p.readCredentials()
+	if err != nil || updated.AccessToken() != "after" {
+		t.Fatalf("symlink target was not updated: creds=%v err=%v", updated, err)
+	}
+}
+
+func TestLegacyConfigDirIsHonored(t *testing.T) {
+	dir := t.TempDir()
+	writeTestCredentials(t, dir, "legacy", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	p := New(config.ProviderConfig{})
+	creds, err := p.readCredentials()
+	if err != nil || creds.AccessToken() != "legacy" {
+		t.Fatalf("legacy config dir read = %v, %v", creds, err)
+	}
+}
+
+func TestNativeDefaultSourcePreservesLegacyCredentialResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeTestCredentials(t, dir, "native-default", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	p := NewNativeSource(config.ProviderConfig{}, config.SourceConfig{ID: "default", Label: "Default"})
+	creds, err := p.readCredentials()
+	if err != nil || creds.AccessToken() != "native-default" {
+		t.Fatalf("native default read = %v, %v", creds, err)
+	}
+	if p.SourceID() != "default" || p.SourceLabel() != "Default" || p.SourceRevision() != "" {
+		t.Fatalf("native default identity = %q/%q revision=%q", p.SourceID(), p.SourceLabel(), p.SourceRevision())
+	}
+}
+
+func TestCredentialsWithoutFileProvenanceCannotPersist(t *testing.T) {
+	p := New(config.ProviderConfig{})
+	if err := p.writeCredentials(&Credentials{}); err == nil || strings.Contains(err.Error(), string(filepath.Separator)) {
+		t.Fatalf("write error = %v, want safe non-persist error", err)
+	}
+}
+
+func TestSourceRevisionIsStableSecretFreeAndChangesWithFile(t *testing.T) {
+	dir := t.TempDir()
+	writeTestCredentials(t, dir, "one", "refresh")
+	p := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}})
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, dir) {
+		t.Fatalf("revision = %q, want opaque non-path value", first)
+	}
+	data := []byte(`{"claudeAiOauth":{"accessToken":"two","refreshToken":"refresh","expiresAt":4102444800000}}`)
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := p.SourceRevision()
+	if second == first {
+		t.Fatal("credential file change did not change source revision")
+	}
+	if err := os.Remove(filepath.Join(dir, ".credentials.json")); err != nil {
+		t.Fatal(err)
+	}
+	missing := p.SourceRevision()
+	if missing == "" || missing == second || strings.Contains(missing, dir) {
+		t.Fatalf("missing-file revision = %q, want distinct opaque provenance", missing)
+	}
+}
 
 func TestUsageResponseDoesNotTurnMissingUtilizationIntoZero(t *testing.T) {
 	var response usageResponse

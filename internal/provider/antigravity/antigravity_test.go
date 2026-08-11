@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
@@ -144,6 +145,165 @@ func TestFetchUsageRefreshesExpiredTokenWithoutWritingLoginFile(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatal("Clawmeter rewrote the agy credential file")
+	}
+}
+
+func TestSourceCapabilityListsAndValidatesAntigravityKinds(t *testing.T) {
+	capability, ok := provider.SourceCapabilityOf(New())
+	if !ok {
+		t.Fatal("Antigravity provider did not expose source capability")
+	}
+	kinds := capability.SourceKinds()
+	if len(kinds) != 2 || kinds[0].Kind != "native" || kinds[1].Kind != "token-file" {
+		t.Fatalf("source kinds = %#v", kinds)
+	}
+	for _, tc := range []struct {
+		name   string
+		source config.SourceConfig
+		valid  bool
+	}{
+		{"native default", config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}, true},
+		{"native named", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "native"}}, false},
+		{"absolute token file", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "token-file", Ref: "/tmp/antigravity-oauth-token"}}, true},
+		{"relative token file", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "token-file", Ref: "token"}}, false},
+		{"unknown kind", config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "AGY_TOKEN"}}, false},
+	} {
+		err := capability.ValidateSource(tc.source)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s: error = %v, valid = %v", tc.name, err, tc.valid)
+		}
+	}
+}
+
+func TestTokenFileSourcesAreIsolatedAndTagged(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	writeToken(t, one, "one-token", testNow.Add(time.Hour))
+	writeToken(t, two, "two-token", testNow.Add(time.Hour))
+	p1 := NewSource(config.SourceConfig{ID: "one", Label: "One", Credential: config.CredentialRef{Kind: "token-file", Ref: tokenPath(one)}})
+	p2 := NewSource(config.SourceConfig{ID: "two", Label: "Two", Credential: config.CredentialRef{Kind: "token-file", Ref: tokenPath(two)}})
+	for _, p := range []*Provider{p1, p2} {
+		p.now = func() time.Time { return testNow }
+		p.lookPath = func(string) (string, error) { return "/bin/agy", nil }
+	}
+	p1.client = antigravityUsageClient(t, "one-token")
+	p2.client = antigravityUsageClient(t, "two-token")
+
+	data1, err := p1.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data2, err := p2.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data1.SourceID != "one" || data1.SourceLabel != "One" || data2.SourceID != "two" || data2.SourceLabel != "Two" {
+		t.Fatalf("source metadata = %#v / %#v", data1, data2)
+	}
+}
+
+func TestTokenFileSourceRefreshIsInstanceLocalAndNoWriteBack(t *testing.T) {
+	home := t.TempDir()
+	writeToken(t, home, "expired", testNow.Add(-time.Hour))
+	before, err := os.ReadFile(tokenPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(home, "agy")
+	if err := os.WriteFile(binaryPath, testOAuthBinary(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p1 := NewSource(config.SourceConfig{ID: "one", Credential: config.CredentialRef{Kind: "token-file", Ref: tokenPath(home)}})
+	p2 := NewSource(config.SourceConfig{ID: "two", Credential: config.CredentialRef{Kind: "token-file", Ref: tokenPath(home)}})
+	for _, p := range []*Provider{p1, p2} {
+		p.now = func() time.Time { return testNow }
+		p.tokenURL = "https://oauth.test/token"
+		p.lookPath = func(string) (string, error) { return binaryPath, nil }
+	}
+	refreshes := map[string]int{}
+	newClient := func(token string) roundTripFunc {
+		return func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() == p1.tokenURL {
+				if err := req.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				refreshes[token]++
+				return jsonResponse(`{"access_token":"` + token + `","expires_in":3600}`), nil
+			}
+			if req.Header.Get("Authorization") != "Bearer "+token {
+				t.Fatalf("Authorization = %q, want %q", req.Header.Get("Authorization"), "Bearer "+token)
+			}
+			if strings.Contains(req.URL.Path, "retrieveUserQuotaSummary") {
+				return jsonResponse(`{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","remainingFraction":1,"resetTime":"2026-07-30T17:47:46Z"}]}]}`), nil
+			}
+			return jsonResponse(`{"cloudaicompanionProject":"p"}`), nil
+		}
+	}
+	p1.client = newClient("fresh-one")
+	p2.client = newClient("fresh-two")
+
+	for _, p := range []*Provider{p1, p1, p2} {
+		if _, err := p.FetchUsage(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refreshes["fresh-one"] != 1 || refreshes["fresh-two"] != 1 {
+		t.Fatalf("refreshes = %#v, want source-local memory reuse", refreshes)
+	}
+	after, err := os.ReadFile(tokenPath(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("token-file source refresh wrote back to disk")
+	}
+}
+
+func TestTokenFileSourceRevisionChangesAndUnavailableIsDistinct(t *testing.T) {
+	home := t.TempDir()
+	writeToken(t, home, "one", testNow.Add(time.Hour))
+	p := NewSource(config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "token-file", Ref: tokenPath(home)}})
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, home) {
+		t.Fatalf("revision = %q, want opaque value", first)
+	}
+	writeToken(t, home, "two", testNow.Add(time.Hour))
+	second := p.SourceRevision()
+	if second == first {
+		t.Fatal("token file change did not change source revision")
+	}
+	if err := os.Remove(tokenPath(home)); err != nil {
+		t.Fatal(err)
+	}
+	missing := p.SourceRevision()
+	if missing == "" || missing == second || strings.Contains(missing, home) {
+		t.Fatalf("missing revision = %q, want distinct opaque unavailable state", missing)
+	}
+}
+
+func TestRegisterExpandsConfiguredAntigravitySources(t *testing.T) {
+	disabled := false
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{
+		"antigravity": {
+			Enabled: true,
+			Sources: []config.SourceConfig{
+				{ID: "default", Credential: config.CredentialRef{Kind: "native"}},
+				{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "token-file", Ref: filepath.Join(t.TempDir(), "antigravity-oauth-token")}},
+				{ID: "off", Enabled: &disabled, Credential: config.CredentialRef{Kind: "token-file", Ref: filepath.Join(t.TempDir(), "off-token")}},
+			},
+		},
+	}}
+	registry := provider.NewRegistry()
+	if err := Register(registry, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("antigravity"); !ok {
+		t.Fatal("default source was not registered")
+	}
+	if got, ok := registry.Get("antigravity:work"); !ok || provider.SourceLabel(got) != "Work" || !provider.IsEnrolledSource(got) {
+		t.Fatalf("work source = %#v, registered=%v", got, ok)
+	}
+	if _, ok := registry.Get("antigravity:off"); ok {
+		t.Fatal("disabled source was registered")
 	}
 }
 
@@ -339,6 +499,23 @@ func writeToken(t *testing.T, home, accessToken string, expiry time.Time) {
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func tokenPath(home string) string {
+	return filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token")
+}
+
+func antigravityUsageClient(t *testing.T, token string) roundTripFunc {
+	t.Helper()
+	return func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") != "Bearer "+token {
+			t.Fatalf("Authorization = %q, want Bearer %s", req.Header.Get("Authorization"), token)
+		}
+		if strings.Contains(req.URL.Path, "retrieveUserQuotaSummary") {
+			return jsonResponse(`{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","remainingFraction":0.5,"resetTime":"2026-07-30T17:47:46Z"}]}]}`), nil
+		}
+		return jsonResponse(`{"cloudaicompanionProject":"p"}`), nil
 	}
 }
 

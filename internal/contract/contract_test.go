@@ -30,7 +30,7 @@ func TestPublishedSchemasAreJSON(t *testing.T) {
 
 func TestStatusV1FixturesMatchGoContract(t *testing.T) {
 	schema := compileSchema(t, "status-v1.schema.json")
-	for _, name := range []string{"status-v1-healthy.json", "status-v1-partial-error.json"} {
+	for _, name := range []string{"status-v1-healthy.json", "status-v1-partial-error.json", "status-v1-multisource.json"} {
 		data := readRepoFile(t, "testdata", "contracts", name)
 		var raw any
 		if err := json.Unmarshal(data, &raw); err != nil {

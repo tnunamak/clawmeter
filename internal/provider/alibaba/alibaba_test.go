@@ -587,6 +587,10 @@ func TestIsConfigured(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 			if tt.envVar != "" {
 				t.Setenv(tt.envVar, tt.envVal)
 			}
@@ -601,6 +605,49 @@ func TestIsConfigured(t *testing.T) {
 				t.Errorf("IsConfigured() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnrolledSourcesNeverBorrowAmbientAlibabaCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	ambientDir := filepath.Join(home, ".bailian")
+	if err := os.MkdirAll(ambientDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ambientDir, "config.json"), []byte(`{"access_token":"ambient-console"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ALIBABA_CODING_PLAN_API_KEY", "sk-sp-ambient")
+
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("Alibaba did not expose source capability")
+	}
+	console, err := capability.NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "console-file", Ref: filepath.Join(home, "missing.json")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if console.IsConfigured() {
+		t.Fatal("explicit console source borrowed ambient console or API-key credentials")
+	}
+	data, err := console.FetchUsage(context.Background())
+	if err != nil || data.SourceID != "work" || data.SourceLabel != "Work" || !data.IsExpired {
+		t.Fatalf("missing explicit console result = %#v, %v", data, err)
+	}
+
+	keySource, err := capability.NewSource(config.ProviderConfig{APIKey: "sk-sp-config"}, config.SourceConfig{ID: "team", Credential: config.CredentialRef{Kind: "api-key-env-name", Ref: "ALIBABA_TEAM_KEY"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keySource.IsConfigured() {
+		t.Fatal("explicit API-key source borrowed config, ambient env, or console credentials")
+	}
+	t.Setenv("ALIBABA_TEAM_KEY", "sk-sp-team")
+	if !keySource.IsConfigured() {
+		t.Fatal("selected API-key environment variable was not used")
 	}
 }
 

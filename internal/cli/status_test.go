@@ -2,6 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,17 +15,70 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
+func TestPrintJSONMultisourceKeepsDefaultLegacyFieldsAndSortsSources(t *testing.T) {
+	now := time.Now().UTC()
+	data := func(id string, pct float64) *provider.UsageData {
+		return &provider.UsageData{Provider: "claude", SourceID: id, SourceLabel: "Credential profile", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Utilization: pct, ResetsAt: now.Add(time.Hour)}}}
+	}
+	out := &MultiProviderOutput{Providers: []ProviderFormatter{
+		{Name: "claude:work", Family: "claude", SourceID: "work", SourceLabel: "Work", Data: data("work", 20)},
+		{Name: "claude:default", Family: "claude", SourceID: "default", SourceLabel: "Default", Data: data("default", 10)},
+		{Name: "claude:personal", Family: "claude", SourceID: "personal", SourceLabel: "Personal", Data: data("personal", 30)},
+	}}
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	out.PrintJSON(nil)
+	_ = w.Close()
+	os.Stdout = old
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded JSONOutput
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	family := decoded.Providers["claude"]
+	if family.Usage == nil || family.Usage.SourceID != "" || family.Usage.SourceLabel != "" || family.Forecast == nil {
+		t.Fatalf("default legacy fields missing: %#v", family)
+	}
+	if got := []string{family.Sources[0].Source.ID, family.Sources[1].Source.ID, family.Sources[2].Source.ID}; strings.Join(got, ",") != "default,personal,work" {
+		t.Fatalf("sources not source-sorted: %v", got)
+	}
+}
+
 type cliStubProvider struct {
-	name string
+	name       string
+	configured *bool
+	enrolled   bool
 }
 
 func (p cliStubProvider) Name() string         { return p.name }
 func (p cliStubProvider) DisplayName() string  { return p.name }
 func (p cliStubProvider) Description() string  { return "" }
 func (p cliStubProvider) DashboardURL() string { return "" }
-func (p cliStubProvider) IsConfigured() bool   { return true }
+func (p cliStubProvider) IsConfigured() bool {
+	return p.configured == nil || *p.configured
+}
+func (p cliStubProvider) IsEnrolledSource() bool { return p.enrolled }
 func (p cliStubProvider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	return nil, nil
+}
+
+func TestConfiguredSourcesKeepsOnlyAvailableOrEnrolledProfiles(t *testing.T) {
+	available, unavailable := true, false
+	got := configuredSources([]provider.Provider{
+		cliStubProvider{name: "available", configured: &available},
+		cliStubProvider{name: "unavailable", configured: &unavailable},
+		cliStubProvider{name: "enrolled", configured: &unavailable, enrolled: true},
+	})
+	if len(got) != 2 || got[0].Name() != "available" || got[1].Name() != "enrolled" {
+		t.Fatalf("configuredSources() = %#v, want available and explicitly enrolled sources", got)
+	}
 }
 
 func TestFormatColorShowsBalanceOnlyProviderWithNameFallback(t *testing.T) {
@@ -653,5 +710,90 @@ func TestStaleFallbackRejectsInvalidatedPriorUsage(t *testing.T) {
 	}
 	if got, ok := staleFallback(entry, "xai", current); ok || got != nil {
 		t.Fatalf("staleFallback() = %#v, %v; want no fallback for invalidated usage", got, ok)
+	}
+}
+
+func TestStaleFallbackRequiresMatchingSourceRevision(t *testing.T) {
+	entry := &cache.Entry{ProviderData: map[string]*provider.UsageData{
+		"claude:work": {
+			Provider: "claude",
+			Windows:  []provider.UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}},
+		},
+	}}
+	current := &provider.UsageData{Provider: "claude", Error: "temporarily unavailable"}
+	if got, ok := staleFallback(entry, "claude:work", current, "current-revision"); ok || got != nil {
+		t.Fatalf("staleFallback() = %#v, %v; cache without source provenance must not be reused", got, ok)
+	}
+	entry.SourceRevisions = map[string]string{"claude:work": "current-revision"}
+	if got, ok := staleFallback(entry, "claude:work", current, "current-revision"); !ok || got == nil {
+		t.Fatalf("staleFallback() = %#v, %v; matching source provenance should be reusable", got, ok)
+	}
+	if got, ok := staleFallback(entry, "claude:work", current, ""); ok || got != nil {
+		t.Fatalf("staleFallback() = %#v, %v; revisioned cache must not survive a switch to native credentials", got, ok)
+	}
+}
+
+func TestApplySourceFallbacksPreservesSourceLocalStaleDataAndExitSignal(t *testing.T) {
+	work := sourcedCLIProvider{id: "work"}
+	personal := sourcedCLIProvider{id: "personal"}
+	result := &provider.MultiFetchResult{
+		Results: map[string]*provider.UsageData{
+			"claude:work":     {Provider: "claude", Error: "rate limited"},
+			"claude:personal": {Provider: "claude", Error: "offline"},
+		},
+		SourceRevisions: map[string]string{"claude:work": "work-revision"},
+		Errors:          map[string]error{"claude:personal": errors.New("offline")},
+	}
+	entry := &cache.Entry{
+		ProviderData: map[string]*provider.UsageData{
+			"claude:work": {
+				Provider: "claude",
+				Windows:  []provider.UsageWindow{{Name: "5h", Utilization: 20, ResetsAt: time.Now().Add(time.Hour)}},
+			},
+		},
+		SourceRevisions: map[string]string{"claude:work": "work-revision"},
+	}
+	if !applySourceFallbacks([]provider.Provider{work, personal}, result, entry) {
+		t.Fatal("raw source fetch error did not preserve a nonzero exit signal")
+	}
+	if data := result.Results["claude:work"]; !data.Stale || !data.HasPresentableUsage() {
+		t.Fatalf("matching work cache was not used source-locally: %#v", data)
+	}
+	if data := result.Results["claude:personal"]; data.Stale || data.Error == "" {
+		t.Fatalf("personal error was incorrectly replaced: %#v", data)
+	}
+}
+
+type sourcedCLIProvider struct {
+	id       string
+	revision string
+}
+
+func (p sourcedCLIProvider) Name() string           { return "claude" }
+func (p sourcedCLIProvider) DisplayName() string    { return "Claude" }
+func (p sourcedCLIProvider) Description() string    { return "" }
+func (p sourcedCLIProvider) DashboardURL() string   { return "" }
+func (p sourcedCLIProvider) IsConfigured() bool     { return true }
+func (p sourcedCLIProvider) SourceID() string       { return p.id }
+func (p sourcedCLIProvider) SourceLabel() string    { return p.id }
+func (p sourcedCLIProvider) SourceRevision() string { return p.revision }
+func (p sourcedCLIProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return nil, nil
+}
+
+func TestBuildOutputFromCacheRejectsRotatedSourceCredential(t *testing.T) {
+	registry := provider.NewRegistry()
+	if err := registry.Register(sourcedCLIProvider{id: "work", revision: "account-b"}); err != nil {
+		t.Fatal(err)
+	}
+	entry := &cache.Entry{
+		ProviderData: map[string]*provider.UsageData{"claude:work": {
+			Provider: "claude", SourceID: "work", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 73}},
+		}},
+		SourceRevisions: map[string]string{"claude:work": "account-a"},
+	}
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	if len(output.Providers) != 1 || output.Providers[0].Data != nil {
+		t.Fatalf("rotated source reused cached account data: %#v", output.Providers)
 	}
 }

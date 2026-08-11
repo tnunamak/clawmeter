@@ -3,6 +3,7 @@ package jetbrains
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -17,7 +18,12 @@ import (
 
 // Provider implements the provider.Provider interface for JetBrains AI.
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg            config.ProviderConfig
+	sourceID       string
+	sourceLabel    string
+	quotaFile      string
+	explicitSource bool
+	enrolledSource bool
 }
 
 // New creates a new JetBrains provider.
@@ -25,6 +31,97 @@ func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
 		cfg: cfg,
 	}
+}
+
+func NewNativeSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	if source.Credential.Kind == "" {
+		source.Credential.Kind = "native"
+	}
+	p, _ := newSource(cfg, source)
+	return p
+}
+
+func NewSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	p, _ := newSource(cfg, source)
+	return p
+}
+
+func newSource(cfg config.ProviderConfig, source config.SourceConfig) (*Provider, error) {
+	p, err := (sourceCapability{}).NewSource(cfg, source)
+	if err != nil {
+		return nil, err
+	}
+	return p.(*Provider), nil
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default quota-file discovery"},
+		{Kind: "quota-file", Summary: "Exact JetBrains AIAssistantQuotaManager2.xml observation; absolute path required", RefUsage: "/absolute/path/AIAssistantQuotaManager2.xml", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	switch source.Credential.Kind {
+	case "native":
+		if source.ID != "default" || source.Credential.Ref != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "jetbrains", source.ID)
+		}
+	case "quota-file":
+		if source.Credential.Ref == "" {
+			return fmt.Errorf("provider %q source %q has empty quota file", "jetbrains", source.ID)
+		}
+		if !filepath.IsAbs(source.Credential.Ref) {
+			return fmt.Errorf("provider %q source %q has relative quota file", "jetbrains", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "jetbrains", source.ID, source.Credential.Kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := &Provider{cfg: cfg, sourceID: source.ID, sourceLabel: source.Label, enrolledSource: true}
+	if source.Credential.Kind == "quota-file" {
+		p.quotaFile = source.Credential.Ref
+		p.explicitSource = true
+	}
+	return p, nil
+}
+
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	return sourceRevision(p.quotaFile)
 }
 
 func (p *Provider) Name() string         { return "jetbrains" }
@@ -58,6 +155,13 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 
 // findQuotaFile finds the most recent JetBrains AI quota XML file.
 func (p *Provider) findQuotaFile() (string, error) {
+	if p.explicitSource {
+		if _, err := os.Stat(p.quotaFile); err != nil {
+			return "", fmt.Errorf("quota file: %w", err)
+		}
+		return p.quotaFile, nil
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
@@ -160,8 +264,10 @@ func parseQuotaXML(data []byte) (*quotaData, error) {
 }
 
 func (p *Provider) transformQuota(quota *quotaData) *provider.UsageData {
+	// A quota-file source is one exact XML observation. Separate files are
+	// separate observations, not proof that JetBrains exposes separate account pools.
 	data := &provider.UsageData{
-		Provider:  p.Name(),
+		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
@@ -196,5 +302,22 @@ func (p *Provider) transformQuota(quota *quotaData) *provider.UsageData {
 // Register registers the JetBrains provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("jetbrains")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }
+
+func sourceRevision(path string) string {
+	canonical, err := filepath.Abs(path)
+	if err != nil {
+		canonical = path
+	}
+	if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+		canonical = resolved
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical+"\x00unavailable")))
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%o", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm()))))
+}
+
+var _ provider.SourceCapability = (*Provider)(nil)

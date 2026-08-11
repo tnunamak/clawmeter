@@ -405,6 +405,8 @@ type tray struct {
 	menuLock         sync.RWMutex
 	props, menuProps *prop.Properties
 	menuVersion      uint32
+	menuUpdateDepth  int
+	menuUpdateDirty  bool
 }
 
 func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {

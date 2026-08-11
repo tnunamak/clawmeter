@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
@@ -13,10 +14,18 @@ type sessionEnvironmentCacheKey struct {
 	fallback bool
 }
 
+type sessionEnvironmentCacheEntry struct {
+	values    map[string]string
+	expiresAt time.Time
+}
+
+const sessionEnvironmentCacheTTL = 30 * time.Second
+
 type sessionEnvironmentResolver struct {
 	mu       sync.Mutex
-	cache    map[sessionEnvironmentCacheKey]map[string]string
+	cache    map[sessionEnvironmentCacheKey]sessionEnvironmentCacheEntry
 	uncached func(provider.SessionEnvironmentRequest) map[string]string
+	now      func() time.Time
 }
 
 // NewSessionEnvironmentResolver creates a lazy, process-local resolver.
@@ -26,7 +35,9 @@ func NewSessionEnvironmentResolver() provider.SessionEnvironmentResolver {
 }
 
 func newSessionEnvironmentResolver(uncached func(provider.SessionEnvironmentRequest) map[string]string) provider.SessionEnvironmentResolver {
-	return &sessionEnvironmentResolver{cache: make(map[sessionEnvironmentCacheKey]map[string]string), uncached: uncached}
+	return &sessionEnvironmentResolver{
+		cache: make(map[sessionEnvironmentCacheKey]sessionEnvironmentCacheEntry), uncached: uncached, now: time.Now,
+	}
 }
 
 func (r *sessionEnvironmentResolver) ResolveSessionEnvironment(request provider.SessionEnvironmentRequest) map[string]string {
@@ -34,12 +45,15 @@ func (r *sessionEnvironmentResolver) ResolveSessionEnvironment(request provider.
 	key := sessionEnvironmentCacheKey{names: strings.Join(names, "\x00"), fallback: request.AllowSessionEnvironmentFallback}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if cached, ok := r.cache[key]; ok {
-		return cloneSessionEnvironmentValues(cached)
+	now := r.now()
+	if cached, ok := r.cache[key]; ok && now.Before(cached.expiresAt) {
+		return cloneSessionEnvironmentValues(cached.values)
 	}
 	request.EnvNames = names
 	values := r.uncached(request)
-	r.cache[key] = cloneSessionEnvironmentValues(values)
+	r.cache[key] = sessionEnvironmentCacheEntry{
+		values: cloneSessionEnvironmentValues(values), expiresAt: now.Add(sessionEnvironmentCacheTTL),
+	}
 	return cloneSessionEnvironmentValues(values)
 }
 

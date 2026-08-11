@@ -91,13 +91,20 @@ func TestMergeClaudeStatusLine_IsIdempotent(t *testing.T) {
 func TestSetupClaudeStatuslineIntegration_WritesIsolatedHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	volume := filepath.VolumeName(home)
+	t.Setenv("HOMEDRIVE", volume)
+	t.Setenv("HOMEPATH", strings.TrimPrefix(home, volume))
 
 	result := setupClaudeStatuslineIntegration(false)
 	if result.Status != "installed" {
 		t.Fatalf("expected installed, got %#v", result)
 	}
 
-	path := filepath.Join(home, ".claude", "settings.local.json")
+	path, err := claudeSettingsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ package xai
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,10 @@ type Provider struct {
 	baseURL                    string
 	grokBillingURL             string
 	client                     *http.Client
+	sourceID                   string
+	sourceLabel                string
+	grokHome                   string
+	enrolledSource             bool
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
 }
 
@@ -62,6 +67,10 @@ func (p *Provider) SafeForAutoPolling() bool {
 }
 
 func (p *Provider) IsConfigured() bool {
+	if p.grokHome != "" {
+		_, err := p.grokCredentials()
+		return err == nil
+	}
 	if _, err := p.managementKey(); err == nil {
 		return true
 	}
@@ -70,6 +79,16 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
+	if p.grokHome != "" {
+		if _, err := p.grokCredentials(); err == nil {
+			return provider.SetupStatus{State: provider.SetupReady, Detail: "grok login credentials found"}
+		} else if errors.Is(err, errGrokCredentialsExpired) {
+			return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "grok auth expired — run `grok login`"}
+		} else if errors.Is(err, errGrokCredentialsMalformed) {
+			return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "grok auth is unreadable — run `grok login`"}
+		}
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "grok auth not found"}
+	}
 	if _, err := p.managementKey(); err == nil {
 		if _, err := p.configuredTeamID(); err == nil {
 			return provider.SetupStatus{State: provider.SetupReady, Detail: "management key and team id found"}
@@ -93,6 +112,9 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
+	if p.grokHome != "" {
+		return p.fetchGrokBuildUsage(ctx)
+	}
 	key, err := p.managementKey()
 	if err != nil {
 		return p.fetchGrokBuildUsage(ctx)
@@ -104,12 +126,12 @@ func (p *Provider) fetchPrepaidCredits(ctx context.Context, key string) (*provid
 	teamID, err := p.teamID(ctx, key)
 	if err != nil {
 		if isUnauthorized(err) {
-			return &provider.UsageData{
+			return p.withSource(&provider.UsageData{
 				Provider:  p.Name(),
 				FetchedAt: time.Now(),
 				IsExpired: true,
 				Error:     "unauthorized — check XAI_MANAGEMENT_API_KEY",
-			}, nil
+			}), nil
 		}
 		return nil, err
 	}
@@ -117,12 +139,12 @@ func (p *Provider) fetchPrepaidCredits(ctx context.Context, key string) (*provid
 	resp, err := p.get(ctx, key, "/v1/billing/teams/"+url.PathEscape(teamID)+"/prepaid/balance")
 	if err != nil {
 		if isUnauthorized(err) {
-			return &provider.UsageData{
+			return p.withSource(&provider.UsageData{
 				Provider:  p.Name(),
 				FetchedAt: time.Now(),
 				IsExpired: true,
 				Error:     "unauthorized — check XAI_MANAGEMENT_API_KEY",
-			}, nil
+			}), nil
 		}
 		return nil, err
 	}
@@ -133,19 +155,19 @@ func (p *Provider) fetchPrepaidCredits(ctx context.Context, key string) (*provid
 		return nil, fmt.Errorf("decode prepaid balance: %w", err)
 	}
 
-	return p.transformBalance(&balance), nil
+	return p.withSource(p.transformBalance(&balance)), nil
 }
 
 func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData, error) {
 	credentials, err := p.grokCredentials()
 	if err != nil {
 		if errors.Is(err, errGrokCredentialsExpired) {
-			return &provider.UsageData{
+			return p.withSource(&provider.UsageData{
 				Provider:  p.Name(),
 				FetchedAt: time.Now(),
 				IsExpired: true,
 				Error:     "grok auth expired — run `grok login`",
-			}, nil
+			}), nil
 		}
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
@@ -169,12 +191,12 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return &provider.UsageData{
+		return p.withSource(&provider.UsageData{
 			Provider:  p.Name(),
 			FetchedAt: time.Now(),
 			IsExpired: true,
 			Error:     "grok auth rejected — run `grok login`",
-		}, nil
+		}), nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
@@ -185,12 +207,12 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 	}
 	if err := validateGRPCStatus(grpcStatusFields(resp.Header), body); err != nil {
 		if isGrokAuthError(err) {
-			return &provider.UsageData{
+			return p.withSource(&provider.UsageData{
 				Provider:  p.Name(),
 				FetchedAt: time.Now(),
 				IsExpired: true,
 				Error:     "grok auth rejected — run `grok login`",
-			}, nil
+			}), nil
 		}
 		return nil, err
 	}
@@ -198,12 +220,12 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 	snapshot, err := parseGrokBilling(body, time.Now())
 	if err != nil {
 		if errors.Is(err, errGrokUsageUnavailable) {
-			return &provider.UsageData{
+			return p.withSource(&provider.UsageData{
 				Provider:              p.Name(),
 				FetchedAt:             time.Now(),
 				Error:                 "Grok usage percentage unavailable",
 				InvalidatesPriorUsage: true,
-			}, nil
+			}), nil
 		}
 		return nil, err
 	}
@@ -219,7 +241,109 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 			ResetsAt:    snapshot.ResetsAt,
 		}},
 	}
-	return data, nil
+	return p.withSource(data), nil
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "grok-home", Summary: "Grok credential directory containing auth.json; absolute path required", RefUsage: "/absolute/path/to/.grok", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind := strings.TrimSpace(source.Credential.Kind)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || strings.TrimSpace(source.Credential.Ref) != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "xai", source.ID)
+		}
+	case "grok-home":
+		ref := strings.TrimSpace(source.Credential.Ref)
+		if ref == "" {
+			return fmt.Errorf("provider %q source %q has empty grok home", "xai", source.ID)
+		}
+		if !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q has relative grok home", "xai", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "xai", source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := New(cfg)
+	p.sourceID = strings.TrimSpace(source.ID)
+	p.sourceLabel = strings.TrimSpace(source.Label)
+	p.enrolledSource = true
+	if strings.TrimSpace(source.Credential.Kind) == "grok-home" {
+		p.grokHome = strings.TrimSpace(source.Credential.Ref)
+	}
+	return p, nil
+}
+
+func NewSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	p, _ := (sourceCapability{}).NewSource(cfg, source)
+	return p.(*Provider)
+}
+
+func (p *Provider) SourceID() string {
+	if strings.TrimSpace(p.sourceID) == "" {
+		return "default"
+	}
+	return strings.TrimSpace(p.sourceID)
+}
+
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+
+func (p *Provider) SourceRevision() string {
+	if strings.TrimSpace(p.grokHome) == "" {
+		return ""
+	}
+	path := filepath.Join(p.grokHome, "auth.json")
+	canonical, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
+		canonical = resolved
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(canonical+"\x00unavailable")))
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%o", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm()))))
+}
+
+func (p *Provider) withSource(data *provider.UsageData) *provider.UsageData {
+	if data == nil {
+		return nil
+	}
+	data.SourceID = p.SourceID()
+	data.SourceLabel = p.SourceLabel()
+	return data
 }
 
 func (p *Provider) managementKey() (string, error) {
@@ -334,7 +458,7 @@ type grokCredentials struct {
 }
 
 func (p *Provider) grokCredentials() (*grokCredentials, error) {
-	path, err := grokAuthPath()
+	path, err := p.grokAuthPath()
 	if err != nil {
 		return nil, err
 	}
@@ -376,7 +500,10 @@ func (p *Provider) grokCredentials() (*grokCredentials, error) {
 	return nil, errGrokCredentialsNotFound
 }
 
-func grokAuthPath() (string, error) {
+func (p *Provider) grokAuthPath() (string, error) {
+	if p != nil && strings.TrimSpace(p.grokHome) != "" {
+		return filepath.Join(strings.TrimSpace(p.grokHome), "auth.json"), nil
+	}
 	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
 		return filepath.Join(expandTilde(home), "auth.json"), nil
 	}
@@ -898,5 +1025,5 @@ func clampInt(v int64) int {
 // Register registers the xAI provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("xai")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }

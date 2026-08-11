@@ -34,6 +34,10 @@
           "additionalProperties": true
         },
         "usage": { "$ref": "#/$defs/usage" },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/source" }
+        },
         "forecast": {
           "type": "object",
           "required": ["windows"],
@@ -57,11 +61,29 @@
       },
       "additionalProperties": true
     },
+    "source": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "required": ["id"],
+          "properties": { "id": { "type": "string" }, "label": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "usage": { "$ref": "#/$defs/usage" },
+        "forecast": { "$ref": "#/$defs/provider/properties/forecast" },
+        "status": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
     "usage": {
       "type": "object",
       "required": ["provider", "fetched_at", "windows"],
       "properties": {
         "provider": { "type": "string" },
+        "source_id": { "type": "string" },
+        "source_label": { "type": "string" },
         "fetched_at": { "type": "string", "format": "date-time" },
         "windows": {
           "type": ["array", "null"],

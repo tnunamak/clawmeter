@@ -10,10 +10,67 @@ import (
 
 	"github.com/gen2brain/beeep"
 
+	"github.com/tnunamak/clawmeter/internal/cache"
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/update"
 )
+
+type sourceMenuTestProvider struct{ id, revision string }
+
+func (p sourceMenuTestProvider) Name() string           { return "claude" }
+func (p sourceMenuTestProvider) DisplayName() string    { return "Claude" }
+func (p sourceMenuTestProvider) Description() string    { return "" }
+func (p sourceMenuTestProvider) DashboardURL() string   { return "" }
+func (p sourceMenuTestProvider) IsConfigured() bool     { return true }
+func (p sourceMenuTestProvider) SourceID() string       { return p.id }
+func (p sourceMenuTestProvider) SourceLabel() string    { return p.id }
+func (p sourceMenuTestProvider) SourceRevision() string { return p.revision }
+func (p sourceMenuTestProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return nil, nil
+}
+
+func TestTrayCacheAndPriorResultsRequireMatchingSourceRevision(t *testing.T) {
+	data := &provider.UsageData{Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: time.Now().Add(time.Hour)}}}
+	entry := &cache.Entry{
+		ProviderData:    map[string]*provider.UsageData{"claude": data},
+		SourceRevisions: map[string]string{"claude": "old-profile"},
+	}
+
+	if got := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default", revision: "new-profile"}}); len(got) != 0 {
+		t.Fatalf("startup cache crossed profile revisions: %#v", got)
+	}
+	if got := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default"}}); len(got) != 0 {
+		t.Fatalf("revisioned explicit cache survived switch to native default: %#v", got)
+	}
+	if got := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default", revision: "old-profile"}}); got["claude"] != data {
+		t.Fatalf("matching source revision was not restored: %#v", got)
+	}
+
+	prior := map[string]*provider.UsageData{"claude": data}
+	if got := resultsMatchingSourceRevisions(prior, map[string]string{"claude": "old-profile"}, map[string]string{"claude": "new-profile"}); len(got) != 0 {
+		t.Fatalf("refresh prior data crossed profile revisions: %#v", got)
+	}
+}
+
+func TestApplyProviderEnablementUsesFamilyForEverySource(t *testing.T) {
+	menus := map[string]*providerMenuItems{
+		"claude":      {provider: sourceMenuTestProvider{id: "default"}},
+		"claude:work": {provider: sourceMenuTestProvider{id: "work"}},
+	}
+	cfg := config.DefaultConfig()
+	cfg.EnsureProvider("claude", true)
+	applyProviderEnablement(menus, cfg)
+	if !menus["claude"].explicitlyEnabled || !menus["claude:work"].explicitlyEnabled {
+		t.Fatalf("family enablement did not reach every source: %#v", menus)
+	}
+	cfg.EnsureProvider("claude", false)
+	applyProviderEnablement(menus, cfg)
+	if menus["claude"].explicitlyEnabled || menus["claude:work"].explicitlyEnabled {
+		t.Fatalf("family disablement did not reach every source: %#v", menus)
+	}
+}
 
 func TestConfigureNotificationIdentity(t *testing.T) {
 	old := beeep.AppName
@@ -42,6 +99,14 @@ func TestProviderConnectionMenuState(t *testing.T) {
 			name:         "missing session",
 			providerName: tokenPlanProviderName,
 			explicit:     true,
+			wantStatus:   "Quota access not connected",
+			wantAction:   "Connect quota access",
+			wantShow:     true,
+		},
+		{
+			name:         "auto-detected setup without session",
+			providerName: tokenPlanProviderName,
+			setupReady:   false,
 			wantStatus:   "Quota access not connected",
 			wantAction:   "Connect quota access",
 			wantShow:     true,
@@ -396,6 +461,25 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestActiveIconTargetsUsesOnlyHighestRiskWindowPerMultiSourceFamily(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"claude:a": {Provider: "claude", SourceID: "a", Windows: []provider.UsageWindow{{Name: "low", Utilization: 10, ResetsAt: now.Add(12 * time.Hour)}, {Name: "high", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
+		"claude:b": {Provider: "claude", SourceID: "b", Windows: []provider.UsageWindow{{Name: "only", Utilization: 30, ResetsAt: now.Add(2 * time.Hour)}}},
+	}
+	got := activeIconTargets(results, iconAutoRisk)
+	if len(got) != 2 {
+		t.Fatalf("targets = %+v, want one per source", got)
+	}
+	seen := map[string]bool{}
+	for _, target := range got {
+		seen[target.Provider+":"+target.Window] = true
+	}
+	if !seen["claude:a:high"] || !seen["claude:b:only"] {
+		t.Fatalf("targets = %+v, want highest-risk source windows", got)
 	}
 }
 
@@ -983,6 +1067,21 @@ func TestExpectedUsagePctClampsToResetWindow(t *testing.T) {
 	}
 	if got := expectedUsagePct(time.Now().Add(-time.Hour), forecast.SevenDayWindow); got != 100 {
 		t.Fatalf("past-reset expected usage = %.1f, want 100", got)
+	}
+}
+
+func TestPollIntervalForConfigEnforcesFiveMinuteFloor(t *testing.T) {
+	tests := map[int]time.Duration{
+		0:   5 * time.Minute,
+		60:  5 * time.Minute,
+		299: 5 * time.Minute,
+		300: 5 * time.Minute,
+		600: 10 * time.Minute,
+	}
+	for configured, want := range tests {
+		if got := pollIntervalForConfig(configured); got != want {
+			t.Fatalf("pollIntervalForConfig(%d) = %s, want %s", configured, got, want)
+		}
 	}
 }
 

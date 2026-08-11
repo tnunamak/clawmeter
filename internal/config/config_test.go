@@ -1,11 +1,140 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestSourceEnabledTriStateRoundTrips(t *testing.T) {
+	scopeHome(t)
+	cfg := DefaultConfig()
+	dir := filepath.Join(t.TempDir(), "profile")
+	cfg.Providers["claude"] = ProviderConfig{Sources: []SourceConfig{
+		{ID: "default", Credential: CredentialRef{Kind: "config-dir", Ref: dir}},
+		{ID: "off", Enabled: Bool(false), Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "off")}},
+	}}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Providers["claude"].Sources[0].IsEnabled() || loaded.Providers["claude"].Sources[1].IsEnabled() {
+		t.Fatal("source enabled tri-state was not preserved")
+	}
+	path, err := configPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "enabled: true") {
+		t.Fatal("default-enabled source should omit enabled: true")
+	}
+}
+
+func TestLoadRunsInjectedProviderSourceValidation(t *testing.T) {
+	scopeHome(t)
+	cfg := DefaultConfig()
+	cfg.Providers["openai"] = ProviderConfig{Sources: []SourceConfig{{
+		ID: "work", Credential: CredentialRef{Kind: "codex-home", Ref: filepath.Join(t.TempDir(), "codex")},
+	}}}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	want := os.ErrInvalid
+	_, err := Load(func(family string, sources []SourceConfig) error {
+		if family == "openai" && len(sources) == 1 {
+			return want
+		}
+		return nil
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("Load validation error = %v, want %v", err, want)
+	}
+}
+
+func TestValidateSourcesRejectsRelativeAndUppercaseReferences(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Providers["claude"] = ProviderConfig{Sources: []SourceConfig{{ID: "Work", Credential: CredentialRef{Kind: "config-dir", Ref: "relative"}}}}
+	if err := cfg.ValidateSources(func(_ string, sources []SourceConfig) error {
+		for _, source := range sources {
+			if source.Credential.Kind == "config-dir" && !filepath.IsAbs(source.Credential.Ref) {
+				return os.ErrInvalid
+			}
+		}
+		return nil
+	}); err == nil {
+		t.Fatal("relative/uppercase source reference should be rejected")
+	}
+}
+
+func TestValidateSourcesLeavesSelectorRulesToProviderCapability(t *testing.T) {
+	for _, tc := range []struct {
+		family string
+		id     string
+		ref    string
+		valid  bool
+	}{
+		{family: "claude", id: "default", valid: true},
+		{family: "claude", id: "work", valid: true},
+		{family: "claude", id: "default", ref: "/unexpected", valid: true},
+		{family: "openai", id: "default", valid: true},
+	} {
+		cfg := DefaultConfig()
+		cfg.Providers[tc.family] = ProviderConfig{Sources: []SourceConfig{{
+			ID: tc.id, Credential: CredentialRef{Kind: "native", Ref: tc.ref},
+		}}}
+		if err := cfg.ValidateSources(); (err == nil) != tc.valid {
+			t.Fatalf("ValidateSources(%s/%s, ref=%q) error = %v, valid=%v", tc.family, tc.id, tc.ref, err, tc.valid)
+		}
+	}
+}
+
+func TestValidateSourcesRequiresSafeLabelsAndAllowsNamedOnlySources(t *testing.T) {
+	for _, label := range []string{"person@example.com", "/home/person/profile", "token=value", "line\nbreak", " padded ", "ghp_0123456789abcdefghijklmnop", "abc123def456ghi789jkl012"} {
+		cfg := DefaultConfig()
+		cfg.Providers["claude"] = ProviderConfig{Sources: []SourceConfig{{
+			ID: "default", Label: label, Credential: CredentialRef{Kind: "native"},
+		}}}
+		if err := cfg.ValidateSources(); err == nil {
+			t.Fatalf("unsafe label %q was accepted", label)
+		}
+	}
+	for _, id := range []string{"sk-ant-secret", "ghp_0123456789abcdefghijklmnop", "abc123def456ghi789jkl012"} {
+		cfg := DefaultConfig()
+		cfg.Providers["claude"] = ProviderConfig{Sources: []SourceConfig{{
+			ID: id, Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "profile")},
+		}}}
+		if err := cfg.ValidateSources(); err == nil {
+			t.Fatalf("key-like source id %q was accepted", id)
+		} else if strings.Contains(err.Error(), id) {
+			t.Fatalf("validation error echoed unsafe source id: %v", err)
+		}
+	}
+	safe := DefaultConfig()
+	safe.Providers["claude"] = ProviderConfig{Sources: []SourceConfig{{
+		ID: "odl-work", Label: "ODL Work Profile 2026", Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "safe")},
+	}}}
+	if err := safe.ValidateSources(); err != nil {
+		t.Fatalf("ordinary source metadata was rejected: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.Providers["claude"] = ProviderConfig{Sources: []SourceConfig{
+		{ID: "personal", Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "personal")}},
+		{ID: "work", Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "work")}},
+	}}
+	if err := cfg.ValidateSources(); err != nil {
+		t.Fatalf("named-only sources were rejected: %v", err)
+	}
+}
 
 func TestIsProviderDisabled(t *testing.T) {
 	cfg := DefaultConfig()
@@ -189,5 +318,29 @@ func TestSaveAndLoadRoundtrip(t *testing.T) {
 	}
 	if !loaded.IsProviderExplicitlyEnabled("openai") {
 		t.Fatalf("roundtrip lost openai enabled state")
+	}
+}
+
+func TestSourceConfigValidationAndRoundtrip(t *testing.T) {
+	scopeHome(t)
+	cfg := DefaultConfig()
+	cfg.Providers["claude"] = ProviderConfig{Enabled: true, Sources: []SourceConfig{
+		{ID: "default", Label: "Personal", Enabled: Bool(true), Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "one")}},
+		{ID: "work", Label: "Work", Enabled: Bool(true), Credential: CredentialRef{Kind: "config-dir", Ref: filepath.Join(t.TempDir(), "two")}},
+	}}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Providers["claude"].Sources) != 2 || loaded.Providers["claude"].Sources[1].Label != "Work" {
+		t.Fatalf("sources did not roundtrip: %#v", loaded.Providers["claude"].Sources)
+	}
+	loaded.Providers["claude"] = cfg.Providers["claude"]
+	loaded.Providers["claude"].Sources[1].ID = "default"
+	if err := loaded.ValidateSources(); err == nil {
+		t.Fatal("duplicate source id should fail")
 	}
 }

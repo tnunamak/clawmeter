@@ -8,14 +8,14 @@ Clawmeter reuses credentials that the provider's own tools already store locally
 
 | Provider | Credential source | Notes |
 | --- | --- | --- |
-| Claude | `~/.claude/.credentials.json` | May refresh OAuth access and write the provider's normal credential file. |
-| Codex/OpenAI | Local Codex CLI integration | Clawmeter delegates rate-limit reads to the local Codex CLI instead of directly reading OpenAI credentials. |
+| Claude | Claude Code's native credential source, plus any config directories you explicitly enroll | May refresh OAuth access. File-backed profiles write only the exact credential file they were read from; environment and macOS Keychain credentials are never written by Clawmeter. |
+| Codex/OpenAI | Codex CLI and `auth.json` in the native or explicitly enrolled Codex home | Clawmeter prefers the local Codex app-server and may read the selected `auth.json` for read-only usage/reset-credit fallbacks. It never writes Codex credentials. |
 | Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | When the access token expires, Clawmeter reads the refresh token, discovers the OAuth client from the installed `agy` binary, and requests a new access token from Google. The refreshed access token stays in memory; Clawmeter does not rewrite the login file. A new Clawmeter process may refresh again after the usage cache expires. |
 | Gemini | `~/.gemini/oauth_creds.json` and Gemini settings | May refresh an access token for API requests. |
 | GitHub Copilot | `COPILOT_API_TOKEN` | Reads the token from the environment when configured. |
 | Kimi | Kimi config, `KIMI_ACCESS_TOKEN`, or `KIMI_K2_API_KEY` | OAuth mode may refresh access and write the provider's normal credential file. |
 | OpenRouter | `OPENROUTER_API_KEY` or config | API-key based. |
-| Alibaba | `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, `DASHSCOPE_API_KEY`, or `~/.qwen/settings.json` | API-key based. Reads Qwen Code settings for credential discovery. |
+| Alibaba | Model Studio console sessions, `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, or explicitly enrolled sources | Coding Plan and Personal Token Plan stay separate. Generic DashScope keys are not sent to Coding Plan quota endpoints. |
 
 Clawmeter does not send provider credentials to Tim Nunamaker, GitHub, SignPath, or any Clawmeter service.
 
@@ -40,7 +40,7 @@ Clawmeter stores its own configuration and cache locally:
 - Config: OS user config directory, for example `~/.config/clawmeter/config.yaml` on Linux.
 - Cache: OS user cache directory, for example `~/.cache/clawmeter/usage.json` on Linux.
 
-The usage cache stores derived quota/status data and recent provider errors so the tray and CLI avoid excessive polling. The default cache TTL is 60 seconds. The cache is not intended to store raw provider credentials.
+The usage cache stores derived quota/status data, recent provider errors, and opaque source-revision fingerprints so the tray and CLI avoid excessive polling and never reuse one account's data for another. For environment-backed sources, that fingerprint is a one-way SHA-256 hash of the selected route and high-entropy API credential. Raw credentials, environment-variable names, credential paths, account IDs, and email addresses are not stored in the cache. The cache file is private to the OS user (`0600` on Unix), and the default cache TTL is 60 seconds.
 
 Uninstalling Clawmeter removes installed binaries and shortcuts according to the installer. Local config and cache files may remain unless you delete them manually.
 

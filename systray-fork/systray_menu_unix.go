@@ -339,6 +339,14 @@ func showMenuItem(item *MenuItem) {
 func refresh() {
 	instance.lock.Lock()
 	defer instance.lock.Unlock()
+	refreshLocked()
+}
+
+func refreshLocked() {
+	if instance.menuUpdateDepth > 0 {
+		instance.menuUpdateDirty = true
+		return
+	}
 	if instance.conn == nil || instance.menuProps == nil {
 		return
 	}

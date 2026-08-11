@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,10 @@ type Provider struct {
 	httpClient                 *http.Client
 	endpoint                   string
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+	sourceID                   string
+	sourceLabel                string
+	sourceCredentialRef        string
+	enrolledSource             bool
 }
 
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
@@ -38,6 +43,67 @@ func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnviro
 
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{cfg: cfg, httpClient: &http.Client{Timeout: timeout}, endpoint: quotasURL}
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "env-name", Summary: "API key from the selected environment variable", RefUsage: "SYNTHETIC_API_KEY", RefRequired: true, RefCaseInsensitive: true},
+	}
+}
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind, ref := strings.TrimSpace(source.Credential.Kind), strings.TrimSpace(source.Credential.Ref)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || ref != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "synthetic", source.ID)
+		}
+	case "env-name":
+		if !syntheticEnvNamePattern.MatchString(ref) {
+			return fmt.Errorf("provider %q source %q has invalid environment variable name", "synthetic", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "synthetic", source.ID, kind)
+	}
+	return nil
+}
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	return &Provider{cfg: cfg, httpClient: &http.Client{Timeout: timeout}, endpoint: quotasURL,
+		sourceID: strings.TrimSpace(source.ID), sourceLabel: strings.TrimSpace(source.Label),
+		sourceCredentialRef: strings.TrimSpace(source.Credential.Ref), enrolledSource: true}, nil
+}
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string {
+	if !p.enrolledSource || p.sourceCredentialRef == "" {
+		return ""
+	}
+	key, _ := p.getAPIKey()
+	return provider.CredentialSourceRevision("env-name\x00"+p.sourceCredentialRef, key)
 }
 
 func (p *Provider) Name() string         { return "synthetic" }
@@ -74,7 +140,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			IsExpired: true,
 			Error:     "unauthorized — check SYNTHETIC_API_KEY",
@@ -101,6 +167,17 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 }
 
 func (p *Provider) getAPIKey() (string, error) {
+	if p.enrolledSource && p.sourceCredentialRef != "" {
+		if p.sessionEnvironmentResolver != nil {
+			values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{EnvNames: []string{p.sourceCredentialRef}, AllowSessionEnvironmentFallback: true})
+			if key := strings.TrimSpace(values[p.sourceCredentialRef]); key != "" {
+				return strings.Trim(key, "\" "), nil
+			}
+		} else if key := os.Getenv(p.sourceCredentialRef); key != "" {
+			return strings.Trim(key, "\" "), nil
+		}
+		return "", fmt.Errorf("environment variable %q is empty", p.sourceCredentialRef)
+	}
 	if p.cfg.APIKey != "" {
 		return p.cfg.APIKey, nil
 	}
@@ -119,7 +196,7 @@ func (p *Provider) getAPIKey() (string, error) {
 
 func (p *Provider) parseQuotas(raw json.RawMessage) (*provider.UsageData, error) {
 	data := &provider.UsageData{
-		Provider:  p.Name(),
+		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
@@ -307,5 +384,10 @@ func findString(obj map[string]json.RawMessage, keys []string) string {
 
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("synthetic")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }
+
+var (
+	syntheticEnvNamePattern                           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	_                       provider.SourceCapability = (*Provider)(nil)
+)

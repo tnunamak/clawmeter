@@ -103,11 +103,34 @@ Useful commands:
 ```bash
 clawmeter providers      # detected providers and auth status
 clawmeter providers diagnose codex --pretty  # privacy-safe live diagnostic
+clawmeter providers source list               # enrolled source ids and labels
+clawmeter providers source add <provider> <id> <kind> [ref] [--label <label>]
+clawmeter providers source remove claude work # final removal also disables the provider
 clawmeter claude         # one provider
 clawmeter codex          # Codex quota
 clawmeter grok           # Grok quota
 clawmeter --json         # machine-readable output
 clawmeter statusline     # compact Claude/statusline segment
+```
+
+Restart a running tray after changing sources to apply the change.
+
+Source enrollment uses provider-declared kinds. Run `clawmeter providers source help
+<provider>` to see the exact routes that provider supports. `native` takes no `ref`;
+file and directory routes require absolute paths; environment routes take the variable
+name, never its secret value. Unsupported kinds fail before configuration is saved.
+
+When the currently detected native source exists, adding the first named source keeps
+it as `Default`. Otherwise Clawmeter adds only the named source, avoiding a broken empty
+row. Every named source uses only its enrolled credential route. Clawmeter does not scan
+for additional accounts or combine quotas across sources.
+
+```bash
+clawmeter providers source help codex
+clawmeter providers source add codex work codex-home ~/.codex-work --label Work
+```
+
+```bash
 clawmeter status --agent # token-efficient all-quota summary for AI agents
 clawmeter setup --all    # install mainstream local integrations
 clawmeter doctor         # provider and integration readiness

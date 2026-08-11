@@ -83,6 +83,29 @@ func TestSessionEnvironmentResolverCachesValuesAndMissesByNameSet(t *testing.T) 
 	}
 }
 
+func TestSessionEnvironmentResolverReobservesCredentialsAfterTTL(t *testing.T) {
+	now := time.Unix(100, 0)
+	credential := "account-a"
+	calls := 0
+	resolver := newSessionEnvironmentResolver(func(request provider.SessionEnvironmentRequest) map[string]string {
+		calls++
+		return map[string]string{"CLAWMETER_REQUESTED": credential}
+	}).(*sessionEnvironmentResolver)
+	resolver.now = func() time.Time { return now }
+	request := provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_REQUESTED"}, AllowSessionEnvironmentFallback: true}
+	if got := resolver.ResolveSessionEnvironment(request)["CLAWMETER_REQUESTED"]; got != "account-a" {
+		t.Fatalf("first credential = %q", got)
+	}
+	credential = "account-b"
+	if got := resolver.ResolveSessionEnvironment(request)["CLAWMETER_REQUESTED"]; got != "account-a" || calls != 1 {
+		t.Fatalf("unexpired snapshot = %q, calls=%d", got, calls)
+	}
+	now = now.Add(sessionEnvironmentCacheTTL)
+	if got := resolver.ResolveSessionEnvironment(request)["CLAWMETER_REQUESTED"]; got != "account-b" || calls != 2 {
+		t.Fatalf("refreshed credential = %q, calls=%d", got, calls)
+	}
+}
+
 func TestSessionEnvironmentResolverCachesValuesAndMisses(t *testing.T) {
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "zsh")

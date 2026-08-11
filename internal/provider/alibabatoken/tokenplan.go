@@ -4,6 +4,7 @@ package alibabatoken
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -50,6 +52,10 @@ type Provider struct {
 	endpoint   string
 
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+	sourceID                   string
+	sourceLabel                string
+	explicitSource             bool
+	enrolledSource             bool
 }
 
 // consoleConfigPaths treats the official CLI's store as authoritative after a
@@ -94,6 +100,90 @@ func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnviro
 	p.sessionEnvironmentResolver = resolver
 }
 
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "console-file", Summary: "Exact Model Studio console profile file", RefUsage: "/absolute/path/config.json", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind, ref := strings.TrimSpace(source.Credential.Kind), strings.TrimSpace(source.Credential.Ref)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || ref != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", name, source.ID)
+		}
+	case "console-file":
+		if ref == "" || !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q requires an absolute console file", name, source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", name, source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := New(cfg)
+	p.sourceID = strings.TrimSpace(source.ID)
+	p.sourceLabel = strings.TrimSpace(source.Label)
+	p.enrolledSource = true
+	if source.Credential.Kind == "console-file" {
+		p.configPath = strings.TrimSpace(source.Credential.Ref)
+		p.explicitSource = true
+	}
+	return p, nil
+}
+
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	material := p.configPath
+	if info, err := os.Stat(p.configPath); err == nil {
+		material += fmt.Sprintf("\x00%d\x00%d\x00%d", info.Size(), info.ModTime().UnixNano(), info.Mode().Perm())
+	} else {
+		material += "\x00unavailable"
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
+}
+
+func (p *Provider) withSource(data *provider.UsageData) *provider.UsageData {
+	if data != nil {
+		data.Provider, data.SourceID, data.SourceLabel = p.Name(), p.SourceID(), p.SourceLabel()
+	}
+	return data
+}
+
 func (p *Provider) IsConfigured() bool {
 	_, ok := p.consoleSession()
 	return ok
@@ -102,6 +192,12 @@ func (p *Provider) IsConfigured() bool {
 func (p *Provider) SetupStatus() provider.SetupStatus {
 	if _, ok := p.consoleSession(); ok {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "Model Studio console session found"}
+	}
+	if p.explicitSource {
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "enrolled Model Studio console session is unavailable"}
+	}
+	if _, err := exec.LookPath("bl"); err == nil {
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "Bailian CLI found; connect quota access with `clawmeter providers connect token-plan`"}
 	}
 	if p.hasTokenPlanKey() {
 		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "Token Plan key found; connect quota access with `clawmeter providers connect token-plan`"}
@@ -112,18 +208,22 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	session, ok := p.consoleSession()
 	if !ok {
-		return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: true, InvalidatesPriorUsage: true, Error: "Model Studio quota access is not connected; run `clawmeter providers connect token-plan`"}, nil
+		message := "Model Studio quota access is not connected; run `clawmeter providers connect token-plan`"
+		if p.explicitSource {
+			message = "enrolled Model Studio console session is unavailable"
+		}
+		return p.withSource(&provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: true, InvalidatesPriorUsage: true, Error: message}), nil
 	}
 
 	usage, err := p.call(ctx, session, usageOperation)
 	if err != nil {
-		return p.errorData(err), nil
+		return p.withSource(p.errorData(err)), nil
 	}
 	data, err := parseUsage(usage, p.now())
 	if err != nil {
 		return nil, err
 	}
-	data.Provider = p.Name()
+	p.withSource(data)
 
 	cards, err := p.call(ctx, session, resetCardsOperation)
 	if err == nil {
@@ -137,9 +237,12 @@ func (p *Provider) errorData(err error) *provider.UsageData {
 	expired := false
 	if strings.Contains(strings.ToLower(err.Error()), "login") || strings.Contains(strings.ToLower(err.Error()), "unauthorized") || strings.Contains(strings.ToLower(err.Error()), "forbidden") {
 		message = "Model Studio quota access expired; run `clawmeter providers connect token-plan --force`"
+		if p.explicitSource {
+			message = "enrolled Model Studio console session expired"
+		}
 		expired = true
 	}
-	return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), IsExpired: expired, InvalidatesPriorUsage: expired, Error: message}
+	return &provider.UsageData{Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(), FetchedAt: p.now(), IsExpired: expired, InvalidatesPriorUsage: expired, Error: message}
 }
 
 type consoleSession struct {

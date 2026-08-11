@@ -15,9 +15,11 @@ const defaultTTL = 60 * time.Second
 
 // Entry represents cached usage data for all providers.
 type Entry struct {
-	// ProviderData maps provider name to their usage data
-	ProviderData map[string]*provider.UsageData `json:"provider_data"`
-	FetchedAt    time.Time                      `json:"fetched_at"`
+	// ProviderData maps canonical source key to usage data. The legacy `claude`
+	// key remains the default Claude source.
+	ProviderData    map[string]*provider.UsageData `json:"provider_data"`
+	SourceRevisions map[string]string              `json:"source_revisions,omitempty"`
+	FetchedAt       time.Time                      `json:"fetched_at"`
 }
 
 // cachePath returns the path to the cache file: the platform's user cache
@@ -67,6 +69,30 @@ func (e *Entry) Covers(want []string) bool {
 	return true
 }
 
+func (e *Entry) CoversCurrent(want []string, revisions map[string]string) bool {
+	if !e.Covers(want) {
+		return false
+	}
+	for _, name := range want {
+		if !SourceRevisionMatches(e.SourceRevisions, name, revisions[name]) {
+			return false
+		}
+	}
+	return true
+}
+
+// SourceRevisionMatches compares provenance symmetrically. An unrevisioned
+// source matches only an unrevisioned cache entry; this prevents a source key
+// that changes between native and explicit credentials from reusing old data.
+func SourceRevisionMatches(cached map[string]string, name, current string) bool {
+	previous, hadPrevious := cached[name]
+	if previous == "" {
+		hadPrevious = false
+	}
+	hasCurrent := current != ""
+	return hadPrevious == hasCurrent && (!hasCurrent || previous == current)
+}
+
 // HasStaleData reports whether any requested provider is cached fallback data.
 func (e *Entry) HasStaleData(want []string) bool {
 	for _, name := range want {
@@ -94,8 +120,8 @@ func Write(result *provider.MultiFetchResult) error {
 	}
 
 	entry := Entry{
-		ProviderData: result.Results,
-		FetchedAt:    result.FetchedAt,
+		ProviderData: result.Results, SourceRevisions: result.SourceRevisions,
+		FetchedAt: result.FetchedAt,
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {

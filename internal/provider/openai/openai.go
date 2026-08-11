@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,30 +20,131 @@ import (
 )
 
 const (
-	timeout          = 15 * time.Second
 	maxFetchAttempts = 2
 	retryDelay       = 150 * time.Millisecond
 	maxStderrBytes   = 4096
 )
 
-var errNoResponse = errors.New("no response received")
+var (
+	errNoResponse    = errors.New("no response received")
+	appServerTimeout = 15 * time.Second
+	appServerBudget  = 18 * time.Second
+)
 
 // Provider implements the provider.Provider interface for Codex.
 type Provider struct {
-	cfg config.ProviderConfig
+	cfg            config.ProviderConfig
+	sourceID       string
+	sourceLabel    string
+	codexHome      string
+	explicitSource bool
+	enrolledSource bool
 }
 
 // New creates a new Codex provider.
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
-		cfg: cfg,
+		cfg:         cfg,
+		sourceID:    "default",
+		sourceLabel: "Default",
 	}
+}
+
+func NewNativeSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+	p, _ := (sourceCapability{}).NewSource(cfg, source)
+	return p.(*Provider)
+}
+
+func NewSource(cfg config.ProviderConfig, source config.SourceConfig) (*Provider, error) {
+	p, err := (sourceCapability{}).NewSource(cfg, source)
+	if err != nil {
+		return nil, err
+	}
+	return p.(*Provider), nil
 }
 
 func (p *Provider) Name() string         { return "openai" } // stable config key
 func (p *Provider) DisplayName() string  { return "Codex" }
 func (p *Provider) Description() string  { return "Codex quota (via local Codex auth)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string { return p.sourceRevision() }
+
+func (p *Provider) subprocessEnv() []string {
+	env := replaceEnv(os.Environ(), "NO_COLOR", "1", runtime.GOOS == "windows")
+	if p.explicitSource {
+		env = replaceEnv(env, "CODEX_HOME", p.codexHome, runtime.GOOS == "windows")
+	}
+	return env
+}
+
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "codex-home", Summary: "Codex home directory; absolute path required", RefUsage: "/absolute/path", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind := strings.TrimSpace(source.Credential.Kind)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || strings.TrimSpace(source.Credential.Ref) != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "openai", source.ID)
+		}
+	case "codex-home":
+		ref := strings.TrimSpace(source.Credential.Ref)
+		if ref == "" {
+			return fmt.Errorf("provider %q source %q has empty Codex home", "openai", source.ID)
+		}
+		if !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q has relative Codex home", "openai", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "openai", source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	label := strings.TrimSpace(source.Label)
+	if label == "" && strings.TrimSpace(source.ID) == "default" {
+		label = "Default"
+	}
+	p := &Provider{cfg: cfg, sourceID: strings.TrimSpace(source.ID), sourceLabel: label, enrolledSource: true}
+	if source.Credential.Kind == "codex-home" {
+		p.codexHome = filepath.Clean(strings.TrimSpace(source.Credential.Ref))
+		p.explicitSource = true
+	}
+	return p, nil
+}
 
 // FetchUsage retrieves rate limit data by launching codex as a JSON-RPC subprocess.
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
@@ -50,9 +153,16 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return p.fetchUsageWithoutCLI(ctx)
 	}
 
+	// Keep the app-server phase below the tray's 30-second refresh deadline so
+	// retryable transport failures cannot consume the direct fallback's budget.
+	appCtx, cancelAppServer := context.WithTimeout(ctx, appServerBudget)
+	defer cancelAppServer()
+
 	var lastErr error
+
+appServerAttempts:
 	for attempt := 1; attempt <= maxFetchAttempts; attempt++ {
-		data, err := p.fetchUsageOnce(ctx, codexPath)
+		data, err := p.fetchUsageOnce(appCtx, codexPath)
 		if err != nil {
 			lastErr = err
 		} else if data == nil {
@@ -63,15 +173,19 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			p.attachResetCredits(ctx, data)
 			return data, nil
 		}
-		if attempt == maxFetchAttempts || !isRetryableAppServerError(lastErr) || ctx.Err() != nil {
+		// A timed-out attempt has already spent the app-server budget. Retrying
+		// would starve the read-only HTTP fallback under the 30-second caller
+		// deadline. Quick transient failures still get one retry.
+		if attempt == maxFetchAttempts || errors.Is(lastErr, context.DeadlineExceeded) || !isRetryableAppServerError(lastErr) || appCtx.Err() != nil {
 			break
 		}
 		select {
 		case <-time.After(retryDelay):
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case <-appCtx.Done():
+			break appServerAttempts
 		}
 	}
+	cancelAppServer()
 	if data, directErr := p.fetchUsageWithoutCLI(ctx); directErr == nil {
 		return data, nil
 	}
@@ -79,8 +193,11 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 }
 
 func (p *Provider) fetchUsageWithoutCLI(ctx context.Context) (*provider.UsageData, error) {
-	auth, err := readAuthFile(codexHome())
+	auth, err := readAuthFile(p.authDirectory())
 	if err != nil {
+		if p.explicitSource {
+			return nil, fmt.Errorf("codex source unavailable")
+		}
 		return nil, fmt.Errorf("codex not found on PATH")
 	}
 	data, err := p.fetchUsageDirect(ctx, auth)
@@ -92,12 +209,12 @@ func (p *Provider) fetchUsageWithoutCLI(ctx context.Context) (*provider.UsageDat
 }
 
 func (p *Provider) fetchUsageOnce(ctx context.Context, codexPath string) (*provider.UsageData, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, appServerTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, codexPath, "-s", "read-only", "-a", "untrusted", "app-server")
 	hideSubprocessWindow(cmd)
-	cmd.Env = append(os.Environ(), "NO_COLOR=1")
+	cmd.Env = p.subprocessEnv()
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -272,7 +389,7 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 			msg = "API key · billed per token (codex login for ChatGPT)"
 		}
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			Error:     msg,
 		}, nil
@@ -280,7 +397,7 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 
 	if resp.Result == nil || resp.Result.RateLimits == nil {
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			Error:     "no rate limit data",
 		}, nil
@@ -288,14 +405,14 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 
 	rl := resp.Result.RateLimits
 	result := &provider.UsageData{
-		Provider:  p.Name(),
+		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
 	if validRateLimitWindow(rl.Primary) {
 		primaryReset := time.Unix(rl.Primary.ResetsAt, 0)
-		name, displayName := primaryWindowLabels(primaryReset, time.Now())
+		name, displayName := codexWindowLabels(rl.Primary.WindowDurationMins, primaryReset, time.Now())
 		result.Windows = append(result.Windows, provider.UsageWindow{
 			Name:        name,
 			DisplayName: displayName,
@@ -305,11 +422,13 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 	}
 
 	if validRateLimitWindow(rl.Secondary) {
+		secondaryReset := time.Unix(rl.Secondary.ResetsAt, 0)
+		name, displayName := codexWindowLabels(rl.Secondary.WindowDurationMins, secondaryReset, time.Now())
 		result.Windows = append(result.Windows, provider.UsageWindow{
-			Name:        "7d",
-			DisplayName: "7 days",
+			Name:        name,
+			DisplayName: displayName,
 			Utilization: *rl.Secondary.UsedPercent,
-			ResetsAt:    time.Unix(rl.Secondary.ResetsAt, 0),
+			ResetsAt:    secondaryReset,
 		})
 	}
 	if len(result.Windows) == 0 {
@@ -319,12 +438,18 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 	return result, nil
 }
 
-// primaryWindowLabels keeps the slot mapping compatible with the normal Codex
-// response while handling policy changes that temporarily omit the five-hour
-// limit and return the remaining weekly limit in primary instead. The wire
-// protocol does not expose a semantic window name, so the reset horizon is the
-// only defensive signal available when the slot and observed cadence disagree.
-func primaryWindowLabels(resetsAt, now time.Time) (string, string) {
+// codexWindowLabels prefers Codex's declared duration when present. This is
+// important when a weekly window is near its reset: its remaining time can be
+// shorter than a five-hour window, but windowDurationMins still identifies it
+// correctly. The reset-horizon fallback keeps compatibility with older
+// responses that omitted the duration.
+func codexWindowLabels(windowDurationMins int64, resetsAt, now time.Time) (string, string) {
+	if windowDurationMins >= int64(24*time.Hour/time.Minute) {
+		return "7d", "7 days"
+	}
+	if windowDurationMins > 0 {
+		return "5h", "5h"
+	}
 	if resetsAt.After(now.Add(24 * time.Hour)) {
 		return "7d", "7 days"
 	}
@@ -348,8 +473,9 @@ type rateLimits struct {
 }
 
 type rateLimitWindow struct {
-	UsedPercent *float64 `json:"usedPercent"`
-	ResetsAt    int64    `json:"resetsAt"`
+	UsedPercent        *float64 `json:"usedPercent"`
+	WindowDurationMins int64    `json:"windowDurationMins"`
+	ResetsAt           int64    `json:"resetsAt"`
 }
 
 func validRateLimitWindow(window *rateLimitWindow) bool {
@@ -480,5 +606,7 @@ func truncateDiagnostic(s string, maxLen int) string {
 // Register registers the Codex provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("openai")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }
+
+var _ provider.SourceCapability = (*Provider)(nil)

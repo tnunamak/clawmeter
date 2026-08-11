@@ -5,6 +5,7 @@ package alibaba
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -54,7 +56,14 @@ type Provider struct {
 	consoleEndpoint            string // overridable for tests; empty uses the console gateway
 	now                        func() time.Time
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+	sourceID                   string
+	sourceLabel                string
+	sourceCredential           config.CredentialRef
+	explicitSource             bool
+	enrolledSource             bool
 }
+
+var alibabaEnvNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 func New(cfg config.ProviderConfig) *Provider {
 	return &Provider{
@@ -81,7 +90,112 @@ func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnviro
 	p.sessionEnvironmentResolver = resolver
 }
 
+type sourceCapability struct{}
+
+func (*Provider) SourceKinds() []provider.SourceKind { return (sourceCapability{}).SourceKinds() }
+func (*Provider) DefaultSource() (config.SourceConfig, bool) {
+	return (sourceCapability{}).DefaultSource()
+}
+func (*Provider) ValidateSource(source config.SourceConfig) error {
+	return (sourceCapability{}).ValidateSource(source)
+}
+func (*Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	return (sourceCapability{}).NewSource(cfg, source)
+}
+
+func (sourceCapability) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "Provider's legacy/default credential route"},
+		{Kind: "console-file", Summary: "Exact Model Studio console profile file", RefUsage: "/absolute/path/config.json", RefRequired: true, RefIsPath: true},
+		{Kind: "api-key-env-name", Summary: "Coding Plan API-key environment variable", RefUsage: "ALIBABA_WORK_CODING_PLAN_KEY", RefRequired: true, RefCaseInsensitive: true},
+	}
+}
+
+func (sourceCapability) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (sourceCapability) ValidateSource(source config.SourceConfig) error {
+	kind, ref := strings.TrimSpace(source.Credential.Kind), strings.TrimSpace(source.Credential.Ref)
+	switch kind {
+	case "native":
+		if strings.TrimSpace(source.ID) != "default" || ref != "" {
+			return fmt.Errorf("provider %q source %q cannot use native credentials", "alibaba", source.ID)
+		}
+	case "console-file":
+		if ref == "" || !filepath.IsAbs(ref) {
+			return fmt.Errorf("provider %q source %q requires an absolute console file", "alibaba", source.ID)
+		}
+	case "api-key-env-name":
+		if !alibabaEnvNamePattern.MatchString(ref) {
+			return fmt.Errorf("provider %q source %q has invalid environment variable name", "alibaba", source.ID)
+		}
+	default:
+		return fmt.Errorf("provider %q source %q has unsupported credential kind %q", "alibaba", source.ID, kind)
+	}
+	return nil
+}
+
+func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := (sourceCapability{}).ValidateSource(source); err != nil {
+		return nil, err
+	}
+	p := New(cfg)
+	p.sourceID = strings.TrimSpace(source.ID)
+	p.sourceLabel = strings.TrimSpace(source.Label)
+	p.sourceCredential = config.CredentialRef{Kind: strings.TrimSpace(source.Credential.Kind), Ref: strings.TrimSpace(source.Credential.Ref)}
+	p.explicitSource = p.sourceCredential.Kind != "native"
+	p.enrolledSource = true
+	if p.sourceCredential.Kind == "console-file" {
+		p.consoleConfigPath = p.sourceCredential.Ref
+	}
+	return p, nil
+}
+
+func (p *Provider) SourceID() string {
+	if p.sourceID == "" {
+		return "default"
+	}
+	return p.sourceID
+}
+func (p *Provider) SourceLabel() string    { return p.sourceLabel }
+func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
+func (p *Provider) SourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	material := p.sourceCredential.Kind + "\x00" + p.sourceCredential.Ref
+	if p.sourceCredential.Kind == "console-file" {
+		if info, err := os.Stat(p.sourceCredential.Ref); err == nil {
+			material += fmt.Sprintf("\x00%d\x00%d\x00%d", info.Size(), info.ModTime().UnixNano(), info.Mode().Perm())
+		} else {
+			material += "\x00unavailable"
+		}
+	} else {
+		key, _ := p.apiKey()
+		return provider.CredentialSourceRevision(material, key)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
+}
+
+func (p *Provider) withSource(data *provider.UsageData) *provider.UsageData {
+	if data != nil {
+		data.Provider, data.SourceID, data.SourceLabel = p.Name(), p.SourceID(), p.SourceLabel()
+	}
+	return data
+}
+
 func (p *Provider) IsConfigured() bool {
+	if p.explicitSource {
+		switch p.sourceCredential.Kind {
+		case "console-file":
+			_, ok := p.consoleSession()
+			return ok
+		case "api-key-env-name":
+			key, _ := p.apiKey()
+			return key != ""
+		}
+	}
 	if _, ok := p.consoleSession(); ok {
 		return true
 	}
@@ -90,6 +204,12 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
+	if p.explicitSource {
+		if p.IsConfigured() {
+			return provider.SetupStatus{State: provider.SetupReady, Detail: "enrolled Coding Plan source found"}
+		}
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "enrolled Coding Plan source is unavailable"}
+	}
 	if _, ok := p.consoleSession(); ok {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "Model Studio console session found"}
 	}
@@ -103,22 +223,45 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
+	if p.explicitSource {
+		switch p.sourceCredential.Kind {
+		case "console-file":
+			session, ok := p.consoleSession()
+			if !ok {
+				return p.withSource(p.consoleErrorData(fmt.Errorf("console login required"))), nil
+			}
+			data, err := p.fetchConsoleUsage(ctx, session)
+			if err != nil {
+				return p.withSource(p.consoleErrorData(err)), nil
+			}
+			return p.withSource(data), nil
+		case "api-key-env-name":
+			key, err := p.apiKey()
+			if err != nil {
+				return nil, fmt.Errorf("credentials: %w", err)
+			}
+			data, err := p.fetchAPIUsage(ctx, key)
+			return p.withSource(data), err
+		}
+	}
 	if session, ok := p.consoleSession(); ok {
 		data, err := p.fetchConsoleUsage(ctx, session)
 		if err == nil {
-			return data, nil
+			return p.withSource(data), nil
 		}
 		if key, keyErr := p.apiKey(); keyErr == nil && key != "" {
-			return p.fetchAPIUsage(ctx, key)
+			data, fetchErr := p.fetchAPIUsage(ctx, key)
+			return p.withSource(data), fetchErr
 		}
-		return p.consoleErrorData(err), nil
+		return p.withSource(p.consoleErrorData(err)), nil
 	}
 
 	key, err := p.apiKey()
 	if err != nil {
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
-	return p.fetchAPIUsage(ctx, key)
+	data, fetchErr := p.fetchAPIUsage(ctx, key)
+	return p.withSource(data), fetchErr
 }
 
 func (p *Provider) fetchAPIUsage(ctx context.Context, key string) (*provider.UsageData, error) {
@@ -339,6 +482,24 @@ func (p *Provider) transformQuota(quota map[string]any) *provider.UsageData {
 // apiKey resolves the Coding Plan API key from config, environment, or
 // Qwen Code's settings.json.
 func (p *Provider) apiKey() (string, error) {
+	if p.explicitSource {
+		if p.sourceCredential.Kind != "api-key-env-name" {
+			return "", fmt.Errorf("no API key selected")
+		}
+		name := p.sourceCredential.Ref
+		raw := strings.TrimSpace(os.Getenv(name))
+		if p.sessionEnvironmentResolver != nil {
+			values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{EnvNames: []string{name}, AllowSessionEnvironmentFallback: true})
+			raw = strings.TrimSpace(values[name])
+		}
+		if key := normalizeCodingPlanKey(raw); key != "" {
+			return key, nil
+		}
+		if raw != "" {
+			return "", fmt.Errorf("Coding Plan key must start with %s", codingPlanKeyPrefix)
+		}
+		return "", fmt.Errorf("selected API key is unavailable")
+	}
 	if key := normalizeCodingPlanKey(p.cfg.APIKey); key != "" {
 		return key, nil
 	} else if strings.TrimSpace(p.cfg.APIKey) != "" {

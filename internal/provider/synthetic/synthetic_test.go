@@ -5,11 +5,60 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+type syntheticResolver struct {
+	values  map[string]string
+	request provider.SessionEnvironmentRequest
+}
+
+func (r *syntheticResolver) ResolveSessionEnvironment(request provider.SessionEnvironmentRequest) map[string]string {
+	r.request = request
+	out := make(map[string]string)
+	for _, name := range request.EnvNames {
+		if value := r.values[name]; value != "" {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+func TestExplicitSourcesUseOnlySelectedEnvironmentName(t *testing.T) {
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+	if !ok {
+		t.Fatal("Synthetic provider did not expose source capability")
+	}
+	if got := capability.SourceKinds(); len(got) != 2 || got[1].Kind != "env-name" {
+		t.Fatalf("source kinds = %#v", got)
+	}
+	for _, name := range []string{"lower-name", "bad-name!", ""} {
+		if err := capability.ValidateSource(config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: name}}); err == nil {
+			t.Fatalf("env name %q unexpectedly accepted", name)
+		}
+	}
+	resolver := &syntheticResolver{values: map[string]string{"SYNTHETIC_WORK": "work-secret", "SYNTHETIC_API_KEY": "ambient-secret"}}
+	p, err := capability.NewSource(config.ProviderConfig{APIKey: "config-secret"}, config.SourceConfig{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "env-name", Ref: "SYNTHETIC_WORK"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.(*Provider).SetSessionEnvironmentResolver(resolver)
+	key, err := p.(*Provider).getAPIKey()
+	if err != nil || key != "work-secret" {
+		t.Fatalf("selected key = %q, err=%v", key, err)
+	}
+	if !reflect.DeepEqual(resolver.request, provider.SessionEnvironmentRequest{EnvNames: []string{"SYNTHETIC_WORK"}, AllowSessionEnvironmentFallback: true}) {
+		t.Fatalf("resolver request = %#v", resolver.request)
+	}
+	if provider.SourceID(p) != "work" || provider.SourceLabel(p) != "Work" || !provider.IsEnrolledSource(p) || provider.SourceRevision(p) == "" {
+		t.Fatalf("source metadata missing")
+	}
+}
 
 func TestParseQuotasPreservesKnownSlotsAndZero(t *testing.T) {
 	input := json.RawMessage(`{"rollingFiveHourLimit":{"limit":100,"used":0},"weeklyTokenLimit":{"limit":200,"used":50,"resetAt":"not-a-timestamp"},"search":{"hourly":{"limit":10,"used":5,"resetAt":"2026-07-16T18:00:00Z"}}}`)

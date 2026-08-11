@@ -3,12 +3,14 @@ package copilot
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"time"
 
@@ -21,10 +23,14 @@ const (
 	timeout = 10 * time.Second
 )
 
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // Provider implements the provider.Provider interface for GitHub Copilot.
 type Provider struct {
 	cfg                        config.ProviderConfig
 	sessionEnvironmentResolver provider.SessionEnvironmentResolver
+	source                     config.SourceConfig
+	enrolled                   bool
 }
 
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
@@ -33,15 +39,92 @@ func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnviro
 
 // New creates a new Copilot provider.
 func New(cfg config.ProviderConfig) *Provider {
-	return &Provider{
-		cfg: cfg,
-	}
+	return &Provider{cfg: cfg}
 }
 
 func (p *Provider) Name() string         { return "copilot" }
 func (p *Provider) DisplayName() string  { return "Copilot" }
 func (p *Provider) Description() string  { return "GitHub Copilot (via GitHub token)" }
 func (p *Provider) DashboardURL() string { return "https://github.com/settings/copilot" }
+
+func (p *Provider) SourceKinds() []provider.SourceKind {
+	return []provider.SourceKind{
+		{Kind: "native", Summary: "default Copilot credential discovery"},
+		{Kind: "env-name", Summary: "session environment variable name", RefUsage: "COPILOT_WORK_TOKEN", RefRequired: true, RefCaseInsensitive: true},
+		{Kind: "credential-file", Summary: "absolute path to Copilot hosts.json", RefUsage: "/home/me/.config/github-copilot/hosts.json", RefRequired: true, RefIsPath: true},
+	}
+}
+
+func (p *Provider) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}}, true
+}
+
+func (p *Provider) ValidateSource(source config.SourceConfig) error {
+	switch source.Credential.Kind {
+	case "native":
+		if source.ID != "default" || source.Credential.Ref != "" {
+			return fmt.Errorf("copilot source %q native credential must not have a ref", source.ID)
+		}
+	case "env-name":
+		if !envNamePattern.MatchString(source.Credential.Ref) {
+			return fmt.Errorf("copilot source %q env-name ref must be an environment variable name", source.ID)
+		}
+	case "credential-file":
+		if !filepath.IsAbs(source.Credential.Ref) {
+			return fmt.Errorf("copilot source %q credential-file ref must be an absolute path", source.ID)
+		}
+		if filepath.Base(source.Credential.Ref) != "hosts.json" {
+			return fmt.Errorf("copilot source %q credential-file ref must reference exact hosts.json file", source.ID)
+		}
+	default:
+		return fmt.Errorf("unsupported copilot credential kind %q", source.Credential.Kind)
+	}
+	return nil
+}
+
+func (p *Provider) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (provider.Provider, error) {
+	if err := p.ValidateSource(source); err != nil {
+		return nil, err
+	}
+	return &Provider{cfg: cfg, source: source, enrolled: true}, nil
+}
+
+func (p *Provider) SourceID() string {
+	if p.source.ID == "" {
+		return "default"
+	}
+	return p.source.ID
+}
+
+func (p *Provider) SourceLabel() string {
+	return p.source.Label
+}
+
+func (p *Provider) IsEnrolledSource() bool {
+	return p.enrolled
+}
+
+func (p *Provider) SourceRevision() string {
+	if !p.enrolled || p.source.Credential.Kind == "native" {
+		return ""
+	}
+	material := p.source.Credential.Kind + "\x00" + p.source.Credential.Ref
+	switch p.source.Credential.Kind {
+	case "env-name":
+		token, _ := p.getToken()
+		return provider.CredentialSourceRevision(material, token)
+	case "credential-file":
+		info, err := os.Stat(p.source.Credential.Ref)
+		if err != nil {
+			material += "\x00unavailable"
+		} else {
+			material += fmt.Sprintf("\x00%d\x00%d\x00%o", info.Size(), info.ModTime().UnixNano(), info.Mode().Perm())
+		}
+		return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
+	default:
+		return "native"
+	}
+}
 
 func (p *Provider) IsConfigured() bool {
 	_, err := p.getToken()
@@ -76,7 +159,7 @@ func (p *Provider) fetchUsage(ctx context.Context, client *http.Client, endpoint
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return &provider.UsageData{
-			Provider:  p.Name(),
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 			FetchedAt: time.Now(),
 			IsExpired: true,
 			Error:     "no active subscription — enable at github.com/settings/copilot",
@@ -96,6 +179,10 @@ func (p *Provider) fetchUsage(ctx context.Context, client *http.Client, endpoint
 }
 
 func (p *Provider) getToken() (string, error) {
+	if p.enrolled {
+		return p.getSourceToken()
+	}
+
 	// 1. Config API key
 	if p.cfg.APIKey != "" {
 		return p.cfg.APIKey, nil
@@ -124,6 +211,39 @@ func (p *Provider) getToken() (string, error) {
 	}
 
 	return "", fmt.Errorf("no copilot credentials found")
+}
+
+func (p *Provider) getSourceToken() (string, error) {
+	switch p.source.Credential.Kind {
+	case "native":
+		cfg := p.cfg
+		cfg.Sources = nil
+		native := New(cfg)
+		native.sessionEnvironmentResolver = p.sessionEnvironmentResolver
+		return native.getToken()
+	case "env-name":
+		if p.sessionEnvironmentResolver != nil {
+			values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+				EnvNames: []string{p.source.Credential.Ref}, AllowSessionEnvironmentFallback: true,
+			})
+			if token := values[p.source.Credential.Ref]; token != "" {
+				return token, nil
+			}
+			return "", fmt.Errorf("no copilot credentials found for env %q", p.source.Credential.Ref)
+		}
+		if token := os.Getenv(p.source.Credential.Ref); token != "" {
+			return token, nil
+		}
+		return "", fmt.Errorf("no copilot credentials found for env %q", p.source.Credential.Ref)
+	case "credential-file":
+		data, err := os.ReadFile(p.source.Credential.Ref)
+		if err != nil {
+			return "", fmt.Errorf("read copilot credential file: %w", err)
+		}
+		return tokenFromHostsJSON(data)
+	default:
+		return "", fmt.Errorf("unsupported copilot credential kind %q", p.source.Credential.Kind)
+	}
 }
 
 // copilotHostsPaths returns platform-specific paths for the Copilot hosts.json file.
@@ -178,7 +298,7 @@ type quotaSnapshot struct {
 
 func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
 	data := &provider.UsageData{
-		Provider:  p.Name(),
+		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
@@ -253,5 +373,5 @@ func clamp(v, lo, hi float64) float64 {
 // Register registers the Copilot provider with the registry.
 func Register(registry *provider.Registry, cfg *config.Config) error {
 	providerCfg, _ := cfg.GetProvider("copilot")
-	return registry.Register(New(providerCfg))
+	return provider.RegisterConfigured(registry, providerCfg, New(providerCfg))
 }

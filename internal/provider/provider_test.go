@@ -3,10 +3,255 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/config"
 )
+
+type sourcedTestProvider struct {
+	id, label  string
+	value      float64
+	err        error
+	enrolled   bool
+	configured bool
+}
+
+type fakeSourceProvider struct {
+	id string
+}
+
+func (p fakeSourceProvider) Name() string         { return "fake" }
+func (p fakeSourceProvider) DisplayName() string  { return "Fake" }
+func (p fakeSourceProvider) Description() string  { return "test" }
+func (p fakeSourceProvider) DashboardURL() string { return "" }
+func (p fakeSourceProvider) IsConfigured() bool   { return true }
+func (p fakeSourceProvider) FetchUsage(context.Context) (*UsageData, error) {
+	return &UsageData{Provider: p.Name(), SourceID: p.id}, nil
+}
+func (p fakeSourceProvider) SourceID() string    { return p.id }
+func (p fakeSourceProvider) SourceLabel() string { return p.id }
+
+type fakeSourceCapability struct{}
+
+func (fakeSourceCapability) SourceKinds() []SourceKind {
+	return []SourceKind{{Kind: "slot", Summary: "fake slot", RefUsage: "name"}}
+}
+func (fakeSourceCapability) ValidateSource(source config.SourceConfig) error {
+	if source.Credential.Kind != "slot" {
+		return fmt.Errorf("unsupported fake kind %q", source.Credential.Kind)
+	}
+	return nil
+}
+func (fakeSourceCapability) NewSource(_ config.ProviderConfig, source config.SourceConfig) (Provider, error) {
+	return fakeSourceProvider{id: source.ID}, nil
+}
+
+type capableFakeBase struct{ fakeSourceProvider }
+
+func (capableFakeBase) SourceKinds() []SourceKind { return fakeSourceCapability{}.SourceKinds() }
+func (capableFakeBase) DefaultSource() (config.SourceConfig, bool) {
+	return config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "slot", Ref: "default"}}, true
+}
+func (capableFakeBase) ValidateSource(source config.SourceConfig) error {
+	return fakeSourceCapability{}.ValidateSource(source)
+}
+func (capableFakeBase) NewSource(cfg config.ProviderConfig, source config.SourceConfig) (Provider, error) {
+	return fakeSourceCapability{}.NewSource(cfg, source)
+}
+
+type caseInsensitiveFakeBase struct{ capableFakeBase }
+
+func (caseInsensitiveFakeBase) SourceKinds() []SourceKind {
+	return []SourceKind{{Kind: "slot", RefCaseInsensitive: true}}
+}
+
+func TestRegisterConfiguredUsesProviderCapability(t *testing.T) {
+	base := capableFakeBase{fakeSourceProvider{id: ""}}
+	registry := NewRegistry()
+	cfg := config.ProviderConfig{Sources: []config.SourceConfig{
+		{ID: "work", Credential: config.CredentialRef{Kind: "slot", Ref: "work"}},
+		{ID: "off", Enabled: config.Bool(false), Credential: config.CredentialRef{Kind: "slot", Ref: "off"}},
+	}}
+	if len(cfg.Sources) != 2 {
+		t.Fatalf("sources = %#v", cfg.Sources)
+	}
+	if err := RegisterConfigured(registry, cfg, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("fake:work"); !ok {
+		t.Fatalf("enabled source was not registered: keys=%v", func() []string {
+			out := []string{}
+			for _, p := range registry.GetAll() {
+				out = append(out, SourceKey(p))
+			}
+			return out
+		}())
+	}
+	if _, ok := registry.Get("fake:off"); ok {
+		t.Fatal("disabled source was registered")
+	}
+}
+
+func TestRegisterConfiguredRejectsUnsupportedProviderSources(t *testing.T) {
+	cfg := config.ProviderConfig{Sources: []config.SourceConfig{{ID: "work", Credential: config.CredentialRef{Kind: "slot"}}}}
+	if err := RegisterConfigured(NewRegistry(), cfg, providerWithoutCapability{}); err == nil || !strings.Contains(err.Error(), "does not support enrolled sources") {
+		t.Fatalf("error = %v, want explicit unsupported capability error", err)
+	}
+}
+
+func TestRegisterConfiguredRejectsCaseVariantCredentialRoutes(t *testing.T) {
+	cfg := config.ProviderConfig{Sources: []config.SourceConfig{
+		{ID: "personal", Credential: config.CredentialRef{Kind: "slot", Ref: "ACCOUNT_TOKEN"}},
+		{ID: "work", Credential: config.CredentialRef{Kind: "slot", Ref: "account_token"}},
+	}}
+	err := RegisterConfigured(NewRegistry(), cfg, caseInsensitiveFakeBase{})
+	if err == nil || !strings.Contains(err.Error(), "duplicate credential reference") {
+		t.Fatalf("duplicate case-variant route error = %v", err)
+	}
+}
+
+func (p sourcedTestProvider) Name() string         { return "claude" }
+func (p sourcedTestProvider) DisplayName() string  { return "Claude" }
+func (p sourcedTestProvider) Description() string  { return "test" }
+func (p sourcedTestProvider) DashboardURL() string { return "" }
+func (p sourcedTestProvider) IsConfigured() bool   { return !p.enrolled || p.configured }
+func (p sourcedTestProvider) FetchUsage(context.Context) (*UsageData, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &UsageData{Windows: []UsageWindow{{Name: p.id, Utilization: p.value}}}, nil
+}
+func (p sourcedTestProvider) SourceID() string       { return p.id }
+func (p sourcedTestProvider) SourceLabel() string    { return p.label }
+func (p sourcedTestProvider) IsEnrolledSource() bool { return p.enrolled }
+
+func TestSourceKeysAndFetchIsolation(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(sourcedTestProvider{id: "personal", label: "Personal"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(sourcedTestProvider{id: "work", label: "Work"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.ConfiguredNames(); !equalSlice(got, []string{"claude:personal", "claude:work"}) {
+		t.Fatalf("configured keys = %v", got)
+	}
+	result := FetchProvidersParallel(context.Background(), r.GetAll())
+	if len(result.Results) != 2 || result.Results["claude:personal"].SourceLabel != "Personal" || result.Results["claude:work"].SourceLabel != "Work" {
+		t.Fatalf("source results were not isolated: %#v", result.Results)
+	}
+}
+
+type rotatingSourceProvider struct {
+	revision string
+	next     []string
+	calls    int
+}
+
+func (p *rotatingSourceProvider) Name() string         { return "rotating" }
+func (p *rotatingSourceProvider) DisplayName() string  { return "Rotating" }
+func (p *rotatingSourceProvider) Description() string  { return "test" }
+func (p *rotatingSourceProvider) DashboardURL() string { return "" }
+func (p *rotatingSourceProvider) IsConfigured() bool   { return true }
+func (p *rotatingSourceProvider) SourceRevision() string {
+	return p.revision
+}
+func (p *rotatingSourceProvider) FetchUsage(context.Context) (*UsageData, error) {
+	if p.calls < len(p.next) {
+		p.revision = p.next[p.calls]
+	}
+	p.calls++
+	return &UsageData{Provider: "rotating", Windows: []UsageWindow{{Name: "5h", Utilization: float64(70 + p.calls)}}}, nil
+}
+
+func TestFetchRetriesOnceWhenCredentialChangesInFlight(t *testing.T) {
+	p := &rotatingSourceProvider{revision: "account-a", next: []string{"account-b"}}
+	result := FetchProvidersParallel(context.Background(), []Provider{p})
+	data := result.Results["rotating"]
+	if data == nil || !data.HasPresentableUsage() || data.Windows[0].Utilization != 72 || p.calls != 2 {
+		t.Fatalf("stable account B retry was not used: data=%#v calls=%d", data, p.calls)
+	}
+	if result.Errors["rotating"] != nil || result.SourceRevisions["rotating"] != "account-b" {
+		t.Fatalf("stable retry provenance = %#v / %#v", result.Errors, result.SourceRevisions)
+	}
+}
+
+func TestFetchDiscardsResponseWhenCredentialKeepsChangingInFlight(t *testing.T) {
+	p := &rotatingSourceProvider{revision: "account-a", next: []string{"account-b", "account-c"}}
+	result := FetchProvidersParallel(context.Background(), []Provider{p})
+	data := result.Results["rotating"]
+	if data == nil || data.HasPresentableUsage() || !data.InvalidatesPriorUsage {
+		t.Fatalf("in-flight account A response was not discarded: %#v", data)
+	}
+	if data.Error != "credential source changed during refresh; retry" || result.Errors["rotating"] == nil {
+		t.Fatalf("rotation error was not preserved safely: data=%#v errors=%#v", data, result.Errors)
+	}
+	if got := result.SourceRevisions["rotating"]; got != "account-c" {
+		t.Fatalf("cached provenance = %q, want post-fetch account-c", got)
+	}
+}
+
+func TestFetchResultRetainsSourceLocalErrors(t *testing.T) {
+	providers := []Provider{
+		sourcedTestProvider{id: "personal", value: 10},
+		sourcedTestProvider{id: "work", err: errors.New("connection refused for bearer-secret user@example.com")},
+	}
+	result := FetchProvidersParallel(context.Background(), providers)
+	if result.Errors["claude:work"] == nil || result.Errors["claude:personal"] != nil {
+		t.Fatalf("source errors were not isolated: %#v", result.Errors)
+	}
+	if result.Results["claude:personal"] == nil || result.Results["claude:work"].Error != "connection failed" {
+		t.Fatalf("source results were not preserved: %#v", result.Results)
+	}
+	if encoded, err := json.Marshal(result.Results); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(encoded), "bearer-secret") || strings.Contains(string(encoded), "example.com") {
+		t.Fatalf("fetch result leaked raw error: %s", encoded)
+	}
+}
+
+func TestSafeFetchErrorUsesClosedNonSecretMessages(t *testing.T) {
+	secret := "bearer-secret user@example.com account-123"
+	for _, tc := range []struct {
+		raw, want string
+	}{
+		{"HTTP 429 " + secret, "rate limited"},
+		{"HTTP 401 " + secret, "authentication failed"},
+		{"context deadline exceeded " + secret, "connection timed out"},
+		{"dial tcp: connection refused " + secret, "connection failed"},
+		{"decode response: invalid character " + secret, "provider response unavailable"},
+		{"unexpected " + secret, "provider request failed"},
+	} {
+		got := SafeFetchError(errors.New(tc.raw))
+		if got != tc.want || strings.Contains(got, secret) || strings.Contains(got, "example.com") {
+			t.Fatalf("SafeFetchError(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestGetConfiguredKeepsExplicitlyEnrolledUnavailableSource(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(sourcedTestProvider{id: "work", enrolled: true, configured: false}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.ConfiguredNames(); !equalSlice(got, []string{"claude:work"}) {
+		t.Fatalf("enrolled unavailable source disappeared: %v", got)
+	}
+}
+
+func TestSourceKeyCollisionRejected(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(sourcedTestProvider{id: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(sourcedTestProvider{id: "work"}); err == nil {
+		t.Fatal("duplicate source key should fail")
+	}
+}
 
 // stubProvider is a minimal Provider for registry testing.
 type stubProvider struct {

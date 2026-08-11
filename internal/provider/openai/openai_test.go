@@ -34,11 +34,28 @@ func TestParseRateLimitsLabelsWeeklyOnlyPrimaryByResetHorizon(t *testing.T) {
 	}
 }
 
-func TestPrimaryWindowLabelsKeepFiveHourWindow(t *testing.T) {
+func TestCodexWindowLabelsKeepFiveHourWindow(t *testing.T) {
 	now := time.Now()
-	name, displayName := primaryWindowLabels(now.Add(2*time.Hour), now)
+	name, displayName := codexWindowLabels(0, now.Add(2*time.Hour), now)
 	if name != "5h" || displayName != "5h" {
-		t.Fatalf("primaryWindowLabels() = %q/%q, want 5h/5h", name, displayName)
+		t.Fatalf("codexWindowLabels() = %q/%q, want 5h/5h", name, displayName)
+	}
+}
+
+func TestParseRateLimitsUsesDeclaredWeeklyDurationNearReset(t *testing.T) {
+	now := time.Now()
+	reset := now.Add(2 * time.Hour).Unix()
+	raw := `{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":96,"windowDurationMins":10080,"resetsAt":` + itoa64(reset) + `}}}}`
+
+	data, err := New(config.ProviderConfig{}).parseRateLimits([]byte(raw), &accountResponse{})
+	if err != nil {
+		t.Fatalf("parseRateLimits() error = %v", err)
+	}
+	if len(data.Windows) != 1 {
+		t.Fatalf("windows = %d, want 1", len(data.Windows))
+	}
+	if got := data.Windows[0].Name; got != "7d" {
+		t.Fatalf("window name = %q, want 7d", got)
 	}
 }
 

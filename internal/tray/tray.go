@@ -38,18 +38,38 @@ const (
 	tokenPlanConnectTarget = "token-plan"
 )
 
+func pollIntervalForConfig(seconds int) time.Duration {
+	interval := time.Duration(seconds) * time.Second
+	minimum := time.Duration(config.MinimumPollIntervalSeconds) * time.Second
+	if interval < minimum {
+		return minimum
+	}
+	return interval
+}
+
 type state struct {
-	mu                 sync.Mutex
-	lastResults        map[string]*provider.UsageData
-	statuses           map[string]*status.ProviderStatus
-	failureGate        *provider.FailureGate
-	pendingRelease     *update.Release
-	currentTitle       string
-	currentTooltip     string
-	lastRefreshAt      time.Time
-	iconAutoMode       iconAutoMode
-	iconTargetOverride iconTarget
-	iconTargetChoices  []iconTarget
+	mu                        sync.Mutex
+	lastResults               map[string]*provider.UsageData
+	lastSourceRevisions       map[string]string
+	statuses                  map[string]*status.ProviderStatus
+	failureGate               *provider.FailureGate
+	pendingRelease            *update.Release
+	currentTitle              string
+	currentTooltip            string
+	lastRefreshAt             time.Time
+	iconAutoMode              iconAutoMode
+	iconTargetOverride        iconTarget
+	iconTargetChoices         []iconTarget
+	iconTargetState           menuItemState
+	iconStateKnown            bool
+	currentIconProvider       string
+	currentIconMeter          icons.MeterState
+	reauthVisible             bool
+	reauthVisibleKnown        bool
+	emptyVisible              bool
+	emptyVisibleKnown         bool
+	providerSetupVisible      bool
+	providerSetupVisibleKnown bool
 }
 
 type iconTarget struct {
@@ -70,6 +90,10 @@ var (
 	version          string
 	cfg              *config.Config
 	iconClickActions chan iconClickAction
+	// systray's Linux implementation performs a synchronous D-Bus refresh for
+	// every menu mutation. Keep background refreshes and click handlers from
+	// mutating the native menu concurrently.
+	trayRenderMu sync.Mutex
 )
 
 func Run(ver string) int {
@@ -78,7 +102,11 @@ func Run(ver string) int {
 	version = ver
 	iconClickActions = make(chan iconClickAction, 1)
 	installTrayClickHandlers(iconClickActions)
-	shellpath.Init()
+	// Login-shell PATH capture can execute user startup files and take several
+	// seconds. Start it before provider refresh, but never make Plasma wait for
+	// it to register the tray menu. Providers that need the recovered PATH call
+	// Init through their executable lookup and wait on the same sync.Once.
+	go shellpath.Init()
 	setupIconTheme()
 	systray.Run(onReady, func() {
 		cleanupIconTheme()
@@ -94,11 +122,17 @@ func onReady() {
 	s.failureGate = provider.NewFailureGate()
 
 	var err error
-	cfg, err = config.Load()
+	cfg, err = config.Load(all.SourceValidator())
 	if err != nil {
 		setErrorState("Config error")
 		return
 	}
+
+	// Build the initial native menu as one transaction. On Linux, each menu
+	// mutation otherwise emits a separate D-Bus layout signal while Plasma is
+	// trying to register the tray item.
+	systray.BeginMenuUpdate()
+	defer systray.EndMenuUpdate()
 
 	// Launch at login is opt-in: the user enables it from the tray menu.
 	// Do not silently persist anything on first run.
@@ -125,11 +159,15 @@ func onReady() {
 	// appears on the next refresh without needing a restart.
 	providerMenus := make(map[string]*providerMenuItems)
 	providerConnectActions := make(chan string, 1)
+	familyCounts := make(map[string]int)
+	for _, p := range registry.GetAll() {
+		familyCounts[p.Name()]++
+	}
 	for _, p := range registry.GetAll() {
 		explicit := cfg.IsProviderExplicitlyEnabled(p.Name())
-		menu := createProviderMenuItems(p, explicit, providerConnectActions)
+		menu := createProviderMenuItems(p, explicit, providerConnectActions, familyCounts[p.Name()] > 1)
 		hideProviderMenu(menu)
-		providerMenus[p.Name()] = menu
+		providerMenus[provider.SourceKey(p)] = menu
 	}
 
 	// Placeholder shown when no provider is in the primary UI; updateUI
@@ -139,11 +177,16 @@ func onReady() {
 	mProviderSetup := systray.AddMenuItem("Manage providers: run `clawmeter providers`", "")
 	mProviderSetup.Disable()
 	mProviderSetup.Hide()
+	s.emptyVisible = true
+	s.emptyVisibleKnown = true
+	s.providerSetupVisible = false
+	s.providerSetupVisibleKnown = true
 
 	systray.AddSeparator()
 
 	// Global menu items
 	mIconProvider := systray.AddMenuItem("Icon: Auto (click to cycle)", "")
+	s.iconTargetState = menuItemState{title: "Icon: Auto (click to cycle)", enabled: true, initialized: true}
 	mIconAutoMode := systray.AddMenuItem("Auto Mode: Risk", "")
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	systray.AddSeparator()
@@ -160,6 +203,8 @@ func onReady() {
 	mReauth := systray.AddMenuItem("Claude token expired — run `claude` to reauth", "")
 	mReauth.Disable()
 	mReauth.Hide()
+	s.reauthVisible = false
+	s.reauthVisibleKnown = true
 
 	var updateChecking sync.Mutex
 	mUpdate := systray.AddMenuItem("", "")
@@ -178,15 +223,13 @@ func onReady() {
 	// makes `clawmeter config enable <provider>` (or any other out-of-band
 	// edit) reflect in the running tray without a restart.
 	reloadConfig := func() {
-		newCfg, err := config.Load()
+		newCfg, err := config.Load(all.SourceValidator())
 		if err != nil {
 			return
 		}
 		cfg = newCfg
 		registry.SetEnabledFilter(cfg)
-		for name, menu := range providerMenus {
-			menu.explicitlyEnabled = cfg.IsProviderExplicitlyEnabled(name)
-		}
+		applyProviderEnablement(providerMenus, cfg)
 	}
 
 	// Refresh usage only (lightweight, runs every poll cycle)
@@ -198,18 +241,28 @@ func onReady() {
 
 		reloadConfig()
 
+		configured := registry.GetConfigured()
+		currentRevisions := providerSourceRevisions(configured)
+		s.mu.Lock()
+		priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
+		toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
+		priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
+		s.mu.Unlock()
+
+		// Credential discovery may recover allowlisted variables through a login
+		// shell. Start the network deadline afterward so discovery latency cannot
+		// leave every provider with an already-expired context.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-
-		s.mu.Lock()
-		toFetch, skipped := splitProvidersForRefresh(registry.GetConfigured(), s.failureGate, s.lastResults, force)
-		s.mu.Unlock()
 
 		result := provider.FetchProvidersParallel(ctx, toFetch)
 
 		// Merge in cached data for backed-off providers
 		for name, cached := range skipped {
 			result.Results[name] = cached
+			if revision := priorRevisions[name]; revision != "" {
+				result.SourceRevisions[name] = revision
+			}
 		}
 
 		// Apply failure gate: suppress transient errors when cached data exists
@@ -232,19 +285,19 @@ func onReady() {
 			// Provider errored — keep showing last good windows, but label them
 			// stale so the tray never turns unavailable data into a clean 0%.
 			hasPrior := false
-			if prev, ok := s.lastResults[name]; ok && prev != nil && prev.HasPresentableUsage() {
+			if prev, ok := priorResults[name]; ok && prev != nil && prev.HasPresentableUsage() && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
 				hasPrior = true
 			}
 			if data.InvalidatesPriorUsage {
 				_ = s.failureGate.ShouldSurfaceError(name, hasPrior)
 			} else if hasPrior && !data.HasPresentableUsage() {
-				prev := s.lastResults[name].Clone()
+				prev := priorResults[name].Clone()
 				prev.MarkStale(data.Error)
 				result.Results[name] = prev
 				_ = s.failureGate.ShouldSurfaceError(name, true)
 			} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
 				// First failure with prior data — keep showing cache silently.
-				if prev, ok := s.lastResults[name]; ok && prev != nil {
+				if prev, ok := priorResults[name]; ok && prev != nil && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
 					cached := prev.Clone()
 					cached.MarkStale(data.Error)
 					result.Results[name] = cached
@@ -258,12 +311,15 @@ func onReady() {
 		now := time.Now()
 		s.mu.Lock()
 		s.lastResults = result.Results
+		s.lastSourceRevisions = result.SourceRevisions
 		s.lastRefreshAt = now
 		statuses := s.statuses // reuse last known statuses
 		s.mu.Unlock()
 
 		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+		trayRenderMu.Lock()
 		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
+		trayRenderMu.Unlock()
 	}
 
 	// Refresh status pages (heavier, runs less often)
@@ -287,7 +343,9 @@ func onReady() {
 	checkUpdate := func() {
 		if !cfg.ShouldCheckForUpdates() {
 			setPendingRelease(nil)
+			trayRenderMu.Lock()
 			mUpdate.Hide()
+			trayRenderMu.Unlock()
 			return
 		}
 		if !updateChecking.TryLock() {
@@ -302,6 +360,7 @@ func onReady() {
 			return
 		}
 		setPendingRelease(rel)
+		trayRenderMu.Lock()
 		if rel == nil {
 			mUpdate.Hide()
 		} else {
@@ -317,6 +376,7 @@ func onReady() {
 			updateTrayTitle(results)
 			updateTrayTooltip(results, displayNames)
 		}
+		trayRenderMu.Unlock()
 	}
 
 	// Apply update function
@@ -325,25 +385,33 @@ func onReady() {
 		if rel == nil {
 			return
 		}
+		trayRenderMu.Lock()
 		mUpdate.SetTitle("Updating...")
 		mUpdate.Disable()
+		trayRenderMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		exe, err := update.ExecutablePath()
 		if err != nil {
+			trayRenderMu.Lock()
 			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
 			mUpdate.Enable()
+			trayRenderMu.Unlock()
 			return
 		}
 		if err := update.ApplyTo(ctx, rel.URL, exe); err != nil {
+			trayRenderMu.Lock()
 			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
 			mUpdate.Enable()
+			trayRenderMu.Unlock()
 			return
 		}
 		notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", rel.Version), "low")
 		if err := update.Restart(exe); err != nil {
+			trayRenderMu.Lock()
 			mUpdate.SetTitle("Updated — restart Clawmeter")
 			mUpdate.Enable()
+			trayRenderMu.Unlock()
 			notify("Clawmeter", "Updated, but restart failed. Restart Clawmeter manually.", "normal")
 			return
 		}
@@ -352,9 +420,15 @@ func onReady() {
 
 	// Show cached data immediately while fetching fresh data
 	if cached, err := cache.Read(); err == nil && cached != nil {
-		filtered := provider.FilterUsageDataByNames(cached.ProviderData, providerNames(registry.GetConfigured()))
+		// Do not probe credentials while the native menu is being registered.
+		// GetConfigured calls every provider's IsConfigured method, and some
+		// providers recover PATH through a login shell. That work belongs to the
+		// background refresh; cached rendering only needs the registered names.
+		allProviders := registry.GetAll()
+		filtered := cachedResultsForCurrentSources(cached, allProviders)
 		s.mu.Lock()
 		s.lastResults = filtered
+		s.lastSourceRevisions = providerSourceRevisions(allProviders)
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
 		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
@@ -368,10 +442,7 @@ func onReady() {
 	go checkUpdate()
 
 	// Setup tickers
-	pollInterval := time.Duration(cfg.Settings.PollInterval) * time.Second
-	if pollInterval < 60*time.Second {
-		pollInterval = 5 * time.Minute // minimum 5 minutes
-	}
+	pollInterval := pollIntervalForConfig(cfg.Settings.PollInterval)
 	ticker := time.NewTicker(pollInterval)
 	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
 	updateTicker := time.NewTicker(updateCheckInterval)
@@ -407,13 +478,15 @@ func onReady() {
 				if !menu.connecting.CompareAndSwap(false, true) {
 					continue
 				}
-				menu.connectItem.SetTitle("Connecting...")
-				menu.connectItem.Disable()
+				trayRenderMu.Lock()
+				setProviderConnectionItemLocked(menu, "", true)
+				trayRenderMu.Unlock()
 				go func(providerName string, menu *providerMenuItems) {
 					defer menu.connecting.Store(false)
 					if err := connectProviderFromTray(providerName); err != nil {
-						menu.connectItem.SetTitle("Retry quota access")
-						menu.connectItem.Enable()
+						trayRenderMu.Lock()
+						setProviderConnectionItemLocked(menu, "Retry quota access", true)
+						trayRenderMu.Unlock()
 						notify(menu.provider.DisplayName(), err.Error(), "normal")
 						return
 					}
@@ -422,9 +495,11 @@ func onReady() {
 					go refreshStatus()
 				}(providerName, menu)
 			case <-mUpdate.ClickedCh:
-				applyUpdate()
+				// Download, verify, replace, and restart can take seconds. Keep
+				// the tray event loop available while the update runs.
+				go applyUpdate()
 			case <-mAutostart.ClickedCh:
-				toggleAutostart(mAutostart)
+				go toggleAutostart(mAutostart)
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return
@@ -433,9 +508,16 @@ func onReady() {
 	}()
 }
 
+func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Config) {
+	for _, menu := range menus {
+		menu.explicitlyEnabled = cfg.IsProviderExplicitlyEnabled(menu.provider.Name())
+	}
+}
+
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
 	provider          provider.Provider
+	displayName       string
 	headerItem        *systray.MenuItem
 	statusItem        *systray.MenuItem
 	connectItem       *systray.MenuItem
@@ -445,13 +527,34 @@ type providerMenuItems struct {
 	everHealthy       bool // true once we've seen useful quota data
 	explicitlyEnabled bool
 	connecting        atomic.Bool
+	headerState       menuItemState
+	statusState       menuItemState
+	connectState      menuItemState
+	windowStates      []menuItemState
+	balanceStates     []menuItemState
+	dashboardState    menuItemState
+}
+
+type menuItemState struct {
+	title       string
+	visible     bool
+	enabled     bool
+	initialized bool
 }
 
 const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
 
-func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string) *providerMenuItems {
+func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string, repeated bool) *providerMenuItems {
+	displayName := p.DisplayName()
+	label := provider.SourceLabel(p)
+	if label == "" {
+		label = provider.SourceID(p)
+	}
+	if repeated && label != "" {
+		displayName += " · " + label
+	}
 	// Provider header (disabled)
-	header := systray.AddMenuItem(p.DisplayName(), "")
+	header := systray.AddMenuItem(displayName, "")
 	header.Disable()
 
 	// Status item (shows loading/error)
@@ -479,12 +582,20 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		item.Hide()
 		windowItems[i] = item
 	}
+	windowStates := make([]menuItemState, len(windowItems))
+	for i := range windowStates {
+		windowStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
+	}
 	balanceItems := make([]*systray.MenuItem, maxWindowItems)
 	for i := range balanceItems {
 		item := systray.AddMenuItem("", "")
 		item.Disable()
 		item.Hide()
 		balanceItems[i] = item
+	}
+	balanceStates := make([]menuItemState, len(balanceItems))
+	for i := range balanceStates {
+		balanceStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
 	}
 
 	// Dashboard item (clickable). The disabled-header of the next provider
@@ -500,6 +611,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 
 	return &providerMenuItems{
 		provider:          p,
+		displayName:       displayName,
 		headerItem:        header,
 		statusItem:        statusItem,
 		connectItem:       connectItem,
@@ -507,37 +619,87 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		balanceItems:      balanceItems,
 		dashboardItem:     dashboardItem,
 		explicitlyEnabled: explicitlyEnabled,
+		headerState:       menuItemState{title: displayName, visible: true, enabled: false, initialized: true},
+		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
+		connectState:      menuItemState{title: "Connect quota access", visible: true, enabled: true, initialized: connectItem != nil},
+		windowStates:      windowStates,
+		balanceStates:     balanceStates,
+		dashboardState:    menuItemState{title: fmt.Sprintf("Open %s Dashboard", p.DisplayName()), visible: true, enabled: true, initialized: true},
 	}
 }
 
 func hideProviderMenu(menu *providerMenuItems) {
-	menu.headerItem.Hide()
-	menu.statusItem.Hide()
+	setMenuItemVisible(menu.headerItem, &menu.headerState, false)
+	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	if menu.connectItem != nil {
-		menu.connectItem.Hide()
+		setMenuItemVisible(menu.connectItem, &menu.connectState, false)
 	}
 	hideProviderWindows(menu)
-	menu.dashboardItem.Hide()
+	setMenuItemVisible(menu.dashboardItem, &menu.dashboardState, false)
 }
 
 func hideProviderWindows(menu *providerMenuItems) {
-	for _, w := range menu.windowItems {
-		w.Hide()
+	for i, w := range menu.windowItems {
+		setMenuItemVisible(w, &menu.windowStates[i], false)
 	}
-	for _, b := range menu.balanceItems {
-		b.Hide()
+	for i, b := range menu.balanceItems {
+		setMenuItemVisible(b, &menu.balanceStates[i], false)
 	}
 }
 
 func showProviderHeader(menu *providerMenuItems) {
-	menu.headerItem.Show()
+	setMenuItemVisible(menu.headerItem, &menu.headerState, true)
+}
+
+func setMenuItemTitle(item *systray.MenuItem, state *menuItemState, title string) {
+	if !state.initialized || state.title != title {
+		item.SetTitle(title)
+		state.title = title
+		state.initialized = true
+	}
+}
+
+func setMenuItemVisible(item *systray.MenuItem, state *menuItemState, visible bool) {
+	if !state.initialized || state.visible != visible {
+		if visible {
+			item.Show()
+		} else {
+			item.Hide()
+		}
+		state.visible = visible
+		state.initialized = true
+	}
+}
+
+func setMenuItemEnabled(item *systray.MenuItem, state *menuItemState, enabled bool) {
+	if !state.initialized || state.enabled != enabled {
+		if enabled {
+			item.Enable()
+		} else {
+			item.Disable()
+		}
+		state.enabled = enabled
+		state.initialized = true
+	}
+}
+
+func setSharedMenuItemVisible(item *systray.MenuItem, visible bool, current *bool, known *bool) {
+	if !*known || *current != visible {
+		if visible {
+			item.Show()
+		} else {
+			item.Hide()
+		}
+		*current = visible
+		*known = true
+	}
 }
 
 func providerConnectionMenuState(name string, data *provider.UsageData, explicitlyEnabled, setupReady bool) (status, action string, show bool) {
 	if name != tokenPlanProviderName {
 		return "", "", false
 	}
-	if data == nil && explicitlyEnabled && !setupReady {
+	if data == nil && !setupReady {
 		return "Quota access not connected", "Connect quota access", true
 	}
 	if data == nil || !data.IsExpired {
@@ -549,23 +711,23 @@ func providerConnectionMenuState(name string, data *provider.UsageData, explicit
 	return "Quota access expired", "Reconnect quota access", true
 }
 
-func setProviderConnectionItem(menu *providerMenuItems, action string, show bool) {
+func setProviderConnectionItemLocked(menu *providerMenuItems, action string, show bool) {
 	if menu.connectItem == nil {
 		return
 	}
 	if menu.connecting.Load() {
-		menu.connectItem.SetTitle("Connecting...")
-		menu.connectItem.Disable()
-		menu.connectItem.Show()
+		setMenuItemTitle(menu.connectItem, &menu.connectState, "Connecting...")
+		setMenuItemEnabled(menu.connectItem, &menu.connectState, false)
+		setMenuItemVisible(menu.connectItem, &menu.connectState, true)
 		return
 	}
 	if !show {
-		menu.connectItem.Hide()
+		setMenuItemVisible(menu.connectItem, &menu.connectState, false)
 		return
 	}
-	menu.connectItem.SetTitle(action)
-	menu.connectItem.Enable()
-	menu.connectItem.Show()
+	setMenuItemTitle(menu.connectItem, &menu.connectState, action)
+	setMenuItemEnabled(menu.connectItem, &menu.connectState, true)
+	setMenuItemVisible(menu.connectItem, &menu.connectState, true)
 }
 
 func connectProviderFromTray(providerName string) error {
@@ -608,29 +770,50 @@ func providerConnectFailureMessage(stdout, stderr string) string {
 }
 
 func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
+	setups := make(map[string]provider.SetupStatus, len(menus))
+	for name, menu := range menus {
+		// Only Alibaba has a setup-only menu path today. Other providers are
+		// represented by their fetched data, and asking every provider for
+		// setup status here can trigger multiple shell-environment probes while
+		// the native menu is still being constructed.
+		if name == tokenPlanProviderName {
+			// Setup discovery can recover a shell environment and therefore may
+			// take a bounded amount of time. Do it before taking the native-menu
+			// mutation lock so a slow shell cannot stall tray interactions.
+			setups[name] = provider.GetSetupStatus(menu.provider)
+		}
+	}
+
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
+	systray.BeginMenuUpdate()
+	defer systray.EndMenuUpdate()
+
 	hasExpiredClaude := false
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
 
 	for name, menu := range menus {
-		displayNames[name] = menu.provider.DisplayName()
+		displayNames[name] = menu.displayName
 		data := results[name]
 
 		if data != nil && data.EstablishesPrimaryUIHistory() {
 			menu.everHealthy = true
 		}
 
-		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) {
+		setup := setups[name]
+		detected := data != nil
+		if name == tokenPlanProviderName {
+			detected = detected || setup.State != provider.SetupUnavailable
+		}
+		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) && !detected {
 			hideProviderMenu(menu)
 			continue
 		}
-		setupReady := true
-		if name == tokenPlanProviderName {
-			setupReady = provider.GetSetupStatus(menu.provider).IsReady()
-		}
+		setupReady := setup.IsReady()
 		connectionStatus, connectionAction, showConnection := providerConnectionMenuState(name, data, menu.explicitlyEnabled, setupReady)
-		setProviderConnectionItem(menu, connectionAction, showConnection)
+		setProviderConnectionItemLocked(menu, connectionAction, showConnection)
 		visibleProviderCount++
 		if data != nil {
 			activeResults[name] = data
@@ -642,20 +825,20 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			if connectionStatus != "" {
 				statusTitle = connectionStatus
 			}
-			if connectionStatus == "" && menu.explicitlyEnabled {
-				if setup := provider.GetSetupStatus(menu.provider); !setup.IsReady() && setup.Detail != "" {
+			if connectionStatus == "" {
+				if !setup.IsReady() && setup.Detail != "" {
 					statusTitle = setup.Detail
 				}
 			}
-			menu.statusItem.SetTitle(statusTitle)
-			menu.statusItem.Show()
+			setMenuItemTitle(menu.statusItem, &menu.statusState, statusTitle)
+			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 			hideProviderWindows(menu)
-			menu.dashboardItem.Show()
+			setMenuItemVisible(menu.dashboardItem, &menu.dashboardState, true)
 			continue
 		}
 
 		if data.IsExpired {
-			if name == "claude" {
+			if menu.provider.Name() == "claude" {
 				hasExpiredClaude = true
 			}
 			showProviderHeader(menu)
@@ -669,30 +852,30 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 					expiredMsg = format.HumanizeError(data.Error)
 				}
 			}
-			menu.statusItem.SetTitle(expiredMsg)
-			menu.statusItem.Show()
-			menu.dashboardItem.Show()
+			setMenuItemTitle(menu.statusItem, &menu.statusState, expiredMsg)
+			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			setMenuItemVisible(menu.dashboardItem, &menu.dashboardState, true)
 			continue
 		}
 
 		if data.Error != "" {
 			showProviderHeader(menu)
 			hideProviderWindows(menu)
-			menu.statusItem.SetTitle(format.HumanizeError(data.Error))
-			menu.statusItem.Show()
-			menu.dashboardItem.Show()
+			setMenuItemTitle(menu.statusItem, &menu.statusState, format.HumanizeError(data.Error))
+			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			setMenuItemVisible(menu.dashboardItem, &menu.dashboardState, true)
 			continue
 		}
 
 		showProviderHeader(menu)
 		if data.Stale {
-			menu.statusItem.SetTitle(fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
-			menu.statusItem.Show()
+			setMenuItemTitle(menu.statusItem, &menu.statusState, fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
+			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 		} else if resetTitle := resetCreditTraySummary(data, time.Now()); resetTitle != "" {
-			menu.statusItem.SetTitle(resetTitle)
-			menu.statusItem.Show()
+			setMenuItemTitle(menu.statusItem, &menu.statusState, resetTitle)
+			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 		} else {
-			menu.statusItem.Hide()
+			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
 		windows := data.PresentationWindows()
@@ -708,14 +891,14 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			} else if window.ResetPolicy != "" {
 				indicator = window.ResetPolicy
 			}
-			menu.windowItems[i].SetTitle(fmt.Sprintf("%s: %.0f%% — %s — %s",
+			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], fmt.Sprintf("%s: %.0f%% — %s — %s",
 				trayWindowLabel(window), window.Utilization, resetStr, indicator))
-			menu.windowItems[i].Show()
+			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], true)
 
 		}
 
 		for i := len(windows); i < len(menu.windowItems); i++ {
-			menu.windowItems[i].Hide()
+			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
 		}
 		for i, balance := range data.Balances {
 			if i >= len(menu.balanceItems) {
@@ -725,33 +908,29 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			if label == "" {
 				label = balance.Name
 			}
-			menu.balanceItems[i].SetTitle(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
-			menu.balanceItems[i].Show()
+			setMenuItemTitle(menu.balanceItems[i], &menu.balanceStates[i], fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
+			setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], true)
 		}
 		for i := len(data.Balances); i < len(menu.balanceItems); i++ {
-			menu.balanceItems[i].Hide()
+			setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 		}
 
-		menu.dashboardItem.Show()
+		setMenuItemVisible(menu.dashboardItem, &menu.dashboardState, true)
 	}
 
 	// Show/hide reauth button (only for Claude expired tokens)
-	if hasExpiredClaude {
-		mReauth.Show()
-	} else {
-		mReauth.Hide()
-	}
+	setSharedMenuItemVisible(mReauth, hasExpiredClaude, &s.reauthVisible, &s.reauthVisibleKnown)
 
 	// Show the "No active providers" placeholder only when no provider is
 	// visible. This keeps the tray useful for a fresh install (where it
 	// reads as a hint that the user needs to configure something) without
 	// adding clutter once at least one provider is showing data.
 	if visibleProviderCount == 0 {
-		mEmpty.Show()
-		mProviderSetup.Show()
+		setSharedMenuItemVisible(mEmpty, true, &s.emptyVisible, &s.emptyVisibleKnown)
+		setSharedMenuItemVisible(mProviderSetup, true, &s.providerSetupVisible, &s.providerSetupVisibleKnown)
 	} else {
-		mEmpty.Hide()
-		mProviderSetup.Hide()
+		setSharedMenuItemVisible(mEmpty, false, &s.emptyVisible, &s.emptyVisibleKnown)
+		setSharedMenuItemVisible(mProviderSetup, false, &s.providerSetupVisible, &s.providerSetupVisibleKnown)
 	}
 
 	updateIconTargetSelector(activeResults, displayNames, mIconProvider)
@@ -779,6 +958,10 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.iconTargetOverride = nextIconTargetOverride(s.iconTargetOverride, choices, true)
 	s.mu.Unlock()
 
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
+	systray.BeginMenuUpdate()
+	defer systray.EndMenuUpdate()
 	updateIconTargetSelector(results, displayNames, item)
 	updateTrayIcon(results)
 	updateTrayTitle(results)
@@ -796,6 +979,10 @@ func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
+	systray.BeginMenuUpdate()
+	defer systray.EndMenuUpdate()
 	updateIconTargetSelector(results, displayNames, item)
 	updateIconAutoModeLabel(modeItem)
 	updateTrayIcon(results)
@@ -825,6 +1012,10 @@ func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuI
 	}
 	s.mu.Unlock()
 
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
+	systray.BeginMenuUpdate()
+	defer systray.EndMenuUpdate()
 	updateIconTargetSelector(results, displayNames, item)
 	updateIconAutoModeLabel(modeItem)
 	updateTrayIcon(results)
@@ -835,7 +1026,7 @@ func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuI
 func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string {
 	displayNames := make(map[string]string, len(menus))
 	for name, menu := range menus {
-		displayNames[name] = menu.provider.DisplayName()
+		displayNames[name] = menu.displayName
 	}
 	return displayNames
 }
@@ -854,15 +1045,15 @@ func updateIconTargetSelector(results map[string]*provider.UsageData, displayNam
 
 	if len(choices) == 0 {
 		if item != nil {
-			item.SetTitle("Icon: Auto")
-			item.Disable()
+			setMenuItemTitle(item, &s.iconTargetState, "Icon: Auto")
+			setMenuItemEnabled(item, &s.iconTargetState, false)
 		}
 		return
 	}
 
 	if item != nil {
-		item.Enable()
-		item.SetTitle(iconCycleMenuTitle(override, displayNames, mode))
+		setMenuItemEnabled(item, &s.iconTargetState, true)
+		setMenuItemTitle(item, &s.iconTargetState, iconCycleMenuTitle(override, displayNames, mode))
 	}
 }
 
@@ -941,6 +1132,12 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		providerNames = append(providerNames, name)
 	}
 	sort.Strings(providerNames)
+	familyCounts := make(map[string]int)
+	for _, name := range providerNames {
+		if data := results[name]; data != nil {
+			familyCounts[data.Provider]++
+		}
+	}
 
 	ranked := make([]rankedTarget, 0, len(results))
 	for _, name := range providerNames {
@@ -954,6 +1151,15 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		windows := data.UsableWindows()
 		if len(windows) == 0 {
 			continue
+		}
+		if familyCounts[data.Provider] > 1 {
+			best := windows[0]
+			for _, window := range windows[1:] {
+				if forecast.CompareRisk(windowProjection(window), windowProjection(best)) < 0 {
+					best = window
+				}
+			}
+			windows = []provider.UsageWindow{best}
 		}
 		for _, window := range windows {
 			target := iconTarget{Provider: name, Window: window.Name}
@@ -1123,6 +1329,16 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 		worstProvider = name
 	}
 	meter.UpdateAvailable = updateAvailable()
+
+	s.mu.Lock()
+	if s.iconStateKnown && s.currentIconProvider == worstProvider && s.currentIconMeter == meter {
+		s.mu.Unlock()
+		return
+	}
+	s.currentIconProvider = worstProvider
+	s.currentIconMeter = meter
+	s.iconStateKnown = true
+	s.mu.Unlock()
 
 	// Each platform renders from its closest native V10 raster. Linux supplies
 	// the 22px and 32px forms as SNI pixmaps; Windows and macOS receive the
@@ -1508,7 +1724,9 @@ func updateAutostartLabel(m *systray.MenuItem) {
 
 func toggleAutostart(m *systray.MenuItem) {
 	if !autostart.IsSupported() {
+		trayRenderMu.Lock()
 		updateAutostartLabel(m)
+		trayRenderMu.Unlock()
 		return
 	}
 	if autostart.IsInstalled() {
@@ -1522,7 +1740,9 @@ func toggleAutostart(m *systray.MenuItem) {
 			notify("Clawmeter", fmt.Sprintf("Could not enable launch at login: %v", err), "normal")
 		}
 	}
+	trayRenderMu.Lock()
 	updateAutostartLabel(m)
+	trayRenderMu.Unlock()
 }
 
 func openURL(url string) {
@@ -1550,11 +1770,54 @@ func providerNames(providers []provider.Provider) []string {
 	return names
 }
 
+func providerSourceRevisions(providers []provider.Provider) map[string]string {
+	revisions := make(map[string]string)
+	for _, p := range providers {
+		if revision := provider.SourceRevision(p); revision != "" {
+			revisions[provider.SourceKey(p)] = revision
+		}
+	}
+	return revisions
+}
+
+func cloneSourceRevisions(revisions map[string]string) map[string]string {
+	cloned := make(map[string]string, len(revisions))
+	for name, revision := range revisions {
+		cloned[name] = revision
+	}
+	return cloned
+}
+
+func resultsMatchingSourceRevisions(results map[string]*provider.UsageData, previous, current map[string]string) map[string]*provider.UsageData {
+	matched := make(map[string]*provider.UsageData, len(results))
+	for name, data := range results {
+		if cache.SourceRevisionMatches(previous, name, current[name]) {
+			matched[name] = data
+		}
+	}
+	return matched
+}
+
+func cachedResultsForCurrentSources(entry *cache.Entry, providers []provider.Provider) map[string]*provider.UsageData {
+	current := providerSourceRevisions(providers)
+	results := make(map[string]*provider.UsageData)
+	for _, p := range providers {
+		name := provider.SourceKey(p)
+		if !cache.SourceRevisionMatches(entry.SourceRevisions, name, current[name]) {
+			continue
+		}
+		if data, ok := entry.ProviderData[name]; ok {
+			results[name] = data
+		}
+	}
+	return results
+}
+
 func splitProvidersForRefresh(providers []provider.Provider, gate *provider.FailureGate, lastResults map[string]*provider.UsageData, force bool) ([]provider.Provider, map[string]*provider.UsageData) {
 	toFetch := make([]provider.Provider, 0, len(providers))
 	skipped := make(map[string]*provider.UsageData)
 	for _, p := range providers {
-		name := p.Name()
+		name := provider.SourceKey(p)
 		prev := lastResults[name]
 		if !force && gate != nil && gate.InBackoff(name) && prev != nil && prev.EstablishesPrimaryUIHistory() {
 			skipped[name] = prev.Clone()

@@ -86,6 +86,32 @@ func TestSessionEnvironmentResolverProvidesZAISettingsAndKeepsValidation(t *test
 	}
 }
 
+func TestEnrolledZAISourcesUseOnlySelectedKeyAndEndpoint(t *testing.T) {
+	t.Setenv("Z_AI_API_KEY", "ambient-secret")
+	capability, ok := provider.SourceCapabilityOf(New(config.ProviderConfig{APIKey: "config-secret"}))
+	if !ok {
+		t.Fatal("z.ai did not expose source capability")
+	}
+	sourced, err := capability.NewSource(config.ProviderConfig{APIKey: "config-secret"}, config.SourceConfig{ID: "work", Label: "Work", Credential: config.CredentialRef{Kind: "cn-api-key-env-name", Ref: "ZAI_WORK_KEY"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := sourced.(*Provider)
+	if p.IsConfigured() {
+		t.Fatal("explicit z.ai source borrowed config or ambient credentials")
+	}
+	t.Setenv("ZAI_WORK_KEY", "work-secret")
+	if !p.IsConfigured() {
+		t.Fatal("selected z.ai key was not used")
+	}
+	if got := p.getQuotaURL(); got != "https://open.bigmodel.cn"+quotaPath {
+		t.Fatalf("explicit China source URL = %q", got)
+	}
+	if p.SourceID() != "work" || p.SourceLabel() != "Work" || p.SourceRevision() == "" {
+		t.Fatalf("source identity/revision missing: id=%q label=%q revision=%q", p.SourceID(), p.SourceLabel(), p.SourceRevision())
+	}
+}
+
 func TestTransformLimitsIsTypedAndConservative(t *testing.T) {
 	reset := int64(1770000000000)
 	zero := int64(0)

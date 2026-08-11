@@ -20,14 +20,14 @@ const (
 
 var (
 	resetCreditsURL        = "https://chatgpt.com" + resetCreditsPath
-	resetCreditsHTTPClient = &http.Client{Timeout: resetCreditsTimeout}
+	resetCreditsHTTPClient = newReadOnlyHTTPClient(resetCreditsTimeout)
 )
 
 func (p *Provider) attachResetCredits(ctx context.Context, data *provider.UsageData) {
 	if data == nil || data.Error != "" || data.IsExpired {
 		return
 	}
-	auth, err := readAuthFile(codexHome())
+	auth, err := readAuthFile(p.authDirectory())
 	if err != nil {
 		return
 	}

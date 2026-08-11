@@ -19,8 +19,17 @@ const (
 
 var (
 	directUsageURL        = "https://chatgpt.com" + directUsagePath
-	directUsageHTTPClient = &http.Client{Timeout: directUsageTimeout}
+	directUsageHTTPClient = newReadOnlyHTTPClient(directUsageTimeout)
 )
+
+func newReadOnlyHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
 // fetchUsageDirect reads the same authenticated Codex quota surface used by
 // the desktop client. It is a fail-soft fallback for a missing or unhealthy
@@ -73,7 +82,7 @@ func (p *Provider) parseDirectUsage(body []byte, now time.Time) (*provider.Usage
 		return nil, fmt.Errorf("parse direct Codex quota response: %w", err)
 	}
 
-	result := &provider.UsageData{Provider: p.Name(), FetchedAt: now}
+	result := &provider.UsageData{Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(), FetchedAt: now}
 	if !validDirectUsageWindow(response.RateLimit) {
 		result.Error = "no complete rate limit data"
 		return result, nil
@@ -108,8 +117,6 @@ func validDirectUsageWindow(rateLimit *struct {
 }
 
 func directWindowLabels(windowSeconds int64, resetsAt, now time.Time) (string, string) {
-	if windowSeconds >= int64(24*time.Hour/time.Second) {
-		return "7d", "7 days"
-	}
-	return primaryWindowLabels(resetsAt, now)
+	windowDurationMins := windowSeconds / int64(time.Minute/time.Second)
+	return codexWindowLabels(windowDurationMins, resetsAt, now)
 }
