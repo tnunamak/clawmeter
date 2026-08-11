@@ -464,22 +464,22 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
 	}
 }
 
-func TestActiveIconTargetsUsesOnlyHighestRiskWindowPerMultiSourceFamily(t *testing.T) {
+func TestActiveIconTargetsIncludesEveryWindowFromMultiSourceFamily(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude:a": {Provider: "claude", SourceID: "a", Windows: []provider.UsageWindow{{Name: "low", Utilization: 10, ResetsAt: now.Add(12 * time.Hour)}, {Name: "high", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
 		"claude:b": {Provider: "claude", SourceID: "b", Windows: []provider.UsageWindow{{Name: "only", Utilization: 30, ResetsAt: now.Add(2 * time.Hour)}}},
 	}
 	got := activeIconTargets(results, iconAutoRisk)
-	if len(got) != 2 {
-		t.Fatalf("targets = %+v, want one per source", got)
+	if len(got) != 3 {
+		t.Fatalf("targets = %+v, want every source window", got)
 	}
 	seen := map[string]bool{}
 	for _, target := range got {
 		seen[target.Provider+":"+target.Window] = true
 	}
-	if !seen["claude:a:high"] || !seen["claude:b:only"] {
-		t.Fatalf("targets = %+v, want highest-risk source windows", got)
+	if !seen["claude:a:low"] || !seen["claude:a:high"] || !seen["claude:b:only"] {
+		t.Fatalf("targets = %+v, want every source window", got)
 	}
 }
 

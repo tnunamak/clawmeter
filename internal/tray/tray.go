@@ -1132,13 +1132,6 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		providerNames = append(providerNames, name)
 	}
 	sort.Strings(providerNames)
-	familyCounts := make(map[string]int)
-	for _, name := range providerNames {
-		if data := results[name]; data != nil {
-			familyCounts[data.Provider]++
-		}
-	}
-
 	ranked := make([]rankedTarget, 0, len(results))
 	for _, name := range providerNames {
 		data := results[name]
@@ -1151,15 +1144,6 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		windows := data.UsableWindows()
 		if len(windows) == 0 {
 			continue
-		}
-		if familyCounts[data.Provider] > 1 {
-			best := windows[0]
-			for _, window := range windows[1:] {
-				if forecast.CompareRisk(windowProjection(window), windowProjection(best)) < 0 {
-					best = window
-				}
-			}
-			windows = []provider.UsageWindow{best}
 		}
 		for _, window := range windows {
 			target := iconTarget{Provider: name, Window: window.Name}
