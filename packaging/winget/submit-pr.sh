@@ -113,6 +113,9 @@ trap cleanup EXIT
 
 if [[ "$dry_run" != "1" ]]; then
   gh auth setup-git >/dev/null
+  # Sync through GitHub so the automation token never needs workflow scope just
+  # to carry upstream workflow changes into the fork.
+  gh api --method POST "repos/${fork_repo}/merge-upstream" -f branch=master >/dev/null
 fi
 
 gh repo clone "$fork_repo" "$workdir" -- --filter=blob:none --sparse
