@@ -149,17 +149,17 @@ jobs:
 
           CONFIG_DIR="$TMPHOME/.config/clawmeter"
           mkdir -p "$CONFIG_DIR"
-          printf 'providers:\n  openai:\n    enabled: true\n' > "$CONFIG_DIR/config.yaml"
+          printf 'providers:\n  codex:\n    enabled: true\n' > "$CONFIG_DIR/config.yaml"
 
           # On Linux with no XDG_CONFIG_HOME, legacy == canonical, so this
           # is a straight read — migration is skipped. The point is that the
-          # file is readable and openai shows as enabled.
+          # file is readable and Codex shows as enabled.
           OUTPUT=$(HOME="$TMPHOME" /tmp/clawmeter providers 2>&1)
 
-          if echo "$OUTPUT" | grep -qi "openai"; then
-            echo "PASS: openai appears in providers output"
+          if echo "$OUTPUT" | grep -qi "Codex"; then
+            echo "PASS: Codex appears in providers output"
           else
-            echo "FAIL: openai not found in providers output"
+            echo "FAIL: Codex not found in providers output"
             echo "$OUTPUT"
             exit 1
           fi
@@ -351,7 +351,7 @@ jobs:
           LEGACY_DIR="$TMPHOME/.config/clawmeter"
           LEGACY_CFG="$LEGACY_DIR/config.yaml"
           mkdir -p "$LEGACY_DIR"
-          printf 'providers:\n  openai:\n    enabled: true\n' > "$LEGACY_CFG"
+          printf 'providers:\n  codex:\n    enabled: true\n' > "$LEGACY_CFG"
 
           # On macOS, os.UserConfigDir() returns $HOME/Library/Application Support.
           # Since $HOME is redirected to $TMPHOME, the canonical path is:
@@ -645,7 +645,7 @@ jobs:
           $LegacyDir = Join-Path $TmpHome ".config\clawmeter"
           $LegacyCfg = Join-Path $LegacyDir "config.yaml"
           New-Item -ItemType Directory -Force -Path $LegacyDir | Out-Null
-          "providers:`n  openai:`n    enabled: true" | Out-File -FilePath $LegacyCfg -Encoding utf8NoBOM
+          "providers:`n  codex:`n    enabled: true" | Out-File -FilePath $LegacyCfg -Encoding utf8NoBOM
 
           # On Windows, os.UserConfigDir() uses %AppData%; os.UserHomeDir() uses %USERPROFILE%.
           # Point both at our temp tree so the binary writes to a sandboxed location.
@@ -688,11 +688,11 @@ jobs:
             exit 1
           }
 
-          # Verify openai appears enabled in providers output (case-insensitive).
-          if ($output -imatch "openai") {
-            Write-Host "PASS: openai appears in providers output"
+          # Verify Codex appears enabled in providers output (case-insensitive).
+          if ($output -imatch "Codex") {
+            Write-Host "PASS: Codex appears in providers output"
           } else {
-            Write-Error "FAIL: openai not found in providers output"
+            Write-Error "FAIL: Codex not found in providers output"
             Write-Host $output
             exit 1
           }
