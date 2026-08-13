@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"math"
 	"testing"
@@ -122,6 +123,60 @@ func TestProviderIconsIncludeQuotaLabelAtTraySize(t *testing.T) {
 	}, 22))
 	if countVisiblyDifferentPixels(base, labeled) < 14 {
 		t.Fatal("quota label is not visible at tray size")
+	}
+}
+
+func TestV10QuotaLabelUsesLegibleNativeBounds(t *testing.T) {
+	for _, size := range []int{22, 32} {
+		img := renderV10NativeFrame("openai", MeterState{
+			UsagePct: 44, ExpectedPct: 20, ShowExpected: true, Label: "7D",
+		}, size, frameThemeDark)
+		without := renderV10NativeFrame("openai", MeterState{
+			UsagePct: 44, ExpectedPct: 20, ShowExpected: true,
+		}, size, frameThemeDark)
+		bounds := visiblyDifferentBounds(without, img)
+		want := image.Rect(5, 16, 16, 22)
+		if size == 32 {
+			want = image.Rect(10, 24, 21, 31)
+		}
+		if bounds != want {
+			t.Fatalf("%dpx label bounds = %v, want %v", size, bounds, want)
+		}
+	}
+}
+
+func TestV10VisualChannelsNeverOccludeEachOther(t *testing.T) {
+	for _, size := range []int{22, 32} {
+		for _, theme := range []frameTheme{frameThemeDark, frameThemeLight} {
+			for providerName := range frameProviderAsset {
+				for _, label := range []string{"5h", "7d", "7A", "7S", "mo"} {
+					meter, err := v10MeterRaster(size, theme, MeterState{
+						UsagePct: 78, ExpectedPct: 40, ShowExpected: true,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					providerLayer := image.NewNRGBA(image.Rect(0, 0, size, size))
+					v10ProviderMark(providerLayer, providerName, size, theme)
+					labelLayer := image.NewNRGBA(image.Rect(0, 0, size, size))
+					v10WindowLabel(labelLayer, label, size, theme)
+					updateLayer := image.NewNRGBA(image.Rect(0, 0, size, size))
+					draw.Draw(updateLayer, frameGeometries[size].update, image.NewUniform(color.Opaque), image.Point{}, draw.Src)
+
+					layers := []struct {
+						name string
+						img  image.Image
+					}{{"meter", meter}, {"provider", providerLayer}, {"label", labelLayer}, {"update", updateLayer}}
+					for i := 0; i < len(layers); i++ {
+						for j := i + 1; j < len(layers); j++ {
+							if layersOverlap(layers[i].img, layers[j].img) {
+								t.Fatalf("%dpx %s %s/%s: %s occludes %s", size, theme, providerName, label, layers[i].name, layers[j].name)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -639,6 +694,45 @@ func countVisiblyDifferentPixels(a, b image.Image) int {
 		}
 	}
 	return n
+}
+
+func visiblyDifferentBounds(a, b image.Image) image.Rectangle {
+	bounds := a.Bounds()
+	minX, minY := bounds.Max.X, bounds.Max.Y
+	maxX, maxY := bounds.Min.X, bounds.Min.Y
+	found := false
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			ac := color.NRGBAModel.Convert(a.At(x, y)).(color.NRGBA)
+			bc := color.NRGBAModel.Convert(b.At(x, y)).(color.NRGBA)
+			if absInt(int(ac.R)-int(bc.R))+absInt(int(ac.G)-int(bc.G))+absInt(int(ac.B)-int(bc.B))+absInt(int(ac.A)-int(bc.A)) <= 80 {
+				continue
+			}
+			found = true
+			minX = min(minX, x)
+			minY = min(minY, y)
+			maxX = max(maxX, x+1)
+			maxY = max(maxY, y+1)
+		}
+	}
+	if !found {
+		return image.Rectangle{}
+	}
+	return image.Rect(minX, minY, maxX, maxY)
+}
+
+func layersOverlap(a, b image.Image) bool {
+	bounds := a.Bounds().Intersect(b.Bounds())
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, aa := a.At(x, y).RGBA()
+			_, _, _, ba := b.At(x, y).RGBA()
+			if aa > 0 && ba > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func absInt(n int) int {

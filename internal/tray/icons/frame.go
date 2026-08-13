@@ -246,6 +246,9 @@ func v10ProviderMark(dst draw.Image, providerName string, size int, theme frameT
 	// would move it one pixel away from the approved raster.
 	x := int(math.RoundToEven(g.providerX - float64(mark.Bounds().Dx())/2))
 	y := int(math.RoundToEven(g.providerY - float64(mark.Bounds().Dy())/2))
+	if size == 22 {
+		y++
+	}
 	draw.Draw(dst, image.Rect(x, y, x+mark.Bounds().Dx(), y+mark.Bounds().Dy()), mark, mark.Bounds().Min, draw.Over)
 }
 
