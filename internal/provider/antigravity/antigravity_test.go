@@ -444,6 +444,29 @@ func TestSetupStatusRequiresCLIAndUsableToken(t *testing.T) {
 	}
 }
 
+func TestSetupStatusKeepsStoredLoginConfiguredWithoutCLI(t *testing.T) {
+	home := t.TempDir()
+	writeToken(t, home, "token", testNow.Add(-time.Hour))
+	p := newTestProvider(home, "http://unused.invalid")
+	p.lookPath = func(string) (string, error) { return "", errors.New("missing") }
+
+	if got := p.SetupStatus(); got.State != provider.SetupReady {
+		t.Fatalf("SetupStatus() = %+v, want stored login to remain configured", got)
+	}
+}
+
+func TestSetupStatusRecoversCLIFromSessionExecutableResolver(t *testing.T) {
+	home := t.TempDir()
+	writeToken(t, home, "token", testNow.Add(time.Hour))
+	p := newTestProvider(home, "http://unused.invalid")
+	p.lookPath = func(string) (string, error) { return "", errors.New("minimal GUI PATH") }
+	p.SetSessionEnvironmentResolver(testSessionResolver{executable: "/home/user/.local/bin/agy"})
+
+	if got := p.SetupStatus(); got.State != provider.SetupReady {
+		t.Fatalf("SetupStatus() = %+v, want ready through session executable resolver", got)
+	}
+}
+
 func TestSetupStatusExplainsUnsafeOrMalformedLoginFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits do not apply on Windows")
@@ -540,6 +563,16 @@ func assertWindow(t *testing.T, got provider.UsageWindow, name, display string, 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) Do(req *http.Request) (*http.Response, error) { return f(req) }
+
+type testSessionResolver struct{ executable string }
+
+func (r testSessionResolver) ResolveSessionEnvironment(provider.SessionEnvironmentRequest) map[string]string {
+	return nil
+}
+
+func (r testSessionResolver) ResolveSessionExecutable(string) (string, error) {
+	return r.executable, nil
+}
 
 func jsonResponse(body string) *http.Response {
 	return jsonStatusResponse(http.StatusOK, body)

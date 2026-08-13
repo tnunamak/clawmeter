@@ -1,6 +1,11 @@
 package shellpath
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -8,6 +13,32 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+func (r *sessionEnvironmentResolver) ResolveSessionExecutable(name string) (string, error) {
+	Init()
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	if filepath.Base(name) != name {
+		return "", fmt.Errorf("executable name must not contain a path")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	candidate := filepath.Join(home, ".local", "bin", name)
+	if runtime.GOOS == "windows" {
+		candidate += ".exe"
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return "", fmt.Errorf("executable %q not found", name)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("executable %q is not executable", name)
+	}
+	return candidate, nil
+}
 
 type sessionEnvironmentCacheKey struct {
 	names    string

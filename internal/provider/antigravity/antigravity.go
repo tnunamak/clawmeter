@@ -92,14 +92,6 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
-	if p.tokenPath == "" {
-		if _, err := p.lookPath("agy"); err != nil {
-			return provider.SetupStatus{
-				State:  provider.SetupUnavailable,
-				Detail: "Antigravity CLI is not installed",
-			}
-		}
-	}
 	token, err := p.readToken()
 	if errors.Is(err, errTokenPermissions) {
 		return provider.SetupStatus{
@@ -114,6 +106,14 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 		}
 	}
 	if err != nil || token.AccessToken == "" {
+		if p.tokenPath == "" {
+			if _, cliErr := p.executablePath("agy"); cliErr != nil {
+				return provider.SetupStatus{
+					State:  provider.SetupUnavailable,
+					Detail: "Antigravity CLI is not installed",
+				}
+			}
+		}
 		return provider.SetupStatus{
 			State:  provider.SetupNeedsAuth,
 			Detail: "run `agy` to sign in",
@@ -429,7 +429,7 @@ func (p *Provider) resolveOAuthClients() ([]oauthClient, error) {
 			return []oauthClient{{ID: id, Secret: secret}}, nil
 		}
 	}
-	path, err := p.lookPath("agy")
+	path, err := p.executablePath("agy")
 	if err != nil {
 		return nil, err
 	}
@@ -438,6 +438,17 @@ func (p *Provider) resolveOAuthClients() ([]oauthClient, error) {
 		return nil, err
 	}
 	return parseOAuthClients(data)
+}
+
+func (p *Provider) executablePath(name string) (string, error) {
+	path, err := p.lookPath(name)
+	if err == nil {
+		return path, nil
+	}
+	if resolver, ok := p.sessionEnvironmentResolver.(provider.SessionExecutableResolver); ok {
+		return resolver.ResolveSessionExecutable(name)
+	}
+	return "", err
 }
 
 func parseOAuthClients(data []byte) ([]oauthClient, error) {

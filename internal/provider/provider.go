@@ -220,6 +220,13 @@ type SessionEnvironmentResolver interface {
 	ResolveSessionEnvironment(SessionEnvironmentRequest) map[string]string
 }
 
+// SessionExecutableResolver is an optional extension for resolving CLI tools
+// from the user's interactive/session PATH when a GUI process inherited a
+// reduced environment.
+type SessionExecutableResolver interface {
+	ResolveSessionExecutable(string) (string, error)
+}
+
 // SessionEnvironmentResolverConsumer accepts the process-local resolver during
 // provider registration. Providers that do not use environment credentials
 // do not implement it.

@@ -436,6 +436,24 @@ func TestCaptureMergeAndLookPathPreserveInheritedPrecedence(t *testing.T) {
 	}
 }
 
+func TestSessionExecutableResolverFindsStandardUserBin(t *testing.T) {
+	home := t.TempDir()
+	name := "clawmeter-test-user-bin-tool"
+	path := filepath.Join(home, ".local", "bin", name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	got, err := NewSessionEnvironmentResolver().(provider.SessionExecutableResolver).ResolveSessionExecutable(name)
+	if err != nil || got != path {
+		t.Fatalf("ResolveSessionExecutable() = %q, %v; want %q", got, err, path)
+	}
+}
+
 func TestProbeForShellUsesShellSpecificProtocol(t *testing.T) {
 	for _, name := range []string{"zsh", "bash", "sh", "dash", "ksh"} {
 		probe, ok := probeForShell("/bin/" + name)
