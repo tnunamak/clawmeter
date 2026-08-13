@@ -241,6 +241,10 @@ func onReady() {
 
 		reloadConfig()
 
+		// Refresh already runs off the tray event loop. Complete executable-path
+		// recovery before discovering configured providers so CLI-backed sources
+		// cannot disappear based on a startup race.
+		shellpath.Init()
 		configured := registry.GetConfigured()
 		currentRevisions := providerSourceRevisions(configured)
 		s.mu.Lock()
@@ -327,6 +331,7 @@ func onReady() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
+		shellpath.Init()
 		statuses := status.FetchAll(ctx, providerNames(registry.GetConfigured()))
 
 		s.mu.Lock()
@@ -950,7 +955,7 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.mu.Lock()
 	results := s.lastResults
 	mode := normalizedIconAutoModeLocked()
-	choices := activeIconTargets(results, mode)
+	choices := manualIconTargets(results, mode)
 	s.iconTargetChoices = choices
 	if !targetInChoices(s.iconTargetOverride, choices) {
 		s.iconTargetOverride = iconTarget{}
@@ -974,7 +979,7 @@ func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.mu.Lock()
 	results := s.lastResults
 	mode := normalizedIconAutoModeLocked()
-	choices := activeIconTargets(results, mode)
+	choices := manualIconTargets(results, mode)
 	s.iconTargetChoices = choices
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
@@ -1005,7 +1010,7 @@ func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuI
 		s.iconAutoMode = iconAutoRisk
 	}
 	mode := s.iconAutoMode
-	choices := activeIconTargets(results, mode)
+	choices := manualIconTargets(results, mode)
 	s.iconTargetChoices = choices
 	if !targetInChoices(s.iconTargetOverride, choices) {
 		s.iconTargetOverride = iconTarget{}
@@ -1033,7 +1038,7 @@ func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string
 
 func updateIconTargetSelector(results map[string]*provider.UsageData, displayNames map[string]string, item *systray.MenuItem) {
 	mode := currentIconAutoMode()
-	choices := activeIconTargets(results, mode)
+	choices := manualIconTargets(results, mode)
 
 	s.mu.Lock()
 	if !targetInChoices(s.iconTargetOverride, choices) {
@@ -1101,7 +1106,7 @@ func nextIconTargetOverride(current iconTarget, choices []iconTarget, skipAutoCu
 			continue
 		}
 		if i == len(choices)-1 {
-			return choices[0]
+			return iconTarget{}
 		}
 		return choices[i+1]
 	}
@@ -1113,6 +1118,10 @@ func activeIconTargets(results map[string]*provider.UsageData, mode iconAutoMode
 	if len(choices) > 0 {
 		return choices
 	}
+	return activeIconTargetsAllowingStale(results, mode, true)
+}
+
+func manualIconTargets(results map[string]*provider.UsageData, mode iconAutoMode) []iconTarget {
 	return activeIconTargetsAllowingStale(results, mode, true)
 }
 
@@ -1254,17 +1263,17 @@ func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provid
 	override := s.iconTargetOverride
 	mode := normalizedIconAutoModeLocked()
 	s.mu.Unlock()
-	choices := activeIconTargets(results, mode)
+	autoChoices := activeIconTargets(results, mode)
 
 	if override.Provider != "" {
-		if targetInChoices(override, choices) {
+		if targetInChoices(override, manualIconTargets(results, mode)) {
 			if data := results[override.Provider]; data != nil {
 				return override.Provider, data, override.Window, true
 			}
 		}
 	}
 
-	for _, target := range choices {
+	for _, target := range autoChoices {
 		data := results[target.Provider]
 		if data == nil {
 			continue
@@ -1308,9 +1317,9 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 	worstProvider := ""
 	meter := icons.MeterState{}
 
-	if name, data, windowName, ok := selectedTrayTarget(results); ok {
+	if _, data, windowName, ok := selectedTrayTarget(results); ok {
 		meter = iconMeterState(data, windowName)
-		worstProvider = name
+		worstProvider = iconProviderName(data)
 	}
 	meter.UpdateAvailable = updateAvailable()
 
@@ -1328,6 +1337,13 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 	// the 22px and 32px forms as SNI pixmaps; Windows and macOS receive the
 	// closest source form for their own final compositor scaling.
 	setIconDynamic(worstProvider, meter, nil)
+}
+
+func iconProviderName(data *provider.UsageData) string {
+	if data == nil {
+		return ""
+	}
+	return data.Provider
 }
 
 // iconMeterState maps provider usage into the tray icon's three visual

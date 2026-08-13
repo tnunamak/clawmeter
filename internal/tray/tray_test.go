@@ -343,8 +343,8 @@ func TestIconTargetOverrideCyclesOnlyThroughProviderQuotaWindows(t *testing.T) {
 	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices, true); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
 		t.Fatalf("next from claude 5h = %+v, want claude/7d All", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
-		t.Fatalf("next from final target = %+v, want claude/5h", got)
+	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices, true); got != (iconTarget{}) {
+		t.Fatalf("next from final target = %+v, want Auto", got)
 	}
 	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
 		t.Fatalf("next from missing override = %+v, want claude/5h", got)
@@ -380,7 +380,14 @@ func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T)
 	}
 }
 
-func TestIconCycleMenuTitleMentionsDoubleClickAutoReset(t *testing.T) {
+func TestIconProviderNameUsesProviderFamilyNotSourceKey(t *testing.T) {
+	data := &provider.UsageData{Provider: "claude", SourceID: "odl"}
+	if got := iconProviderName(data); got != "claude" {
+		t.Fatalf("iconProviderName() = %q, want claude", got)
+	}
+}
+
+func TestIconCycleMenuTitleDescribesNextClick(t *testing.T) {
 	displayNames := map[string]string{"claude": "Claude"}
 	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRisk); got != "Icon: Auto Risk (click to cycle)" {
 		t.Fatalf("auto title = %q", got)
@@ -593,7 +600,7 @@ func TestActiveIconTargetsRunwayOrdersByMostRemainingProjectedRoom(t *testing.T)
 	}
 }
 
-func TestActiveIconTargetsPrefersFreshWindowsOverStaleFallback(t *testing.T) {
+func TestManualIconTargetsIncludesFreshAndStaleWindows(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {
@@ -613,10 +620,31 @@ func TestActiveIconTargetsPrefersFreshWindowsOverStaleFallback(t *testing.T) {
 		},
 	}
 
+	got := manualIconTargets(results, iconAutoRisk)
+	want := map[iconTarget]bool{
+		{Provider: "openai", Window: "7d"}: true,
+		{Provider: "claude", Window: "5h"}: true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("manualIconTargets = %+v, want fresh and stale targets", got)
+	}
+	for _, target := range got {
+		if !want[target] {
+			t.Fatalf("manualIconTargets includes unexpected target %+v", target)
+		}
+	}
+}
+
+func TestActiveIconTargetsStillPrefersFreshForAutoSelection(t *testing.T) {
+	now := time.Now()
+	results := map[string]*provider.UsageData{
+		"claude": {Provider: "claude", Stale: true, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
+		"openai": {Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)}}},
+	}
 	got := activeIconTargets(results, iconAutoRisk)
-	want := []iconTarget{{Provider: "openai", Window: "7d"}}
-	if len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("activeIconTargets = %+v, want only fresh target %+v", got, want)
+	want := iconTarget{Provider: "openai", Window: "7d"}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("activeIconTargets = %+v, want only fresh auto target %+v", got, want)
 	}
 }
 
@@ -688,7 +716,7 @@ func TestSelectedTrayTargetRunwayUsesMostAvailableUsableQuota(t *testing.T) {
 	}
 }
 
-func TestSelectedTrayTargetIgnoresStaleOverrideWhenFreshTargetExists(t *testing.T) {
+func TestSelectedTrayTargetHonorsManualStaleOverride(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {
@@ -722,8 +750,8 @@ func TestSelectedTrayTargetIgnoresStaleOverrideWhenFreshTargetExists(t *testing.
 	if !ok {
 		t.Fatal("selectedTrayTarget returned no provider")
 	}
-	if name != "openai" || windowName != "7d" {
-		t.Fatalf("selected target = %s/%s, want openai/7d", name, windowName)
+	if name != "claude" || windowName != "5h" {
+		t.Fatalf("selected target = %s/%s, want manually selected stale claude/5h", name, windowName)
 	}
 }
 
