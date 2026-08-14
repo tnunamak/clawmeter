@@ -155,6 +155,7 @@ clawmeter tray           # run the tray in this session
 | Kimi K2 | Credit balance |
 | Alibaba Coding Plan | Coding Plan 5-hour, weekly, and monthly quotas |
 | Alibaba Token Plan | Personal Token Plan 5-hour, 7-day, and reset-credit data after one-time Model Studio quota connection |
+| DeepSeek | Account balance only (read-only); no utilization, spend, or reset-time data |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 
@@ -262,6 +263,7 @@ brew services stop clawmeter
 | Kimi K2 | `KIMI_K2_API_KEY` or config |
 | Alibaba Coding Plan | Dedicated Model Studio console login (`bl auth login --console`) or `ALIBABA_CODING_PLAN_API_KEY` / `BAILIAN_CODING_PLAN_API_KEY` (Coding Plan key only) |
 | Alibaba Token Plan | One-time Model Studio quota connection via `clawmeter providers connect token-plan`; existing `~/.bailian` session is reused |
+| DeepSeek | `DEEPSEEK_API_KEY` or config |
 
 For Grok/xAI, `grok login` enables Grok weekly usage-pool tracking from the
 read-only grok.com billing surface. `XAI_MANAGEMENT_API_KEY` enables xAI API
@@ -282,6 +284,12 @@ continues to be useful for model requests, but it does not provide account-level
 Token Plan quota and is never treated as quota authorization. If the official
 Bailian CLI is missing, Clawmeter prints Alibaba's documented install command;
 it does not silently download executable code.
+
+DeepSeek is read-only balance semantics. Clawmeter calls only the documented
+`GET /user/balance` endpoint and reports the account balance per currency; it
+never exposes utilization percentage, spend, quota totals, or reset timing,
+because DeepSeek's balance API does not provide them. Clawmeter never tops up,
+spends, or rotates the key.
 
 </details>
 

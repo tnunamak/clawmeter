@@ -15,6 +15,7 @@ Clawmeter reuses credentials that the provider's own tools already store locally
 | GitHub Copilot | `COPILOT_API_TOKEN` | Reads the token from the environment when configured. |
 | Kimi | Kimi config, `KIMI_ACCESS_TOKEN`, or `KIMI_K2_API_KEY` | OAuth mode may refresh access and write the provider's normal credential file. |
 | OpenRouter | `OPENROUTER_API_KEY` or config | API-key based. |
+| DeepSeek | `DEEPSEEK_API_KEY` or config | API-key based, read-only. Clawmeter calls only DeepSeek's documented `GET /user/balance` endpoint and reads the returned account balance; it never spends, tops up, or rotates the key. |
 | Alibaba | Model Studio console sessions, `ALIBABA_CODING_PLAN_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`, or explicitly enrolled sources | Coding Plan and Personal Token Plan stay separate. Generic DashScope keys are not sent to Coding Plan quota endpoints. |
 
 Clawmeter does not send provider credentials to Tim Nunamaker, GitHub, SignPath, or any Clawmeter service.

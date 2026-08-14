@@ -23,7 +23,12 @@ account has yet provided live quota-field validation. Antigravity has been valid
 consumer account, but its CLI-owned credential storage and internal quota API
 still need live validation on macOS and Windows. Grok is experimental because
 its live endpoint has omitted the usage percentage even while the account was
-exhausted. The other group retains this project's existing live-validation
+exhausted. DeepSeek is experimental because, although its `GET
+/user/balance` contract is officially documented, no live entitled DeepSeek
+account has yet validated the integration end to end; the provider also
+exposes balance only — no utilization, spend, quota totals, or credential
+expiry signal — so those fields are intentionally left unset rather than
+inferred. The other group retains this project's existing live-validation
 evidence. Maturity describes confidence in the integration, not whether
 credentials were found or whether polling is enabled. The `providers`
 inventory remains the place to see setup and polling state; quota rows and the
