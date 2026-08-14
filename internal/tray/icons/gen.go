@@ -46,6 +46,8 @@ var (
 	ProviderZAI []byte
 	//go:embed provider-alibaba.png
 	ProviderAlibaba []byte
+	//go:embed provider-deepseek.png
+	ProviderDeepSeek []byte
 )
 
 // ProviderLogos maps provider name to its embedded logo PNG.
@@ -66,6 +68,7 @@ var ProviderLogos = map[string][]byte{
 	"zai":           ProviderZAI,
 	"alibaba":       ProviderAlibaba,
 	"alibaba_token": ProviderAlibaba,
+	"deepseek":      ProviderDeepSeek,
 }
 
 type logoTreatment struct {

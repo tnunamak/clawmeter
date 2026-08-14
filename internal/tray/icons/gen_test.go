@@ -31,9 +31,6 @@ func TestGenerateProviderIconOutputsSquareNonBlankPNGs(t *testing.T) {
 
 func TestRegisteredProvidersHaveRealLogos(t *testing.T) {
 	for _, name := range all.Names() {
-		if name == "deepseek" { // DeepSeek is balance-only; its owner supplies visuals separately.
-			continue
-		}
 		if len(ProviderLogos[name]) == 0 {
 			t.Fatalf("%q has no embedded provider logo", name)
 		}

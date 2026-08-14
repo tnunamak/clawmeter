@@ -40,6 +40,7 @@ var providers = []sample{
 	{"jetbrains", "JetBrains"},
 	{"synthetic", "Synthetic"},
 	{"zai", "z.ai"},
+	{"deepseek", "DeepSeek"},
 }
 
 type state struct {
