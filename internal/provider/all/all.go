@@ -14,6 +14,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/anthropic"
 	"github.com/tnunamak/clawmeter/internal/provider/antigravity"
 	"github.com/tnunamak/clawmeter/internal/provider/copilot"
+	"github.com/tnunamak/clawmeter/internal/provider/deepseek"
 	"github.com/tnunamak/clawmeter/internal/provider/gemini"
 	"github.com/tnunamak/clawmeter/internal/provider/jetbrains"
 	"github.com/tnunamak/clawmeter/internal/provider/kimi"
@@ -30,6 +31,7 @@ var aliases = map[string]string{
 	"grok":               "xai",
 	"x.ai":               "xai",
 	"x-ai":               "xai",
+	"deep-seek":          "deepseek",
 	"xai":                "xai",
 	"openai":             "openai",
 	"qwen":               "alibaba",
@@ -55,6 +57,7 @@ var registrations = []registration{
 	{name: "openai", new: func(cfg config.ProviderConfig) provider.Provider { return openai.New(cfg) }},
 	{name: "gemini", new: func(cfg config.ProviderConfig) provider.Provider { return gemini.New(cfg) }},
 	{name: "copilot", new: func(cfg config.ProviderConfig) provider.Provider { return copilot.New(cfg) }},
+	{name: "deepseek", new: func(cfg config.ProviderConfig) provider.Provider { return deepseek.New(cfg) }},
 	{name: "openrouter", new: func(cfg config.ProviderConfig) provider.Provider { return openrouter.New(cfg) }},
 	{name: "jetbrains", new: func(cfg config.ProviderConfig) provider.Provider { return jetbrains.New(cfg) }},
 	{name: "synthetic", new: func(cfg config.ProviderConfig) provider.Provider { return synthetic.New(cfg) }},

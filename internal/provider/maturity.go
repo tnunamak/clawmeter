@@ -21,6 +21,7 @@ var experimentalProviderByName = map[string]bool{
 	"kimi":          true,
 	"kimik2":        true,
 	"copilot":       true,
+	"deepseek":      true,
 	"openrouter":    true,
 	"jetbrains":     true,
 	"synthetic":     true,

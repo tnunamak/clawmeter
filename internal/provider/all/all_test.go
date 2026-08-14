@@ -36,7 +36,7 @@ func TestNames_IncludesKnownProviders(t *testing.T) {
 		t.Fatal("expected at least one provider")
 	}
 	// Sanity-check a handful of canonical names.
-	required := []string{"alibaba", "alibaba_token", "antigravity", "claude", "openai", "gemini", "kimi", "kimik2", "xai"}
+	required := []string{"alibaba", "alibaba_token", "antigravity", "claude", "deepseek", "openai", "gemini", "kimi", "kimik2", "xai"}
 	have := make(map[string]bool, len(got))
 	for _, n := range got {
 		have[n] = true
@@ -295,6 +295,9 @@ func TestIsKnown(t *testing.T) {
 	if !IsKnown("grok") {
 		t.Error("grok alias should be known")
 	}
+	if !IsKnown("deep-seek") || !IsKnown("deepseek") {
+		t.Error("DeepSeek names should be known")
+	}
 	if IsKnown("opneai") {
 		t.Error("opneai (typo) must not be known")
 	}
@@ -314,6 +317,7 @@ func TestCanonicalName(t *testing.T) {
 		{"x.ai", "xai"},
 		{"token-plan", "alibaba_token"},
 		{"Alibaba-Token-Plan", "alibaba_token"},
+		{"deep-seek", "deepseek"},
 	}
 	for _, tt := range tests {
 		got, ok := CanonicalName(tt.in)

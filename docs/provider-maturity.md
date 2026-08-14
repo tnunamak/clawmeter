@@ -11,7 +11,7 @@ an audit covered a provider:
 | Providers | Maturity |
 |---|---|
 | Claude, Codex (`openai`), Gemini | not experimental |
-| Alibaba Coding Plan, Alibaba Token Plan, Antigravity, Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
+| Alibaba Coding Plan, Alibaba Token Plan, Antigravity, DeepSeek, Grok (`xai`), Kimi, Kimi K2, Copilot, OpenRouter, JetBrains, Synthetic, z.ai | experimental |
 
 The experimental group reflects the current provider audit's documented
 contract or semantic risks. Alibaba Token Plan and Alibaba Coding Plan use a
