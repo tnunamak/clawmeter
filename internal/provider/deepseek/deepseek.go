@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -194,17 +196,24 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	if payload.BalanceInfos == nil {
 		return nil, fmt.Errorf("decode response: missing balance_infos")
 	}
+	seenCurrencies := make(map[string]bool, len(payload.BalanceInfos))
 	for _, balance := range payload.BalanceInfos {
 		currency := strings.TrimSpace(balance.Currency)
 		if currency == "" {
 			return nil, fmt.Errorf("decode response: empty currency")
 		}
+		normalized := strings.ToLower(currency)
+		if seenCurrencies[normalized] {
+			return nil, fmt.Errorf("decode response: duplicate currency %q", currency)
+		}
+		seenCurrencies[normalized] = true
 		total, err := strconv.ParseFloat(strings.TrimSpace(balance.TotalBalance), 64)
-		if err != nil || total < 0 {
+		if err != nil || math.IsNaN(total) || math.IsInf(total, 0) || total < 0 {
 			return nil, fmt.Errorf("decode response: invalid total balance for %q", currency)
 		}
-		data.Balances = append(data.Balances, provider.UsageBalance{Name: strings.ToLower(currency), DisplayName: strings.ToUpper(currency) + " balance", Remaining: total})
+		data.Balances = append(data.Balances, provider.UsageBalance{Name: normalized, DisplayName: strings.ToUpper(currency) + " balance", Remaining: total})
 	}
+	sort.SliceStable(data.Balances, func(i, j int) bool { return data.Balances[i].Name < data.Balances[j].Name })
 	if !payload.IsAvailable {
 		data.Warning = "DeepSeek balance endpoint reports the account is unavailable"
 	}

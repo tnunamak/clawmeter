@@ -85,6 +85,7 @@ var frameProviderAsset = map[string]string{
 	"jetbrains":     "jetbrains",
 	"synthetic":     "synthetic",
 	"zai":           "zai",
+	"deepseek":      "deepseek",
 }
 
 var frameGlyphs = map[rune][]string{

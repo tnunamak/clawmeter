@@ -34,7 +34,7 @@ func TestFetchUsageContractAndBalanceSemantics(t *testing.T) {
 		if got := r.Header.Get("Accept"); got != "application/json" {
 			t.Errorf("accept = %q", got)
 		}
-		_, _ = w.Write([]byte(`{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"12.50","granted_balance":"2","topped_up_balance":"10.5"},{"currency":"CNY","total_balance":"0","granted_balance":"0","topped_up_balance":"0"}]}`))
+		_, _ = w.Write([]byte(`{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"12.50","granted_balance":"2","topped_up_balance":"10.5"},{"currency":"CNY","total_balance":"5","granted_balance":"0","topped_up_balance":"5"}]}`))
 	}))
 	defer srv.Close()
 	p := New(config.ProviderConfig{APIKey: "configured"})
@@ -44,12 +44,80 @@ func TestFetchUsageContractAndBalanceSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Balances) != 2 || data.Balances[0].Name != "usd" || data.Balances[0].DisplayName != "USD balance" || data.Balances[0].Remaining != 12.5 {
+	// Balances are sorted by currency code regardless of API response order.
+	if len(data.Balances) != 2 || data.Balances[0].Name != "cny" || data.Balances[1].Name != "usd" || data.Balances[1].DisplayName != "USD balance" || data.Balances[1].Remaining != 12.5 {
 		t.Fatalf("balances = %#v", data.Balances)
 	}
 	if data.Balances[0].Total != 0 || data.Balances[0].Used != 0 || data.Windows != nil {
 		t.Fatalf("invented usage data: %#v", data)
 	}
+}
+
+func TestFetchUsageRejectsNonFiniteAndDuplicateCurrencies(t *testing.T) {
+	for name, body := range map[string]string{
+		"nan":       `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"NaN"}]}`,
+		"inf":       `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"Inf"}]}`,
+		"neg-inf":   `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"-Inf"}]}`,
+		"duplicate": `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"1"},{"currency":"usd","total_balance":"2"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer srv.Close()
+			p := New(config.ProviderConfig{APIKey: "key"})
+			p.balanceURL, p.client = srv.URL, srv.Client()
+			if _, err := p.FetchUsage(context.Background()); err == nil {
+				t.Fatalf("body %q accepted", body)
+			}
+		})
+	}
+}
+
+func TestFetchUsageAcceptsEmptyBalanceInfosArray(t *testing.T) {
+	// A present-but-empty "balance_infos": [] differs from an absent/null key
+	// (which unmarshals to nil and is rejected). An account with genuinely no
+	// balances should not be treated as a malformed response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"is_available":true,"balance_infos":[]}`))
+	}))
+	defer srv.Close()
+	p := New(config.ProviderConfig{APIKey: "key"})
+	p.balanceURL, p.client = srv.URL, srv.Client()
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatalf("empty balance_infos array rejected: %v", err)
+	}
+	if len(data.Balances) != 0 {
+		t.Fatalf("balances = %#v", data.Balances)
+	}
+}
+
+func TestCredentialPrecedence(t *testing.T) {
+	t.Run("cfg APIKey used when no resolver and no ambient env", func(t *testing.T) {
+		p := New(config.ProviderConfig{APIKey: "cfg-key"})
+		if p.apiKey() != "cfg-key" {
+			t.Fatalf("apiKey = %q", p.apiKey())
+		}
+	})
+	t.Run("resolver takes over entirely for default DEEPSEEK_API_KEY lookup", func(t *testing.T) {
+		t.Setenv("DEEPSEEK_API_KEY", "ambient-should-not-be-used")
+		p := New(config.ProviderConfig{})
+		p.SetSessionEnvironmentResolver(resolver{})
+		if got := p.apiKey(); got != "" {
+			t.Fatalf("apiKey = %q, want empty (resolver returned nothing, ambient os.Getenv must not be consulted)", got)
+		}
+	})
+	t.Run("env-name source never falls back to cfg.APIKey or ambient DEEPSEEK_API_KEY", func(t *testing.T) {
+		t.Setenv("DEEPSEEK_API_KEY", "ambient-should-not-be-used")
+		capability, _ := provider.SourceCapabilityOf(New(config.ProviderConfig{}))
+		p, err := capability.NewSource(config.ProviderConfig{APIKey: "cfg-should-not-be-used"}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "env-name", Ref: "DEEPSEEK_WORK_KEY"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// DEEPSEEK_WORK_KEY is intentionally left unset.
+		if _, err := p.FetchUsage(context.Background()); err == nil || !strings.Contains(err.Error(), "no API key") {
+			t.Fatalf("expected no-API-key error, got %v", err)
+		}
+	})
 }
 
 func TestFetchUsageStatusSemantics(t *testing.T) {
