@@ -36,9 +36,11 @@ Other provider coverage checked:
 - Gemini CLI / Gemini Code Assist document ordinary quota reset behavior, not
   banked reset credits:
   https://developers.google.com/gemini-code-assist/resources/quotas
-- GitHub Copilot documents monthly premium-request allowances and reset cycles,
-  with no rollover for unused requests:
-  https://docs.github.com/en/copilot/concepts/billing/copilot-requests
+- GitHub Copilot documents a monthly AI-credit allowance and reset cycle. The
+  current account-quota surface reports runtime categories such as premium
+  interactions, chat, and completions; it is not a banked reset-credit surface:
+  https://docs.github.com/en/copilot/concepts/billing/usage-based-billing-for-individuals
+  https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/usage-and-billing
 - OpenRouter exposes purchased-credit balances, not banked reset credits:
   https://openrouter.ai/docs/api/api-reference/credits/get-credits
   Clawmeter keeps that wallet balance separate from optional finite API-key limits;

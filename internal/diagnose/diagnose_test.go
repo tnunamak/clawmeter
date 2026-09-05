@@ -138,6 +138,49 @@ func TestDiagnosticOmitsProviderControlledLabels(t *testing.T) {
 	}
 }
 
+func TestIsSafeWindowNameAcceptsNewScopedModelNames(t *testing.T) {
+	safe := []string{
+		"7d Sonnet", "7d Opus 5", "7d Fable 5.1", "7d Haiku 4.5",
+		"7d Claude 3.5 Sonnet", "7d Claude 4 Opus", "5h", "7d All",
+	}
+	for _, name := range safe {
+		if !isSafeWindowName(name) {
+			t.Errorf("isSafeWindowName(%q) = false, want true", name)
+		}
+	}
+}
+
+func TestDiagnosticPreservesSafeScopedModelName(t *testing.T) {
+	summary := summarizeUsage(&provider.UsageData{
+		Windows: []provider.UsageWindow{{Name: "7d Fable 5.1", Utilization: 42}},
+	})
+	if len(summary.Windows) != 1 || summary.Windows[0].Name != "7d Fable 5.1" {
+		t.Fatalf("summary windows = %#v, want scoped model name preserved", summary.Windows)
+	}
+}
+
+func TestIsSafeWindowNameRejectsProviderControlledText(t *testing.T) {
+	unsafe := []string{
+		"7d account@example.com",
+		"7d John Smith",
+		"7d account-42",
+		"7d -",
+		"7d  Sonnet",
+		"7d Sonnet ",
+		"7d Sonnet  5",
+		"7d 5.1",
+		"7d Unknown 5",
+		"7d " + strings.Repeat("x", 30),
+		"account@example.com",
+		"7d Sonnet; DROP TABLE",
+	}
+	for _, name := range unsafe {
+		if isSafeWindowName(name) {
+			t.Errorf("isSafeWindowName(%q) = true, want false", name)
+		}
+	}
+}
+
 func TestSafeErrorCategories(t *testing.T) {
 	tests := map[string]string{
 		"429 rate limited":             "rate_limited",

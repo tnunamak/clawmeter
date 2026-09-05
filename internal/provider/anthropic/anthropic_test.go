@@ -238,7 +238,7 @@ func TestAddUsageWindowsIncludesNormalizedScopedModelLimits(t *testing.T) {
 				Percent:  float64Ptr(42),
 				ResetsAt: reset,
 				Scope: &usageLimitScope{
-					Model: &usageLimitModelScope{DisplayName: "Fable"},
+					Model: &usageLimitModelScope{DisplayName: "Fable 5.1"},
 				},
 			},
 		},
@@ -248,8 +248,8 @@ func TestAddUsageWindowsIncludesNormalizedScopedModelLimits(t *testing.T) {
 		t.Fatalf("len(data.Windows) = %d, want 1", len(data.Windows))
 	}
 	got := data.Windows[0]
-	if got.Name != "7d Fable" || got.DisplayName != "7 days (Fable)" {
-		t.Fatalf("window = %q/%q, want 7d Fable/7 days (Fable)", got.Name, got.DisplayName)
+	if got.Name != "7d Fable 5.1" || got.DisplayName != "7 days (Fable 5.1)" {
+		t.Fatalf("window = %q/%q, want 7d Fable 5.1/7 days (Fable 5.1)", got.Name, got.DisplayName)
 	}
 	if got.Utilization != 42 || !got.ResetsAt.Equal(reset) {
 		t.Fatalf("window usage/reset = %.0f/%s, want 42/%s", got.Utilization, got.ResetsAt, reset)

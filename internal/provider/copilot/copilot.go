@@ -293,7 +293,11 @@ type userResponse struct {
 }
 
 type quotaSnapshot struct {
-	PercentRemaining *float64 `json:"percentRemaining"`
+	PercentRemaining     *float64 `json:"percentRemaining"`
+	RemainingPercentage  *float64 `json:"remainingPercentage"`
+	RemainingPercentage2 *float64 `json:"remaining_percentage"`
+	ResetDate            string   `json:"resetDate"`
+	ResetDate2           string   `json:"reset_date"`
 }
 
 func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
@@ -306,42 +310,90 @@ func (p *Provider) transformUsage(resp *userResponse) *provider.UsageData {
 	if !resetKnown {
 		resetAt, resetKnown = parseResetDate(resp.QuotaResetDate2)
 	}
-	if !resetKnown && (resp.QuotaResetDate != "" || resp.QuotaResetDate2 != "") {
-		data.Warning = "Copilot returned an invalid quota reset date; reset is unknown"
-	}
-	snapshots := resp.QuotaSnapshots
-	if len(snapshots) == 0 {
-		snapshots = resp.QuotaSnapshots2
-	}
-
-	if snap, ok := snapshots["premiumInteractions"]; ok && validPercentRemaining(snap.PercentRemaining) {
-		usedPct := clamp(100-*snap.PercentRemaining, 0, 100)
-		data.Windows = append(data.Windows, provider.UsageWindow{
-			Name:        "premium",
-			DisplayName: "Premium",
-			Utilization: usedPct,
-			ResetsAt:    resetAt,
-		})
-	}
-
-	if snap, ok := snapshots["chat"]; ok && validPercentRemaining(snap.PercentRemaining) {
-		usedPct := clamp(100-*snap.PercentRemaining, 0, 100)
-		data.Windows = append(data.Windows, provider.UsageWindow{
-			Name:        "chat",
-			DisplayName: "Chat",
-			Utilization: usedPct,
-			ResetsAt:    resetAt,
-		})
-	}
+	invalidResetDate := !resetKnown && (resp.QuotaResetDate != "" || resp.QuotaResetDate2 != "")
+	appendSnapshotWindow(data, resp.QuotaSnapshots, resp.QuotaSnapshots2,
+		[]string{"premium_interactions", "premiumInteractions"}, "premium", "Premium", resetAt, resetKnown)
+	appendSnapshotWindow(data, resp.QuotaSnapshots, resp.QuotaSnapshots2,
+		[]string{"chat"}, "chat", "Chat", resetAt, resetKnown)
+	appendSnapshotWindow(data, resp.QuotaSnapshots, resp.QuotaSnapshots2,
+		[]string{"completions"}, "completions", "Completions", resetAt, resetKnown)
 
 	if len(data.Windows) == 0 {
 		data.Error = "no quota data in response"
 	}
-	if !resetKnown && len(data.Windows) > 0 && data.Warning == "" {
-		data.Warning = "Copilot quota reset date is not available; reset is unknown"
+	if len(data.Windows) > 0 && data.Warning == "" {
+		missingReset := false
+		for _, window := range data.Windows {
+			if window.ResetsAt.IsZero() {
+				missingReset = true
+				break
+			}
+		}
+		if missingReset {
+			if invalidResetDate {
+				data.Warning = "Copilot returned an invalid quota reset date; reset is unknown"
+			} else {
+				data.Warning = "Copilot quota reset date is not available; reset is unknown"
+			}
+		}
 	}
 
 	return data
+}
+
+func appendSnapshotWindow(
+	data *provider.UsageData,
+	primary, alternate map[string]quotaSnapshot,
+	names []string,
+	name, displayName string,
+	fallbackReset time.Time,
+	fallbackResetKnown bool,
+) {
+	snap, ok := findSnapshot(primary, alternate, names...)
+	if !ok {
+		return
+	}
+	percent, ok := snap.percentRemaining()
+	if !ok {
+		return
+	}
+	resetAt, _ := snap.resetAt(fallbackReset, fallbackResetKnown)
+	data.Windows = append(data.Windows, provider.UsageWindow{
+		Name:        name,
+		DisplayName: displayName,
+		Utilization: clamp(100-percent, 0, 100),
+		ResetsAt:    resetAt,
+	})
+}
+
+func findSnapshot(primary, alternate map[string]quotaSnapshot, names ...string) (quotaSnapshot, bool) {
+	for _, name := range names {
+		if snap, ok := primary[name]; ok {
+			return snap, true
+		}
+		if snap, ok := alternate[name]; ok {
+			return snap, true
+		}
+	}
+	return quotaSnapshot{}, false
+}
+
+func (s quotaSnapshot) percentRemaining() (float64, bool) {
+	for _, percent := range []*float64{s.PercentRemaining, s.RemainingPercentage, s.RemainingPercentage2} {
+		if validPercentRemaining(percent) {
+			return *percent, true
+		}
+	}
+	return 0, false
+}
+
+func (s quotaSnapshot) resetAt(fallback time.Time, fallbackKnown bool) (time.Time, bool) {
+	for _, value := range []string{s.ResetDate, s.ResetDate2} {
+		if parsed, ok := parseResetDate(value); ok {
+			return parsed, true
+		}
+	}
+	return fallback, fallbackKnown
 }
 
 func validPercentRemaining(percent *float64) bool {

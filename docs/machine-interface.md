@@ -58,8 +58,11 @@ are reduced to a closed category and safe message.
 
 Provider identity is the canonical provider key, without account- or source-derived
 display metadata. Quota windows and balances are numbered. A window name is included
-only when it belongs to Clawmeter's fixed safe vocabulary; provider-supplied labels are
-omitted because they could contain account-specific text.
+only when it belongs to Clawmeter's safe vocabulary. Fixed names are allowlisted;
+Anthropic's model-scoped weekly names are included only when they match the
+bounded Claude family/version shape such as `7d Fable 5.1` or `7d Claude 4
+Sonnet`. Other provider-supplied labels are omitted because they could contain
+account-specific text.
 
 The diagnostic never invokes quota-reset redemption or other quota-consuming actions.
 Providers that normally refresh expired local OAuth credentials may do so during a live

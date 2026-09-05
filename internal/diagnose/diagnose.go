@@ -62,10 +62,78 @@ type BalanceSummary struct {
 
 var safeWindowNames = map[string]bool{
 	"5h": true, "7d": true, "7d All": true, "7d OAuth": true,
-	"7d Opus": true, "7d Sonnet": true, "7d Fable": true,
 	"24h Pro": true, "24h Flash": true, "daily": true, "weekly": true,
 	"monthly": true, "premium": true, "chat": true, "credits": true,
-	"key": true, "bonus": true, "extra": true,
+	"key": true, "bonus": true, "extra": true, "completions": true,
+}
+
+// Anthropic scopes some fixed windows to a model. Keep accepting new numeric
+// versions of known model families without echoing arbitrary provider text.
+var safeScopedWindowPrefixes = []string{"7d "}
+
+var safeModelFamilies = map[string]bool{
+	"Fable":  true,
+	"Haiku":  true,
+	"Opus":   true,
+	"Sonnet": true,
+}
+
+const maxSafeScopedWindowNameLen = 24
+
+func isSafeWindowName(name string) bool {
+	if safeWindowNames[name] {
+		return true
+	}
+	for _, prefix := range safeScopedWindowPrefixes {
+		if suffix, ok := strings.CutPrefix(name, prefix); ok && isSafeModelSuffix(suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isSafeModelSuffix accepts Claude family names with an optional numeric
+// version, including the historical "Claude 3.5 Sonnet" form. It rejects
+// account labels and other provider-controlled text.
+func isSafeModelSuffix(suffix string) bool {
+	if suffix == "" || len(suffix) > maxSafeScopedWindowNameLen {
+		return false
+	}
+	parts := strings.Split(suffix, " ")
+	if strings.Join(parts, " ") != suffix {
+		return false
+	}
+	switch len(parts) {
+	case 1:
+		return safeModelFamilies[parts[0]]
+	case 2:
+		return (safeModelFamilies[parts[0]] && isSafeModelVersion(parts[1])) ||
+			(parts[0] == "Claude" && safeModelFamilies[parts[1]])
+	case 3:
+		return parts[0] == "Claude" &&
+			((safeModelFamilies[parts[1]] && isSafeModelVersion(parts[2])) ||
+				(isSafeModelVersion(parts[1]) && safeModelFamilies[parts[2]]))
+	default:
+		return false
+	}
+}
+
+func isSafeModelVersion(version string) bool {
+	segments := strings.Split(version, ".")
+	if len(segments) == 0 {
+		return false
+	}
+	for _, segment := range segments {
+		if segment == "" {
+			return false
+		}
+		for _, r := range segment {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Run diagnoses providers in the supplied order. shouldProbe is policy owned
@@ -165,7 +233,7 @@ func summarizeUsage(data *provider.UsageData) *UsageSummary {
 	}
 	for i, window := range data.PresentationWindows() {
 		windowSummary := WindowSummary{Index: i + 1, Utilization: window.Utilization}
-		if safeWindowNames[window.Name] {
+		if isSafeWindowName(window.Name) {
 			windowSummary.Name = window.Name
 		}
 		if !window.ResetsAt.IsZero() {

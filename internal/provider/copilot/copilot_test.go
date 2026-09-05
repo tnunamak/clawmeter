@@ -59,6 +59,63 @@ func TestTransformUsagePreservesZeroAndIgnoresUnknownSnapshots(t *testing.T) {
 	}
 }
 
+func TestTransformUsageAcceptsCurrentQuotaSnapshotNamesAndFields(t *testing.T) {
+	var response userResponse
+	if err := json.Unmarshal([]byte(`{
+		"quota_snapshots": {
+			"premium_interactions": {"remainingPercentage": 75, "resetDate": "2026-09-10T12:00:00Z"},
+			"chat": {"percentRemaining": 50},
+			"completions": {"remaining_percentage": 20}
+		},
+		"quotaResetDate": "2026-09-11T12:00:00Z"
+	}`), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	data := (&Provider{}).transformUsage(&response)
+	if len(data.Windows) != 3 {
+		t.Fatalf("windows = %#v, want premium, chat, and completions", data.Windows)
+	}
+	wants := []struct {
+		name        string
+		utilization float64
+		reset       time.Time
+	}{
+		{"premium", 25, time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)},
+		{"chat", 50, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)},
+		{"completions", 80, time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)},
+	}
+	for i, want := range wants {
+		got := data.Windows[i]
+		if got.Name != want.name || got.Utilization != want.utilization || !got.ResetsAt.Equal(want.reset) {
+			t.Errorf("window %d = %+v, want name=%q utilization=%v reset=%v", i, got, want.name, want.utilization, want.reset)
+		}
+	}
+}
+
+func TestTransformUsageAcceptsPerSnapshotResetDates(t *testing.T) {
+	var response userResponse
+	if err := json.Unmarshal([]byte(`{
+		"quotaSnapshots": {
+			"premium_interactions": {"remainingPercentage": 75, "resetDate": "2026-09-10T12:00:00Z"},
+			"chat": {"remainingPercentage": 50, "reset_date": "2026-09-10T12:00:00Z"}
+		},
+		"quotaResetDate": "not-a-date"
+	}`), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	data := (&Provider{}).transformUsage(&response)
+	if len(data.Windows) != 2 || data.Warning != "" {
+		t.Fatalf("data = %#v, want two windows with no reset warning", data)
+	}
+	for _, window := range data.Windows {
+		if window.ResetsAt.IsZero() {
+			t.Errorf("window %q has no reset date", window.Name)
+		}
+	}
+}
+
 func TestTransformUsageDoesNotTurnMissingPercentageIntoExhaustion(t *testing.T) {
 	for _, payload := range []string{
 		`{"quotaSnapshots":{"chat":{}}}`,

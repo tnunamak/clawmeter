@@ -147,7 +147,7 @@ clawmeter tray           # run the tray in this session
 | Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
 | Antigravity | Separate weekly pools for Gemini models and Claude/GPT models |
 | Gemini | 24h Pro-model and Flash-model quotas; Code Assist tier checked when available |
-| GitHub Copilot | Premium and chat interactions |
+| GitHub Copilot | Provider-reported premium, chat, and completion quotas when available |
 | Grok/xAI | Grok weekly usage pool; API prepaid credits |
 | Kimi | Usage and rate limits; cadence is provider-reported/experimental |
 | OpenRouter | Wallet credit balance and finite API-key limits |
@@ -158,6 +158,11 @@ clawmeter tray           # run the tray in this session
 | DeepSeek | Account balance only (read-only); no utilization, spend, or reset-time data |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
+
+Model selection and quota windows are separate. Claude's model-scoped weekly windows use
+the names returned by Anthropic, including new model names. Codex's quota response does
+not identify the active model, so Codex rows stay labeled by the provider and the
+reported time window rather than guessing from the CLI model selection.
 
 Provider maturity is binary and intentionally kept out of quota rows and the tray. The `clawmeter providers` inventory and `--json` metadata identify experimental integrations and link to [provider maturity](docs/provider-maturity.md).
 
