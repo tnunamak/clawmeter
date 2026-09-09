@@ -4,6 +4,7 @@ package tray
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -189,13 +190,32 @@ func TestTrayTitleShowsUpdateIndicator(t *testing.T) {
 	defer setPendingRelease(oldRelease)
 
 	setPendingRelease(nil)
-	if got := trayTitle(); got != "Clawmeter" {
+	if got := trayTitle(); got != trayTitleForPlatform(runtime.GOOS, false) {
 		t.Fatalf("trayTitle without update = %q", got)
 	}
 
 	setPendingRelease(&update.Release{Version: "v9.9.9"})
-	if got := trayTitle(); got != "Clawmeter •" {
+	if got := trayTitle(); got != trayTitleForPlatform(runtime.GOOS, true) {
 		t.Fatalf("trayTitle with update = %q", got)
+	}
+}
+
+func TestTrayTitleForPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		os     string
+		update bool
+		want   string
+	}{
+		{"darwin", false, ""},
+		{"darwin", true, ""},
+		{"linux", false, "Clawmeter"},
+		{"linux", true, "Clawmeter •"},
+		{"windows", false, "Clawmeter"},
+		{"windows", true, "Clawmeter •"},
+	} {
+		if got := trayTitleForPlatform(tc.os, tc.update); got != tc.want {
+			t.Errorf("trayTitleForPlatform(%q, %t) = %q, want %q", tc.os, tc.update, got, tc.want)
+		}
 	}
 }
 

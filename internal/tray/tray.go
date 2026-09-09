@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -138,7 +139,7 @@ func onReady() {
 	// Do not silently persist anything on first run.
 
 	setIconByName("gray", icons.Gray)
-	systray.SetTitle("Clawmeter")
+	systray.SetTitle(trayTitleForPlatform(runtime.GOOS, false))
 	systray.SetTooltip("")
 
 	// Build header
@@ -1405,7 +1406,15 @@ func updateTrayTitle(results map[string]*provider.UsageData) {
 }
 
 func trayTitle() string {
-	if updateAvailable() {
+	return trayTitleForPlatform(runtime.GOOS, updateAvailable())
+}
+
+func trayTitleForPlatform(goos string, hasUpdate bool) string {
+	// On macOS the title occupies menu-bar space beside the icon.
+	if goos == "darwin" {
+		return ""
+	}
+	if hasUpdate {
 		return "Clawmeter •"
 	}
 	return "Clawmeter"
@@ -1705,7 +1714,7 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 
 func setErrorState(msg string) {
 	setIconByName("gray", icons.Gray)
-	systray.SetTitle("Clawmeter")
+	systray.SetTitle(trayTitleForPlatform(runtime.GOOS, false))
 	systray.SetTooltip("")
 }
 
