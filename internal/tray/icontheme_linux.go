@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"fyne.io/systray"
+	"github.com/tnunamak/clawmeter/internal/systray"
 	xdraw "golang.org/x/image/draw"
 
 	"github.com/tnunamak/clawmeter/internal/tray/icons"

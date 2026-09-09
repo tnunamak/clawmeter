@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"fyne.io/systray"
 	"github.com/gen2brain/beeep"
 	"github.com/pkg/browser"
+	"github.com/tnunamak/clawmeter/internal/systray"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
 	"github.com/tnunamak/clawmeter/internal/cache"

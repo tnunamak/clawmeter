@@ -3,7 +3,7 @@
 package tray
 
 import (
-	"fyne.io/systray"
+	"github.com/tnunamak/clawmeter/internal/systray"
 	"golang.org/x/sys/windows"
 
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
