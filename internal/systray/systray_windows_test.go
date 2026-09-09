@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const iconFilePath = "example/icon/iconwin.ico"
+const iconFilePath = "testdata/iconwin.ico"
 
 func TestBaseWindowsTray(t *testing.T) {
 	systrayReady = func() {}
@@ -43,39 +43,39 @@ func TestBaseWindowsTray(t *testing.T) {
 		t.Errorf("SetIcon failed: %s", err)
 	}
 
-	var id atomic.Int32
-	err := wt.addOrUpdateMenuItem(id.Add(1), "Simple enabled", false, false)
+	var id atomic.Uint32
+	err := wt.addOrUpdateMenuItem(id.Add(1), 0, "Simple enabled", false, false)
 	if err != nil {
 		t.Errorf("mergeMenuItem failed: %s", err)
 	}
-	err = wt.addOrUpdateMenuItem(id.Add(1), "Simple disabled", true, false)
+	err = wt.addOrUpdateMenuItem(id.Add(1), 0, "Simple disabled", true, false)
 	if err != nil {
 		t.Errorf("mergeMenuItem failed: %s", err)
 	}
-	err = wt.addSeparatorMenuItem(id.Add(1))
+	err = wt.addSeparatorMenuItem(id.Add(1), 0)
 	if err != nil {
 		t.Errorf("addSeparatorMenuItem failed: %s", err)
 	}
-	err = wt.addOrUpdateMenuItem(id.Add(1), "Simple checked enabled", false, true)
+	err = wt.addOrUpdateMenuItem(id.Add(1), 0, "Simple checked enabled", false, true)
 	if err != nil {
 		t.Errorf("mergeMenuItem failed: %s", err)
 	}
-	err = wt.addOrUpdateMenuItem(id.Add(1), "Simple checked disabled", true, true)
+	err = wt.addOrUpdateMenuItem(id.Add(1), 0, "Simple checked disabled", true, true)
 	if err != nil {
 		t.Errorf("mergeMenuItem failed: %s", err)
 	}
 
-	err = wt.hideMenuItem(1)
+	err = wt.hideMenuItem(1, 0)
 	if err != nil {
 		t.Errorf("hideMenuItem failed: %s", err)
 	}
 
-	err = wt.hideMenuItem(100)
+	err = wt.hideMenuItem(100, 0)
 	if err == nil {
 		t.Error("hideMenuItem failed: must return error on invalid item id")
 	}
 
-	err = wt.addOrUpdateMenuItem(2, "Simple disabled update", true, false)
+	err = wt.addOrUpdateMenuItem(2, 0, "Simple disabled update", true, false)
 	if err != nil {
 		t.Errorf("mergeMenuItem failed: %s", err)
 	}

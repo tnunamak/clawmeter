@@ -37,7 +37,7 @@ GOOS=windows GOARCH=amd64 GOFLAGS='-tags=tray' go-licenses report ./cmd/clawmete
 | Component | Use | License |
 | --- | --- | --- |
 | `github.com/tnunamak/clawmeter` | application code | MIT |
-| `fyne.io/systray` vendored at `internal/systray` | system tray integration | Apache-2.0 |
+| `github.com/tnunamak/clawmeter/internal/systray` (vendored `fyne.io/systray` fork) | system tray integration | Apache-2.0 |
 | `github.com/tadvi/systray` | systray fork ancestry | MIT |
 | `git.sr.ht/~jackmordaunt/go-toast` | Windows toast integration | MIT |
 | `github.com/gen2brain/beeep` | desktop notification helper | BSD-2-Clause |
