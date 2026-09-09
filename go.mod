@@ -1,14 +1,14 @@
 module github.com/tnunamak/clawmeter
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/gen2brain/beeep v0.11.2
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
-	golang.org/x/image v0.36.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/image v0.45.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -22,5 +22,5 @@ require (
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
 	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )
