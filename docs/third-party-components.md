@@ -1,6 +1,6 @@
 # Third-party components
 
-Clawmeter is released under the MIT license. Windows release artifacts are built from the Go module graph and the local `systray-fork` replacement in this repository.
+Clawmeter is released under the MIT license. Windows release artifacts are built from the Go module graph and the `fyne.io/systray` fork vendored at `internal/systray` in this repository.
 
 ## Bundled assets
 
@@ -37,7 +37,7 @@ GOOS=windows GOARCH=amd64 GOFLAGS='-tags=tray' go-licenses report ./cmd/clawmete
 | Component | Use | License |
 | --- | --- | --- |
 | `github.com/tnunamak/clawmeter` | application code | MIT |
-| `fyne.io/systray` via `./systray-fork` | system tray integration | Apache-2.0 |
+| `fyne.io/systray` vendored at `internal/systray` | system tray integration | Apache-2.0 |
 | `github.com/tadvi/systray` | systray fork ancestry | MIT |
 | `git.sr.ht/~jackmordaunt/go-toast` | Windows toast integration | MIT |
 | `github.com/gen2brain/beeep` | desktop notification helper | BSD-2-Clause |

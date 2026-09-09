@@ -1,5 +1,17 @@
 # Systray
 
+> **Note:** This directory is a vendored, modified fork of
+> [`fyne.io/systray`](https://github.com/fyne-io/systray) v1.12.0, kept here as an
+> ordinary package of the `github.com/tnunamak/clawmeter` module (not a separate
+> Go module) so `go install .../cmd/clawmeter@latest` works without a `replace`
+> directive. Clawmeter's modifications (KDE/freedesktop icon-name theming via
+> `SetIconNameWithPixmap`, batched menu updates, and platform tweaks) are on top
+> of that base and are not present upstream. It remains under the original
+> Apache-2.0 license (see `LICENSE` in this directory). The rest of this README
+> is the upstream document and its `import "fyne.io/systray"` examples below are
+> historical; within this repository the actual import path is
+> `github.com/tnunamak/clawmeter/internal/systray`.
+
 systray is a cross-platform Go library to place an icon and menu in the notification area.
 This repository is a fork of [getlantern/systray](https://github.com/getlantern/systray)
 removing the GTK dependency and support for legacy linux system tray.
