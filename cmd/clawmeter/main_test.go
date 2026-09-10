@@ -36,21 +36,33 @@ func configPathForHome(home string) string {
 	}
 }
 
-// runWithHome points every supported platform's config-home variable at an
-// isolated directory so integration tests cannot touch the developer's config.
+// runWithHome isolates config, credentials, and executable discovery. Do not
+// inherit the host environment: provider tokens and config overrides live there.
 func runWithHome(t *testing.T, bin, home string, args ...string) (string, string, int) {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
+	cmd.Dir = home
 	volume := filepath.VolumeName(home)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"USERPROFILE="+home,
-		"HOMEDRIVE="+volume,
-		"HOMEPATH="+strings.TrimPrefix(home, volume),
-		"APPDATA="+filepath.Join(home, "AppData", "Roaming"),
-		"LOCALAPPDATA="+filepath.Join(home, "AppData", "Local"),
-		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
-	)
+	cmd.Env = []string{
+		"HOME=" + home,
+		"USERPROFILE=" + home,
+		"HOMEDRIVE=" + volume,
+		"HOMEPATH=" + strings.TrimPrefix(home, volume),
+		"APPDATA=" + filepath.Join(home, "AppData", "Roaming"),
+		"LOCALAPPDATA=" + filepath.Join(home, "AppData", "Local"),
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
+		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"),
+		"XDG_STATE_HOME=" + filepath.Join(home, ".local", "state"),
+		"XDG_RUNTIME_DIR=" + home,
+		"TMPDIR=" + home,
+		"TMP=" + home,
+		"TEMP=" + home,
+		"PATH=" + home,
+	}
+	if runtime.GOOS == "windows" {
+		cmd.Env = append(cmd.Env, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"))
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -271,6 +283,13 @@ func TestSourceHelpAndUnsupportedKindAreGeneric(t *testing.T) {
 
 func TestSourceAddDoesNotInventUnavailableDefault(t *testing.T) {
 	bin := buildBinary(t)
+	// Simulate an authenticated developer without reading real credentials.
+	credentialsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(credentialsDir, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"host-test","expiresAt":4102444800000}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "host-test")
+	t.Setenv("CLAUDE_CONFIG_DIR", credentialsDir)
 	home := t.TempDir()
 	profile := filepath.Join(home, "work-profile")
 	if _, stderr, code := runWithHome(t, bin, home, "providers", "source", "add", "claude", "work", "config-dir", profile); code != 0 {
