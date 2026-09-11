@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -24,7 +25,124 @@ import (
 	"github.com/tnunamak/clawmeter/internal/update"
 )
 
-var Version = "dev"
+// Version is stamped by the release build with -X main.Version=<tag> (see
+// Makefile and .github/workflows/semantic-release.yml), so it carries the
+// v-prefixed tag that update.Check compares against GitHub's tag_name.
+//
+// A `go install github.com/tnunamak/clawmeter/cmd/clawmeter@latest` build gets
+// no ldflags, so it kept this "dev" placeholder while actually being a tagged
+// release. Two things then misbehaved: `clawmeter version` reported "dev", and
+// `clawmeter update` refused outright ("self-update is not available for dev
+// builds"). An external updater that compares reported version against the
+// latest tag therefore reinstalled clawmeter on every run, forever.
+//
+// The module version is recorded in the binary either way, so read it when the
+// placeholder survives. Go writes "(devel)" there for a build from a working
+// tree, which is genuinely not a release — that case stays "dev".
+// -X rewrites this variable's value after package initialization, so a release
+// build's tag survives and resolveVersion below is only consulted when the
+// placeholder is still in place.
+var Version = defaultVersion
+
+const defaultVersion = "dev"
+
+func init() { Version = resolveVersion(Version, debug.ReadBuildInfo) }
+
+// resolveVersion keeps an ldflags-stamped version and otherwise falls back to
+// the module version the go tool embeds in the binary.
+func resolveVersion(stamped string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
+	if stamped != defaultVersion {
+		return stamped
+	}
+	info, ok := readBuildInfo()
+	if !ok || info == nil {
+		return defaultVersion
+	}
+	return releaseVersionOrDev(info.Main.Version)
+}
+
+// releaseVersionOrDev accepts only a plain release tag such as "v0.34.4".
+//
+// Everything else the go tool can put in Main.Version describes a build that is
+// not a release, and must keep reporting "dev" so `clawmeter update` stays
+// disabled for it:
+//   - ""          no module version recorded
+//   - "(devel)"   the documented working-tree marker
+//   - a pseudo-version like "v0.34.2-0.20260910012458-c0abf48acfd4", which the
+//     go tool synthesizes for a commit that is not itself tagged
+//   - any of the above with a "+dirty" suffix for uncommitted changes
+//
+// Checking the shape rather than listing the markers matters: a local build of
+// this repo reports "v0.34.2-0.20260910012458-c0abf48acfd4+dirty", not
+// "(devel)", so a marker list alone would let a dirty tree claim to be a
+// release and try to self-update.
+func releaseVersionOrDev(v string) string {
+	if !strings.HasPrefix(v, "v") {
+		return defaultVersion
+	}
+	if strings.Contains(v, "+") {
+		return defaultVersion
+	}
+	// A release tag is v<major>.<minor>.<patch>, optionally with a prerelease
+	// suffix. A pseudo-version always carries a timestamp-and-hash segment,
+	// which shows up as a hyphen followed by a digit run of that form.
+	base := strings.TrimPrefix(v, "v")
+	if strings.Count(base, ".") < 2 {
+		return defaultVersion
+	}
+	if isPseudoVersion(base) {
+		return defaultVersion
+	}
+	return v
+}
+
+// isPseudoVersion reports whether base looks like the go tool's synthesized
+// <version>-<yyyymmddhhmmss>-<12-hex> form rather than a real tag.
+// The timestamp and hash are the last two hyphen-separated segments, but the
+// prerelease part before them varies ("v0.34.2-0.<stamp>-<hash>" splits into
+// four segments, not three), so look for an adjacent stamp/hash PAIR anywhere
+// rather than at fixed indices.
+func isPseudoVersion(base string) bool {
+	parts := strings.Split(base, "-")
+	for i := 0; i+1 < len(parts); i++ {
+		if isTimestamp(parts[i]) && isShortHash(parts[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTimestamp accepts the 14-digit UTC stamp, with or without the "<n>."
+// prefix the go tool emits when the base version is itself a prerelease. A real
+// pseudo-version for an untagged commit after v0.34.2 reads
+// "v0.34.2-0.20260910012458-c0abf48acfd4", where the middle segment is
+// "0.20260910012458" rather than a bare 14-digit run.
+func isTimestamp(s string) bool {
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		s = s[i+1:]
+	}
+	if len(s) != 14 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isShortHash(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
 
 func main() {
 	os.Exit(run())

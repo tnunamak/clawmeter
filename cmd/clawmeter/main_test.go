@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"runtime"
 	"strings"
 	"testing"
@@ -466,5 +467,71 @@ func TestTopLevelAllIsStatusShortcut(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Claude") {
 		t.Fatalf("--all should include unavailable providers in status output: %s", stdout)
+	}
+}
+
+func buildInfoWith(version string) func() (*debug.BuildInfo, bool) {
+	return func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: version}}, true
+	}
+}
+
+func TestResolveVersionKeepsLdflagsStampedRelease(t *testing.T) {
+	// A release build stamps -X main.Version=<tag>. The embedded module version
+	// must never override it, or a retagged build would report the wrong thing.
+	if got := resolveVersion("v9.9.9", buildInfoWith("v0.34.4")); got != "v9.9.9" {
+		t.Errorf("resolveVersion(stamped) = %q, want %q", got, "v9.9.9")
+	}
+}
+
+func TestResolveVersionFallsBackToModuleVersion(t *testing.T) {
+	// `go install ...@latest` passes no ldflags, so the placeholder survives even
+	// though the binary IS a tagged release. Reporting "dev" there made
+	// `clawmeter update` refuse to run and made external updaters reinstall on
+	// every invocation.
+	if got := resolveVersion("dev", buildInfoWith("v0.34.4")); got != "v0.34.4" {
+		t.Errorf("resolveVersion(go install) = %q, want %q", got, "v0.34.4")
+	}
+}
+
+func TestResolveVersionStaysDevForNonReleaseBuilds(t *testing.T) {
+	// "(devel)" is a working-tree build and "" means no module version was
+	// recorded. Neither is a release, so self-update must stay disabled.
+	for _, embedded := range []string{"(devel)", ""} {
+		if got := resolveVersion("dev", buildInfoWith(embedded)); got != "dev" {
+			t.Errorf("resolveVersion(dev, %q) = %q, want %q", embedded, got, "dev")
+		}
+	}
+	unavailable := func() (*debug.BuildInfo, bool) { return nil, false }
+	if got := resolveVersion("dev", unavailable); got != "dev" {
+		t.Errorf("resolveVersion with no build info = %q, want %q", got, "dev")
+	}
+}
+
+func TestReleaseVersionOrDevAcceptsOnlyReleaseTags(t *testing.T) {
+	releases := []string{"v0.34.4", "v1.0.0", "v2.10.3-rc.1"}
+	for _, v := range releases {
+		if got := releaseVersionOrDev(v); got != v {
+			t.Errorf("releaseVersionOrDev(%q) = %q, want %q", v, got, v)
+		}
+	}
+
+	// A dirty local build of this repo reports a pseudo-version with +dirty, NOT
+	// "(devel)". Treating it as a release would re-enable self-update for an
+	// uncommitted tree and report a version that was never published.
+	notReleases := []string{
+		"",
+		"(devel)",
+		"v0.34.2-0.20260910012458-c0abf48acfd4",
+		"v0.34.2-0.20260910012458-c0abf48acfd4+dirty",
+		"v0.34.4+dirty",
+		"devel",
+		"0.34.4",
+		"v1.2",
+	}
+	for _, v := range notReleases {
+		if got := releaseVersionOrDev(v); got != defaultVersion {
+			t.Errorf("releaseVersionOrDev(%q) = %q, want %q", v, got, defaultVersion)
+		}
 	}
 }
