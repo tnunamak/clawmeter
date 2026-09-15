@@ -192,6 +192,24 @@ func SourceKey(p Provider) string {
 	return p.Name() + ":" + id
 }
 
+// UsageDataMatchesSource reports whether usage data can be shown for the
+// requested provider source. Older default-source cache entries may not carry
+// source metadata; explicitly named sources must carry their exact ID.
+func UsageDataMatchesSource(data *UsageData, providerName, sourceID string) bool {
+	if data == nil {
+		return false
+	}
+	if data.Provider != "" && data.Provider != providerName {
+		return false
+	}
+	expected := strings.TrimSpace(sourceID)
+	actual := strings.TrimSpace(data.SourceID)
+	if expected == "" || expected == "default" {
+		return actual == "" || actual == "default"
+	}
+	return actual == expected
+}
+
 func SourceRevision(p Provider) string {
 	if source, ok := p.(SourceRevisionCapability); ok {
 		return source.SourceRevision()

@@ -23,6 +23,9 @@ var testNow = time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 func newTestProvider(url string) *Provider {
 	p := New(config.ProviderConfig{})
 	p.usageURL = url
+	// Do not let a developer's real ~/.bailian session redirect API-fixture
+	// tests into the console path.
+	p.consoleConfigPath = filepath.Join(os.TempDir(), "clawmeter-test-no-console-session.json")
 	p.now = func() time.Time { return testNow }
 	return p
 }
@@ -93,7 +96,7 @@ func TestFetchUsage_HappyPath(t *testing.T) {
 		utilization float64
 	}{
 		{"session_5h", "5-Hour", 50, 200, 25},
-		{"weekly", "Weekly", 500, 2000, 25},
+		{"weekly", "7d", 500, 2000, 25},
 		{"monthly", "Monthly", 1000, 8000, 12.5},
 	}
 	for i, tt := range tests {
@@ -503,7 +506,7 @@ func TestFetchUsage_FiveHourResetNormalization(t *testing.T) {
 }
 
 func TestFetchUsage_PartialWindows(t *testing.T) {
-	// Only weekly has complete data; 5h missing total, monthly missing used.
+	// Only the weekly window has complete data; 5h missing total, monthly missing used.
 	resp := map[string]any{
 		"codingPlanInstanceInfos": []any{
 			map[string]any{

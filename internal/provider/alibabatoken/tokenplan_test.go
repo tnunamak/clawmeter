@@ -108,7 +108,7 @@ func TestFetchUsageOnlyCallsReadOnlyOperations(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls = %d, want 2", len(calls))
 	}
-	if len(data.Windows) != 2 || data.Windows[0].DisplayName != "5h" || data.Windows[0].Utilization != 42.5 || data.Windows[1].DisplayName != "7d" || data.Windows[1].Utilization != 81 {
+	if len(data.Windows) != 2 || data.Windows[0].Name != "session_5h" || data.Windows[0].DisplayName != "5h" || data.Windows[0].Utilization != 42.5 || data.Windows[1].Name != "weekly" || data.Windows[1].DisplayName != "7d" || data.Windows[1].Utilization != 81 {
 		t.Fatalf("Windows = %#v", data.Windows)
 	}
 	if data.ResetCredits == nil || data.ResetCredits.DisplayCount(p.now()) != 1 {

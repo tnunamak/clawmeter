@@ -146,6 +146,29 @@ func TestSourceKeysAndFetchIsolation(t *testing.T) {
 	}
 }
 
+func TestUsageDataMatchesSource(t *testing.T) {
+	tests := []struct {
+		name         string
+		data         *UsageData
+		providerName string
+		sourceID     string
+		want         bool
+	}{
+		{name: "default legacy metadata omitted", data: &UsageData{Provider: "claude"}, providerName: "claude", sourceID: "default", want: true},
+		{name: "default metadata", data: &UsageData{Provider: "claude", SourceID: "default"}, providerName: "claude", sourceID: "default", want: true},
+		{name: "explicit exact", data: &UsageData{Provider: "claude", SourceID: "odl"}, providerName: "claude", sourceID: "odl", want: true},
+		{name: "explicit relabeled default", data: &UsageData{Provider: "claude", SourceID: "default"}, providerName: "claude", sourceID: "odl", want: false},
+		{name: "provider mismatch", data: &UsageData{Provider: "codex", SourceID: "odl"}, providerName: "claude", sourceID: "odl", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := UsageDataMatchesSource(tt.data, tt.providerName, tt.sourceID); got != tt.want {
+				t.Fatalf("UsageDataMatchesSource(%+v, %q, %q) = %v, want %v", tt.data, tt.providerName, tt.sourceID, got, tt.want)
+			}
+		})
+	}
+}
+
 type rotatingSourceProvider struct {
 	revision string
 	next     []string

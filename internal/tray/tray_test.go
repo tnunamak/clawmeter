@@ -55,6 +55,18 @@ func TestTrayCacheAndPriorResultsRequireMatchingSourceRevision(t *testing.T) {
 	}
 }
 
+func TestTrayCacheRejectsDataFromAnotherSource(t *testing.T) {
+	data := &provider.UsageData{Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 80}}}
+	entry := &cache.Entry{
+		ProviderData:    map[string]*provider.UsageData{"claude:odl": data},
+		SourceRevisions: map[string]string{"claude:odl": "same-revision"},
+	}
+	current := sourceMenuTestProvider{id: "odl", revision: "same-revision"}
+	if got := cachedResultsForCurrentSources(entry, []provider.Provider{current}); len(got) != 0 {
+		t.Fatalf("startup cache relabeled another source: %#v", got)
+	}
+}
+
 func TestApplyProviderEnablementUsesFamilyForEverySource(t *testing.T) {
 	menus := map[string]*providerMenuItems{
 		"claude":      {provider: sourceMenuTestProvider{id: "default"}},

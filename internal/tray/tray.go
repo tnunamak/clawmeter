@@ -890,15 +890,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 				break
 			}
 
-			resetStr, indicator := "reset unknown", "reset unknown"
-			if !window.ResetsAt.IsZero() {
-				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-				resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
-			} else if window.ResetPolicy != "" {
-				indicator = window.ResetPolicy
-			}
-			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], fmt.Sprintf("%s: %.0f%% — %s — %s",
-				trayWindowLabel(window), window.Utilization, resetStr, indicator))
+			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], trayWindowStatus(window))
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], true)
 
 		}
@@ -1653,6 +1645,21 @@ func trayWindowLabel(window provider.UsageWindow) string {
 	return strings.TrimSpace(window.Name)
 }
 
+func trayWindowStatus(window provider.UsageWindow) string {
+	label := trayWindowLabel(window)
+	if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
+		return fmt.Sprintf("%s: %.0f%% — reset not reported", label, window.Utilization)
+	}
+	resetStr, indicator := "reset unknown", "reset unknown"
+	if !window.ResetsAt.IsZero() {
+		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+		resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
+	} else if window.ResetPolicy != "" {
+		indicator = window.ResetPolicy
+	}
+	return fmt.Sprintf("%s: %.0f%% — %s — %s", label, window.Utilization, resetStr, indicator)
+}
+
 func compactProjectionEstimate(proj forecast.Projection) string {
 	estimate := forecast.PaceLabel(proj.ProjectedPct)
 	if strings.HasPrefix(estimate, "est.") {
@@ -1816,6 +1823,9 @@ func cachedResultsForCurrentSources(entry *cache.Entry, providers []provider.Pro
 			continue
 		}
 		if data, ok := entry.ProviderData[name]; ok {
+			if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) {
+				continue
+			}
 			results[name] = data
 		}
 	}

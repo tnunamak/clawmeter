@@ -327,6 +327,33 @@ func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
 	}
 }
 
+func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
+	pf := ProviderFormatter{
+		Display: "Claude",
+		Data: &provider.UsageData{Windows: []provider.UsageWindow{{
+			Name: "extra", DisplayName: "Extra usage", Utilization: 100,
+		}}},
+	}
+
+	got := pf.FormatPlain()
+	if !strings.Contains(got, "Extra usage: 100% (reset not reported)") {
+		t.Fatalf("FormatPlain() = %q, want clear resetless extra-usage fact", got)
+	}
+	if strings.Contains(got, "reset unknown") || strings.Contains(got, "resets unknown") {
+		t.Fatalf("FormatPlain() = %q, should not present resetless usage as a warning", got)
+	}
+	if got := classifyProvider(&pf); got.tier != 4 {
+		t.Fatalf("classifyProvider() tier = %d, want non-severity tier 4", got.tier)
+	}
+}
+
+func TestPlainWindowLabelUsesCompactWeeklyDisplayName(t *testing.T) {
+	window := provider.UsageWindow{Name: "weekly", DisplayName: "7d"}
+	if got := plainWindowLabel(window); got != "7d" {
+		t.Fatalf("plainWindowLabel(%+v) = %q, want 7d", window, got)
+	}
+}
+
 func TestFormatPlainIncludesResetCredits(t *testing.T) {
 	now := time.Now()
 	pf := ProviderFormatter{
@@ -681,7 +708,7 @@ func TestStaleFallbackMarksLastGoodDataAndDropsResetlessWindows(t *testing.T) {
 		},
 	}
 
-	got, ok := staleFallback(entry, "claude", &provider.UsageData{Error: "usage unavailable"})
+	got, ok := staleFallback(entry, "claude", &provider.UsageData{Provider: "claude", Error: "usage unavailable"})
 	if !ok {
 		t.Fatal("staleFallback() ok = false, want true")
 	}
@@ -716,11 +743,11 @@ func TestStaleFallbackRejectsInvalidatedPriorUsage(t *testing.T) {
 func TestStaleFallbackRequiresMatchingSourceRevision(t *testing.T) {
 	entry := &cache.Entry{ProviderData: map[string]*provider.UsageData{
 		"claude:work": {
-			Provider: "claude",
-			Windows:  []provider.UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}},
+			Provider: "claude", SourceID: "work",
+			Windows: []provider.UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}},
 		},
 	}}
-	current := &provider.UsageData{Provider: "claude", Error: "temporarily unavailable"}
+	current := &provider.UsageData{Provider: "claude", SourceID: "work", Error: "temporarily unavailable"}
 	if got, ok := staleFallback(entry, "claude:work", current, "current-revision"); ok || got != nil {
 		t.Fatalf("staleFallback() = %#v, %v; cache without source provenance must not be reused", got, ok)
 	}
@@ -733,25 +760,45 @@ func TestStaleFallbackRequiresMatchingSourceRevision(t *testing.T) {
 	}
 }
 
+func TestStaleFallbackRejectsDataFromAnotherSource(t *testing.T) {
+	entry := &cache.Entry{
+		ProviderData: map[string]*provider.UsageData{
+			"claude:odl": {
+				Provider: "claude", SourceID: "default",
+				Windows: []provider.UsageWindow{{Name: "7d All", Utilization: 80, ResetsAt: time.Now().Add(time.Hour)}},
+			},
+		},
+		SourceRevisions: map[string]string{"claude:odl": "same-revision"},
+	}
+	current := &provider.UsageData{Provider: "claude", SourceID: "odl", Error: "rate limited"}
+	if got, ok := staleFallback(entry, "claude:odl", current, "same-revision"); ok || got != nil {
+		t.Fatalf("staleFallback() = %#v, %t; must not relabel another source", got, ok)
+	}
+}
+
 func TestApplySourceFallbacksPreservesSourceLocalStaleDataAndExitSignal(t *testing.T) {
 	work := sourcedCLIProvider{id: "work"}
 	personal := sourcedCLIProvider{id: "personal"}
 	result := &provider.MultiFetchResult{
 		Results: map[string]*provider.UsageData{
-			"claude:work":     {Provider: "claude", Error: "rate limited"},
-			"claude:personal": {Provider: "claude", Error: "offline"},
+			"claude:work":     {Provider: "claude", SourceID: "work", Error: "rate limited"},
+			"claude:personal": {Provider: "claude", SourceID: "personal", Error: "offline"},
 		},
-		SourceRevisions: map[string]string{"claude:work": "work-revision"},
-		Errors:          map[string]error{"claude:personal": errors.New("offline")},
+		SourceRevisions: map[string]string{"claude:work": "work-revision", "claude:personal": "personal-revision"},
+		Errors:          map[string]error{"claude:work": errors.New("rate limited"), "claude:personal": errors.New("offline")},
 	}
 	entry := &cache.Entry{
 		ProviderData: map[string]*provider.UsageData{
 			"claude:work": {
-				Provider: "claude",
-				Windows:  []provider.UsageWindow{{Name: "5h", Utilization: 20, ResetsAt: time.Now().Add(time.Hour)}},
+				Provider: "claude", SourceID: "work",
+				Windows: []provider.UsageWindow{{Name: "5h", Utilization: 20, ResetsAt: time.Now().Add(time.Hour)}},
+			},
+			"claude:personal": {
+				Provider: "claude", SourceID: "personal",
+				Windows: []provider.UsageWindow{{Name: "5h", Utilization: 80, ResetsAt: time.Now().Add(time.Hour)}},
 			},
 		},
-		SourceRevisions: map[string]string{"claude:work": "work-revision"},
+		SourceRevisions: map[string]string{"claude:work": "work-revision", "claude:personal": "personal-revision"},
 	}
 	if !applySourceFallbacks([]provider.Provider{work, personal}, result, entry) {
 		t.Fatal("raw source fetch error did not preserve a nonzero exit signal")
@@ -759,8 +806,8 @@ func TestApplySourceFallbacksPreservesSourceLocalStaleDataAndExitSignal(t *testi
 	if data := result.Results["claude:work"]; !data.Stale || !data.HasPresentableUsage() {
 		t.Fatalf("matching work cache was not used source-locally: %#v", data)
 	}
-	if data := result.Results["claude:personal"]; data.Stale || data.Error == "" {
-		t.Fatalf("personal error was incorrectly replaced: %#v", data)
+	if data := result.Results["claude:personal"]; !data.Stale || data.Windows[0].Utilization != 80 {
+		t.Fatalf("matching personal cache was not used source-locally: %#v", data)
 	}
 }
 

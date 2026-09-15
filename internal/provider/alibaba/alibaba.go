@@ -422,7 +422,7 @@ func (p *Provider) transformQuota(quota map[string]any) *provider.UsageData {
 		},
 		{
 			name:        "weekly",
-			displayName: "Weekly",
+			displayName: "7d",
 			usedKeys:    []string{"perWeekUsedQuota"},
 			totalKeys:   []string{"perWeekTotalQuota"},
 			resetKeys:   []string{"perWeekQuotaNextRefreshTime"},

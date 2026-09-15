@@ -115,21 +115,27 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		resetStr := "unknown"
 		indicator := "reset unknown"
 		colorPct := window.Utilization
+		barColor := color(colorPct)
 		if !window.ResetsAt.IsZero() {
 			proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
 			resetStr = format.FormatDuration(time.Until(window.ResetsAt))
 			indicator = proj.ColorIndicator()
 			colorPct = proj.ProjectedPct
+			barColor = color(colorPct)
 		} else if window.ResetPolicy != "" {
 			indicator = window.ResetPolicy
+		} else {
+			resetStr = "not reported"
+			indicator = ""
+			barColor = ""
 		}
 
 		label := pf.Display
 		if i > 0 {
 			label = ""
 		}
-		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-7s %s",
-			label, window.Name, color(colorPct), bar(window.Utilization), reset,
+		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-11s %s",
+			label, plainWindowLabel(window), barColor, bar(window.Utilization), reset,
 			window.Utilization, resetStr, indicator)
 		if i == 0 && statusLine != "" {
 			line += "  " + statusLine
@@ -181,6 +187,10 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	windows := pf.Data.PresentationWindows()
 	parts := make([]string, 0, len(windows))
 	for _, window := range windows {
+		if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
+			parts = append(parts, fmt.Sprintf("%s: %.0f%% (reset not reported)", plainWindowLabel(window), window.Utilization))
+			continue
+		}
 		resetStr, indicator := "unknown", "reset unknown"
 		if !window.ResetsAt.IsZero() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
@@ -188,7 +198,7 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		} else if window.ResetPolicy != "" {
 			indicator = window.ResetPolicy
 		}
-		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)", window.Name, window.Utilization, resetStr, indicator))
+		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)", plainWindowLabel(window), window.Utilization, resetStr, indicator))
 	}
 
 	prefix := ""
@@ -206,6 +216,14 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
 	}
 	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
+}
+
+func plainWindowLabel(window provider.UsageWindow) string {
+	display := strings.TrimSpace(window.DisplayName)
+	if display != "" && (window.Name == "extra" || (window.Name == "weekly" && display == "7d")) {
+		return display
+	}
+	return window.Name
 }
 
 func resetCreditPlainSummary(data *provider.UsageData, now time.Time) string {
@@ -938,6 +956,9 @@ func staleFallback(cacheEntry *cache.Entry, name string, current *provider.Usage
 	if !ok || cached == nil || !cached.HasPresentableUsage() {
 		return nil, false
 	}
+	if !provider.UsageDataMatchesSource(cached, current.Provider, current.SourceID) {
+		return nil, false
+	}
 	if len(revisions) > 0 {
 		if !cache.SourceRevisionMatches(cacheEntry.SourceRevisions, name, revisions[0]) {
 			return nil, false
@@ -1038,6 +1059,9 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 	for _, p := range configured {
 		key := provider.SourceKey(p)
 		data, _ := cacheEntry.GetProvider(key)
+		if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) {
+			data = nil
+		}
 		if !cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
 		}
@@ -1066,6 +1090,9 @@ func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, resu
 		data, ok := result.Results[key]
 		if !ok {
 			continue
+		}
+		if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) {
+			data = nil
 		}
 		output.Providers = append(output.Providers, ProviderFormatter{
 			Name: key, Family: p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
