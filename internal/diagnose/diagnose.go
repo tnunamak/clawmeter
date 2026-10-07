@@ -62,6 +62,7 @@ type BalanceSummary struct {
 
 var safeWindowNames = map[string]bool{
 	"5h": true, "7d": true, "7d All": true, "7d OAuth": true,
+	"5h Review": true, "7d Review": true,
 	"24h Pro": true, "24h Flash": true, "daily": true, "weekly": true,
 	"monthly": true, "premium": true, "chat": true, "credits": true,
 	"key": true, "bonus": true, "extra": true, "completions": true,

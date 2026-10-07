@@ -194,7 +194,7 @@ func (p Projection) ColorIndicator() string {
 func GuessWindowType(name string) time.Duration {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	switch {
-	case normalized == "5h":
+	case normalized == "5h" || strings.HasPrefix(normalized, "5h "):
 		return FiveHourWindow
 	case strings.HasPrefix(normalized, "7d"):
 		return SevenDayWindow

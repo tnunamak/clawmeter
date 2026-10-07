@@ -74,30 +74,57 @@ func (p *Provider) fetchUsageDirect(ctx context.Context, auth *authFile) (*provi
 
 func (p *Provider) parseDirectUsage(body []byte, now time.Time) (*provider.UsageData, error) {
 	var response struct {
-		RateLimit *struct {
-			PrimaryWindow *directUsageWindow `json:"primary_window"`
-		} `json:"rate_limit"`
+		RateLimit           *directRateLimit `json:"rate_limit"`
+		CodeReviewRateLimit *directRateLimit `json:"code_review_rate_limit"`
+		AdditionalLimits    []struct {
+			LimitName      string           `json:"limit_name"`
+			MeteredFeature string           `json:"metered_feature"`
+			RateLimit      *directRateLimit `json:"rate_limit"`
+		} `json:"additional_rate_limits"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("parse direct Codex quota response: %w", err)
 	}
 
 	result := &provider.UsageData{Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(), FetchedAt: now}
-	if !validDirectUsageWindow(response.RateLimit) {
+	windows := appendLimitWindows(nil, "", response.RateLimit.limit(), now)
+	windows = appendLimitWindows(windows, "Review", response.CodeReviewRateLimit.limit(), now)
+	for i, extra := range response.AdditionalLimits {
+		label := scopeLabel(extra.LimitName)
+		if label == "" {
+			label = scopeLabel(extra.MeteredFeature)
+		}
+		if label == "" {
+			label = fmt.Sprintf("Extra%d", i+1)
+		}
+		windows = appendLimitWindows(windows, label, extra.RateLimit.limit(), now)
+	}
+	if len(windows) == 0 {
 		result.Error = "no complete rate limit data"
 		return result, nil
 	}
-
-	window := response.RateLimit.PrimaryWindow
-	resetAt := time.Unix(window.ResetAt, 0)
-	name, displayName := directWindowLabels(window.LimitWindowSeconds, resetAt, now)
-	result.Windows = []provider.UsageWindow{{
-		Name:        name,
-		DisplayName: displayName,
-		Utilization: *window.UsedPercent,
-		ResetsAt:    resetAt,
-	}}
+	result.Windows = windows
 	return result, nil
+}
+
+// directRateLimit is the `rate_limit`-shaped object the wham usage endpoint
+// uses for the main, code-review, and additional limits.
+type directRateLimit struct {
+	Allowed         *bool              `json:"allowed"`
+	LimitReached    bool               `json:"limit_reached"`
+	PrimaryWindow   *directUsageWindow `json:"primary_window"`
+	SecondaryWindow *directUsageWindow `json:"secondary_window"`
+}
+
+func (r *directRateLimit) limit() *codexLimit {
+	if r == nil {
+		return nil
+	}
+	return &codexLimit{
+		Primary:   r.PrimaryWindow.window(),
+		Secondary: r.SecondaryWindow.window(),
+		Reached:   r.LimitReached || (r.Allowed != nil && !*r.Allowed),
+	}
 }
 
 type directUsageWindow struct {
@@ -106,17 +133,9 @@ type directUsageWindow struct {
 	ResetAt            int64    `json:"reset_at"`
 }
 
-func validDirectUsageWindow(rateLimit *struct {
-	PrimaryWindow *directUsageWindow `json:"primary_window"`
-}) bool {
-	if rateLimit == nil || rateLimit.PrimaryWindow == nil {
-		return false
+func (w *directUsageWindow) window() *codexWindow {
+	if w == nil {
+		return nil
 	}
-	window := rateLimit.PrimaryWindow
-	return window.UsedPercent != nil && *window.UsedPercent >= 0 && *window.UsedPercent <= 100 && window.ResetAt > 0
-}
-
-func directWindowLabels(windowSeconds int64, resetsAt, now time.Time) (string, string) {
-	windowDurationMins := windowSeconds / int64(time.Minute/time.Second)
-	return codexWindowLabels(windowDurationMins, resetsAt, now)
+	return &codexWindow{UsedPercent: w.UsedPercent, DurationMins: w.LimitWindowSeconds / 60, ResetsAt: w.ResetAt}
 }

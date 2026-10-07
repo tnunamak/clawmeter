@@ -170,6 +170,7 @@ appServerAttempts:
 		} else if provider.IsTransientFetchError(data.Error) {
 			lastErr = errors.New(data.Error)
 		} else {
+			p.attachDirectOnlyWindows(ctx, data)
 			p.attachResetCredits(ctx, data)
 			return data, nil
 		}
@@ -206,6 +207,26 @@ func (p *Provider) fetchUsageWithoutCLI(ctx context.Context) (*provider.UsageDat
 	}
 	p.attachResetCredits(ctx, data)
 	return data, nil
+}
+
+// attachDirectOnlyWindows keeps the app-server path at parity with the direct
+// path. The app-server protocol (checked against codex-cli 0.160.1's generated
+// schema) has no code-review limit, so one read-only HTTP read supplies windows
+// the app-server did not report. It is fail-soft and never replaces windows
+// the app-server already returned.
+func (p *Provider) attachDirectOnlyWindows(ctx context.Context, data *provider.UsageData) {
+	if data == nil || data.Error != "" || data.IsExpired {
+		return
+	}
+	auth, err := readAuthFile(p.authDirectory())
+	if err != nil {
+		return
+	}
+	extra, err := p.fetchUsageDirect(ctx, auth)
+	if err != nil {
+		return
+	}
+	mergeMissingWindows(data, extra)
 }
 
 func (p *Provider) fetchUsageOnce(ctx context.Context, codexPath string) (*provider.UsageData, error) {
@@ -410,26 +431,27 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
-	if validRateLimitWindow(rl.Primary) {
-		primaryReset := time.Unix(rl.Primary.ResetsAt, 0)
-		name, displayName := codexWindowLabels(rl.Primary.WindowDurationMins, primaryReset, time.Now())
-		result.Windows = append(result.Windows, provider.UsageWindow{
-			Name:        name,
-			DisplayName: displayName,
-			Utilization: *rl.Primary.UsedPercent,
-			ResetsAt:    primaryReset,
-		})
+	now := time.Now()
+	result.Windows = appendLimitWindows(result.Windows, "", rl.limit(), now)
+	// Additional metered buckets (for example a per-model limit). The bucket
+	// that mirrors the main limit is skipped.
+	mainID := "codex"
+	if rl.LimitID != nil && *rl.LimitID != "" {
+		mainID = *rl.LimitID
 	}
-
-	if validRateLimitWindow(rl.Secondary) {
-		secondaryReset := time.Unix(rl.Secondary.ResetsAt, 0)
-		name, displayName := codexWindowLabels(rl.Secondary.WindowDurationMins, secondaryReset, time.Now())
-		result.Windows = append(result.Windows, provider.UsageWindow{
-			Name:        name,
-			DisplayName: displayName,
-			Utilization: *rl.Secondary.UsedPercent,
-			ResetsAt:    secondaryReset,
-		})
+	for _, id := range sortedKeys(resp.Result.RateLimitsByLimitID) {
+		bucket := resp.Result.RateLimitsByLimitID[id]
+		if bucket == nil || id == mainID {
+			continue
+		}
+		label := ""
+		if bucket.LimitName != nil {
+			label = scopeLabel(*bucket.LimitName)
+		}
+		if label == "" {
+			label = scopeLabel(id)
+		}
+		result.Windows = appendLimitWindows(result.Windows, label, bucket.limit(), now)
 	}
 	if len(result.Windows) == 0 {
 		result.Error = "no complete rate limit data"
@@ -464,12 +486,17 @@ type rpcError struct {
 }
 
 type rateLimitsResult struct {
-	RateLimits *rateLimits `json:"rateLimits"`
+	RateLimits          *rateLimits            `json:"rateLimits"`
+	RateLimitsByLimitID map[string]*rateLimits `json:"rateLimitsByLimitId"`
 }
 
 type rateLimits struct {
+	LimitID   *string          `json:"limitId"`
+	LimitName *string          `json:"limitName"`
 	Primary   *rateLimitWindow `json:"primary"`
 	Secondary *rateLimitWindow `json:"secondary"`
+	// RateLimitReachedType is non-null when the backend reports the limit hit.
+	RateLimitReachedType *string `json:"rateLimitReachedType"`
 }
 
 type rateLimitWindow struct {
@@ -478,8 +505,22 @@ type rateLimitWindow struct {
 	ResetsAt           int64    `json:"resetsAt"`
 }
 
-func validRateLimitWindow(window *rateLimitWindow) bool {
-	return window != nil && window.UsedPercent != nil && *window.UsedPercent >= 0 && *window.UsedPercent <= 100 && window.ResetsAt > 0
+func (r *rateLimits) limit() *codexLimit {
+	if r == nil {
+		return nil
+	}
+	return &codexLimit{
+		Primary:   r.Primary.window(),
+		Secondary: r.Secondary.window(),
+		Reached:   r.RateLimitReachedType != nil && *r.RateLimitReachedType != "",
+	}
+}
+
+func (w *rateLimitWindow) window() *codexWindow {
+	if w == nil {
+		return nil
+	}
+	return &codexWindow{UsedPercent: w.UsedPercent, DurationMins: w.WindowDurationMins, ResetsAt: w.ResetsAt}
 }
 
 func writeJSON(w interface{ Write([]byte) (int, error) }, v interface{}) error {

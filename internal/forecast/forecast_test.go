@@ -159,6 +159,8 @@ func TestGuessWindowType(t *testing.T) {
 		{"5h", FiveHourWindow},
 		{"7d", SevenDayWindow},
 		{"7d-opus", SevenDayWindow},
+		{"5h Review", FiveHourWindow},
+		{"7d Review", SevenDayWindow},
 		{"7d_oauth_apps", SevenDayWindow},
 		{"Monthly Credits", MonthlyWindow},
 		{"session", 24 * time.Hour}, // default
