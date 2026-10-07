@@ -415,6 +415,41 @@ func (r *UsageResetCredits) EarliestExpiry(now time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// Summary is the compact reset row shared by the CLI and tray, for example
+// "Resets: 2 · next expires Oct 22 · checked 11:30". Only browser snapshots
+// say when they were checked. It is empty when no reset is available.
+func (r *UsageResetCredits) Summary(now time.Time) string {
+	count := r.DisplayCount(now)
+	if count <= 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("Resets: %d", count)}
+	if expiresAt, ok := r.EarliestExpiry(now); ok {
+		verb := "expires "
+		if count > 1 {
+			verb = "next expires "
+		}
+		parts = append(parts, verb+shortDate(expiresAt, now))
+	}
+	if r.Snapshot && !r.FetchedAt.IsZero() {
+		parts = append(parts, "checked "+shortDate(r.FetchedAt, now))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// shortDate shows a time of day for today, otherwise a date.
+func shortDate(t, now time.Time) string {
+	t, now = t.Local(), now.Local()
+	switch {
+	case t.Year() == now.Year() && t.YearDay() == now.YearDay():
+		return t.Format("15:04")
+	case t.Year() == now.Year():
+		return t.Format("Jan 2")
+	default:
+		return t.Format("Jan 2, 2006")
+	}
+}
+
 // UsageData contains usage information for a provider.
 type UsageData struct {
 	Provider           string             `json:"provider"` // Provider name

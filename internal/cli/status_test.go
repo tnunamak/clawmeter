@@ -376,7 +376,7 @@ func TestFormatPlainIncludesResetCredits(t *testing.T) {
 	for _, want := range []string{
 		"Codex:",
 		"7d:",
-		"reset credits: 1 available, earliest expires",
+		"  Resets: 1 · expires " + now.Add(9*24*time.Hour).Local().Format("Jan 2"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("FormatPlain() = %q, missing %q", got, want)
@@ -396,13 +396,13 @@ func TestClaudeResetSnapshotRemainsExplicitWhenUsageIsStale(t *testing.T) {
 	}
 	pf := ProviderFormatter{Display: "Claude · ODL", Data: data}
 	plain := pf.FormatPlain()
-	for _, want := range []string{"reset credits: 1 observed", "browser account match confirmed by you", "earliest expires", "last observed " + observedAt.Local().Format("Jan 2, 2006 3:04 PM")} {
+	for _, want := range []string{"stale (updated ", "Resets: 1 · expires ", " · checked "} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain output %q missing %q", plain, want)
 		}
 	}
 	agent := (&MultiProviderOutput{Providers: []ProviderFormatter{pf}}).agentResetCreditSummaries()
-	if len(agent) != 1 || !strings.Contains(agent[0], "observed_count=1 snapshot=true account_match=user_confirmed") || !strings.Contains(agent[0], "last_observed_at=") || strings.Contains(agent[0], "available=1") {
+	if len(agent) != 1 || !strings.Contains(agent[0], "observed_count=1 snapshot=true earliest_expires_at=") || !strings.Contains(agent[0], "last_observed_at=") || strings.Contains(agent[0], "available=1") {
 		t.Fatalf("agent reset snapshot = %v, want timestamped observation, not live availability", agent)
 	}
 }

@@ -66,7 +66,7 @@ func assertResetUnderClaude(t *testing.T, output *MultiProviderOutput, state str
 		t.Fatalf("%s: Claude row lacks the reset snapshot: %#v", state, row.Data)
 	}
 	plain := row.FormatPlain()
-	for _, want := range []string{"Claude:", "reset credits: 1 observed", "last observed "} {
+	for _, want := range []string{"Claude:", "  Resets: 1 · expires ", " · checked "} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("%s: plain output %q missing %q", state, plain, want)
 		}
@@ -76,7 +76,7 @@ func assertResetUnderClaude(t *testing.T, output *MultiProviderOutput, state str
 	}
 
 	agent := output.AgentSummary()
-	if !strings.Contains(agent, "reset_credits=[Claude observed_count=1 snapshot=true account_match=user_confirmed") ||
+	if !strings.Contains(agent, "reset_credits=[Claude observed_count=1 snapshot=true earliest_expires_at=") ||
 		!strings.Contains(agent, "last_observed_at=") {
 		t.Errorf("%s: agent summary %q missing the Claude reset observation", state, agent)
 	}
