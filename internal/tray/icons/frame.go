@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 
 	xdraw "golang.org/x/image/draw"
@@ -370,10 +371,21 @@ func frameDisplayLabel(label string) string {
 		return normalized
 	case "MO":
 		return "mo"
-	default:
-		return ""
 	}
+	// Scoped windows such as "5S" (5h Spark) or "7R" (7d Review) have no
+	// dedicated glyph pair; fall back to the plain window length.
+	switch {
+	case strings.HasPrefix(normalized, "5"):
+		return "5h"
+	case strings.HasPrefix(normalized, "7"):
+		return "7d"
+	}
+	return ""
 }
+
+// FrameDisplayLabel reports the text the Claw Frame icon draws for a window
+// badge label, or "" when the icon would show no window text.
+func FrameDisplayLabel(label string) string { return frameDisplayLabel(label) }
 
 func frameWindowLabel(dst *image.RGBA, label string, g frameGeometry) {
 	if label == "" {

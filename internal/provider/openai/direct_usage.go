@@ -89,15 +89,15 @@ func (p *Provider) parseDirectUsage(body []byte, now time.Time) (*provider.Usage
 	result := &provider.UsageData{Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(), FetchedAt: now}
 	windows := appendLimitWindows(nil, "", response.RateLimit.limit(), now)
 	windows = appendLimitWindows(windows, "Review", response.CodeReviewRateLimit.limit(), now)
+	rawNames := make([]string, len(response.AdditionalLimits))
 	for i, extra := range response.AdditionalLimits {
-		label := scopeLabel(extra.LimitName)
-		if label == "" {
-			label = scopeLabel(extra.MeteredFeature)
+		rawNames[i] = extra.LimitName
+		if strings.TrimSpace(rawNames[i]) == "" {
+			rawNames[i] = extra.MeteredFeature
 		}
-		if label == "" {
-			label = fmt.Sprintf("Extra%d", i+1)
-		}
-		windows = appendLimitWindows(windows, label, extra.RateLimit.limit(), now)
+	}
+	for i, label := range resolveScopeLabels(rawNames) {
+		windows = appendLimitWindows(windows, label, response.AdditionalLimits[i].RateLimit.limit(), now)
 	}
 	if len(windows) == 0 {
 		result.Error = "no complete rate limit data"

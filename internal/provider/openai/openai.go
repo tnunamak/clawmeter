@@ -170,7 +170,6 @@ appServerAttempts:
 		} else if provider.IsTransientFetchError(data.Error) {
 			lastErr = errors.New(data.Error)
 		} else {
-			p.attachDirectOnlyWindows(ctx, data)
 			p.attachResetCredits(ctx, data)
 			return data, nil
 		}
@@ -207,26 +206,6 @@ func (p *Provider) fetchUsageWithoutCLI(ctx context.Context) (*provider.UsageDat
 	}
 	p.attachResetCredits(ctx, data)
 	return data, nil
-}
-
-// attachDirectOnlyWindows keeps the app-server path at parity with the direct
-// path. The app-server protocol (checked against codex-cli 0.160.1's generated
-// schema) has no code-review limit, so one read-only HTTP read supplies windows
-// the app-server did not report. It is fail-soft and never replaces windows
-// the app-server already returned.
-func (p *Provider) attachDirectOnlyWindows(ctx context.Context, data *provider.UsageData) {
-	if data == nil || data.Error != "" || data.IsExpired {
-		return
-	}
-	auth, err := readAuthFile(p.authDirectory())
-	if err != nil {
-		return
-	}
-	extra, err := p.fetchUsageDirect(ctx, auth)
-	if err != nil {
-		return
-	}
-	mergeMissingWindows(data, extra)
 }
 
 func (p *Provider) fetchUsageOnce(ctx context.Context, codexPath string) (*provider.UsageData, error) {
@@ -439,19 +418,22 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 	if rl.LimitID != nil && *rl.LimitID != "" {
 		mainID = *rl.LimitID
 	}
+	var buckets []*rateLimits
+	var rawNames []string
 	for _, id := range sortedKeys(resp.Result.RateLimitsByLimitID) {
 		bucket := resp.Result.RateLimitsByLimitID[id]
 		if bucket == nil || id == mainID {
 			continue
 		}
-		label := ""
-		if bucket.LimitName != nil {
-			label = scopeLabel(*bucket.LimitName)
+		name := id
+		if bucket.LimitName != nil && strings.TrimSpace(*bucket.LimitName) != "" {
+			name = *bucket.LimitName
 		}
-		if label == "" {
-			label = scopeLabel(id)
-		}
-		result.Windows = appendLimitWindows(result.Windows, label, bucket.limit(), now)
+		buckets = append(buckets, bucket)
+		rawNames = append(rawNames, name)
+	}
+	for i, label := range resolveScopeLabels(rawNames) {
+		result.Windows = appendLimitWindows(result.Windows, label, buckets[i].limit(), now)
 	}
 	if len(result.Windows) == 0 {
 		result.Error = "no complete rate limit data"

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -108,16 +109,68 @@ func scopeLabel(name string) string {
 	return name
 }
 
-// mergeMissingWindows appends windows from extra whose names are not in data.
-func mergeMissingWindows(data, extra *provider.UsageData) {
-	if data == nil || extra == nil || extra.Error != "" {
-		return
+// resolveScopeLabels turns raw limit names into short labels that are unique
+// among themselves and never equal the reserved "Review" label, so two distinct
+// buckets never share a window name. A colliding label is extended with the
+// name's version token ("Spark 5.4"); if that still collides it gets a number.
+// The result has the same length and order as names.
+func resolveScopeLabels(names []string) []string {
+	const reserved = "Review"
+	shorts := make([]string, len(names))
+	count := map[string]int{strings.ToLower(reserved): 1}
+	for i, n := range names {
+		shorts[i] = scopeLabel(n)
+		if shorts[i] == "" {
+			shorts[i] = "Extra"
+		}
+		count[strings.ToLower(shorts[i])]++
 	}
-	for _, w := range extra.Windows {
-		if !hasWindowName(data.Windows, w.Name) {
-			data.Windows = append(data.Windows, w)
+	labels := make([]string, len(names))
+	taken := map[string]bool{strings.ToLower(reserved): true}
+	var pending []int
+	for i, s := range shorts {
+		if count[strings.ToLower(s)] == 1 {
+			labels[i] = s
+			taken[strings.ToLower(s)] = true
+		} else {
+			pending = append(pending, i)
 		}
 	}
+	for _, i := range pending {
+		candidate := shorts[i]
+		if v := versionToken(names[i]); v != "" {
+			candidate = shorts[i] + " " + v
+		}
+		for n := 2; taken[strings.ToLower(candidate)] || candidate == shorts[i]; n++ {
+			candidate = fmt.Sprintf("%s %d", shorts[i], n)
+		}
+		labels[i] = candidate
+		taken[strings.ToLower(candidate)] = true
+	}
+	return labels
+}
+
+// versionToken returns the first purely numeric dotted token of a name
+// ("GPT-5.4-Codex-Spark" gives "5.4").
+func versionToken(name string) string {
+	for _, tok := range strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' || r == ' ' }) {
+		digits, dots := 0, 0
+		for _, r := range tok {
+			switch {
+			case r >= '0' && r <= '9':
+				digits++
+			case r == '.':
+				dots++
+			default:
+				digits = 0
+				dots = -1000
+			}
+		}
+		if digits > 0 && dots >= 0 {
+			return tok
+		}
+	}
+	return ""
 }
 
 func sortedKeys[V any](m map[string]V) []string {

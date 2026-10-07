@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -191,8 +192,11 @@ func TestParseRateLimitsReachedTypeFillsMissingPercent(t *testing.T) {
 	}
 }
 
-// Both fetch paths must show the same windows for the same account state.
-func TestAppServerAndDirectPathsProduceSameWindows(t *testing.T) {
+// Both fetch paths must show the same windows for the shared limits. The
+// app-server protocol has no code-review limit, so "7d Review" appears only
+// through the direct path. This costs no extra request: the app-server path
+// shows what the app-server returns.
+func TestAppServerAndDirectPathsShareWindows(t *testing.T) {
 	now := time.Now()
 	p := New(config.ProviderConfig{})
 	direct, err := p.parseDirectUsage([]byte(directFixture(now)), now)
@@ -203,8 +207,6 @@ func TestAppServerAndDirectPathsProduceSameWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The app-server has no code-review limit; the supplement adds it.
-	mergeMissingWindows(app, direct)
 	byName := func(d *provider.UsageData) map[string]float64 {
 		m := map[string]float64{}
 		for _, w := range d.Windows {
@@ -213,23 +215,30 @@ func TestAppServerAndDirectPathsProduceSameWindows(t *testing.T) {
 		return m
 	}
 	a, d := byName(app), byName(direct)
-	if len(a) != len(d) {
-		t.Fatalf("app = %v, direct = %v", a, d)
-	}
-	for name, util := range d {
-		if a[name] != util {
-			t.Fatalf("window %q: app = %v, direct = %v", name, a[name], util)
+	for name, util := range a {
+		if got, ok := d[name]; !ok || got != util {
+			t.Fatalf("window %q: app = %v, direct = %v (present %v)", name, util, got, ok)
 		}
+	}
+	for name := range d {
+		if _, ok := a[name]; !ok && name != "7d Review" {
+			t.Fatalf("direct-only window %q, want only 7d Review", name)
+		}
+	}
+	if _, ok := d["7d Review"]; !ok {
+		t.Fatal("direct path lost the code-review window")
 	}
 }
 
-func TestFetchUsageAppServerPathAddsDirectOnlyReviewWindow(t *testing.T) {
+func TestFetchUsageAppServerPathMakesNoExtraUsageRequest(t *testing.T) {
 	now := time.Now()
+	var usageReads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case resetCreditsPath:
 			_, _ = w.Write([]byte(`{"available_count":0,"credits":[]}`))
 		case directUsagePath:
+			usageReads.Add(1)
 			_, _ = w.Write([]byte(directFixture(now)))
 		default:
 			http.Error(w, "unexpected", http.StatusBadRequest)
@@ -250,7 +259,6 @@ func TestFetchUsageAppServerPathAddsDirectOnlyReviewWindow(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	// The fake app-server reports only the main windows and no additional bucket.
 	script := fmt.Sprintf(`#!/bin/sh
 while IFS= read -r line; do
   case "$line" in
@@ -270,7 +278,66 @@ done
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := windowNames(data), "5h,7d,7d Review,5h Spark,7d Spark"; got != want {
+	if got, want := windowNames(data), "5h,7d"; got != want {
 		t.Fatalf("windows = %s, want %s", got, want)
+	}
+	if n := usageReads.Load(); n != 0 {
+		t.Fatalf("usage endpoint reads = %d, want 0 on the app-server path", n)
+	}
+}
+
+func TestResolveScopeLabelsKeepsCollidingBucketsDistinct(t *testing.T) {
+	got := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark", "GPT-5.4-Codex-Spark", "Review", "Solo"})
+	want := []string{"Spark 5.3", "Spark 5.4", "Review 2", "Solo"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("labels = %v, want %v", got, want)
+		}
+	}
+	// No version token: numbered fallback, still distinct.
+	got = resolveScopeLabels([]string{"A-Spark", "B-Spark", "C-Spark"})
+	seen := map[string]bool{}
+	for _, l := range got {
+		if seen[l] || l == "" {
+			t.Fatalf("labels not distinct: %v", got)
+		}
+		seen[l] = true
+	}
+}
+
+func TestCollidingAdditionalLimitsKeepExhaustedBucketVisible(t *testing.T) {
+	now := time.Now()
+	reset := now.Add(2 * time.Hour).Unix()
+	body := fmt.Sprintf(`{"additional_rate_limits":[
+ {"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000,"reset_at":%d}}},
+ {"limit_name":"GPT-5.4-Codex-Spark","rate_limit":{"limit_reached":true,"primary_window":{"used_percent":100,"limit_window_seconds":18000,"reset_at":%d}}}]}`, reset, reset)
+	data, err := New(config.ProviderConfig{}).parseDirectUsage([]byte(body), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := windowNames(data), "5h Spark 5.3,5h Spark 5.4"; got != want {
+		t.Fatalf("windows = %s, want %s", got, want)
+	}
+	if w := windowByName(t, data, "5h Spark 5.3"); w.Utilization != 20 {
+		t.Fatalf("5.3 = %#v", w)
+	}
+	if w := windowByName(t, data, "5h Spark 5.4"); w.Utilization != 100 {
+		t.Fatalf("5.4 = %#v", w)
+	}
+
+	// Same through the app-server buckets.
+	raw := fmt.Sprintf(`{"id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":1,"windowDurationMins":300,"resetsAt":%d}},
+ "rateLimitsByLimitId":{
+  "a":{"limitId":"a","limitName":"GPT-5.3-Codex-Spark","primary":{"usedPercent":20,"windowDurationMins":300,"resetsAt":%d}},
+  "b":{"limitId":"b","limitName":"GPT-5.4-Codex-Spark","primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":%d}}}}}`, reset, reset, reset)
+	app, err := New(config.ProviderConfig{}).parseRateLimits([]byte(raw), &accountResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := windowNames(app), "5h,5h Spark 5.3,5h Spark 5.4"; got != want {
+		t.Fatalf("app windows = %s, want %s", got, want)
+	}
+	if w := windowByName(t, app, "5h Spark 5.4"); w.Utilization != 100 {
+		t.Fatalf("app 5.4 = %#v", w)
 	}
 }
