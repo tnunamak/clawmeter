@@ -201,14 +201,39 @@ func (p *Provider) ResetSnapshotSourceRevision() string {
 	if !p.explicitSource {
 		return ""
 	}
-	path, err := filepath.Abs(p.configDir)
+	path := canonicalDir(p.configDir)
+	if path == "" {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte("claude-reset-profile\x00"+path)))
+}
+
+// CredentialRoute names the config dir this source reads, so a repointed
+// source, or the native Default under another CLAUDE_CONFIG_DIR, keeps its own
+// rate-limit backoff. Unlike SourceRevision it ignores token-file changes, so
+// a token refresh does not end a backoff.
+func (p *Provider) CredentialRoute() string {
+	switch {
+	case p.explicitSource:
+		return "config-dir\x00" + canonicalDir(p.configDir)
+	case p.pinnedNative:
+		return "native-pinned\x00" + canonicalDir(homeCredentialsDir())
+	default:
+		return "native\x00" + canonicalDir(legacyCredentialsDir())
+	}
+}
+
+// canonicalDir returns dir as an absolute path with symlinks resolved, or ""
+// if it cannot be made absolute.
+func canonicalDir(dir string) string {
+	path, err := filepath.Abs(dir)
 	if err != nil {
 		return ""
 	}
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte("claude-reset-profile\x00"+path)))
+	return path
 }
 
 // Name returns the provider identifier.

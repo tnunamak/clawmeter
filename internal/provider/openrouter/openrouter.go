@@ -4,6 +4,7 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -173,6 +174,12 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 				return p.authOrError(walletErr, "OPENROUTER_MANAGEMENT_KEY")
 			}
 			data.Warning = "wallet credits unavailable: " + walletErr.Error()
+			// Keep the /key reading but still report the 429, so the shared
+			// fetch boundary backs this source off.
+			var limited *provider.RateLimitError
+			if errors.As(walletErr, &limited) {
+				return data, walletErr
+			}
 		} else {
 			data.Balances = wallet.Balances
 		}

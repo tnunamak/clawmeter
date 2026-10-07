@@ -314,3 +314,36 @@ func TestExplicitTwoSourcesDoNotFallbackAcrossOpenRouterKeySurfaces(t *testing.T
 		t.Fatalf("requests = %#v", resolver.requests)
 	}
 }
+
+// Regression: a 429 from /credits after /key succeeded must still back the
+// source off. It used to become a Warning on clean data, which cleared the
+// backoff and hit the wallet endpoint again on every fetch.
+func TestPartialReadingWithWalletRateLimitBacksOffSource(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	t.Setenv("LOCALAPPDATA", cacheRoot)
+	t.Setenv("HOME", cacheRoot)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	var creditCalls int
+	p := providerServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/credits" {
+			creditCalls++
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"limit":10,"limit_remaining":5,"usage":0}}`))
+	}, true)
+
+	data, err := provider.FetchSource(context.Background(), p)
+	if err != nil || data == nil || len(data.Windows) != 1 || data.Error != "" || !strings.Contains(data.Warning, "wallet credits unavailable") {
+		t.Fatalf("partial reading = %#v, %v; want /key window kept with a wallet warning", data, err)
+	}
+	data, err = provider.FetchSource(context.Background(), p)
+	if err != nil || data == nil || !strings.HasPrefix(data.Error, "rate limited (429), next try ") {
+		t.Fatalf("second fetch = %#v, %v; want the source backed off", data, err)
+	}
+	if creditCalls != 1 {
+		t.Fatalf("wallet endpoint called %d times, want 1", creditCalls)
+	}
+}

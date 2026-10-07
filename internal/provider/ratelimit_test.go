@@ -153,7 +153,7 @@ func TestSuccessClearsBackoff(t *testing.T) {
 	clock := isolateBackoff(t)
 	p := &limitedProvider{name: "claude", id: "work"}
 	recordRateLimit(SourceKey(p), 0)
-	if _, ok := backoffUntil(SourceKey(p)); !ok {
+	if _, ok := backoffUntil(backoffKey(p)); !ok {
 		t.Fatal("backoff not recorded")
 	}
 	*clock = clock.Add(10 * time.Minute)
@@ -161,10 +161,10 @@ func TestSuccessClearsBackoff(t *testing.T) {
 		t.Fatalf("fetch after backoff: %q", data.Error)
 	}
 	*clock = clock.Add(-10 * time.Minute)
-	if _, ok := backoffUntil(SourceKey(p)); ok {
+	if _, ok := backoffUntil(backoffKey(p)); ok {
 		t.Fatal("successful fetch did not clear backoff")
 	}
-	if state, ok := readBackoff(SourceKey(p)); ok {
+	if state, ok := readBackoff(backoffKey(p)); ok {
 		t.Fatalf("failure count survived success: %#v", state)
 	}
 }
@@ -175,7 +175,7 @@ func TestOtherErrorsNeitherStartNorClearBackoff(t *testing.T) {
 	if _, err := FetchSource(context.Background(), failing); err == nil {
 		t.Fatal("non-429 error was swallowed")
 	}
-	if _, ok := readBackoff(SourceKey(failing)); ok {
+	if _, ok := readBackoff(backoffKey(failing)); ok {
 		t.Fatal("non-429 error started a backoff")
 	}
 }
@@ -221,4 +221,24 @@ func TestConcurrentRateLimitsKeepEverySourcesBackoff(t *testing.T) {
 			t.Fatalf("source %s called %d times, want 1 (second round backed off)", SourceKey(p), calls)
 		}
 	}
+}
+
+type partialProvider struct{ limitedProvider }
+
+func (p *partialProvider) FetchUsage(context.Context) (*UsageData, error) {
+	p.calls.Add(1)
+	return &UsageData{Windows: []UsageWindow{{Name: "key", Utilization: 50}}, Warning: "wallet unavailable"}, &RateLimitError{}
+}
+
+func TestPartialReadingWithRateLimitIsKeptAndBacksOff(t *testing.T) {
+	isolateBackoff(t)
+	p := &partialProvider{limitedProvider{name: "openrouter"}}
+	data, err := FetchSource(context.Background(), p)
+	if err != nil || data == nil || len(data.Windows) != 1 || data.Error != "" {
+		t.Fatalf("partial reading = %#v, %v; want it kept", data, err)
+	}
+	if _, ok := backoffUntil(backoffKey(p)); !ok {
+		t.Fatal("partial reading with a 429 did not start a backoff")
+	}
+	fetchExpectingCalls(t, &p.limitedProvider, 1, "after partial 429")
 }

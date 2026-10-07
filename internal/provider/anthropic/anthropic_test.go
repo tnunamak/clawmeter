@@ -572,3 +572,46 @@ func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
 		t.Fatalf("lone native reset snapshot revision = %q, want empty", got)
 	}
 }
+
+// Regression: a source ID repointed at another config dir is another account
+// and must not inherit the previous account's 429 backoff.
+func TestRepointedSourceDoesNotInheritBackoff(t *testing.T) {
+	first := newTestProvider(t, `{}`, http.StatusTooManyRequests, "0")
+	if data, _ := provider.FetchSource(context.Background(), first); !strings.Contains(data.Error, "rate limited") {
+		t.Fatalf("first account was not rate limited: %#v", data)
+	}
+	dir := t.TempDir()
+	writeTestCredentials(t, dir, "other-token", "")
+	src := config.SourceConfig{ID: first.SourceID(), Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}}
+	repointed, err := (sourceCapability{}).NewSource(config.ProviderConfig{}, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = provider.FetchSource(context.Background(), repointed)
+	if requests.Load() != 2 {
+		t.Fatalf("requests = %d; repointed source inherited the old account's backoff", requests.Load())
+	}
+}
+
+// The unpinned native Default follows CLAUDE_CONFIG_DIR, so two processes with
+// different config dirs are two accounts and keep separate backoffs.
+func TestNativeDefaultBackoffFollowsClaudeConfigDir(t *testing.T) {
+	newTestProvider(t, `{}`, http.StatusTooManyRequests, "0")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	native := config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}
+	fetchWithConfigDir := func() {
+		dir := t.TempDir()
+		writeTestCredentials(t, dir, "token", "")
+		t.Setenv("CLAUDE_CONFIG_DIR", dir)
+		p, err := (sourceCapability{}).NewSource(config.ProviderConfig{Sources: []config.SourceConfig{native}}, native)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = provider.FetchSource(context.Background(), p)
+	}
+	fetchWithConfigDir()
+	fetchWithConfigDir()
+	if requests.Load() != 2 {
+		t.Fatalf("requests = %d; a 429 under one CLAUDE_CONFIG_DIR backed off another", requests.Load())
+	}
+}

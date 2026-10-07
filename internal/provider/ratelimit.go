@@ -16,6 +16,9 @@ import (
 
 // RateLimitError is how a provider reports that its upstream answered HTTP
 // 429. Providers only report it; FetchSource decides when to call them again.
+// A provider that already has a partial reading (for example, one of two
+// endpoints answered) returns that reading together with the error, and
+// FetchSource keeps it.
 type RateLimitError struct {
 	// RetryAfter is the server's requested delay, or zero if it sent none.
 	RetryAfter time.Duration
@@ -65,20 +68,38 @@ var (
 	}
 )
 
+// CredentialRouteCapability is implemented by sources whose credential route
+// can change while the source ID stays the same: a repointed config dir, or
+// one chosen by the environment. Each route keeps its own backoff. The route
+// must not change on a routine token refresh, or a refresh would end a backoff.
+type CredentialRouteCapability interface{ CredentialRoute() string }
+
+func backoffKey(p Provider) string {
+	key := SourceKey(p)
+	if route, ok := p.(CredentialRouteCapability); ok {
+		key += "\x00" + route.CredentialRoute()
+	}
+	return key
+}
+
 // FetchSource is the one place a source is fetched. It skips sources that are
 // in a rate-limit backoff, starts or extends the backoff when the provider
 // reports a RateLimitError, and clears it after a clean reading. A rate limit
 // is returned as data with Error set, not as an error, so callers fall back to
 // the last good reading and mark it stale.
 func FetchSource(ctx context.Context, p Provider) (*UsageData, error) {
-	key := SourceKey(p)
+	key := backoffKey(p)
 	if until, ok := backoffUntil(key); ok {
 		return rateLimitedData(p, until), nil
 	}
 	data, err := p.FetchUsage(ctx)
 	var limited *RateLimitError
 	if errors.As(err, &limited) {
-		return rateLimitedData(p, recordRateLimit(key, limited.RetryAfter)), nil
+		until := recordRateLimit(key, limited.RetryAfter)
+		if data == nil {
+			data = rateLimitedData(p, until)
+		}
+		return data, nil
 	}
 	if err == nil && data != nil && data.Error == "" {
 		clearBackoff(key)
