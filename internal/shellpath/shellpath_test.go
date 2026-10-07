@@ -106,6 +106,33 @@ func TestSessionEnvironmentResolverReobservesCredentialsAfterTTL(t *testing.T) {
 	}
 }
 
+func TestSessionEnvironmentResolverBatchesStaleNamesIntoOneResolution(t *testing.T) {
+	now := time.Unix(100, 0)
+	var requests [][]string
+	resolver := newSessionEnvironmentResolver(func(request provider.SessionEnvironmentRequest) map[string]string {
+		requests = append(requests, request.EnvNames)
+		return map[string]string{"CLAWMETER_B": "b"}
+	}).(*sessionEnvironmentResolver)
+	resolver.now = func() time.Time { return now }
+	a := provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_A"}, AllowSessionEnvironmentFallback: true}
+	b := provider.SessionEnvironmentRequest{EnvNames: []string{"CLAWMETER_B"}, AllowSessionEnvironmentFallback: true}
+	resolver.ResolveSessionEnvironment(a)
+	resolver.ResolveSessionEnvironment(b)
+	if len(requests) != 2 {
+		t.Fatalf("first cycle resolutions = %d, want one per new name", len(requests))
+	}
+	now = now.Add(sessionEnvironmentCacheTTL)
+	if got := resolver.ResolveSessionEnvironment(a); len(got) != 0 {
+		t.Fatalf("A = %#v, want miss", got)
+	}
+	if got := resolver.ResolveSessionEnvironment(b)["CLAWMETER_B"]; got != "b" {
+		t.Fatalf("B = %q, want value served from the batched refresh", got)
+	}
+	if len(requests) != 3 || !reflect.DeepEqual(requests[2], []string{"CLAWMETER_A", "CLAWMETER_B"}) {
+		t.Fatalf("requests = %#v, want one batched refresh of both names after TTL", requests)
+	}
+}
+
 func TestSessionEnvironmentResolverCachesValuesAndMisses(t *testing.T) {
 	dir := t.TempDir()
 	shell := filepath.Join(dir, "zsh")

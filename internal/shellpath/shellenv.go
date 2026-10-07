@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,16 +40,21 @@ func (r *sessionEnvironmentResolver) ResolveSessionExecutable(name string) (stri
 }
 
 type sessionEnvironmentCacheKey struct {
-	names    string
+	name     string
 	fallback bool
 }
 
 type sessionEnvironmentCacheEntry struct {
-	values    map[string]string
+	value     string
+	found     bool
 	expiresAt time.Time
 }
 
-const sessionEnvironmentCacheTTL = 30 * time.Second
+// sessionEnvironmentCacheTTL bounds how long a login-shell observation (value
+// or miss) is reused. Each shell recovery runs the user's rc files, which costs
+// over a second of CPU on a typical zsh setup, so the TTL must be much longer
+// than the tray poll interval.
+const sessionEnvironmentCacheTTL = 10 * time.Minute
 
 type sessionEnvironmentResolver struct {
 	mu       sync.Mutex
@@ -71,21 +75,51 @@ func newSessionEnvironmentResolver(uncached func(provider.SessionEnvironmentRequ
 	}
 }
 
+// ResolveSessionEnvironment caches per variable name. When any requested name
+// is stale, every other cached name with the same fallback policy that is also
+// stale is refreshed in the same resolution, so one login shell serves all
+// providers instead of one shell per distinct name set.
 func (r *sessionEnvironmentResolver) ResolveSessionEnvironment(request provider.SessionEnvironmentRequest) map[string]string {
 	names := canonicalEnvNames(request.EnvNames)
-	key := sessionEnvironmentCacheKey{names: strings.Join(names, "\x00"), fallback: request.AllowSessionEnvironmentFallback}
+	fallback := request.AllowSessionEnvironmentFallback
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
-	if cached, ok := r.cache[key]; ok && now.Before(cached.expiresAt) {
-		return cloneSessionEnvironmentValues(cached.values)
+	fresh := func(name string) bool {
+		entry, ok := r.cache[sessionEnvironmentCacheKey{name: name, fallback: fallback}]
+		return ok && now.Before(entry.expiresAt)
 	}
-	request.EnvNames = names
-	values := r.uncached(request)
-	r.cache[key] = sessionEnvironmentCacheEntry{
-		values: cloneSessionEnvironmentValues(values), expiresAt: now.Add(sessionEnvironmentCacheTTL),
+	stale := false
+	for _, name := range names {
+		if !fresh(name) {
+			stale = true
+			break
+		}
 	}
-	return cloneSessionEnvironmentValues(values)
+	if stale {
+		refresh := append([]string(nil), names...)
+		for key := range r.cache {
+			if key.fallback == fallback && !fresh(key.name) {
+				refresh = append(refresh, key.name)
+			}
+		}
+		refresh = canonicalEnvNames(refresh)
+		request.EnvNames = refresh
+		values := r.uncached(request)
+		for _, name := range refresh {
+			value, found := values[name]
+			r.cache[sessionEnvironmentCacheKey{name: name, fallback: fallback}] = sessionEnvironmentCacheEntry{
+				value: value, found: found, expiresAt: now.Add(sessionEnvironmentCacheTTL),
+			}
+		}
+	}
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		if entry := r.cache[sessionEnvironmentCacheKey{name: name, fallback: fallback}]; entry.found {
+			out[name] = entry.value
+		}
+	}
+	return out
 }
 
 func canonicalEnvNames(names []string) []string {
@@ -100,12 +134,4 @@ func canonicalEnvNames(names []string) []string {
 	}
 	sort.Strings(canonical)
 	return canonical
-}
-
-func cloneSessionEnvironmentValues(values map[string]string) map[string]string {
-	clone := make(map[string]string, len(values))
-	for name, value := range values {
-		clone[name] = value
-	}
-	return clone
 }
