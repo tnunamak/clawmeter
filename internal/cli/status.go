@@ -97,7 +97,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
-		return appendResetSnapshotLine([]string{line}, pf.Data, pf.Display)
+		return appendResetSnapshotLine([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
 	}
 
 	if pf.Data.Error != "" {
@@ -105,7 +105,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
-		return appendResetSnapshotLine([]string{line}, pf.Data, pf.Display)
+		return appendResetSnapshotLine([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
 	}
 
 	windows := pf.Data.PresentationWindows()
@@ -153,12 +153,12 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %.2f remaining",
 			pf.Display, label, balance.Remaining))
 	}
-	if summary := resetCreditCompactSummary(pf.Data, time.Now()); summary != "" {
+	if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
 		label := ""
 		if len(lines) == 0 {
 			label = pf.Display
 		}
-		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %s", label, "resets", summary))
+		lines = append(lines, fmt.Sprintf(pad+" %s", label, summary))
 	}
 
 	return lines
@@ -208,7 +208,7 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	if pf.Data.Stale {
 		prefix = fmt.Sprintf("stale (updated %s) - ", pf.Data.FetchedAt.Format("15:04"))
 	}
-	if resetSummary := resetCreditPlainSummary(pf.Data, time.Now()); resetSummary != "" {
+	if resetSummary := resetCreditSummary(pf.Data, time.Now()); resetSummary != "" {
 		parts = append(parts, resetSummary)
 	}
 	for _, balance := range pf.Data.Balances {
@@ -236,79 +236,27 @@ func plainWindowLabel(window provider.UsageWindow) string {
 	return window.Name
 }
 
-func resetCreditPlainSummary(data *provider.UsageData, now time.Time) string {
+// resetCreditSummary is the shared reset row. A stale live inventory is
+// hidden; a browser snapshot is a dated observation and stays visible.
+func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 	if data == nil || data.ResetCredits == nil || (data.Stale && !data.ResetCredits.Snapshot) {
 		return ""
 	}
-	count := data.ResetCredits.DisplayCount(now)
-	if count <= 0 {
-		return ""
-	}
-	availability := resetCreditAvailability(data.ResetCredits.Snapshot)
-	if data.ResetCredits.Snapshot {
-		availability += " (browser account match confirmed by you)"
-	}
-	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
-		return fmt.Sprintf("reset credits: %d %s, earliest expires %s%s", count, availability, formatResetCreditExpiry(expiresAt), resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
-	}
-	return fmt.Sprintf("reset credits: %d %s%s", count, availability, resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
+	return data.ResetCredits.Summary(now)
 }
 
-func resetCreditCompactSummary(data *provider.UsageData, now time.Time) string {
-	if data == nil || data.ResetCredits == nil || (data.Stale && !data.ResetCredits.Snapshot) {
-		return ""
-	}
-	count := data.ResetCredits.DisplayCount(now)
-	if count <= 0 {
-		return ""
-	}
-	noun := "reset credit"
-	if count != 1 {
-		noun = "reset credits"
-	}
-	if data.ResetCredits.Snapshot {
-		noun += " observed"
-		noun += " (browser account match confirmed by you)"
-	}
-	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
-		return fmt.Sprintf("%d %s - earliest expires %s%s", count, noun, formatResetCreditExpiry(expiresAt), resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
-	}
-	return fmt.Sprintf("%d %s available%s", count, noun, resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
-}
-
-func resetCreditAvailability(snapshot bool) string {
-	if snapshot {
-		return "observed"
-	}
-	return "available"
-}
-
-func resetCreditObservedAt(observedAt time.Time, snapshot bool) string {
-	if observedAt.IsZero() {
-		return ""
-	}
-	if snapshot {
-		return " (last observed " + observedAt.Local().Format("Jan 2, 2006 3:04 PM") + ")"
-	}
-	return " (checked " + observedAt.Local().Format("15:04") + ")"
-}
-
-func appendResetSnapshotLine(lines []string, data *provider.UsageData, display string) []string {
-	if summary := resetCreditCompactSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
-		return append(lines, fmt.Sprintf("%s resets %s", display, summary))
+func appendResetSnapshotLine(lines []string, data *provider.UsageData, indent string) []string {
+	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
+		return append(lines, indent+" "+summary)
 	}
 	return lines
 }
 
 func appendResetSnapshotPlain(line string, data *provider.UsageData) string {
-	if summary := resetCreditPlainSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
+	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
 		return line + "  " + summary
 	}
 	return line
-}
-
-func formatResetCreditExpiry(t time.Time) string {
-	return t.Local().Format("Jan 2 3:04 PM")
 }
 
 // MultiProviderOutput handles displaying data from multiple providers.
@@ -570,7 +518,7 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 		}
 		countField := fmt.Sprintf("available=%d", count)
 		if pf.Data.ResetCredits.Snapshot {
-			countField = fmt.Sprintf("observed_count=%d snapshot=true account_match=user_confirmed", count)
+			countField = fmt.Sprintf("observed_count=%d snapshot=true", count)
 		}
 		fields := []string{pf.Display, countField}
 		expiresAt, hasExpiry := pf.Data.ResetCredits.EarliestExpiry(now)

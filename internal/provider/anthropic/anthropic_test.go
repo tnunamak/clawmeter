@@ -173,25 +173,39 @@ func TestSourceRevisionIsStableSecretFreeAndChangesWithFile(t *testing.T) {
 	}
 }
 
-func TestResetSnapshotSourceRevisionTracksProfilePathNotOAuthRefresh(t *testing.T) {
-	one, two := t.TempDir(), t.TempDir()
-	writeTestCredentials(t, one, "before", "refresh-before")
-	writeTestCredentials(t, two, "two", "refresh-two")
-	oneSource := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: one}})
-	first := oneSource.ResetSnapshotSourceRevision()
-	if first == "" || strings.Contains(first, one) {
-		t.Fatalf("profile identity = %q, want opaque stable identity", first)
+func writeTestProfile(t *testing.T, path, org string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	writeTestCredentials(t, one, "after-refresh", "refresh-after")
-	if got := oneSource.ResetSnapshotSourceRevision(); got != first {
-		t.Fatalf("routine credential refresh changed snapshot profile identity: %q != %q", got, first)
+	data, _ := json.Marshal(map[string]any{"oauthAccount": map[string]any{"organizationUuid": org, "emailAddress": "user@example.com"}})
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	twoSource := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: two}})
-	if got := twoSource.ResetSnapshotSourceRevision(); got == first {
-		t.Fatal("repointing explicit profile did not change snapshot identity")
+}
+
+func TestClaudeOrganizationUUIDReadsEachProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	native := New(config.ProviderConfig{})
+	if got := native.ClaudeOrganizationUUID(); got != "" {
+		t.Fatalf("no profile: org = %q, want empty", got)
 	}
-	if New(config.ProviderConfig{}).ResetSnapshotSourceRevision() != "" {
-		t.Fatal("native default must not claim a stable profile identity")
+	writeTestProfile(t, filepath.Join(home, ".claude", ".claude.json"), "org-fallback")
+	if got := native.ClaudeOrganizationUUID(); got != "org-fallback" {
+		t.Fatalf("fallback profile: org = %q", got)
+	}
+	writeTestProfile(t, filepath.Join(home, ".claude.json"), "org-home")
+	if got := native.ClaudeOrganizationUUID(); got != "org-home" {
+		t.Fatalf("home profile: org = %q, want ~/.claude.json first", got)
+	}
+	dir := t.TempDir()
+	writeTestProfile(t, filepath.Join(dir, ".claude.json"), "org-work")
+	work := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}})
+	if got := work.ClaudeOrganizationUUID(); got != "org-work" {
+		t.Fatalf("config-dir profile: org = %q", got)
 	}
 }
 
@@ -562,15 +576,6 @@ func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
 	if rev != pinned.(*Provider).SourceRevision() {
 		t.Fatal("pinned revision is not stable")
 	}
-	// Browser reset snapshots use a separate identity. Pinning must not change
-	// it, or a Default snapshot saved before a second source was added would
-	// stop attaching to Default.
-	if got := pinned.(*Provider).ResetSnapshotSourceRevision(); got != "" {
-		t.Fatalf("pinned native reset snapshot revision = %q, want empty", got)
-	}
-	if got := alone.(*Provider).ResetSnapshotSourceRevision(); got != "" {
-		t.Fatalf("lone native reset snapshot revision = %q, want empty", got)
-	}
 }
 
 // Regression: a source ID repointed at another config dir is another account
@@ -613,5 +618,21 @@ func TestNativeDefaultBackoffFollowsClaudeConfigDir(t *testing.T) {
 	fetchWithConfigDir()
 	if requests.Load() != 2 {
 		t.Fatalf("requests = %d; a 429 under one CLAUDE_CONFIG_DIR backed off another", requests.Load())
+	}
+}
+
+func TestTokenOverrideHasNoOrganization(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	writeTestProfile(t, filepath.Join(home, ".claude.json"), "org-home")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "other-account-token")
+	if got := New(config.ProviderConfig{}).ClaudeOrganizationUUID(); got != "" {
+		t.Fatalf("env token override: org = %q, want empty", got)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	if got := New(config.ProviderConfig{OAuthToken: "configured-token"}).ClaudeOrganizationUUID(); got != "" {
+		t.Fatalf("config token override: org = %q, want empty", got)
 	}
 }

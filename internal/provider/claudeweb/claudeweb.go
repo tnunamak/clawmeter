@@ -1,4 +1,4 @@
-// Package claudeweb exposes browser-confirmed Claude reset credits as a hidden
+// Package claudeweb exposes browser-observed Claude reset credits as a hidden
 // supplemental source. Each instance is bound to one Claude source key and is
 // merged under that Claude account for display (provider.PresentResetCreditSources);
 // it is never a user-facing provider. It never reads browser credentials or
@@ -36,42 +36,49 @@ func (p *Provider) Name() string         { return name }
 func (*Provider) ProviderFamily() string { return "claude" }
 func (*Provider) DisplayName() string    { return "Claude" }
 func (p *Provider) Description() string  { return "Browser-observed Claude reset inventory" }
-func (*Provider) DashboardURL() string   { return "https://claude.ai/settings/usage" }
+func (*Provider) DashboardURL() string   { return claudeweb.UsageURL }
 func (p *Provider) SourceID() string     { return p.sourceID }
 func (p *Provider) SourceLabel() string  { return p.label }
+
+// SourceRevision changes with every new check (fresh salt) and when the
+// source's account no longer matches the snapshot, so cached copies of an
+// invalid snapshot are never shown.
 func (p *Provider) SourceRevision() string {
-	return "claude-web-snapshot-v3:" + p.targetKey + ":" + p.targetSourceRevision()
+	summary, ok := p.snapshot()
+	if !ok {
+		return "claude-web-snapshot-v4:" + p.targetKey + ":none"
+	}
+	return "claude-web-snapshot-v4:" + p.targetKey + ":" + summary.MatchHash
 }
+
 func (p *Provider) IsConfigured() bool {
-	summary, err := p.readSummary()
-	return err == nil && p.matchesSourceRevision(summary) && availableCount(summary, time.Now()) > 0
+	summary, ok := p.snapshot()
+	return ok && availableCount(summary, time.Now()) > 0
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
 	if p.IsConfigured() {
-		return provider.SetupStatus{State: provider.SetupReady, Detail: "browser reset observation available"}
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "browser reset check available"}
 	}
-	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "run a browser check from the tray"}
+	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check Claude resets in the tray"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	summary, err := p.readSummary()
-	if err != nil {
-		return nil, fmt.Errorf("read Claude Web reset inventory: %w", err)
+	summary, ok := p.snapshot()
+	if !ok {
+		return nil, fmt.Errorf("no Claude reset check for this account")
 	}
-	if !p.matchesSourceRevision(summary) {
-		return nil, fmt.Errorf("saved Claude reset observation belongs to a different local source revision")
-	}
+	now := time.Now()
 	credits := make([]provider.UsageResetCredit, 0, len(summary.Credits))
+	earliest := time.Time{}
 	for _, expiresAt := range summary.Credits {
 		credits = append(credits, provider.UsageResetCredit{Status: "available", ExpiresAt: expiresAt})
-	}
-	available := summary.AvailableCount
-	if len(summary.Credits) > 0 {
-		available = availableCount(summary, time.Now())
+		if expiresAt.After(now) && (earliest.IsZero() || expiresAt.Before(earliest)) {
+			earliest = expiresAt
+		}
 	}
 	return &provider.UsageData{
 		Provider:           name,
@@ -80,8 +87,8 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		ResetCreditsTarget: p.targetKey,
 		FetchedAt:          summary.ObservedAt,
 		ResetCredits: &provider.UsageResetCredits{
-			AvailableCount:    available,
-			EarliestExpiresAt: summary.EarliestExpiresAt,
+			AvailableCount:    availableCount(summary, now),
+			EarliestExpiresAt: earliest,
 			Credits:           credits,
 			FetchedAt:         summary.ObservedAt,
 			Snapshot:          true,
@@ -89,43 +96,51 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}, nil
 }
 
-// StartCheck starts a one-time browser handoff for the selected Claude source.
-// The tray calls this; keeping the source-revision choice here guarantees the
-// session stamps the same identity that FetchUsage later validates against.
-func StartCheck(target provider.Provider) (*claudeweb.Session, error) {
-	return claudeweb.StartForSource(provider.SourceKey(target), ResetSnapshotRevision(target))
-}
-
-// ResetSnapshotRevision is the identity a browser reset snapshot is bound to.
-// It is not the cache SourceRevision: that one rotates with OAuth token
-// refreshes and differs for the pinned native Default source.
-func ResetSnapshotRevision(target provider.Provider) string {
-	source, ok := target.(interface{ ResetSnapshotSourceRevision() string })
-	if !ok {
-		return ""
+// snapshot returns the saved check only while the source is still signed in
+// to the organization the browser proved.
+func (p *Provider) snapshot() (claudeweb.GrantSummary, bool) {
+	summary, err := claudeweb.ReadSummaryFor(p.targetKey)
+	if err != nil || !summary.MatchesOrg(OrganizationUUID(p.target)) {
+		return claudeweb.GrantSummary{}, false
 	}
-	return source.ResetSnapshotSourceRevision()
+	return summary, true
 }
 
-func (p *Provider) readSummary() (claudeweb.GrantSummary, error) {
-	return claudeweb.ReadSummaryFor(p.targetKey)
+// OrganizationUUID returns the Claude organization a local Claude source is
+// signed in to, or "" when unknown.
+func OrganizationUUID(source provider.Provider) string {
+	if s, ok := source.(interface{ ClaudeOrganizationUUID() string }); ok {
+		return s.ClaudeOrganizationUUID()
+	}
+	return ""
 }
 
-func (p *Provider) targetSourceRevision() string {
-	return ResetSnapshotRevision(p.target)
+// Accounts lists the Claude sources a browser check can be filed under,
+// labelled as the tray names them.
+func Accounts(sources []provider.Provider) []claudeweb.Account {
+	accounts := make([]claudeweb.Account, 0, len(sources))
+	for _, source := range sources {
+		if source.Name() == "claude" {
+			accounts = append(accounts, claudeweb.Account{Key: provider.SourceKey(source), Label: provider.SourceLabel(source), OrgUUID: OrganizationUUID(source)})
+		}
+	}
+	for i := range accounts {
+		if accounts[i].Label == "" && len(accounts) > 1 {
+			accounts[i].Label = "Default"
+		} else if accounts[i].Label == "" {
+			accounts[i].Label = "Claude"
+		}
+	}
+	return accounts
 }
 
-func (p *Provider) matchesSourceRevision(summary claudeweb.GrantSummary) bool {
-	return summary.SourceRevision == p.targetSourceRevision()
+// StartCheck starts a browser handoff for every local Claude source. The
+// browser result is filed under the source whose organization matches.
+func StartCheck(sources []provider.Provider) (*claudeweb.Session, error) {
+	return claudeweb.Start(Accounts(sources))
 }
 
 func availableCount(summary claudeweb.GrantSummary, now time.Time) int {
-	if len(summary.Credits) == 0 {
-		if summary.AvailableCount > 0 && (summary.EarliestExpiresAt.IsZero() || summary.EarliestExpiresAt.After(now)) {
-			return summary.AvailableCount
-		}
-		return 0
-	}
 	count := 0
 	for _, expiresAt := range summary.Credits {
 		if expiresAt.After(now) {

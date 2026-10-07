@@ -193,19 +193,46 @@ func (p *Provider) SourceRevision() string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%o", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm()))))
 }
 
-// ResetSnapshotSourceRevision identifies an explicitly configured local
-// profile without following routine OAuth token-file refreshes. The native
-// Default route can resolve through environment variables or Keychain, so it
-// has no stable local profile identity to expose.
-func (p *Provider) ResetSnapshotSourceRevision() string {
-	if !p.explicitSource {
+// ClaudeOrganizationUUID returns the organization Claude Code recorded for
+// this profile (oauthAccount.organizationUuid in its .claude.json), or "".
+// Browser reset checks use it to file results under the matching source.
+func (p *Provider) ClaudeOrganizationUUID() string {
+	// A token override can belong to any account, and nothing local records
+	// its organization, so it can't receive browser reset results.
+	if p.usesTokenOverride() {
 		return ""
 	}
-	path := provider.CanonicalPath(p.configDir)
-	if path == "" {
-		return ""
+	var paths []string
+	switch {
+	case p.explicitSource:
+		paths = []string{filepath.Join(p.configDir, ".claude.json")}
+	case !p.pinnedNative && strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) != "":
+		paths = []string{filepath.Join(strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")), ".claude.json")}
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		paths = []string{filepath.Join(home, ".claude.json"), filepath.Join(home, ".claude", ".claude.json")}
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte("claude-reset-profile\x00"+path)))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var profile struct {
+			OAuthAccount struct {
+				OrganizationUUID string `json:"organizationUuid"`
+			} `json:"oauthAccount"`
+		}
+		if json.Unmarshal(data, &profile) != nil {
+			continue
+		}
+		if org := strings.TrimSpace(profile.OAuthAccount.OrganizationUUID); org != "" {
+			return org
+		}
+	}
+	return ""
 }
 
 // CredentialRoute names the config dir this source reads, so a repointed
@@ -445,6 +472,27 @@ func (c *Credentials) IsExpired() bool {
 		return false // can't check expiry for raw tokens
 	}
 	return time.Now().UnixMilli() >= c.ClaudeAiOauth.ExpiresAt
+}
+
+// usesTokenOverride reports whether readCredentials would use a bare OAuth
+// token from config or the environment instead of a Claude profile.
+func (p *Provider) usesTokenOverride() bool {
+	if p.explicitSource {
+		return false
+	}
+	if p.cfg.OAuthToken != "" {
+		return true
+	}
+	if p.pinnedNative {
+		return false
+	}
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"CLAUDE_CODE_OAUTH_TOKEN"}, AllowSessionEnvironmentFallback: true,
+		})
+		return values["CLAUDE_CODE_OAUTH_TOKEN"] != ""
+	}
+	return os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 }
 
 // readCredentials tries multiple sources to find credentials.

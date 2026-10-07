@@ -919,3 +919,39 @@ func TestResetOnlyClaudeRowIsMarkedUsageUnavailable(t *testing.T) {
 		t.Fatalf("reset-only row error=%q presentable=%v; a manual reset observation is not a usage reading", got.Error, got.HasPresentableUsage())
 	}
 }
+
+func TestResetCreditsSummaryStrings(t *testing.T) {
+	old := time.Local
+	time.Local = time.FixedZone("CDT", -5*60*60)
+	defer func() { time.Local = old }()
+	now := time.Date(2026, time.October, 7, 14, 0, 0, 0, time.Local)
+	available := func(expiries ...time.Time) []UsageResetCredit {
+		credits := make([]UsageResetCredit, 0, len(expiries))
+		for _, expiry := range expiries {
+			credits = append(credits, UsageResetCredit{Status: "available", ExpiresAt: expiry})
+		}
+		return credits
+	}
+	oct22 := time.Date(2026, time.October, 22, 9, 0, 0, 0, time.Local)
+	checkedToday := time.Date(2026, time.October, 7, 11, 30, 0, 0, time.Local)
+	for _, tc := range []struct {
+		name    string
+		credits *UsageResetCredits
+		want    string
+	}{
+		{"none", &UsageResetCredits{}, ""},
+		{"nil", nil, ""},
+		{"codex one", &UsageResetCredits{AvailableCount: 1, Credits: available(oct22), FetchedAt: checkedToday}, "Resets: 1 · expires Oct 22"},
+		{"codex two", &UsageResetCredits{AvailableCount: 2, Credits: available(oct22, oct22.Add(48*time.Hour))}, "Resets: 2 · next expires Oct 22"},
+		{"count without expiry", &UsageResetCredits{AvailableCount: 3}, "Resets: 3"},
+		{"snapshot checked today", &UsageResetCredits{Snapshot: true, Credits: available(oct22), FetchedAt: checkedToday}, "Resets: 1 · expires Oct 22 · checked 11:30"},
+		{"snapshot checked earlier", &UsageResetCredits{Snapshot: true, Credits: available(oct22, oct22), FetchedAt: time.Date(2026, time.October, 5, 8, 0, 0, 0, time.Local)}, "Resets: 2 · next expires Oct 22 · checked Oct 5"},
+		{"expires today", &UsageResetCredits{Snapshot: true, Credits: available(time.Date(2026, time.October, 7, 18, 45, 0, 0, time.Local)), FetchedAt: checkedToday}, "Resets: 1 · expires 18:45 · checked 11:30"},
+		{"expires next year", &UsageResetCredits{AvailableCount: 1, Credits: available(time.Date(2027, time.January, 3, 9, 0, 0, 0, time.Local))}, "Resets: 1 · expires Jan 3, 2027"},
+		{"all expired", &UsageResetCredits{Snapshot: true, Credits: available(now.Add(-time.Minute)), FetchedAt: checkedToday}, ""},
+	} {
+		if got := tc.credits.Summary(now); got != tc.want {
+			t.Errorf("%s: Summary() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

@@ -176,20 +176,7 @@ func run() int {
 	case "doctor":
 		return doctorCmd(os.Args[2:])
 	case "claude-web-bookmarklet":
-		fmt.Println("Create a browser bookmark named Clawmeter reset check, then set its URL to:")
-		fmt.Println()
 		fmt.Println(claudeweb.Bookmarklet())
-		return 0
-	case "claude-web-setup":
-		if err := claudeweb.OpenSetupPage(); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
-			return 1
-		}
-		if err := claudeweb.MarkSetupStarted(); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: opened setup page but could not save setup state: %v\n", err)
-			return 1
-		}
-		fmt.Println("Opened Claude reset bookmark setup in your default browser. Save the bookmark, then start a source-specific check from the tray.")
 		return 0
 	case "tray":
 		return trayCmd(os.Args[2:])
@@ -1224,8 +1211,7 @@ Commands:
   providers                 List, connect, or configure providers
   setup                     Install or show local integrations
   doctor                    Check provider and integration readiness
-  claude-web-setup          Open setup for the reusable Claude reset bookmark
-  claude-web-bookmarklet    Print setup instructions for Claude Web reset checks
+  claude-web-bookmarklet    Print the Claude reset bookmark URL
   tray                      Run as system tray icon
   config                    Manage configuration
   update                    Self-update to the latest release
