@@ -308,3 +308,85 @@ func TestUsageUnavailableAllowsRealZeroWhenModelWindowsAreAbsent(t *testing.T) {
 }
 
 func float64Ptr(value float64) *float64 { return &value }
+
+// Regression: with several Claude sources configured, the native Default
+// source must not follow an ambient CLAUDE_CONFIG_DIR / CLAUDE_CODE_OAUTH_TOKEN.
+// Running the CLI from a shell set up for another account (e.g. `claude-odl`)
+// otherwise made Default show that account's quota under the Default label.
+func TestNativeSourceIgnoresAmbientEnvWhenMultipleSourcesConfigured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeTestCredentials(t, filepath.Join(home, ".claude"), "default-account", "")
+	odl := t.TempDir()
+	writeTestCredentials(t, odl, "odl-account", "")
+
+	t.Setenv("CLAUDE_CONFIG_DIR", odl)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "odl-env-token")
+
+	sources := []config.SourceConfig{
+		{ID: "default", Label: "Default", Credential: config.CredentialRef{Kind: "native"}},
+		{ID: "odl", Label: "ODL", Credential: config.CredentialRef{Kind: "config-dir", Ref: odl}},
+	}
+	cfg := config.ProviderConfig{Sources: sources}
+	def, err := (sourceCapability{}).NewSource(cfg, sources[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := (sourceCapability{}).NewSource(cfg, sources[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc, err := def.(*Provider).readCredentials()
+	if err != nil || dc.AccessToken() != "default-account" {
+		t.Fatalf("default source read the wrong account: token=%q err=%v", tokenOf(dc), err)
+	}
+	oc, err := other.(*Provider).readCredentials()
+	if err != nil || oc.AccessToken() != "odl-account" {
+		t.Fatalf("odl source read the wrong account: token=%q err=%v", tokenOf(oc), err)
+	}
+}
+
+// A lone native source keeps the legacy ambient resolution chain.
+func TestNativeSourceAloneStillHonorsAmbientEnv(t *testing.T) {
+	dir := t.TempDir()
+	writeTestCredentials(t, dir, "ambient", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	src := config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}
+	p, err := (sourceCapability{}).NewSource(config.ProviderConfig{Sources: []config.SourceConfig{src}}, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds, err := p.(*Provider).readCredentials()
+	if err != nil || creds.AccessToken() != "ambient" {
+		t.Fatalf("lone native source = %q, %v", tokenOf(creds), err)
+	}
+}
+
+func TestNativeSourceIgnoresAmbientConfigDirAlone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeTestCredentials(t, filepath.Join(home, ".claude"), "default-account", "")
+	odl := t.TempDir()
+	writeTestCredentials(t, odl, "odl-account", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", odl)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	sources := []config.SourceConfig{
+		{ID: "default", Credential: config.CredentialRef{Kind: "native"}},
+		{ID: "odl", Credential: config.CredentialRef{Kind: "config-dir", Ref: odl}},
+	}
+	p, _ := (sourceCapability{}).NewSource(config.ProviderConfig{Sources: sources}, sources[0])
+	creds, err := p.(*Provider).readCredentials()
+	if err != nil || creds.AccessToken() != "default-account" {
+		t.Fatalf("default source followed CLAUDE_CONFIG_DIR: %q, %v", tokenOf(creds), err)
+	}
+}
+
+func tokenOf(c *Credentials) string {
+	if c == nil {
+		return ""
+	}
+	return c.AccessToken()
+}

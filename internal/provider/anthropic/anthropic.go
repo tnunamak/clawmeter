@@ -37,6 +37,10 @@ type Provider struct {
 	configDir                  string
 	explicitSource             bool
 	enrolledSource             bool
+	// pinnedNative makes the native source ignore ambient CLAUDE_CONFIG_DIR and
+	// CLAUDE_CODE_OAUTH_TOKEN. Set when other sources exist, so the Default
+	// label cannot silently resolve to whichever account the shell is set up for.
+	pinnedNative bool
 }
 
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
@@ -128,6 +132,8 @@ func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.Sourc
 	if source.Credential.Kind == "config-dir" {
 		p.configDir = strings.TrimSpace(source.Credential.Ref)
 		p.explicitSource = true
+	} else if len(cfg.Sources) > 1 {
+		p.pinnedNative = true
 	}
 	return p, nil
 }
@@ -390,8 +396,12 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 		return &Credentials{tokenOnly: p.cfg.OAuthToken}, nil
 	}
 
-	// 2. Environment variable (for backward compatibility)
-	if p.sessionEnvironmentResolver != nil {
+	// 2. Environment variable (for backward compatibility). Skipped for a
+	// pinned native source: the ambient token belongs to whichever account
+	// the calling shell is set up for, not necessarily the Default one.
+	if p.pinnedNative {
+		// fall through to keychain / ~/.claude
+	} else if p.sessionEnvironmentResolver != nil {
 		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
 			EnvNames: []string{"CLAUDE_CODE_OAUTH_TOKEN"}, AllowSessionEnvironmentFallback: true,
 		})
@@ -410,7 +420,20 @@ func (p *Provider) readCredentials() (*Credentials, error) {
 	}
 
 	// 4. Credentials file (Linux/Claude Code default)
+	if p.pinnedNative {
+		return p.readCredentialsFile(homeCredentialsDir())
+	}
 	return p.readCredentialsFile(legacyCredentialsDir())
+}
+
+// homeCredentialsDir is Claude Code's default config directory, ignoring
+// CLAUDE_CONFIG_DIR.
+func homeCredentialsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".claude")
+	}
+	return filepath.Join(home, ".claude")
 }
 
 func (p *Provider) readKeychain() (*Credentials, error) {
