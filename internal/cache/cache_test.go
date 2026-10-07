@@ -2,6 +2,8 @@ package cache
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -184,5 +186,34 @@ func TestHasStaleData(t *testing.T) {
 	}
 	if entry.HasStaleData([]string{"gemini"}) {
 		t.Fatal("HasStaleData(missing) = true, want false")
+	}
+}
+
+// Entries written before the schema version existed hold Claude extra-usage
+// values 100x too large. They must not be served, fresh or as stale fallback.
+func TestReadRejectsCacheWrittenWithOldClaudeUnits(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", root)
+	t.Setenv("HOME", root)
+	t.Setenv("LocalAppData", root)
+	dir, err := cacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"provider_data":{"claude":{"provider":"claude","windows":[{"name":"extra","utilization":100,"resets_at":"0001-01-01T00:00:00Z","limit":200000,"used":200400}]}},"fetched_at":"2026-10-07T12:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "usage.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if entry, err := Read(); err == nil {
+		t.Fatalf("Read served pre-version cache: %#v", entry)
+	}
+	if err := Write(&provider.MultiFetchResult{Results: map[string]*provider.UsageData{"claude": {Provider: "claude"}}, FetchedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(); err != nil {
+		t.Fatalf("Read of current-version cache: %v", err)
 	}
 }

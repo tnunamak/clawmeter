@@ -13,8 +13,14 @@ import (
 
 const defaultTTL = 60 * time.Second
 
+// schemaVersion invalidates caches whose values changed meaning. Version 2:
+// Claude extra-usage Used/Limit were written 100x too large before; entries
+// without this version are dropped on read, including stale fallbacks.
+const schemaVersion = 2
+
 // Entry represents cached usage data for all providers.
 type Entry struct {
+	Version int `json:"version,omitempty"`
 	// ProviderData maps canonical source key to usage data. The legacy `claude`
 	// key remains the default Claude source.
 	ProviderData    map[string]*provider.UsageData `json:"provider_data"`
@@ -46,6 +52,9 @@ func Read() (*Entry, error) {
 	var entry Entry
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return nil, err
+	}
+	if entry.Version != schemaVersion {
+		return nil, fmt.Errorf("cache schema version %d is not %d", entry.Version, schemaVersion)
 	}
 	return &entry, nil
 }
@@ -120,6 +129,7 @@ func Write(result *provider.MultiFetchResult) error {
 	}
 
 	entry := Entry{
+		Version:      schemaVersion,
 		ProviderData: result.Results, SourceRevisions: result.SourceRevisions,
 		FetchedAt: result.FetchedAt,
 	}

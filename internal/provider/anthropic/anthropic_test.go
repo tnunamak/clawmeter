@@ -1,14 +1,20 @@
 package anthropic
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
@@ -389,4 +395,185 @@ func tokenOf(c *Credentials) string {
 		return ""
 	}
 	return c.AccessToken()
+}
+
+// TestMain keeps every test off the developer's real macOS Keychain.
+func TestMain(m *testing.M) {
+	keychainRead = func() ([]byte, error) { return nil, errors.New("keychain disabled in tests") }
+	os.Exit(m.Run())
+}
+
+const documentedExtraUsage = `{"extra_usage":{"is_enabled":true,"monthly_limit":50000,"used_credits":27140,"utilization":54,"currency":"USD"}}`
+
+func extraWindowFor(t *testing.T, payload string) provider.UsageWindow {
+	t.Helper()
+	p := newTestProvider(t, payload, http.StatusOK, "")
+	data, err := p.FetchUsage(context.Background())
+	if err != nil || data.Error != "" {
+		t.Fatalf("FetchUsage: %v / %q", err, data.Error)
+	}
+	for _, w := range data.Windows {
+		if w.Name == "extra" {
+			return w
+		}
+	}
+	t.Fatalf("no extra window in %#v", data.Windows)
+	return provider.UsageWindow{}
+}
+
+// newTestProvider serves body from a local server and isolates backoff state.
+func newTestProvider(t *testing.T, body string, status int, retryAfter string) *Provider {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	requests.Store(0)
+	oldEndpoint, oldCache, oldNow := usageEndpoint, userCacheDir, now
+	cacheRoot := t.TempDir()
+	usageEndpoint = srv.URL
+	userCacheDir = func() (string, error) { return cacheRoot, nil }
+	t.Cleanup(func() { usageEndpoint, userCacheDir, now = oldEndpoint, oldCache, oldNow })
+	dir := t.TempDir()
+	writeTestCredentials(t, dir, "test-token", "")
+	src := config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}}
+	p, err := (sourceCapability{}).NewSource(config.ProviderConfig{}, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.(*Provider)
+}
+
+var requests atomic.Int32
+
+func TestExtraUsageDocumentedExampleIsCents(t *testing.T) {
+	w := extraWindowFor(t, documentedExtraUsage)
+	if w.Used != 27140 || w.Limit != 50000 || w.Currency != "USD" {
+		t.Fatalf("window = %#v, want used 27140 limit 50000 USD (cents, unscaled)", w)
+	}
+	if w.Utilization != 54 {
+		t.Fatalf("utilization = %v, want 54", w.Utilization)
+	}
+	if got := w.MoneyDetail(); got != "$271.40 / $500.00" {
+		t.Fatalf("MoneyDetail = %q", got)
+	}
+}
+
+func TestExtraUsageOverCapIsReportedTruthfully(t *testing.T) {
+	w := extraWindowFor(t, `{"extra_usage":{"is_enabled":true,"monthly_limit":20000,"used_credits":20040,"utilization":100,"currency":"USD"}}`)
+	if w.Utilization < 100.19 || w.Utilization > 100.21 {
+		t.Fatalf("utilization = %v, want ~100.2 (not clamped)", w.Utilization)
+	}
+	if got := w.MoneyDetail(); got != "$200.40 / $200.00, over cap" {
+		t.Fatalf("MoneyDetail = %q", got)
+	}
+}
+
+func TestExtraUsageNonUSDCurrency(t *testing.T) {
+	w := extraWindowFor(t, `{"extra_usage":{"is_enabled":true,"monthly_limit":2000,"used_credits":1658,"utilization":83,"currency":"eur"}}`)
+	if got := w.MoneyDetail(); got != "16.58 EUR / 20.00 EUR" {
+		t.Fatalf("MoneyDetail = %q", got)
+	}
+}
+
+func TestRateLimitBacksOffAndHonorsFloor(t *testing.T) {
+	p := newTestProvider(t, `{"type":"error","error":{"type":"rate_limit_error"}}`, http.StatusTooManyRequests, "0")
+	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	now = func() time.Time { return clock }
+
+	data, _ := p.FetchUsage(context.Background())
+	if !strings.Contains(data.Error, "rate limited") || requests.Load() != 1 {
+		t.Fatalf("first fetch: error=%q requests=%d", data.Error, requests.Load())
+	}
+	clock = clock.Add(4 * time.Minute)
+	data, _ = p.FetchUsage(context.Background())
+	if !strings.Contains(data.Error, "rate limited") || requests.Load() != 1 {
+		t.Fatalf("during backoff: error=%q requests=%d, want no new request", data.Error, requests.Load())
+	}
+	clock = clock.Add(2 * time.Minute) // 6 min after first 429, past the 5 min floor
+	_, _ = p.FetchUsage(context.Background())
+	if requests.Load() != 2 {
+		t.Fatalf("after floor: requests=%d, want 2", requests.Load())
+	}
+	// Second consecutive 429 doubles the delay to 10 minutes.
+	clock = clock.Add(8 * time.Minute)
+	_, _ = p.FetchUsage(context.Background())
+	if requests.Load() != 2 {
+		t.Fatalf("exponential: requests=%d, want still 2 at +8m", requests.Load())
+	}
+	clock = clock.Add(3 * time.Minute)
+	_, _ = p.FetchUsage(context.Background())
+	if requests.Load() != 3 {
+		t.Fatalf("exponential: requests=%d, want 3 at +11m", requests.Load())
+	}
+}
+
+func TestRateLimitHonorsLongRetryAfter(t *testing.T) {
+	p := newTestProvider(t, `{}`, http.StatusTooManyRequests, "1800")
+	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	now = func() time.Time { return clock }
+	_, _ = p.FetchUsage(context.Background())
+	clock = clock.Add(20 * time.Minute)
+	_, _ = p.FetchUsage(context.Background())
+	if requests.Load() != 1 {
+		t.Fatalf("requests=%d, want retry-after 30m honored", requests.Load())
+	}
+}
+
+func TestSuccessClearsBackoff(t *testing.T) {
+	p := newTestProvider(t, `{"five_hour":{"utilization":10,"resets_at":"2026-12-01T00:00:00Z"}}`, http.StatusOK, "")
+	p.recordRateLimit("0")
+	if _, ok := p.backoffUntil(); !ok {
+		t.Fatal("backoff not recorded")
+	}
+	now = func() time.Time { return time.Now().Add(10 * time.Minute) }
+	if data, err := p.FetchUsage(context.Background()); err != nil || data.Error != "" {
+		t.Fatalf("fetch after backoff: %v %q", err, data.Error)
+	}
+	now = time.Now
+	if _, ok := p.backoffUntil(); ok {
+		t.Fatal("successful fetch did not clear backoff")
+	}
+}
+
+func TestRawResponseIsRecordedVerbatim(t *testing.T) {
+	p := newTestProvider(t, documentedExtraUsage, http.StatusOK, "")
+	if _, err := p.FetchUsage(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw := p.LastRawResponse()
+	if raw == nil || raw.Status != 200 || raw.Body != documentedExtraUsage || raw.FetchedAt.IsZero() {
+		t.Fatalf("raw = %#v", raw)
+	}
+}
+
+// Regression: the pinned native Default source must not share cache
+// provenance with the legacy ambient route, or a failed fetch could serve the
+// ambient account's cached quota under the Default label.
+func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	native := config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}
+	other := config.SourceConfig{ID: "odl", Credential: config.CredentialRef{Kind: "config-dir", Ref: t.TempDir()}}
+	alone, _ := (sourceCapability{}).NewSource(config.ProviderConfig{Sources: []config.SourceConfig{native}}, native)
+	pinned, _ := (sourceCapability{}).NewSource(config.ProviderConfig{Sources: []config.SourceConfig{native, other}}, native)
+	if rev := alone.(*Provider).SourceRevision(); rev != "" {
+		t.Fatalf("lone native revision = %q, want legacy empty", rev)
+	}
+	rev := pinned.(*Provider).SourceRevision()
+	if rev == "" {
+		t.Fatal("pinned native revision is empty; legacy cache entries would match")
+	}
+	if cache.SourceRevisionMatches(map[string]string{"claude": ""}, "claude", rev) {
+		t.Fatal("legacy unrevisioned cache entry matches pinned source")
+	}
+	if rev != pinned.(*Provider).SourceRevision() {
+		t.Fatal("pinned revision is not stable")
+	}
 }

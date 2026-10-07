@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -28,6 +30,9 @@ const (
 	timeout       = 15 * time.Second
 )
 
+// usageEndpoint is a variable so tests can point it at a local server.
+var usageEndpoint = usageURL
+
 // Provider implements the provider.Provider interface for Anthropic/Claude.
 type Provider struct {
 	cfg                        config.ProviderConfig
@@ -41,6 +46,23 @@ type Provider struct {
 	// CLAUDE_CODE_OAUTH_TOKEN. Set when other sources exist, so the Default
 	// label cannot silently resolve to whichever account the shell is set up for.
 	pinnedNative bool
+
+	rawMu   sync.Mutex
+	lastRaw *provider.RawResponse
+}
+
+// LastRawResponse returns the last usage endpoint response, or nil if this
+// process made no request (for example during a rate-limit backoff).
+func (p *Provider) LastRawResponse() *provider.RawResponse {
+	p.rawMu.Lock()
+	defer p.rawMu.Unlock()
+	return p.lastRaw
+}
+
+func (p *Provider) recordRaw(status int, retryAfter, body string) {
+	p.rawMu.Lock()
+	defer p.rawMu.Unlock()
+	p.lastRaw = &provider.RawResponse{Status: status, FetchedAt: time.Now(), RetryAfter: retryAfter, Body: body}
 }
 
 func (p *Provider) SetSessionEnvironmentResolver(resolver provider.SessionEnvironmentResolver) {
@@ -147,6 +169,12 @@ func (p *Provider) SourceID() string {
 func (p *Provider) SourceLabel() string    { return p.sourceLabel }
 func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
 func (p *Provider) SourceRevision() string {
+	if p.pinnedNative {
+		// Pinned Default reads only ~/.claude. A distinct, stable revision keeps
+		// cache entries written by the old ambient route (possibly another
+		// account) from being served as stale fallback under this source.
+		return fmt.Sprintf("%x", sha256.Sum256([]byte("native-pinned\x00"+filepath.Join(homeCredentialsDir(), ".credentials.json"))))
+	}
 	if !p.explicitSource {
 		return ""
 	}
@@ -221,7 +249,15 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", usageURL, nil)
+	if until, backingOff := p.backoffUntil(); backingOff {
+		return &provider.UsageData{
+			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
+			FetchedAt: time.Now(),
+			Error:     rateLimitedMessage(until),
+		}, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", usageEndpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +270,12 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	p.recordRaw(resp.StatusCode, resp.Header.Get("Retry-After"), string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnauthorized {
@@ -248,16 +290,17 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			return &provider.UsageData{
 				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 				FetchedAt: time.Now(),
-				Error:     "rate limited (429)",
+				Error:     rateLimitedMessage(p.recordRateLimit(resp.Header.Get("Retry-After"))),
 			}, nil
 		}
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 
 	var apiResp usageResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&apiResp); err != nil {
+	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+	p.clearBackoff()
 
 	if apiResp.usageUnavailable() {
 		return &provider.UsageData{
@@ -285,6 +328,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 				Utilization: utilization,
 				Used:        cents(apiResp.ExtraUsage.UsedCredits),
 				Limit:       cents(apiResp.ExtraUsage.MonthlyLimit),
+				Currency:    apiResp.ExtraUsage.currency(),
 			})
 		}
 	}
@@ -436,9 +480,14 @@ func homeCredentialsDir() string {
 	return filepath.Join(home, ".claude")
 }
 
-func (p *Provider) readKeychain() (*Credentials, error) {
-	out, err := exec.Command("security", "find-generic-password",
+// keychainRead is a variable so tests never touch the real macOS Keychain.
+var keychainRead = func() ([]byte, error) {
+	return exec.Command("security", "find-generic-password",
 		"-s", "Claude Code-credentials", "-w").Output()
+}
+
+func (p *Provider) readKeychain() (*Credentials, error) {
+	out, err := keychainRead()
 	if err != nil {
 		return nil, fmt.Errorf("keychain: %w", err)
 	}
@@ -651,25 +700,39 @@ func validUtilization(percent *float64) bool {
 	return percent != nil && *percent >= 0 && *percent <= 100
 }
 
+// utilization returns the extra-usage percent. Anthropic documents it as a
+// whole percent for the bearer's own monthly cap. When spend exceeds the cap the
+// real ratio is reported (above 100), not hidden.
 func (w extraUsageWindow) utilization() (float64, bool) {
+	computed, hasComputed := 0.0, false
+	if w.MonthlyLimit != nil && w.UsedCredits != nil && *w.MonthlyLimit > 0 && *w.UsedCredits >= 0 {
+		computed, hasComputed = *w.UsedCredits / *w.MonthlyLimit * 100, true
+	}
+	if hasComputed && computed > 100 {
+		return computed, true
+	}
 	if validUtilization(w.Utilization) {
 		return *w.Utilization, true
 	}
-	if w.MonthlyLimit != nil && w.UsedCredits != nil && *w.MonthlyLimit > 0 && *w.UsedCredits >= 0 {
-		percent := *w.UsedCredits / *w.MonthlyLimit * 100
-		if percent > 100 {
-			percent = 100
-		}
-		return percent, true
-	}
-	return 0, false
+	return computed, hasComputed
 }
 
+// currency returns the upper-case ISO currency, defaulting to USD when the
+// API omits it (the only currency Anthropic documents for this field).
+func (w extraUsageWindow) currency() string {
+	if c := strings.ToUpper(strings.TrimSpace(w.Currency)); c != "" {
+		return c
+	}
+	return "USD"
+}
+
+// cents reads an extra_usage amount. The API contract gives these fields in
+// cents already; do not scale them.
 func cents(value *float64) int {
 	if value == nil || *value <= 0 {
 		return 0
 	}
-	return int(*value * 100)
+	return int(math.Round(*value))
 }
 
 // Register registers the Anthropic provider with the registry.

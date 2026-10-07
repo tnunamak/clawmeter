@@ -103,6 +103,7 @@ Useful commands:
 ```bash
 clawmeter providers      # detected providers and auth status
 clawmeter providers diagnose codex --pretty  # privacy-safe live diagnostic
+clawmeter providers diagnose claude --raw     # raw provider response per source (redacted), to verify a reading
 clawmeter providers source list               # enrolled source ids and labels
 clawmeter providers source add <provider> <id> <kind> [ref] [--label <label>]
 clawmeter providers source remove claude work # final removal also disables the provider

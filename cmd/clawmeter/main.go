@@ -984,16 +984,22 @@ func providersConnectCmd(args []string) int {
 func providersDiagnoseCmd(args []string) int {
 	selection := ""
 	pretty := false
+	raw := false
 	for _, arg := range args {
 		switch arg {
 		case "--json":
 			// JSON is the only diagnostic format; accept the flag for clarity.
+		case "--raw":
+			raw = true
 		case "--pretty":
 			pretty = true
 		case "help", "--help", "-h":
-			fmt.Println("Usage: clawmeter providers diagnose <provider|all> [--json] [--pretty]")
+			fmt.Println("Usage: clawmeter providers diagnose <provider|all> [--json] [--pretty] [--raw]")
 			fmt.Println()
 			fmt.Println("Runs a live provider probe and emits privacy-safe JSON.")
+			fmt.Println("--raw instead prints, per source, the HTTP status, fetch time, and the provider's")
+			fmt.Println("JSON body as received (emails, org and account IDs redacted). Opt-in; it makes one")
+			fmt.Println("live request per source, or none while a rate-limit backoff is active.")
 			return 0
 		default:
 			if strings.HasPrefix(arg, "-") {
@@ -1009,7 +1015,7 @@ func providersDiagnoseCmd(args []string) int {
 	}
 	if selection == "" {
 		fmt.Fprintln(os.Stderr, "clawmeter: diagnose requires a provider or 'all'")
-		fmt.Fprintln(os.Stderr, "Usage: clawmeter providers diagnose <provider|all> [--json] [--pretty]")
+		fmt.Fprintln(os.Stderr, "Usage: clawmeter providers diagnose <provider|all> [--json] [--pretty] [--raw]")
 		return 1
 	}
 
@@ -1044,6 +1050,21 @@ func providersDiagnoseCmd(args []string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	if raw {
+		var sources []provider.Provider
+		if selection == "all" {
+			sources = registry.GetConfigured()
+		} else {
+			sources = registry.GetFamily(selected[0].Name())
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(diagnose.Raw(ctx, sources)); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: encode raw diagnostic: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	output := diagnose.Run(
 		ctx,
 		selected,

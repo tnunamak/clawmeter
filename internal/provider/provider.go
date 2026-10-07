@@ -261,6 +261,28 @@ type UsageWindow struct {
 	ResetPolicy string    `json:"reset_policy,omitempty"` // Provider policy when no timestamp is known
 	Limit       int       `json:"limit,omitempty"`        // Optional: actual limit number (e.g., 50 requests)
 	Used        int       `json:"used,omitempty"`         // Optional: actual usage number
+	Currency    string    `json:"currency,omitempty"`     // When set, Used and Limit are minor units (cents) of this ISO currency
+}
+
+// MoneyDetail renders Used and Limit as money, for example "$16.58 / $20.00".
+// It adds ", over cap" when spend exceeds the limit. It returns "" unless the window carries a currency and a positive limit.
+func (w UsageWindow) MoneyDetail() string {
+	if w.Currency == "" || w.Limit <= 0 {
+		return ""
+	}
+	detail := formatMinorUnits(w.Used, w.Currency) + " / " + formatMinorUnits(w.Limit, w.Currency)
+	if w.Used > w.Limit {
+		detail += ", over cap"
+	}
+	return detail
+}
+
+func formatMinorUnits(minor int, currency string) string {
+	amount := fmt.Sprintf("%d.%02d", minor/100, minor%100)
+	if strings.EqualFold(currency, "USD") {
+		return "$" + amount
+	}
+	return amount + " " + strings.ToUpper(currency)
 }
 
 // UsageBalance represents a non-resetting provider balance.

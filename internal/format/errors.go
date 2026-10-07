@@ -40,6 +40,8 @@ func HumanizeError(errMsg string) string {
 		return "DNS lookup failed"
 	case strings.Contains(lowered, "certificate") || strings.Contains(lowered, "x509"):
 		return "TLS certificate error"
+	case strings.Contains(lowered, "rate limited (429), next try "):
+		return truncate(core, 80)
 	case strings.Contains(lowered, "rate limited") || strings.Contains(lowered, "429"):
 		return "rate limited"
 	case strings.Contains(fullLowered, "unauthorized") || strings.Contains(fullLowered, "401"):

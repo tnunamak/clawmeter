@@ -844,3 +844,12 @@ func TestBuildOutputFromCacheRejectsRotatedSourceCredential(t *testing.T) {
 		t.Fatalf("rotated source reused cached account data: %#v", output.Providers)
 	}
 }
+
+func TestPlainOutputShowsExtraUsageMoney(t *testing.T) {
+	pf := &ProviderFormatter{Display: "Claude", Data: &provider.UsageData{Windows: []provider.UsageWindow{
+		{Name: "extra", DisplayName: "Extra usage", Utilization: 83, Used: 1658, Limit: 2000, Currency: "USD"},
+	}}}
+	if got := pf.FormatPlain(); !strings.Contains(got, "Extra usage: 83%") || !strings.Contains(got, "[$16.58 / $20.00]") {
+		t.Fatalf("plain = %q", got)
+	}
+}

@@ -137,6 +137,9 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-11s %s",
 			label, plainWindowLabel(window), barColor, bar(window.Utilization), reset,
 			window.Utilization, resetStr, indicator)
+		if money := window.MoneyDetail(); money != "" {
+			line += "  (" + money + ")"
+		}
 		if i == 0 && statusLine != "" {
 			line += "  " + statusLine
 		}
@@ -188,7 +191,7 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	parts := make([]string, 0, len(windows))
 	for _, window := range windows {
 		if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-			parts = append(parts, fmt.Sprintf("%s: %.0f%% (reset not reported)", plainWindowLabel(window), window.Utilization))
+			parts = append(parts, fmt.Sprintf("%s: %.0f%% (reset not reported)%s", plainWindowLabel(window), window.Utilization, moneySuffix(window)))
 			continue
 		}
 		resetStr, indicator := "unknown", "reset unknown"
@@ -198,7 +201,7 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		} else if window.ResetPolicy != "" {
 			indicator = window.ResetPolicy
 		}
-		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)", plainWindowLabel(window), window.Utilization, resetStr, indicator))
+		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)%s", plainWindowLabel(window), window.Utilization, resetStr, indicator, moneySuffix(window)))
 	}
 
 	prefix := ""
@@ -216,6 +219,13 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
 	}
 	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
+}
+
+func moneySuffix(window provider.UsageWindow) string {
+	if money := window.MoneyDetail(); money != "" {
+		return " [" + money + "]"
+	}
+	return ""
 }
 
 func plainWindowLabel(window provider.UsageWindow) string {

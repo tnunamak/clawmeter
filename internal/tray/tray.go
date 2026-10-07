@@ -1647,6 +1647,9 @@ func trayWindowLabel(window provider.UsageWindow) string {
 
 func trayWindowStatus(window provider.UsageWindow) string {
 	label := trayWindowLabel(window)
+	if money := window.MoneyDetail(); money != "" {
+		label += " (" + money + ")"
+	}
 	if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
 		return fmt.Sprintf("%s: %.0f%% — reset not reported", label, window.Utilization)
 	}
