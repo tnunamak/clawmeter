@@ -191,7 +191,12 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	parts := make([]string, 0, len(windows))
 	for _, window := range windows {
 		if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-			parts = append(parts, fmt.Sprintf("%s: %.0f%% (reset not reported)%s", plainWindowLabel(window), window.Utilization, moneySuffix(window)))
+			// A money cap reads best as money; the percentage only repeats it.
+			if money := window.MoneyDetail(); money != "" {
+				parts = append(parts, fmt.Sprintf("%s: %s", plainWindowLabel(window), money))
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s: %.0f%% (reset not reported)", plainWindowLabel(window), window.Utilization))
 			continue
 		}
 		resetStr, indicator := "unknown", "reset unknown"

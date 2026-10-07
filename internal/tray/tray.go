@@ -1795,7 +1795,11 @@ func trayWindowLabel(window provider.UsageWindow) string {
 
 func trayWindowStatus(window provider.UsageWindow) string {
 	label := trayWindowLabel(window)
-	if money := window.MoneyDetail(); money != "" {
+	money := window.MoneyDetail()
+	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
+		return label + ": " + money
+	}
+	if money != "" {
 		label += " (" + money + ")"
 	}
 	if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
