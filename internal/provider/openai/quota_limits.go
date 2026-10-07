@@ -1,8 +1,8 @@
 package openai
 
 import (
-	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -99,12 +99,7 @@ func hasWindowName(windows []provider.UsageWindow, name string) bool {
 // scopeLabel shortens a backend limit name such as "GPT-5.3-Codex-Spark" to
 // its last token ("Spark") and strips control characters.
 func scopeLabel(name string) string {
-	name = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, strings.TrimSpace(name))
+	name = cleanName(name)
 	if len([]rune(name)) > maxScopeLabelRunes {
 		if i := strings.LastIndexAny(name, "- _"); i >= 0 && i+1 < len(name) {
 			name = name[i+1:]
@@ -116,46 +111,51 @@ func scopeLabel(name string) string {
 	return name
 }
 
-// resolveScopeLabels turns raw limit names into short labels that are unique
-// among themselves and never equal the reserved "Review" label, so two distinct
-// buckets never share a window name. A colliding label is extended with the
-// name's version token ("Spark 5.4"); if that still collides it gets a number.
+// cleanName strips control characters and surrounding space.
+func cleanName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(name))
+}
+
+// resolveScopeLabels turns raw limit names into short labels. A label is the
+// name's last token plus its version token ("GPT-5.4-Codex-Spark" gives
+// "Spark 5.4"), so it depends only on that bucket's own name and stays stable
+// as other buckets come and go; tray selection and threshold alerts key on it.
+// Labels never equal the reserved "Review" label. In the rare case two
+// buckets still share a label, both fall back to their full cleaned name.
 // The result has the same length and order as names.
 func resolveScopeLabels(names []string) []string {
-	const reserved = "Review"
-	shorts := make([]string, len(names))
-	count := map[string]int{strings.ToLower(reserved): 1}
-	for i, n := range names {
-		shorts[i] = scopeLabel(n)
-		if shorts[i] == "" {
-			shorts[i] = "Extra"
-		}
-		count[strings.ToLower(shorts[i])]++
-	}
+	const reserved = "review"
 	labels := make([]string, len(names))
-	taken := map[string]bool{strings.ToLower(reserved): true}
-	var pending []int
-	for i, s := range shorts {
-		if count[strings.ToLower(s)] == 1 {
-			labels[i] = s
-			taken[strings.ToLower(s)] = true
-		} else {
-			pending = append(pending, i)
+	count := map[string]int{}
+	for i, n := range names {
+		label := scopeLabel(n)
+		if label == "" {
+			label = "Extra"
 		}
+		if v := versionToken(n); v != "" && !strings.Contains(label, v) {
+			label += " " + v
+		}
+		labels[i] = label
+		count[strings.ToLower(label)]++
 	}
-	// Suffixes follow the backend name, not payload order, so a bucket keeps
-	// its window name across polls and between the two fetch paths.
-	sort.SliceStable(pending, func(a, b int) bool { return names[pending[a]] < names[pending[b]] })
-	for _, i := range pending {
-		candidate := shorts[i]
-		if v := versionToken(names[i]); v != "" {
-			candidate = shorts[i] + " " + v
+	for i, n := range names {
+		key := strings.ToLower(labels[i])
+		if key == reserved {
+			labels[i] += " 2"
+			continue
 		}
-		for n := 2; taken[strings.ToLower(candidate)] || candidate == shorts[i]; n++ {
-			candidate = fmt.Sprintf("%s %d", shorts[i], n)
+		if count[key] > 1 {
+			if full := cleanName(n); full != "" && !strings.EqualFold(full, reserved) {
+				labels[i] = full
+			} else {
+				labels[i] = labels[i] + " " + strconv.Itoa(i+1)
+			}
 		}
-		labels[i] = candidate
-		taken[strings.ToLower(candidate)] = true
 	}
 	return labels
 }

@@ -74,7 +74,7 @@ func TestParseDirectUsageReadsSecondaryReviewAndAdditionalLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := windowNames(data), "5h,7d,7d Review,5h Spark,7d Spark"; got != want {
+	if got, want := windowNames(data), "5h,7d,7d Review,5h Spark 5.3,7d Spark 5.3"; got != want {
 		t.Fatalf("windows = %s, want %s", got, want)
 	}
 	if w := windowByName(t, data, "7d"); w.Utilization != 34 || w.DisplayName != "7 days" {
@@ -83,7 +83,7 @@ func TestParseDirectUsageReadsSecondaryReviewAndAdditionalLimits(t *testing.T) {
 	if w := windowByName(t, data, "7d Review"); w.Utilization != 7 || w.DisplayName != "7 days (Review)" {
 		t.Fatalf("7d Review = %#v", w)
 	}
-	if w := windowByName(t, data, "5h Spark"); w.Utilization != 55 || w.DisplayName != "5h (Spark)" {
+	if w := windowByName(t, data, "5h Spark 5.3"); w.Utilization != 55 || w.DisplayName != "5h (Spark 5.3)" {
 		t.Fatalf("5h Spark = %#v", w)
 	}
 }
@@ -173,7 +173,7 @@ func TestParseRateLimitsReadsAdditionalBucketsAndSkipsMainMirror(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := windowNames(data), "5h,7d,5h Spark,7d Spark"; got != want {
+	if got, want := windowNames(data), "5h,7d,5h Spark 5.3,7d Spark 5.3"; got != want {
 		t.Fatalf("windows = %s, want %s", got, want)
 	}
 }
@@ -360,5 +360,13 @@ func TestCollisionSuffixesDoNotDependOnPayloadOrder(t *testing.T) {
 	b := resolveScopeLabels([]string{"Codex-Bravo-Spark", "Codex-Alpha-Spark"})
 	if a[0] != b[1] || a[1] != b[0] {
 		t.Fatalf("labels depend on order: %v vs %v", a, b)
+	}
+}
+
+func TestScopeLabelDoesNotChangeWhenAnotherBucketAppears(t *testing.T) {
+	alone := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark"})
+	both := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark", "GPT-5.4-Codex-Spark"})
+	if alone[0] != both[0] {
+		t.Fatalf("label changed from %q to %q when another bucket appeared", alone[0], both[0])
 	}
 }
