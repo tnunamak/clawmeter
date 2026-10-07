@@ -140,15 +140,18 @@ func TestParseDirectUsageLimitReachedKeepsReportedPercent(t *testing.T) {
 	}
 }
 
-func TestScopeLabelShortensLongNames(t *testing.T) {
+func TestBucketLabelShortensFromTheNameAlone(t *testing.T) {
 	for in, want := range map[string]string{
-		"GPT-5.3-Codex-Spark":   "Spark",
+		"GPT-5.3-Codex-Spark":   "Spark 5.3",
+		"Codex-Alpha-Spark":     "Alpha Spark",
 		"Spark":                 "Spark",
 		"  Spark\x1b[31m ":      "Spark[31m",
 		"averyveryverylongname": "averyveryver",
+		"Review":                "Review 2",
+		"GPT":                   "Extra",
 	} {
-		if got := scopeLabel(in); got != want {
-			t.Errorf("scopeLabel(%q) = %q, want %q", in, got, want)
+		if got := bucketLabel(in); got != want {
+			t.Errorf("bucketLabel(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -287,7 +290,7 @@ done
 }
 
 func TestResolveScopeLabelsKeepsCollidingBucketsDistinct(t *testing.T) {
-	got := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark", "GPT-5.4-Codex-Spark", "Review", "Solo"})
+	got := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark", "GPT-5.4-Codex-Spark", "Review", "Solo"}, nil)
 	want := []string{"Spark 5.3", "Spark 5.4", "Review 2", "Solo"}
 	for i := range want {
 		if got[i] != want[i] {
@@ -295,7 +298,7 @@ func TestResolveScopeLabelsKeepsCollidingBucketsDistinct(t *testing.T) {
 		}
 	}
 	// No version token: numbered fallback, still distinct.
-	got = resolveScopeLabels([]string{"A-Spark", "B-Spark", "C-Spark"})
+	got = resolveScopeLabels([]string{"A-Spark", "B-Spark", "C-Spark"}, nil)
 	seen := map[string]bool{}
 	for _, l := range got {
 		if seen[l] || l == "" {
@@ -356,17 +359,39 @@ func TestSecondaryWithoutDurationKeepsWeeklyWindowBesidePrimary(t *testing.T) {
 }
 
 func TestCollisionSuffixesDoNotDependOnPayloadOrder(t *testing.T) {
-	a := resolveScopeLabels([]string{"Codex-Alpha-Spark", "Codex-Bravo-Spark"})
-	b := resolveScopeLabels([]string{"Codex-Bravo-Spark", "Codex-Alpha-Spark"})
+	a := resolveScopeLabels([]string{"Spark", "Spark"}, []string{"spark_a", "spark_b"})
+	b := resolveScopeLabels([]string{"Spark", "Spark"}, []string{"spark_b", "spark_a"})
 	if a[0] != b[1] || a[1] != b[0] {
 		t.Fatalf("labels depend on order: %v vs %v", a, b)
 	}
 }
 
 func TestScopeLabelDoesNotChangeWhenAnotherBucketAppears(t *testing.T) {
-	alone := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark"})
-	both := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark", "GPT-5.4-Codex-Spark"})
+	alone := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark"}, nil)
+	both := resolveScopeLabels([]string{"GPT-5.3-Codex-Spark", "GPT-5.4-Codex-Spark"}, nil)
 	if alone[0] != both[0] {
 		t.Fatalf("label changed from %q to %q when another bucket appeared", alone[0], both[0])
+	}
+}
+
+func TestIdenticalNamesWithDistinctIDsAreBothKept(t *testing.T) {
+	got := resolveScopeLabels([]string{"Spark", "Spark"}, []string{"codex_spark_a", "codex_spark_b"})
+	if got[0] == got[1] {
+		t.Fatalf("labels = %v, want distinct", got)
+	}
+	now := time.Now()
+	lo, hi := 10.0, 100.0
+	windows := appendLimitWindows(nil, got[0], &codexLimit{Primary: &codexWindow{UsedPercent: &lo, DurationMins: 300, ResetsAt: now.Add(time.Hour).Unix()}}, now)
+	windows = appendLimitWindows(windows, got[1], &codexLimit{Primary: &codexWindow{UsedPercent: &hi, DurationMins: 300, ResetsAt: now.Add(time.Hour).Unix()}}, now)
+	if len(windows) != 2 {
+		t.Fatalf("windows = %+v, want the exhausted bucket kept", windows)
+	}
+}
+
+func TestLabelWithoutVersionStaysStableWhenAnotherBucketAppears(t *testing.T) {
+	alone := resolveScopeLabels([]string{"Codex-Alpha-Spark"}, nil)
+	both := resolveScopeLabels([]string{"Codex-Alpha-Spark", "Codex-Bravo-Spark"}, nil)
+	if alone[0] != both[0] {
+		t.Fatalf("label changed from %q to %q", alone[0], both[0])
 	}
 }

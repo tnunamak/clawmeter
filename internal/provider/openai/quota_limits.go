@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,21 +97,6 @@ func hasWindowName(windows []provider.UsageWindow, name string) bool {
 	return false
 }
 
-// scopeLabel shortens a backend limit name such as "GPT-5.3-Codex-Spark" to
-// its last token ("Spark") and strips control characters.
-func scopeLabel(name string) string {
-	name = cleanName(name)
-	if len([]rune(name)) > maxScopeLabelRunes {
-		if i := strings.LastIndexAny(name, "- _"); i >= 0 && i+1 < len(name) {
-			name = name[i+1:]
-		}
-	}
-	if r := []rune(name); len(r) > maxScopeLabelRunes {
-		name = string(r[:maxScopeLabelRunes])
-	}
-	return name
-}
-
 // cleanName strips control characters and surrounding space.
 func cleanName(name string) string {
 	return strings.Map(func(r rune) rune {
@@ -121,41 +107,60 @@ func cleanName(name string) string {
 	}, strings.TrimSpace(name))
 }
 
-// resolveScopeLabels turns raw limit names into short labels. A label is the
-// name's last token plus its version token ("GPT-5.4-Codex-Spark" gives
-// "Spark 5.4"), so it depends only on that bucket's own name and stays stable
-// as other buckets come and go; tray selection and threshold alerts key on it.
-// Labels never equal the reserved "Review" label. In the rare case two
-// buckets still share a label, both fall back to their full cleaned name.
-// The result has the same length and order as names.
-func resolveScopeLabels(names []string) []string {
-	const reserved = "review"
+// noiseTokens are vendor words that every Codex limit name repeats.
+var noiseTokens = map[string]bool{"gpt": true, "codex": true, "openai": true}
+
+// bucketLabel shortens one backend limit name from that name alone, so a
+// window keeps its identity (tray selection, threshold alerts) as other
+// buckets come and go: "GPT-5.3-Codex-Spark" gives "Spark 5.3" and
+// "Codex-Alpha-Spark" gives "Alpha Spark".
+func bucketLabel(name string) string {
+	var words, versions []string
+	for _, tok := range strings.FieldsFunc(cleanName(name), func(r rune) bool { return r == '-' || r == '_' || r == ' ' }) {
+		switch {
+		case noiseTokens[strings.ToLower(tok)]:
+		case versionToken(tok) != "":
+			versions = append(versions, tok)
+		default:
+			words = append(words, tok)
+		}
+	}
+	label := strings.Join(append(words, versions...), " ")
+	if r := []rune(label); len(r) > maxScopeLabelRunes {
+		label = strings.TrimSpace(string(r[:maxScopeLabelRunes]))
+	}
+	if label == "" {
+		label = "Extra"
+	}
+	if strings.EqualFold(label, "Review") {
+		label += " 2" // "Review" names the code-review limit
+	}
+	return label
+}
+
+// resolveScopeLabels labels each bucket with bucketLabel. Two buckets whose
+// names shorten identically are both kept: each gets its backend ID appended,
+// so no bucket can hide another. The result has the same order as names.
+func resolveScopeLabels(names, ids []string) []string {
 	labels := make([]string, len(names))
 	count := map[string]int{}
 	for i, n := range names {
-		label := scopeLabel(n)
-		if label == "" {
-			label = "Extra"
-		}
-		if v := versionToken(n); v != "" && !strings.Contains(label, v) {
-			label += " " + v
-		}
-		labels[i] = label
-		count[strings.ToLower(label)]++
+		labels[i] = bucketLabel(n)
+		count[strings.ToLower(labels[i])]++
 	}
-	for i, n := range names {
-		key := strings.ToLower(labels[i])
-		if key == reserved {
-			labels[i] += " 2"
-			continue
-		}
-		if count[key] > 1 {
-			if full := cleanName(n); full != "" && !strings.EqualFold(full, reserved) {
-				labels[i] = full
-			} else {
-				labels[i] = labels[i] + " " + strconv.Itoa(i+1)
+	taken := map[string]bool{}
+	for i := range labels {
+		if count[strings.ToLower(labels[i])] > 1 {
+			suffix := strconv.Itoa(i + 1)
+			if i < len(ids) && strings.TrimSpace(ids[i]) != "" {
+				suffix = cleanName(ids[i])
 			}
+			labels[i] += " " + suffix
 		}
+		for n := 2; taken[strings.ToLower(labels[i])]; n++ {
+			labels[i] = fmt.Sprintf("%s %d", strings.TrimSuffix(labels[i], fmt.Sprintf(" %d", n-1)), n)
+		}
+		taken[strings.ToLower(labels[i])] = true
 	}
 	return labels
 }

@@ -419,7 +419,7 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 		mainID = *rl.LimitID
 	}
 	var buckets []*rateLimits
-	var rawNames []string
+	var rawNames, ids []string
 	for _, id := range sortedKeys(resp.Result.RateLimitsByLimitID) {
 		bucket := resp.Result.RateLimitsByLimitID[id]
 		if bucket == nil || id == mainID {
@@ -431,8 +431,9 @@ func (p *Provider) parseRateLimits(data []byte, acct *accountResponse) (*provide
 		}
 		buckets = append(buckets, bucket)
 		rawNames = append(rawNames, name)
+		ids = append(ids, id)
 	}
-	for i, label := range resolveScopeLabels(rawNames) {
+	for i, label := range resolveScopeLabels(rawNames, ids) {
 		result.Windows = appendLimitWindows(result.Windows, label, buckets[i].limit(), now)
 	}
 	if len(result.Windows) == 0 {

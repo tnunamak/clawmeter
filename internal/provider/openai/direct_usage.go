@@ -90,13 +90,15 @@ func (p *Provider) parseDirectUsage(body []byte, now time.Time) (*provider.Usage
 	windows := appendLimitWindows(nil, "", response.RateLimit.limit(), now)
 	windows = appendLimitWindows(windows, "Review", response.CodeReviewRateLimit.limit(), now)
 	rawNames := make([]string, len(response.AdditionalLimits))
+	ids := make([]string, len(response.AdditionalLimits))
 	for i, extra := range response.AdditionalLimits {
+		ids[i] = extra.MeteredFeature
 		rawNames[i] = extra.LimitName
 		if strings.TrimSpace(rawNames[i]) == "" {
 			rawNames[i] = extra.MeteredFeature
 		}
 	}
-	for i, label := range resolveScopeLabels(rawNames) {
+	for i, label := range resolveScopeLabels(rawNames, ids) {
 		windows = appendLimitWindows(windows, label, response.AdditionalLimits[i].RateLimit.limit(), now)
 	}
 	if len(windows) == 0 {
