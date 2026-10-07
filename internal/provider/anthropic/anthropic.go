@@ -201,7 +201,7 @@ func (p *Provider) ResetSnapshotSourceRevision() string {
 	if !p.explicitSource {
 		return ""
 	}
-	path := canonicalDir(p.configDir)
+	path := provider.CanonicalPath(p.configDir)
 	if path == "" {
 		return ""
 	}
@@ -215,25 +215,12 @@ func (p *Provider) ResetSnapshotSourceRevision() string {
 func (p *Provider) CredentialRoute() string {
 	switch {
 	case p.explicitSource:
-		return "config-dir\x00" + canonicalDir(p.configDir)
+		return "config-dir\x00" + provider.CanonicalPath(p.configDir)
 	case p.pinnedNative:
-		return "native-pinned\x00" + canonicalDir(homeCredentialsDir())
+		return "native-pinned\x00" + provider.CanonicalPath(homeCredentialsDir())
 	default:
-		return "native\x00" + canonicalDir(legacyCredentialsDir())
+		return "native\x00" + provider.CanonicalPath(legacyCredentialsDir())
 	}
-}
-
-// canonicalDir returns dir as an absolute path with symlinks resolved, or ""
-// if it cannot be made absolute.
-func canonicalDir(dir string) string {
-	path, err := filepath.Abs(dir)
-	if err != nil {
-		return ""
-	}
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	return path
 }
 
 // Name returns the provider identifier.

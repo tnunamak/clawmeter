@@ -67,6 +67,16 @@ func (p *Provider) Name() string         { return "openai" } // stable config ke
 func (p *Provider) DisplayName() string  { return "Codex" }
 func (p *Provider) Description() string  { return "Codex quota (via local Codex auth)" }
 func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
+
+// CredentialRoute names the credential this source reads, so a repointed source keeps its own
+// rate-limit backoff. It ignores token changes, so a refresh does not end one.
+func (p *Provider) CredentialRoute() string {
+	if p.explicitSource {
+		return provider.CredentialRoute("codex-home", p.codexHome)
+	}
+	return provider.CredentialRoute("native", provider.CanonicalPath(codexHome()))
+}
+
 func (p *Provider) SourceID() string {
 	if p.sourceID == "" {
 		return "default"

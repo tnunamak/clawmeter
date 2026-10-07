@@ -74,6 +74,32 @@ var (
 // must not change on a routine token refresh, or a refresh would end a backoff.
 type CredentialRouteCapability interface{ CredentialRoute() string }
 
+// CredentialRoute builds the stable route string for a configured credential.
+// An absolute ref is a path and is canonicalized (absolute, symlinks resolved)
+// so equivalent spellings match; any other ref is an environment variable name
+// and is used as written. The route never reads the credential's size, time, or
+// content, so a token refresh keeps the same route.
+func CredentialRoute(kind, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if filepath.IsAbs(ref) {
+		ref = CanonicalPath(ref)
+	}
+	return kind + "\x00" + ref
+}
+
+// CanonicalPath returns path as an absolute path with symlinks resolved, or ""
+// if it cannot be made absolute.
+func CanonicalPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	return abs
+}
+
 func backoffKey(p Provider) string {
 	key := SourceKey(p)
 	if route, ok := p.(CredentialRouteCapability); ok {

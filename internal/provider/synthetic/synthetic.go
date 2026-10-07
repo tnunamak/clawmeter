@@ -90,6 +90,13 @@ func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.Sourc
 		sourceID: strings.TrimSpace(source.ID), sourceLabel: strings.TrimSpace(source.Label),
 		sourceCredentialRef: strings.TrimSpace(source.Credential.Ref), enrolledSource: true}, nil
 }
+
+// CredentialRoute names the credential this source reads, so a repointed source keeps its own
+// rate-limit backoff. It ignores token changes, so a refresh does not end one.
+func (p *Provider) CredentialRoute() string {
+	return provider.CredentialRoute("env-name", p.sourceCredentialRef)
+}
+
 func (p *Provider) SourceID() string {
 	if p.sourceID == "" {
 		return "default"

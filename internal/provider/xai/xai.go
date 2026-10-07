@@ -311,6 +311,17 @@ func NewSource(cfg config.ProviderConfig, source config.SourceConfig) *Provider 
 	return p.(*Provider)
 }
 
+// CredentialRoute names the Grok home this source reads, so a repointed source
+// keeps its own rate-limit backoff across token refreshes. The native source
+// follows GROK_HOME, so that variable's value is part of its route.
+func (p *Provider) CredentialRoute() string {
+	if strings.TrimSpace(p.grokHome) != "" {
+		return provider.CredentialRoute("grok-home", p.grokHome)
+	}
+	path, _ := p.grokAuthPath()
+	return provider.CredentialRoute("native", provider.CanonicalPath(path))
+}
+
 func (p *Provider) SourceID() string {
 	if strings.TrimSpace(p.sourceID) == "" {
 		return "default"

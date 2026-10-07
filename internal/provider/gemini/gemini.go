@@ -124,6 +124,17 @@ func (sourceCapability) NewSource(cfg config.ProviderConfig, source config.Sourc
 	return p, nil
 }
 
+// CredentialRoute names the credential directory this source reads, so a
+// repointed source keeps its own rate-limit backoff. It ignores token-file
+// changes, so a token refresh does not end a backoff.
+func (p *Provider) CredentialRoute() string {
+	if p.explicitSource {
+		return provider.CredentialRoute("config-dir", p.configDir)
+	}
+	path, _ := p.credentialsPath()
+	return provider.CredentialRoute("native", provider.CanonicalPath(path))
+}
+
 func (p *Provider) SourceID() string {
 	if p.sourceID == "" {
 		return "default"

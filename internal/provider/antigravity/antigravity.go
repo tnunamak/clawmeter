@@ -218,6 +218,15 @@ func NewSource(source config.SourceConfig) *Provider {
 	return p.(*Provider)
 }
 
+// CredentialRoute names the token file this source reads, so a repointed
+// source keeps its own rate-limit backoff across token refreshes.
+func (p *Provider) CredentialRoute() string {
+	if path := strings.TrimSpace(p.tokenPath); path != "" {
+		return provider.CredentialRoute("token-file", path)
+	}
+	return "native"
+}
+
 func (p *Provider) SourceID() string {
 	if strings.TrimSpace(p.sourceID) == "" {
 		return "default"
