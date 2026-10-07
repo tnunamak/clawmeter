@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -575,5 +577,34 @@ func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
 	}
 	if rev != pinned.(*Provider).SourceRevision() {
 		t.Fatal("pinned revision is not stable")
+	}
+}
+
+func TestConcurrentRateLimitsKeepEverySourcesBackoff(t *testing.T) {
+	newTestProvider(t, "", http.StatusOK, "")
+	providers := make([]*Provider, 16)
+	for i := range providers {
+		dir := t.TempDir()
+		writeTestCredentials(t, dir, "test-token", "")
+		src := config.SourceConfig{ID: fmt.Sprintf("s%d", i), Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}}
+		p, err := (sourceCapability{}).NewSource(config.ProviderConfig{}, src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		providers[i] = p.(*Provider)
+	}
+	var wg sync.WaitGroup
+	for _, p := range providers {
+		wg.Add(1)
+		go func(p *Provider) {
+			defer wg.Done()
+			p.recordRateLimit("0")
+		}(p)
+	}
+	wg.Wait()
+	for _, p := range providers {
+		if _, ok := p.backoffUntil(); !ok {
+			t.Fatalf("source %s lost its backoff after concurrent 429s", p.SourceID())
+		}
 	}
 }

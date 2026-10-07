@@ -1,7 +1,9 @@
 package anthropic
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,44 +35,55 @@ func (p *Provider) backoffKey() string {
 	return p.SourceID() + "|" + p.configDir
 }
 
-func backoffPath() (string, error) {
+// backoffPath gives each source its own file, so concurrent 429s from
+// different sources (or from the CLI and the tray) never rewrite each other's
+// state. Two writers for the same source compute near-identical state, so last
+// writer wins is acceptable there.
+func (p *Provider) backoffPath() (string, error) {
 	dir, err := userCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "clawmeter", "claude-backoff.json"), nil
+	name := fmt.Sprintf("%x.json", sha256.Sum256([]byte(p.backoffKey())))
+	return filepath.Join(dir, "clawmeter", "claude-backoff", name), nil
 }
 
-func readBackoff() map[string]backoffState {
-	states := map[string]backoffState{}
-	path, err := backoffPath()
+func (p *Provider) readBackoff() (backoffState, bool) {
+	var state backoffState
+	path, err := p.backoffPath()
 	if err != nil {
-		return states
+		return state, false
 	}
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &states)
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &state) != nil {
+		return backoffState{}, false
 	}
-	return states
+	return state, true
 }
 
-func writeBackoff(states map[string]backoffState) {
-	path, err := backoffPath()
+func (p *Provider) writeBackoff(state backoffState) {
+	path, err := p.backoffPath()
 	if err != nil {
 		return
 	}
-	data, err := json.Marshal(states)
+	data, err := json.Marshal(state)
 	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
 		return
 	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, path)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".backoff-*")
+	if err != nil {
+		return
+	}
+	_, werr := tmp.Write(data)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil || os.Rename(tmp.Name(), path) != nil {
+		_ = os.Remove(tmp.Name())
 	}
 }
 
 // backoffUntil returns the time before which this source must not be polled.
 func (p *Provider) backoffUntil() (time.Time, bool) {
-	state, ok := readBackoff()[p.backoffKey()]
+	state, ok := p.readBackoff()
 	if !ok || !now().Before(state.Until) {
 		return time.Time{}, false
 	}
@@ -80,9 +93,7 @@ func (p *Provider) backoffUntil() (time.Time, bool) {
 // recordRateLimit starts or extends the backoff after a 429 and returns when
 // polling may resume. A positive retry-after longer than the computed delay wins.
 func (p *Provider) recordRateLimit(retryAfter string) time.Time {
-	states := readBackoff()
-	key := p.backoffKey()
-	state := states[key]
+	state, _ := p.readBackoff()
 	state.Failures++
 	delay := backoffFloor
 	for i := 1; i < state.Failures && delay < backoffCap; i++ {
@@ -97,16 +108,13 @@ func (p *Provider) recordRateLimit(retryAfter string) time.Time {
 		delay = backoffCap
 	}
 	state.Until = now().Add(delay)
-	states[key] = state
-	writeBackoff(states)
+	p.writeBackoff(state)
 	return state.Until
 }
 
 func (p *Provider) clearBackoff() {
-	states := readBackoff()
-	if _, ok := states[p.backoffKey()]; ok {
-		delete(states, p.backoffKey())
-		writeBackoff(states)
+	if path, err := p.backoffPath(); err == nil {
+		_ = os.Remove(path)
 	}
 }
 
