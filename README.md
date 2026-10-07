@@ -70,29 +70,23 @@ Setup installs the mainstream local surface Clawmeter can verify today: a Claude
 
 ### Claude Web Reset Grants
 
-Claude's Usage page can show promotional reset grants that are not available
-through Claude Code's local usage data. In the tray menu, choose **Set up
-Claude reset bookmark** and save the reusable bookmark in your browser. This
-action stays available so you can reopen setup and replace the bookmark if it
-is deleted. After setup, choose **Check Claude reset** under the Claude source
-you want to check, then click the saved bookmark. The bookmark asks you to
-confirm that the browser is signed into the same Claude account as the selected
-source. Clawmeter cannot verify that match; repeat the check after switching
-accounts in the browser or local CLI.
-The grant count and expiry appear in that Claude source section beside its
-usage, with the full time when Clawmeter last observed them. The tray labels
-the browser/account association as user-confirmed because Clawmeter cannot
-verify account identity.
+Claude's Usage page can show promotional reset grants that Claude Code's local
+usage data does not include. To read them, choose **Check Claude resets** in
+the tray. A local Clawmeter page opens with the steps: save the Clawmeter
+bookmark (first time only), open Claude Usage, and click the bookmark there.
+The page shows the result when it arrives.
 
-The bookmark reads the already-open page and sends only each grant's remaining
-count, start, expiry, and paused state to Clawmeter over a one-time local
-connection. Only grants usable now (started, not paused, not expired) count.
-The native Default Claude source has no stable profile identity, so Clawmeter
-cannot notice if its login changes; recheck after switching accounts. Clawmeter stores the selected local source key and an opaque
-profile-path fingerprint when available, but not browser cookies,
-organization IDs, or raw usage responses. The browser may ask for local-network
-permission. The result is a manual snapshot, not a live poll; the count can
-change if a reset is used after the observation.
+Clawmeter files the result under the Claude source signed in to the same
+organization as the browser, so there is nothing to confirm. The bookmark sends
+a salted hash of the organization ID, never the ID itself, plus each grant's
+remaining count, start, expiry, and paused state. Only grants usable now count.
+Clawmeter stores no cookies, organization IDs, or raw responses. If you later
+sign that source in to a different organization, the saved result is dropped.
+
+The result shows under its Claude source as `Resets: 1 · expires Oct 22 ·
+checked Oct 7`. It is a snapshot, not a live poll: check again after you use a
+reset. Your browser may ask to let claude.ai access your local network; allow
+it. `clawmeter claude-web-bookmarklet` prints the bookmark URL.
 
 ## Read The Icon
 

@@ -50,12 +50,32 @@ func pollIntervalForConfig(seconds int) time.Duration {
 	return interval
 }
 
-func claudeWebActionTitle() string {
-	return "Check Claude reset"
-}
+const (
+	claudeResetsTitle   = "Check Claude resets"
+	claudeResetsWaiting = "Waiting for Claude bookmark…"
+)
 
-func claudeWebCheckTimeoutMessage() string {
-	return "Reset check timed out. Click the saved bookmark while Claude is open. If it is missing, choose Set up Claude reset bookmark in Clawmeter, then try again."
+// Global Claude reset check: the only tray affordance for browser reset checks.
+var (
+	claudeResetsItem  *systray.MenuItem
+	claudeResetsState menuItemState
+)
+
+// beginClaudeResetCheck is the whole behavior of "Check Claude resets": it
+// always opens the local check page. If a check is already running, it only
+// reopens that page and returns a nil session.
+func beginClaudeResetCheck(checking *atomic.Bool, start func() (*claudeweb.Session, error), open func(string)) (*claudeweb.Session, error) {
+	if !checking.CompareAndSwap(false, true) {
+		open(claudeweb.CheckURL)
+		return nil, nil
+	}
+	session, err := start()
+	if err != nil {
+		checking.Store(false)
+		return nil, err
+	}
+	open(claudeweb.CheckURL)
+	return session, nil
 }
 
 func claudeWebProviderKey(target string) string {
@@ -188,8 +208,6 @@ func onReady() {
 	// appears on the next refresh without needing a restart.
 	providerMenus := make(map[string]*providerMenuItems)
 	providerConnectActions := make(chan string, 1)
-	claudeWebActions := make(chan string, 8)
-	claudeWebSetupActions := make(chan string, 4)
 	familyCounts := make(map[string]int)
 	for _, p := range registry.GetAll() {
 		familyCounts[p.Name()]++
@@ -199,7 +217,7 @@ func onReady() {
 			continue
 		}
 		explicit := cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p))
-		menu := createProviderMenuItems(p, explicit, providerConnectActions, claudeWebActions, claudeWebSetupActions, familyCounts[p.Name()] > 1)
+		menu := createProviderMenuItems(p, explicit, providerConnectActions, familyCounts[p.Name()] > 1)
 		hideProviderMenu(menu)
 		providerMenus[provider.SourceKey(p)] = menu
 	}
@@ -223,10 +241,9 @@ func onReady() {
 	s.iconTargetState = menuItemState{title: "Icon: Auto (click to cycle)", enabled: true, initialized: true}
 	mIconAutoMode := systray.AddMenuItem("Auto Mode: Risk", "")
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
-	mClaudeWebSetup := systray.AddMenuItem("Set up Claude reset bookmark", claudeWebSetupTooltip)
-	if !claudeWebSetupIsGlobal(familyCounts["claude"]) {
-		mClaudeWebSetup.Hide()
-	}
+	claudeResetsItem = systray.AddMenuItem(claudeResetsTitle, "Read reset grants from Claude's Usage page in your browser")
+	claudeResetsItem.Hide()
+	claudeResetsState = menuItemState{title: claudeResetsTitle, visible: false, enabled: true, initialized: true}
 	systray.AddSeparator()
 	iconActionCh := iconClickActions
 	if iconActionCh == nil {
@@ -490,76 +507,40 @@ func onReady() {
 	ticker := time.NewTicker(pollInterval)
 	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
 	updateTicker := time.NewTicker(updateCheckInterval)
-	startClaudeWebCheck := func(menu *providerMenuItems) {
-		target := provider.SourceKey(menu.provider)
-		label := provider.SourceLabel(menu.provider)
-		sourceRevision := claudewebprovider.ResetSnapshotRevision(menu.provider)
-		if label == "" {
-			label = "Default"
-		}
-		if !claudeWebChecking.CompareAndSwap(false, true) {
-			notify("Clawmeter", "Another Claude reset check is already running.", "normal")
-			return
-		}
-		session, err := claudewebprovider.StartCheck(menu.provider)
+	// startClaudeResetCheck runs one browser handoff for every Claude source.
+	// It always opens the local check page, which shows the steps and live
+	// progress. A timeout is silent: the page already says so, and the next
+	// check shows the setup steps again unless the bookmark has proven itself.
+	startClaudeResetCheck := func() {
+		session, err := beginClaudeResetCheck(&claudeWebChecking, func() (*claudeweb.Session, error) {
+			return claudewebprovider.StartCheck(registry.GetFamily("claude"))
+		}, openURL)
 		if err != nil {
-			claudeWebChecking.Store(false)
-			trayRenderMu.Lock()
-			setMenuItemTitle(menu.resetAction, &menu.resetActionState, claudeWebActionTitle())
-			trayRenderMu.Unlock()
-			notify("Clawmeter", err.Error(), "normal")
+			notify("Clawmeter", "Couldn't start the Claude reset check. Is another Clawmeter running?", "normal")
+			log.Printf("claude reset check: %v", err)
 			return
+		}
+		if session == nil {
+			return // a check is already running; its page was reopened
 		}
 		trayRenderMu.Lock()
-		setMenuItemTitle(menu.resetAction, &menu.resetActionState, "Waiting for Claude reset bookmark...")
+		setMenuItemTitle(claudeResetsItem, &claudeResetsState, claudeResetsWaiting)
 		trayRenderMu.Unlock()
-		openURL("https://claude.ai/settings/usage")
 		go func() {
 			defer claudeWebChecking.Store(false)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-			_, err := session.Wait(ctx)
-			session.Close()
+			defer session.Finish()
+			summary, err := session.Wait(context.Background())
 			trayRenderMu.Lock()
-			setMenuItemTitle(menu.resetAction, &menu.resetActionState, claudeWebActionTitle())
+			setMenuItemTitle(claudeResetsItem, &claudeResetsState, claudeResetsTitle)
 			trayRenderMu.Unlock()
 			if err != nil {
-				notify("Claude · "+label, claudeWebCheckTimeoutMessage(), "normal")
-				return
-			}
-			if claudewebprovider.ResetSnapshotRevision(menu.provider) != sourceRevision {
-				notify("Claude · "+label, "The selected Claude source changed during the check. The saved reset observation was not attached to it.", "normal")
 				return
 			}
 			refreshing.Lock()
 			defer refreshing.Unlock()
-			if !publishLocalResetSource(registry, claudeWebProviderKey(target), providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
-				notify("Claude · "+label, "Reset data was saved but could not be displayed. Use Refresh Now to retry.", "normal")
-				return
+			if !publishLocalResetSource(registry, claudeWebProviderKey(summary.ResetCreditsTarget), providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
+				notify("Clawmeter", "Claude resets were saved but can't be shown yet. Choose Refresh Now.", "normal")
 			}
-		}()
-	}
-	openClaudeWebSetup := func(title string) {
-		go func() {
-			if err := claudeweb.OpenSetupPage(); err != nil {
-				notify(title, "Could not open Claude reset bookmark setup.", "normal")
-				return
-			}
-			if err := claudeweb.MarkSetupStarted(); err != nil {
-				notify(title, "Setup opened, but its state could not be saved. Try again from the tray.", "normal")
-				return
-			}
-			trayRenderMu.Lock()
-			for _, candidate := range providerMenus {
-				if candidate.resetAction != nil {
-					candidate.resetActionReady = true
-					if candidate.headerState.visible {
-						setMenuItemVisible(candidate.resetAction, &candidate.resetActionState, true)
-					}
-				}
-			}
-			trayRenderMu.Unlock()
-			notify(title, "Save the reusable Clawmeter reset bookmark. It works for every Claude account.", "low")
 		}()
 	}
 
@@ -576,23 +557,8 @@ func onReady() {
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
 				go checkUpdate()
-			case <-mClaudeWebSetup.ClickedCh:
-				openClaudeWebSetup("Clawmeter")
-			case sourceKey := <-claudeWebSetupActions:
-				menu := providerMenus[sourceKey]
-				if menu != nil {
-					openClaudeWebSetup("Claude · " + sourceLabelOrDefault(menu.provider))
-				}
-			case sourceKey := <-claudeWebActions:
-				menu := providerMenus[sourceKey]
-				if menu == nil || menu.resetAction == nil {
-					continue
-				}
-				if claudeweb.SetupStarted() {
-					startClaudeWebCheck(menu)
-					continue
-				}
-				openClaudeWebSetup("Claude · " + sourceLabelOrDefault(menu.provider))
+			case <-claudeResetsItem.ClickedCh:
+				startClaudeResetCheck()
 			case action := <-iconActionCh:
 				if action == iconClickResetAuto {
 					resetIconSelection(providerMenus, mIconProvider, mIconAutoMode)
@@ -654,9 +620,6 @@ type providerMenuItems struct {
 	headerItem         *systray.MenuItem
 	statusItem         *systray.MenuItem
 	resetItem          *systray.MenuItem
-	resetAction        *systray.MenuItem
-	resetActionReady   bool
-	setupAction        *systray.MenuItem
 	connectItem        *systray.MenuItem
 	windowItems        []*systray.MenuItem
 	balanceItems       []*systray.MenuItem
@@ -668,8 +631,6 @@ type providerMenuItems struct {
 	headerState        menuItemState
 	statusState        menuItemState
 	resetState         menuItemState
-	resetActionState   menuItemState
-	setupActionState   menuItemState
 	connectState       menuItemState
 	windowStates       []menuItemState
 	balanceStates      []menuItemState
@@ -685,26 +646,7 @@ type menuItemState struct {
 
 const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
 
-const claudeWebActionTooltip = "Record the reset grants this browser shows for this Claude source. Confirm both are the same account; repeat after switching accounts."
-const claudeWebDefaultActionTooltip = claudeWebActionTooltip + " The Default source has no stable profile identity, so Clawmeter cannot detect an account switch; recheck after switching."
-
-// claudeWebActionTooltipFor explains the account match honestly: a source with
-// a configured profile invalidates its snapshot when the profile is repointed;
-// the native Default source has no such identity.
-func claudeWebActionTooltipFor(p provider.Provider) string {
-	if claudewebprovider.ResetSnapshotRevision(p) != "" {
-		return claudeWebActionTooltip
-	}
-	return claudeWebDefaultActionTooltip
-}
-
-const claudeWebSetupTooltip = "Save this reusable bookmark once. Reopen this page to recreate the bookmark if it is deleted."
-
-func claudeWebSetupIsGlobal(accountCount int) bool {
-	return accountCount > 1
-}
-
-func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string, claudeWebActions chan<- string, claudeWebSetupActions chan<- string, repeated bool) *providerMenuItems {
+func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string, repeated bool) *providerMenuItems {
 	displayName := p.DisplayName()
 	label := provider.SourceLabel(p)
 	if label == "" {
@@ -722,44 +664,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	resetItem := systray.AddMenuItem("", "")
 	resetItem.Disable()
 	resetItem.Hide()
-	var resetAction *systray.MenuItem
-	var setupAction *systray.MenuItem
 	resetState := menuItemState{visible: false, enabled: false, initialized: true}
-	resetActionState := menuItemState{visible: false, enabled: true, initialized: true}
-	setupActionState := menuItemState{visible: false, enabled: true, initialized: true}
-	if p.Name() == "claude" {
-		target := provider.SourceKey(p)
-		ready := claudeweb.SetupStarted()
-		resetAction = systray.AddMenuItem(claudeWebActionTitle(), claudeWebActionTooltipFor(p))
-		resetActionState.title = claudeWebActionTitle()
-		resetActionState.visible = ready
-		// AddMenuItem shows new items; keep the native state in step with the
-		// tracked state so hideProviderMenu can rely on it.
-		if !ready {
-			resetAction.Hide()
-		}
-		go func() {
-			for range resetAction.ClickedCh {
-				select {
-				case claudeWebActions <- target:
-				default:
-				}
-			}
-		}()
-		if !repeated {
-			setupAction = systray.AddMenuItem("Set up Claude reset bookmark", claudeWebSetupTooltip)
-			setupActionState.title = "Set up Claude reset bookmark"
-			setupAction.Hide()
-			go func() {
-				for range setupAction.ClickedCh {
-					select {
-					case claudeWebSetupActions <- target:
-					default:
-					}
-				}
-			}()
-		}
-	}
 
 	var connectItem *systray.MenuItem
 	if p.Name() == tokenPlanProviderName && connectActions != nil {
@@ -815,9 +720,6 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		headerItem:         header,
 		statusItem:         statusItem,
 		resetItem:          resetItem,
-		resetAction:        resetAction,
-		resetActionReady:   p.Name() == "claude" && claudeweb.SetupStarted(),
-		setupAction:        setupAction,
 		connectItem:        connectItem,
 		windowItems:        windowItems,
 		balanceItems:       balanceItems,
@@ -827,8 +729,6 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		headerState:        menuItemState{title: displayName, visible: true, enabled: false, initialized: true},
 		statusState:        menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
 		resetState:         resetState,
-		resetActionState:   resetActionState,
-		setupActionState:   setupActionState,
 		connectState:       menuItemState{title: "Connect quota access", visible: true, enabled: true, initialized: connectItem != nil},
 		windowStates:       windowStates,
 		balanceStates:      balanceStates,
@@ -844,12 +744,6 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setMenuItemVisible(menu.headerItem, &menu.headerState, false)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
-	if menu.resetAction != nil {
-		setMenuItemVisible(menu.resetAction, &menu.resetActionState, false)
-	}
-	if menu.setupAction != nil {
-		setMenuItemVisible(menu.setupAction, &menu.setupActionState, false)
-	}
 	if menu.connectItem != nil {
 		setMenuItemVisible(menu.connectItem, &menu.connectState, false)
 	}
@@ -1013,6 +907,13 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
+	claudeVisible := false
+	defer func() {
+		// The global check is offered only while a Claude account is shown.
+		if claudeResetsItem != nil {
+			setMenuItemVisible(claudeResetsItem, &claudeResetsState, claudeVisible)
+		}
+	}()
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
@@ -1031,11 +932,8 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			hideProviderMenu(menu)
 			continue
 		}
-		if menu.resetAction != nil {
-			setMenuItemVisible(menu.resetAction, &menu.resetActionState, menu.resetActionReady)
-		}
-		if menu.setupAction != nil {
-			setMenuItemVisible(menu.setupAction, &menu.setupActionState, true)
+		if menu.provider.Name() == "claude" {
+			claudeVisible = true
 		}
 		updateResetCreditRow(menu, data, time.Now())
 		setupReady := setup.IsReady()
@@ -1158,13 +1056,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 	// Check notification thresholds
 	checkThresholds(activeResults, displayNames)
-}
-
-func sourceLabelOrDefault(p provider.Provider) string {
-	if label := provider.SourceLabel(p); label != "" {
-		return label
-	}
-	return "Default"
 }
 
 func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now time.Time) {
@@ -1810,32 +1701,7 @@ func resetCreditTraySummary(data *provider.UsageData, now time.Time) string {
 	if data == nil || data.ResetCredits == nil || (data.Stale && !data.ResetCredits.Snapshot) {
 		return ""
 	}
-	count := data.ResetCredits.DisplayCount(now)
-	if count <= 0 {
-		return ""
-	}
-	noun := "reset credit"
-	if count != 1 {
-		noun = "reset credits"
-	}
-	if data.ResetCredits.Snapshot {
-		noun += " observed"
-		noun += " · browser account match confirmed by you"
-	}
-	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
-		return fmt.Sprintf("%d %s - earliest expires %s%s", count, noun, expiresAt.Local().Format("Jan 2 3:04 PM"), resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
-	}
-	return fmt.Sprintf("%d %s available%s", count, noun, resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
-}
-
-func resetCreditObservedAt(observedAt time.Time, snapshot bool) string {
-	if observedAt.IsZero() {
-		return ""
-	}
-	if snapshot {
-		return " · last observed " + observedAt.Local().Format("Jan 2, 2006 3:04 PM")
-	}
-	return " · checked " + observedAt.Local().Format("15:04")
+	return data.ResetCredits.Summary(now)
 }
 
 func staleTooltipReason(data *provider.UsageData) string {

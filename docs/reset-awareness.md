@@ -67,30 +67,33 @@ one shared presentation:
 3. Normalize available credits and their individual expiries into
    `UsageResetCredits`. Show them under their own provider/account source in
    terminal output, `--agent`, JSON, and the tray provider menu / tooltip.
-4. For Claude browser observations, persist expiry timestamps, observation
-   time, the selected local Claude source key, and an opaque configured-profile
-   path fingerprint when available. This invalidates snapshots when an explicit
-   Claude profile is repointed without invalidating on routine token refresh.
-   The native Default source exposes no stable profile identity, so its
-   browser/local account match remains user-confirmed, not independently
-   proven. Recheck after switching accounts. Do not persist browser
-   organization IDs or account/session details.
-   Show the full local observation time because the inventory is a manual
-   snapshot and can change after use.
+4. For Claude browser observations, persist expiry timestamps, check time,
+   the matched local Claude source key, a random salt, and
+   `sha256("clawmeter-claude-reset\0" + salt + "\0" + orgUuid)`. On read,
+   drop the snapshot unless the source's current organization
+   (`oauthAccount.organizationUuid` in its `.claude.json`) hashes to the same
+   value. Never persist organization IDs or account/session details.
 5. Avoid any visual or notification noise when no reset credits exist.
 6. Fail soft if auth is missing, the endpoint changes, the network is down, or
    the provider rejects the request.
 
-For Claude, save the reusable bookmark from the tray's **Set up Claude reset
-bookmark** action. That action stays available to reopen setup if the bookmark
-is deleted; Clawmeter cannot inspect browser bookmarks. Setup state is shared
-because the bookmark works across Claude sources. Each source section then has
-its own `Check Claude reset` action. Use it to open Claude Usage, verify the
-browser is signed into the matching account, then click the saved bookmark
-before the two-minute local handoff expires. The bookmark sends the minimal
-grant inventory for the selected local source. Clawmeter cannot independently
-verify the account match; repeat the check after switching accounts in the
-browser or local CLI. The browser may request local-network permission.
+For Claude, the tray has one action, **Check Claude resets**. It starts a
+10-minute loopback session and opens its page, `http://127.0.0.1:17343/check`.
+The page shows all three setup steps until the bookmark has delivered a result
+(proof, not "the page was opened"); after that it shows only **Open Claude
+Usage**, with the save step behind "Bookmark missing? Save it again". If a check
+ends without the bookmark ever answering, the next check shows all steps again.
+The page polls the session and shows the outcome: waiting, a retryable problem
+(for example, an account that is not in Clawmeter), the result, or a timeout.
+A timeout raises no tray notification.
+
+The bookmark proves its account with
+`sha256("clawmeter-claude-reset\0" + nonce + "\0" + orgUuid)`. Clawmeter computes
+the same hash for every local Claude source and files the result under the one
+that matches. No match, or two sources with the same organization, is rejected
+with a short message and the session keeps waiting. The session accepts one
+result, answers only `https://claude.ai` for the handoff, and serves only the
+`127.0.0.1:17343` Host.
 
 Which grants count. The bookmark sends each grant's remaining count
 (`resets_left`), start (`starts_at`), expiry (`ends_at`), and `paused` flag.
@@ -105,7 +108,7 @@ names. The bookmark and the local listener also refuse the whole result, and
 send nothing, when a grant that has resets left lacks a boolean `paused`, a
 parseable `starts_at`, or a parseable `ends_at`, because guessing would either
 overcount or silently hide a grant. If Claude changes these fields, the
-user sees an explicit "no result was sent" message instead of a wrong count.
+user sees "Claude's reset data changed format. Nothing was sent." instead of a wrong count.
 
 Where it shows. A reset observation always appears under the Claude source it
 was recorded for, in the tray, `clawmeter status` (plain, `--json`, `--agent`,
@@ -118,13 +121,15 @@ different source key. If a Claude source ever reports its own non-empty reset
 inventory, that provider-native inventory is shown and the browser observation
 is dropped for display (Claude Code does not report one today).
 
-Account identity. A source with an explicitly configured profile path stores an
-opaque fingerprint of that path, so repointing the profile invalidates the
-observation. The native Default source has no stable profile identity (it can
-resolve through environment variables or the system keychain), so Clawmeter
-cannot detect that its login changed. The tray tooltip says so,
-and the observation only ever attaches to the Default source it
-was recorded for. The user must recheck after switching Default accounts.
+Presentation. CLI and tray share one row: `Resets: 1 · expires Oct 22`, or
+`Resets: 2 · next expires Oct 22` for several. Browser snapshots add
+` · checked Oct 7`, or ` · checked 11:30` when checked today. Nothing shows
+when no reset is available. JSON keeps the full fields; `--agent` prints
+`observed_count=N snapshot=true` with exact timestamps.
+
+Account identity. Native Default reads `~/.claude.json` (then
+`~/.claude/.claude.json`); a config-dir source reads `<dir>/.claude.json`. A
+source with no recorded organization cannot receive a result.
 
 This slice intentionally does not add active notifications or generic windfall
 detection. The research does not show that users need another alert channel; it
