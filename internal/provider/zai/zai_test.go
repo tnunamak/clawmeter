@@ -2,11 +2,13 @@ package zai
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,6 +194,41 @@ func TestFetchUsageHandlesAuthAndServerStatuses(t *testing.T) {
 				t.Fatalf("err = %v", err)
 			}
 		})
+	}
+}
+
+// Z.ai only reports the 429; the shared fetch boundary backs it off exactly
+// as it does Claude, so a second fetch makes no request.
+func TestRateLimitIsBackedOffAtSharedFetchBoundary(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	t.Setenv("LOCALAPPDATA", cacheRoot)
+	t.Setenv("HOME", cacheRoot)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	t.Setenv("Z_AI_QUOTA_URL", "https://api.z.ai")
+	p := New(config.ProviderConfig{APIKey: "test-key"})
+	p.client = server.Client()
+	p.client.Transport = rewriteTransport{target: server.URL, base: http.DefaultTransport}
+
+	_, err := p.FetchUsage(context.Background())
+	var limited *provider.RateLimitError
+	if !errors.As(err, &limited) {
+		t.Fatalf("FetchUsage err = %v, want RateLimitError", err)
+	}
+	for i := 0; i < 2; i++ {
+		data, err := provider.FetchSource(context.Background(), p)
+		if err != nil || data == nil || !strings.HasPrefix(data.Error, "rate limited (429), next try ") {
+			t.Fatalf("FetchSource %d = %#v, %v", i, data, err)
+		}
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want 2 (direct + first FetchSource; second backed off)", got)
 	}
 }
 

@@ -571,6 +571,9 @@ func (p *Provider) postJSON(ctx context.Context, path, token string, payload any
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, errUnauthorized
 	}
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Antigravity API returned HTTP %d", resp.StatusCode)
 	}

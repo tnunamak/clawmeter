@@ -267,14 +267,6 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		}
 	}
 
-	if until, backingOff := p.backoffUntil(); backingOff {
-		return &provider.UsageData{
-			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
-			FetchedAt: time.Now(),
-			Error:     rateLimitedMessage(until),
-		}, nil
-	}
-
 	req, err := http.NewRequestWithContext(ctx, "GET", usageEndpoint, nil)
 	if err != nil {
 		return nil, err
@@ -304,12 +296,8 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 				Error:     "unauthorized — run `claude` to reauth",
 			}, nil
 		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return &provider.UsageData{
-				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
-				FetchedAt: time.Now(),
-				Error:     rateLimitedMessage(p.recordRateLimit(resp.Header.Get("Retry-After"))),
-			}, nil
+		if err := provider.RateLimitFromResponse(resp); err != nil {
+			return nil, err
 		}
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}
@@ -318,7 +306,6 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	p.clearBackoff()
 
 	if apiResp.usageUnavailable() {
 		return &provider.UsageData{

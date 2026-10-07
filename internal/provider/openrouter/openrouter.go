@@ -269,6 +269,9 @@ func (p *Provider) request(ctx context.Context, url, key string, out any) error 
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return apiError(resp.StatusCode)
 	}

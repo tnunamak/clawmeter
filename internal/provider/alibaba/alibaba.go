@@ -365,6 +365,9 @@ func (p *Provider) fetchRegion(ctx context.Context, key, host, regionID, commodi
 		return nil, &regionError{err: fmt.Errorf("API returned 404"), retryable: true}
 	}
 
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBodySize))
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)

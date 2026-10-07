@@ -202,6 +202,9 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 	if err != nil {
 		return nil, fmt.Errorf("read Grok billing response: %w", err)
 	}
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Grok billing returned HTTP %d", resp.StatusCode)
 	}
@@ -425,6 +428,10 @@ func (p *Provider) get(ctx context.Context, key, path string) (*http.Response, e
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		resp.Body.Close()
 		return nil, unauthorizedError{status: resp.StatusCode}
+	}
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		resp.Body.Close()
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

@@ -252,6 +252,9 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		}, nil
 	}
 
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		if isConsumerTierDeprecationSignal(body) {
@@ -326,6 +329,9 @@ func (p *Provider) loadCodeAssistStatus(ctx context.Context, token string) (code
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return codeAssistStatus{}, fmt.Errorf("Code Assist status API returned %d", resp.StatusCode)
+	}
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return codeAssistStatus{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return codeAssistStatus{}, fmt.Errorf("Code Assist status API returned %d", resp.StatusCode)

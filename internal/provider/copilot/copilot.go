@@ -166,6 +166,9 @@ func (p *Provider) fetchUsage(ctx context.Context, client *http.Client, endpoint
 		}, nil
 	}
 
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}

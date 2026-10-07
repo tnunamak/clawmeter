@@ -238,6 +238,9 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 	defer resp.Body.Close()
 
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnauthorized {
 			return &provider.UsageData{

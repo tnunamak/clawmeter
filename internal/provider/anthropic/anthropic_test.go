@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -458,11 +456,13 @@ func newTestProvider(t *testing.T, body string, status int, retryAfter string) *
 	}))
 	t.Cleanup(srv.Close)
 	requests.Store(0)
-	oldEndpoint, oldCache, oldNow := usageEndpoint, userCacheDir, now
-	cacheRoot := t.TempDir()
+	oldEndpoint := usageEndpoint
 	usageEndpoint = srv.URL
-	userCacheDir = func() (string, error) { return cacheRoot, nil }
-	t.Cleanup(func() { usageEndpoint, userCacheDir, now = oldEndpoint, oldCache, oldNow })
+	t.Cleanup(func() { usageEndpoint = oldEndpoint })
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	t.Setenv("LOCALAPPDATA", cacheRoot)
+	t.Setenv("HOME", cacheRoot)
 	dir := t.TempDir()
 	writeTestCredentials(t, dir, "test-token", "")
 	src := config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}}
@@ -505,63 +505,25 @@ func TestExtraUsageNonUSDCurrency(t *testing.T) {
 	}
 }
 
-func TestRateLimitBacksOffAndHonorsFloor(t *testing.T) {
-	p := newTestProvider(t, `{"type":"error","error":{"type":"rate_limit_error"}}`, http.StatusTooManyRequests, "0")
-	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
-	now = func() time.Time { return clock }
-
-	data, _ := p.FetchUsage(context.Background())
-	if !strings.Contains(data.Error, "rate limited") || requests.Load() != 1 {
-		t.Fatalf("first fetch: error=%q requests=%d", data.Error, requests.Load())
+// Claude only reports the 429; provider.FetchSource owns the backoff.
+func TestRateLimitIsReportedWithRetryAfterAndThenBackedOff(t *testing.T) {
+	p := newTestProvider(t, `{"type":"error","error":{"type":"rate_limit_error"}}`, http.StatusTooManyRequests, "1800")
+	_, err := p.FetchUsage(context.Background())
+	var limited *provider.RateLimitError
+	if !errors.As(err, &limited) || limited.RetryAfter != 30*time.Minute {
+		t.Fatalf("err = %#v, want RateLimitError with 30m retry-after", err)
 	}
-	clock = clock.Add(4 * time.Minute)
-	data, _ = p.FetchUsage(context.Background())
-	if !strings.Contains(data.Error, "rate limited") || requests.Load() != 1 {
-		t.Fatalf("during backoff: error=%q requests=%d, want no new request", data.Error, requests.Load())
+	if raw := p.LastRawResponse(); raw == nil || raw.Status != http.StatusTooManyRequests || raw.RetryAfter != "1800" {
+		t.Fatalf("raw = %#v", raw)
 	}
-	clock = clock.Add(2 * time.Minute) // 6 min after first 429, past the 5 min floor
-	_, _ = p.FetchUsage(context.Background())
+	for i := 0; i < 2; i++ {
+		data, err := provider.FetchSource(context.Background(), p)
+		if err != nil || !strings.Contains(data.Error, "rate limited (429), next try ") {
+			t.Fatalf("fetch %d: data=%#v err=%v", i, data, err)
+		}
+	}
 	if requests.Load() != 2 {
-		t.Fatalf("after floor: requests=%d, want 2", requests.Load())
-	}
-	// Second consecutive 429 doubles the delay to 10 minutes.
-	clock = clock.Add(8 * time.Minute)
-	_, _ = p.FetchUsage(context.Background())
-	if requests.Load() != 2 {
-		t.Fatalf("exponential: requests=%d, want still 2 at +8m", requests.Load())
-	}
-	clock = clock.Add(3 * time.Minute)
-	_, _ = p.FetchUsage(context.Background())
-	if requests.Load() != 3 {
-		t.Fatalf("exponential: requests=%d, want 3 at +11m", requests.Load())
-	}
-}
-
-func TestRateLimitHonorsLongRetryAfter(t *testing.T) {
-	p := newTestProvider(t, `{}`, http.StatusTooManyRequests, "1800")
-	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
-	now = func() time.Time { return clock }
-	_, _ = p.FetchUsage(context.Background())
-	clock = clock.Add(20 * time.Minute)
-	_, _ = p.FetchUsage(context.Background())
-	if requests.Load() != 1 {
-		t.Fatalf("requests=%d, want retry-after 30m honored", requests.Load())
-	}
-}
-
-func TestSuccessClearsBackoff(t *testing.T) {
-	p := newTestProvider(t, `{"five_hour":{"utilization":10,"resets_at":"2026-12-01T00:00:00Z"}}`, http.StatusOK, "")
-	p.recordRateLimit("0")
-	if _, ok := p.backoffUntil(); !ok {
-		t.Fatal("backoff not recorded")
-	}
-	now = func() time.Time { return time.Now().Add(10 * time.Minute) }
-	if data, err := p.FetchUsage(context.Background()); err != nil || data.Error != "" {
-		t.Fatalf("fetch after backoff: %v %q", err, data.Error)
-	}
-	now = time.Now
-	if _, ok := p.backoffUntil(); ok {
-		t.Fatal("successful fetch did not clear backoff")
+		t.Fatalf("requests=%d, want the backed-off fetch to make no request", requests.Load())
 	}
 }
 
@@ -608,34 +570,5 @@ func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
 	}
 	if got := alone.(*Provider).ResetSnapshotSourceRevision(); got != "" {
 		t.Fatalf("lone native reset snapshot revision = %q, want empty", got)
-	}
-}
-
-func TestConcurrentRateLimitsKeepEverySourcesBackoff(t *testing.T) {
-	newTestProvider(t, "", http.StatusOK, "")
-	providers := make([]*Provider, 16)
-	for i := range providers {
-		dir := t.TempDir()
-		writeTestCredentials(t, dir, "test-token", "")
-		src := config.SourceConfig{ID: fmt.Sprintf("s%d", i), Credential: config.CredentialRef{Kind: "config-dir", Ref: dir}}
-		p, err := (sourceCapability{}).NewSource(config.ProviderConfig{}, src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		providers[i] = p.(*Provider)
-	}
-	var wg sync.WaitGroup
-	for _, p := range providers {
-		wg.Add(1)
-		go func(p *Provider) {
-			defer wg.Done()
-			p.recordRateLimit("0")
-		}(p)
-	}
-	wg.Wait()
-	for _, p := range providers {
-		if _, ok := p.backoffUntil(); !ok {
-			t.Fatalf("source %s lost its backoff after concurrent 429s", p.SourceID())
-		}
 	}
 }

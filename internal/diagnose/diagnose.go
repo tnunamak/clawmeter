@@ -199,7 +199,7 @@ func safeSetupDetail(state provider.SetupState) string {
 
 func probe(ctx context.Context, p provider.Provider) (Probe, *UsageSummary) {
 	started := time.Now()
-	data, err := p.FetchUsage(ctx)
+	data, err := provider.FetchSource(ctx, p)
 	result := Probe{Attempted: true, DurationMS: time.Since(started).Milliseconds()}
 	if err != nil {
 		result.Outcome = "error"

@@ -171,6 +171,9 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 	defer resp.Body.Close()
 	data := &provider.UsageData{Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(), FetchedAt: time.Now()}
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		data.IsExpired, data.InvalidatesPriorUsage, data.Error = true, true, "DeepSeek API key expired or unauthorized"

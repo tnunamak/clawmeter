@@ -1182,7 +1182,7 @@ func publishLocalResetSource(registry *provider.Registry, sourceKey string, menu
 	if !ok {
 		return false
 	}
-	data, err := p.FetchUsage(context.Background())
+	data, err := provider.FetchSource(context.Background(), p)
 	if err != nil || data == nil {
 		if err != nil {
 			log.Printf("local reset source refresh failed: provider=%s", p.Name())

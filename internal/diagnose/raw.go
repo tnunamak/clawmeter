@@ -36,7 +36,7 @@ func Raw(ctx context.Context, providers []provider.Provider) RawOutput {
 			out.Sources = append(out.Sources, src)
 			continue
 		}
-		_, _ = p.FetchUsage(ctx)
+		_, _ = provider.FetchSource(ctx, p)
 		raw := reporter.LastRawResponse()
 		if raw == nil {
 			src.Note = "no request made (rate-limit backoff active or credentials unavailable)"

@@ -911,6 +911,8 @@ func (r *Registry) GetConfigured() []Provider {
 // FailureGate tracks consecutive failures per provider, suppresses transient
 // errors when prior cached data is available, and backs off polling for
 // persistently failing providers. Modeled after CodexBar's ConsecutiveFailureGate.
+// It is tray-local and covers every failure; the cross-process HTTP 429
+// backoff lives in FetchSource.
 type FailureGate struct {
 	streaks  map[string]int
 	backoffs map[string]time.Duration
@@ -1016,7 +1018,7 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 			var revisionAfter string
 			for attempt := 0; attempt < 2; attempt++ {
 				revisionBefore := SourceRevision(provider)
-				data, err = provider.FetchUsage(ctx)
+				data, err = FetchSource(ctx, provider)
 				revisionAfter = SourceRevision(provider)
 				if revisionBefore == revisionAfter {
 					break
