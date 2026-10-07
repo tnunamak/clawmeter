@@ -341,3 +341,16 @@ func TestCollidingAdditionalLimitsKeepExhaustedBucketVisible(t *testing.T) {
 		t.Fatalf("app 5.4 = %#v", w)
 	}
 }
+
+func TestSecondaryWithoutDurationKeepsWeeklyWindowBesidePrimary(t *testing.T) {
+	now := time.Now()
+	p, s := 12.0, 99.0
+	soon := now.Add(3 * time.Hour).Unix()
+	got := appendLimitWindows(nil, "", &codexLimit{
+		Primary:   &codexWindow{UsedPercent: &p, ResetsAt: soon},
+		Secondary: &codexWindow{UsedPercent: &s, ResetsAt: soon},
+	}, now)
+	if len(got) != 2 || got[1].Utilization != 99 {
+		t.Fatalf("windows = %+v, want primary and the 99%% secondary both kept", got)
+	}
+}

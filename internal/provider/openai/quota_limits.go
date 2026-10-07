@@ -57,13 +57,20 @@ func appendLimitWindows(dst []provider.UsageWindow, scope string, limit *codexLi
 	if limit == nil {
 		return dst
 	}
-	for _, w := range []*codexWindow{limit.Primary, limit.Secondary} {
+	for i, w := range []*codexWindow{limit.Primary, limit.Secondary} {
 		used, ok := w.usable(limit.Reached)
 		if !ok {
 			continue
 		}
 		resetAt := time.Unix(w.ResetsAt, 0)
-		name, display := codexWindowLabels(w.DurationMins, resetAt, now)
+		duration := w.DurationMins
+		// Older payloads omit the duration. The secondary slot is the weekly
+		// window, so don't let a near reset relabel it 5h and collide with
+		// the primary window.
+		if i == 1 && duration <= 0 {
+			duration = int64(7 * 24 * time.Hour / time.Minute)
+		}
+		name, display := codexWindowLabels(duration, resetAt, now)
 		if scope != "" {
 			name += " " + scope
 			if display == "5h" {
