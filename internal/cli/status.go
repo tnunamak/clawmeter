@@ -97,7 +97,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
-		return []string{line}
+		return appendResetSnapshotLine([]string{line}, pf.Data, pf.Display)
 	}
 
 	if pf.Data.Error != "" {
@@ -105,7 +105,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
-		return []string{line}
+		return appendResetSnapshotLine([]string{line}, pf.Data, pf.Display)
 	}
 
 	windows := pf.Data.PresentationWindows()
@@ -180,11 +180,11 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		if pf.Data.Error != "" {
 			expiredMsg += " — " + format.HumanizeError(pf.Data.Error)
 		}
-		return fmt.Sprintf("%s: %s%s", pf.Display, expiredMsg, suffix)
+		return appendResetSnapshotPlain(fmt.Sprintf("%s: %s%s", pf.Display, expiredMsg, suffix), pf.Data)
 	}
 
 	if pf.Data.Error != "" {
-		return fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix)
+		return appendResetSnapshotPlain(fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix), pf.Data)
 	}
 
 	windows := pf.Data.PresentationWindows()
@@ -237,21 +237,25 @@ func plainWindowLabel(window provider.UsageWindow) string {
 }
 
 func resetCreditPlainSummary(data *provider.UsageData, now time.Time) string {
-	if data == nil || data.Stale || data.ResetCredits == nil {
+	if data == nil || data.ResetCredits == nil || (data.Stale && !data.ResetCredits.Snapshot) {
 		return ""
 	}
 	count := data.ResetCredits.DisplayCount(now)
 	if count <= 0 {
 		return ""
 	}
-	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
-		return fmt.Sprintf("reset credits: %d available, earliest expires %s", count, formatResetCreditExpiry(expiresAt))
+	availability := resetCreditAvailability(data.ResetCredits.Snapshot)
+	if data.ResetCredits.Snapshot {
+		availability += " (browser account match confirmed by you)"
 	}
-	return fmt.Sprintf("reset credits: %d available", count)
+	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
+		return fmt.Sprintf("reset credits: %d %s, earliest expires %s%s", count, availability, formatResetCreditExpiry(expiresAt), resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
+	}
+	return fmt.Sprintf("reset credits: %d %s%s", count, availability, resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
 }
 
 func resetCreditCompactSummary(data *provider.UsageData, now time.Time) string {
-	if data == nil || data.Stale || data.ResetCredits == nil {
+	if data == nil || data.ResetCredits == nil || (data.Stale && !data.ResetCredits.Snapshot) {
 		return ""
 	}
 	count := data.ResetCredits.DisplayCount(now)
@@ -262,10 +266,45 @@ func resetCreditCompactSummary(data *provider.UsageData, now time.Time) string {
 	if count != 1 {
 		noun = "reset credits"
 	}
-	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
-		return fmt.Sprintf("%d %s - earliest expires %s", count, noun, formatResetCreditExpiry(expiresAt))
+	if data.ResetCredits.Snapshot {
+		noun += " observed"
+		noun += " (browser account match confirmed by you)"
 	}
-	return fmt.Sprintf("%d %s available", count, noun)
+	if expiresAt, ok := data.ResetCredits.EarliestExpiry(now); ok {
+		return fmt.Sprintf("%d %s - earliest expires %s%s", count, noun, formatResetCreditExpiry(expiresAt), resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
+	}
+	return fmt.Sprintf("%d %s available%s", count, noun, resetCreditObservedAt(data.ResetCredits.FetchedAt, data.ResetCredits.Snapshot))
+}
+
+func resetCreditAvailability(snapshot bool) string {
+	if snapshot {
+		return "observed"
+	}
+	return "available"
+}
+
+func resetCreditObservedAt(observedAt time.Time, snapshot bool) string {
+	if observedAt.IsZero() {
+		return ""
+	}
+	if snapshot {
+		return " (last observed " + observedAt.Local().Format("Jan 2, 2006 3:04 PM") + ")"
+	}
+	return " (checked " + observedAt.Local().Format("15:04") + ")"
+}
+
+func appendResetSnapshotLine(lines []string, data *provider.UsageData, display string) []string {
+	if summary := resetCreditCompactSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
+		return append(lines, fmt.Sprintf("%s resets %s", display, summary))
+	}
+	return lines
+}
+
+func appendResetSnapshotPlain(line string, data *provider.UsageData) string {
+	if summary := resetCreditPlainSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
+		return line + "  " + summary
+	}
+	return line
 }
 
 func formatResetCreditExpiry(t time.Time) string {
@@ -381,6 +420,11 @@ func (m *MultiProviderOutput) StatusLineSummary() string {
 func (m *MultiProviderOutput) AgentSummary() string {
 	pf, window, proj, ok := m.worstReadableWindow()
 	if !ok {
+		// Reset observations are independent of Claude usage: keep them visible
+		// when usage is unavailable.
+		if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
+			return "Quota: no active quota data; reset_credits=[" + strings.Join(resets, " | ") + "]."
+		}
 		return "Quota: no active quota data. Run `clawmeter providers` if setup may be incomplete."
 	}
 
@@ -517,23 +561,31 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 	summaries := make([]resetSummary, 0)
 	for i := range m.Providers {
 		pf := &m.Providers[i]
-		if pf.Data == nil || pf.Data.Stale || pf.Data.ResetCredits == nil {
+		if pf.Data == nil || pf.Data.ResetCredits == nil || (pf.Data.Stale && !pf.Data.ResetCredits.Snapshot) {
 			continue
 		}
 		count := pf.Data.ResetCredits.DisplayCount(now)
 		if count <= 0 {
 			continue
 		}
-		fields := []string{
-			pf.Display,
-			fmt.Sprintf("available=%d", count),
+		countField := fmt.Sprintf("available=%d", count)
+		if pf.Data.ResetCredits.Snapshot {
+			countField = fmt.Sprintf("observed_count=%d snapshot=true account_match=user_confirmed", count)
 		}
+		fields := []string{pf.Display, countField}
 		expiresAt, hasExpiry := pf.Data.ResetCredits.EarliestExpiry(now)
 		if hasExpiry {
 			fields = append(fields,
 				"earliest_expires_at="+expiresAt.Local().Format(time.RFC3339),
 				"earliest_expires_in="+formatExactDuration(expiresAt.Sub(now)),
 			)
+		}
+		if !pf.Data.ResetCredits.FetchedAt.IsZero() {
+			field := "checked_at=" + pf.Data.ResetCredits.FetchedAt.Local().Format(time.RFC3339)
+			if pf.Data.ResetCredits.Snapshot {
+				field = "last_observed_at=" + pf.Data.ResetCredits.FetchedAt.Local().Format(time.RFC3339)
+			}
+			fields = append(fields, field)
 		}
 		summaries = append(summaries, resetSummary{
 			text:      strings.Join(fields, " "),
@@ -945,6 +997,9 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 		seen[pf.Name] = struct{}{}
 	}
 	for _, p := range registry.GetAll() {
+		if !isUserFacingProviderSource(p) {
+			continue
+		}
 		key := provider.SourceKey(p)
 		if _, ok := seen[key]; ok {
 			continue
@@ -952,10 +1007,16 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 		m.Providers = append(m.Providers, ProviderFormatter{
 			Name:    key,
 			Display: sourceDisplay(p, familyCounts(registry.GetAll())),
-			Family:  p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
-			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
+			Family:  provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
 		})
 	}
+}
+
+// isUserFacingProviderSource hides the supplemental Claude reset source; its
+// data is shown under the Claude account it is bound to.
+func isUserFacingProviderSource(p provider.Provider) bool {
+	return p.Name() != "claude_web"
 }
 
 func staleFallback(cacheEntry *cache.Entry, name string, current *provider.UsageData, revisions ...string) (*provider.UsageData, bool) {
@@ -1062,26 +1123,36 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 	output := &MultiProviderOutput{
 		Providers: make([]ProviderFormatter, 0),
 	}
-
 	// Only show configured providers
 	configured := registry.GetConfigured()
 	counts := familyCounts(configured)
+	sources := make(map[string]*provider.UsageData, len(configured))
 	for _, p := range configured {
 		key := provider.SourceKey(p)
 		data, _ := cacheEntry.GetProvider(key)
-		if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) {
+		if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) ||
+			!cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
 		}
-		if !cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
-			data = nil
+		sources[key] = data
+	}
+	presented := provider.PresentResetCreditSources(sources)
+	seen := make(map[string]struct{}, len(configured))
+	for _, p := range configured {
+		if !isUserFacingProviderSource(p) {
+			continue
 		}
+		key := provider.SourceKey(p)
+		data := presented[key]
+		seen[key] = struct{}{}
 		output.Providers = append(output.Providers, ProviderFormatter{
-			Name: key, Family: p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
 			Display:           sourceDisplay(p, counts),
 			Data:              data,
-			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
 		})
 	}
+	appendPresentedTargetRows(output, registry, cfg, presented, seen, nil, counts)
 
 	return output
 }
@@ -1091,29 +1162,64 @@ func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, resu
 	output := &MultiProviderOutput{
 		Providers: make([]ProviderFormatter, 0),
 	}
-
 	// Only show configured providers that have data
 	configured := registry.GetConfigured()
 	counts := familyCounts(configured)
+	sources := make(map[string]*provider.UsageData, len(configured))
 	for _, p := range configured {
 		key := provider.SourceKey(p)
-		data, ok := result.Results[key]
-		if !ok {
-			continue
-		}
+		data := result.Results[key]
 		if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) {
 			data = nil
 		}
+		sources[key] = data
+	}
+	presented := provider.PresentResetCreditSources(sources)
+	seen := make(map[string]struct{}, len(configured))
+	for _, p := range configured {
+		if !isUserFacingProviderSource(p) {
+			continue
+		}
+		key := provider.SourceKey(p)
+		data, ok := presented[key]
+		seen[key] = struct{}{}
+		if !ok {
+			continue
+		}
 		output.Providers = append(output.Providers, ProviderFormatter{
-			Name: key, Family: p.Name(), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
 			Display:           sourceDisplay(p, counts),
 			Data:              data,
 			Status:            statuses[p.Name()],
-			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(p.Name()),
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
 		})
 	}
+	appendPresentedTargetRows(output, registry, cfg, presented, seen, statuses, counts)
 
 	return output
+}
+
+// appendPresentedTargetRows keeps a source-confirmed Claude reset snapshot
+// visible when Claude Code currently has no usage result for that source. The
+// browser observation is still attached to the named Claude account; no usage
+// windows are synthesized.
+func appendPresentedTargetRows(output *MultiProviderOutput, registry *provider.Registry, cfg *config.Config, presented map[string]*provider.UsageData, seen map[string]struct{}, statuses map[string]*status.ProviderStatus, counts map[string]int) {
+	for key, data := range presented {
+		if _, exists := seen[key]; exists || data == nil || data.Provider != "claude" || data.ResetCredits == nil || !data.ResetCredits.Snapshot {
+			continue
+		}
+		p, ok := registry.Get(key)
+		if !ok || p.Name() != "claude" || !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) {
+			continue
+		}
+		output.Providers = append(output.Providers, ProviderFormatter{
+			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			Display:           sourceDisplay(p, counts),
+			Data:              data,
+			Status:            statuses[p.Name()],
+			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
+		})
+	}
 }
 
 func familyCounts(providers []provider.Provider) map[string]int {
@@ -1408,17 +1514,25 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 
 	configured := configuredSources(providers)
 	for _, p := range providers {
-		if cfg.IsProviderDisabled(p.Name()) {
+		if cfg.IsProviderDisabled(provider.FamilyName(p)) {
 			fmt.Fprintf(os.Stderr, "clawmeter: provider %q is disabled\n", family)
 			return 2
 		}
-		if sourceID != "" && !p.IsConfigured() && !provider.IsEnrolledSource(p) {
+		if sourceID != "" && !p.IsConfigured() && !provider.IsEnrolledSource(p) && len(supplementalResetSources(registry, family, []provider.Provider{p})) == 0 {
 			fmt.Fprintf(os.Stderr, "clawmeter: provider %q source %q is not configured\n", family, provider.SourceID(p))
 			return 2
 		}
 	}
+	// A Claude source without readable usage credentials still has a row when
+	// it holds a browser reset observation, matching `clawmeter status`.
+	display := make([]provider.Provider, 0, len(providers))
+	for _, p := range providers {
+		if p.IsConfigured() || provider.IsEnrolledSource(p) || len(supplementalResetSources(registry, family, []provider.Provider{p})) > 0 {
+			display = append(display, p)
+		}
+	}
 	providers = configured
-	if len(providers) == 0 {
+	if len(display) == 0 {
 		fmt.Fprintf(os.Stderr, "clawmeter: provider %q has no configured sources\n", family)
 		return 2
 	}
@@ -1427,9 +1541,13 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 	defer cancel()
 
 	// Fetch usage and status in parallel
-	result := provider.FetchProvidersParallel(ctx, providers)
+	// Claude reset observations are local files fetched alongside their Claude
+	// sources and folded under them before rendering.
+	fetchSet := append(append([]provider.Provider{}, providers...), supplementalResetSources(registry, family, display)...)
+	result := provider.FetchProvidersParallel(ctx, fetchSet)
 	cacheEntry, _ := cache.Read()
 	hadFetchError := applySourceFallbacks(providers, result, cacheEntry)
+	result.Results = provider.PresentResetCreditSources(result.Results)
 	var ps *status.ProviderStatus
 	done := make(chan struct{}, 1)
 	go func() {
@@ -1437,8 +1555,8 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 		done <- struct{}{}
 	}()
 	<-done
-	output := &MultiProviderOutput{Providers: make([]ProviderFormatter, 0, len(providers))}
-	for _, p := range providers {
+	output := &MultiProviderOutput{Providers: make([]ProviderFormatter, 0, len(display))}
+	for _, p := range display {
 		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}
 
@@ -1454,6 +1572,25 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 		return 1
 	}
 	return 0
+}
+
+// supplementalResetSources returns the configured hidden reset-observation
+// sources bound to the given Claude sources.
+func supplementalResetSources(registry *provider.Registry, family string, sources []provider.Provider) []provider.Provider {
+	if family != "claude" {
+		return nil
+	}
+	var supplemental []provider.Provider
+	for _, source := range sources {
+		key := provider.ClaudeResetSourceName
+		if id := provider.SourceID(source); id != "default" {
+			key += ":" + id
+		}
+		if p, ok := registry.Get(key); ok && p.IsConfigured() {
+			supplemental = append(supplemental, p)
+		}
+	}
+	return supplemental
 }
 
 func applySourceFallbacks(providers []provider.Provider, result *provider.MultiFetchResult, cacheEntry *cache.Entry) bool {

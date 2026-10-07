@@ -1,16 +1,21 @@
 # Reset Awareness
 
-Status: final PRD for the first shipped slice, revised after product review on
-2026-07-03. A second small shipped slice adds blocked-gap visibility next to
-existing run-out estimates.
+Status: final PRD, revised 2026-09-24 to add Claude Web reset observations to
+the shared reset-credit model and presentation.
 
 ## Research Note
 
-Codex is the only currently supported Clawmeter provider with banked usage-limit
-reset credits that are locally discoverable without consuming anything. OpenAI's
-Codex docs say referral-earned rate-limit resets are banked and usable for 30
-days after grant, and the Codex changelog says `/usage` can show and redeem
-earned usage-limit reset credits:
+Codex reset credits are fetched through a read-only endpoint. Claude's
+promotional reset grants are visible to the signed-in browser's usage page but
+not reliably to Claude Code OAuth. Clawmeter reads that page only when the user
+starts a check and clicks their saved bookmark. The user starts the check from
+one named Claude source, and Clawmeter stores the observation under that source.
+It cannot verify that the browser and local source are the same account, so the
+bookmark asks for confirmation before sending the result.
+
+OpenAI's Codex docs say referral-earned rate-limit resets are banked and usable
+for 30 days after grant, and the Codex changelog says `/usage` can show and
+redeem earned usage-limit reset credits:
 
 - https://developers.openai.com/codex/pricing
 - https://developers.openai.com/codex/changelog
@@ -31,8 +36,11 @@ burn a reset:
 Other provider coverage checked:
 
 - Claude and Claude Code expose normal usage windows and optional usage credits,
-  but not banked reset credits in the same sense:
+  but promotional `Reset for free` grants are read through a separate browser
+  surface, not Claude Code OAuth:
   https://support.claude.com/en/articles/12429409-manage-usage-credits-for-paid-claude-plans
+  See `ai/research/claude-reset-surface-2026-09-23.md` for the evidence and
+  limits of the browser handoff.
 - Gemini CLI / Gemini Code Assist document ordinary quota reset behavior, not
   banked reset credits:
   https://developers.google.com/gemini-code-assist/resources/quotas
@@ -50,22 +58,80 @@ Other provider coverage checked:
 
 ## Product Decision
 
-The first lovable slice is passive Codex reset-credit visibility:
+The SLVP uses provider-specific retrieval with one shared inventory model and
+one shared presentation:
 
 1. Fetch Codex reset-credit metadata from the read-only endpoint only:
    `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`.
 2. Never call any endpoint path containing `/consume`.
-3. Show available reset count and earliest expiry where users already look:
+3. Normalize available credits and their individual expiries into
+   `UsageResetCredits`. Show them under their own provider/account source in
    terminal output, `--agent`, JSON, and the tray provider menu / tooltip.
-4. Avoid any visual or notification noise when no reset credits exist.
-5. Fail soft if auth is missing, the endpoint changes, the network is down, or
+4. For Claude browser observations, persist expiry timestamps, observation
+   time, the selected local Claude source key, and an opaque configured-profile
+   path fingerprint when available. This invalidates snapshots when an explicit
+   Claude profile is repointed without invalidating on routine token refresh.
+   The native Default source exposes no stable profile identity, so its
+   browser/local account match remains user-confirmed, not independently
+   proven. Recheck after switching accounts. Do not persist browser
+   organization IDs or account/session details.
+   Show the full local observation time because the inventory is a manual
+   snapshot and can change after use.
+5. Avoid any visual or notification noise when no reset credits exist.
+6. Fail soft if auth is missing, the endpoint changes, the network is down, or
    the provider rejects the request.
+
+For Claude, save the reusable bookmark from the tray's **Set up Claude reset
+bookmark** action. That action stays available to reopen setup if the bookmark
+is deleted; Clawmeter cannot inspect browser bookmarks. Setup state is shared
+because the bookmark works across Claude sources. Each source section then has
+its own `Check Claude reset` action. Use it to open Claude Usage, verify the
+browser is signed into the matching account, then click the saved bookmark
+before the two-minute local handoff expires. The bookmark sends the minimal
+grant inventory for the selected local source. Clawmeter cannot independently
+verify the account match; repeat the check after switching accounts in the
+browser or local CLI. The browser may request local-network permission.
+
+Which grants count. The bookmark sends each grant's remaining count
+(`resets_left`), start (`starts_at`), expiry (`ends_at`), and `paused` flag.
+Clawmeter counts a grant's remaining resets only while the grant is usable now:
+started (`starts_at` not in the future), not paused, not expired, and with at
+least one reset left. A paused or not-yet-started grant is not counted, even
+though the Claude Usage page may list it. The evidence for these semantics is
+thin: `ai/research/claude-reset-surface-2026-09-23.md` does not describe the
+grant fields, and the field names come from the browser capture of the Usage
+response only. The rule is therefore the conservative reading of the field
+names. The bookmark and the local listener also refuse the whole result, and
+send nothing, when a grant that has resets left lacks a boolean `paused`, a
+parseable `starts_at`, or a parseable `ends_at`, because guessing would either
+overcount or silently hide a grant. If Claude changes these fields, the
+user sees an explicit "no result was sent" message instead of a wrong count.
+
+Where it shows. A reset observation always appears under the Claude source it
+was recorded for, in the tray, `clawmeter status` (plain, `--json`, `--agent`,
+cached or fresh, and `clawmeter claude`), and the tooltip. This holds when
+Claude usage is errored, expired, stale, rate limited, or unavailable; in the
+last case the Claude row shows the observation without usage windows. The
+browser observation is never a separate provider row, never appears in
+`clawmeter providers`, diagnose, or icon cycling, and never attaches to a
+different source key. If a Claude source ever reports its own non-empty reset
+inventory, that provider-native inventory is shown and the browser observation
+is dropped for display (Claude Code does not report one today).
+
+Account identity. A source with an explicitly configured profile path stores an
+opaque fingerprint of that path, so repointing the profile invalidates the
+observation. The native Default source has no stable profile identity (it can
+resolve through environment variables or the system keychain), so Clawmeter
+cannot detect that its login changed. The tray tooltip says so,
+and the observation only ever attaches to the Default source it
+was recorded for. The user must recheck after switching Default accounts.
 
 This slice intentionally does not add active notifications or generic windfall
 detection. The research does not show that users need another alert channel; it
-shows they need exact, low-anxiety inventory and expiry information. Reset-event
-notifications remain a later feature once we can throttle them against real
-state without producing false urgency.
+shows they need exact, low-anxiety inventory and expiry information. Retrieval
+and authentication stay provider-specific; normalized reset metadata and
+presentation are shared. Reset-event notifications remain a later feature once
+we can throttle them against real state without producing false urgency.
 
 The next slice keeps the same instrument-first stance and shows the existing
 blocked-gap fact when a quota is projected to run out before its natural reset:
@@ -91,14 +157,14 @@ reset credits: 2 available, earliest expires Jul 12 2:30 PM
 Agent output, when credits exist:
 
 ```text
-runs_out_in=1d22h; runs_out_early_by=1d8h; reset_credits=[Codex available=2 earliest_expires_at=2026-07-12T14:30:00-05:00 earliest_expires_in=9d]
+runs_out_in=1d22h; runs_out_early_by=1d8h; reset_credits=[Codex available=2 earliest_expires_at=2026-07-12T14:30:00-05:00 earliest_expires_in=9d checked_at=2026-07-03T14:20:00-05:00]
 ```
 
 Tray provider menu and tooltip, when credits exist:
 
 ```text
 Runs out in 1d22h (1d8h before reset)
-2 reset credits - earliest expires Jul 12 2:30 PM
+2 reset credits - earliest expires Jul 12 2:30 PM · checked 14:30
 ```
 
 If the count exists but expiry metadata is missing:
@@ -116,8 +182,9 @@ raw responses or credentials.
 - Redeeming or consuming reset credits. Clawmeter must never do this.
 - Recommendation or verdict copy such as "use a reset now." Clawmeter presents
   facts and calculated facts; users decide when to redeem credits.
-- A generic reset-credit framework for every provider. Current evidence only
-  supports Codex.
+- One generic provider retrieval mechanism. Each provider must use a
+  separately verified read-only route; the shared model does not imply shared
+  authentication or reset semantics.
 - Push notifications for reset credits in this slice. Passive visibility solves
   the validated pain point without nagging.
 - Inferring provider-wide global resets from noisy usage data. That needs
@@ -141,6 +208,12 @@ raw responses or credentials.
   and display in local time.
 - Multiple credits with the same expiry: sort deterministically and show the
   earliest expiry.
+- Claude browser observations are snapshots. Keep a separate observation per
+  local Claude source, show its full observation time, and never infer a match
+  from browser organization identifiers.
+- A browser observation can become outdated if the user redeems a grant in
+  Claude before the next check. Show its checked time and never imply it is a
+  live poll.
 - Windows, macOS, and Linux tray differences: use existing menu/tooltip surfaces,
   not platform-specific notification behavior.
 
@@ -153,6 +226,8 @@ raw responses or credentials.
 - Unit-test required request headers with fake tokens and account IDs.
 - Unit-test soft-fail behavior for missing auth and non-2xx responses.
 - Unit-test provider cloning/cache compatibility for reset-credit metadata.
+- Unit-test browser observation persistence, privacy allowlist, expiry filtering,
+  per-source association, shared bookmark setup state, and stale presentation.
 - Unit-test CLI and agent formatting.
 - Unit-test tray tooltip/menu copy where possible without real tray APIs.
 - Run `go test ./...` and `go test -tags tray ./...`.

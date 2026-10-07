@@ -169,6 +169,119 @@ func TestUsageDataMatchesSource(t *testing.T) {
 	}
 }
 
+func TestPresentResetCreditSourcesAttachesByExplicitClaudeSource(t *testing.T) {
+	t.Run("attaches to selected source without mutating fetch results", func(t *testing.T) {
+		primary := &UsageData{Provider: "claude", SourceID: "odl", Windows: []UsageWindow{{Name: "7d All", Utilization: 80}}}
+		credits := &UsageResetCredits{AvailableCount: 1, EarliestExpiresAt: time.Now().Add(24 * time.Hour)}
+		results := map[string]*UsageData{
+			"claude:odl":     primary,
+			"claude_web:odl": {Provider: "claude_web", SourceID: "odl", SourceLabel: "ODL", ResetCreditsTarget: "claude:odl", ResetCredits: credits},
+		}
+
+		got := PresentResetCreditSources(results)
+		if got["claude:odl"] == primary || got["claude:odl"].ResetCredits == nil ||
+			got["claude:odl"].ResetCredits.DisplayCount(time.Now()) != 1 {
+			t.Fatalf("target result = %#v, want a presentation copy with credits", got["claude:odl"])
+		}
+		if _, ok := got["claude_web:odl"]; ok {
+			t.Fatal("linked supplemental source remained as a separate presentation row")
+		}
+		if primary.ResetCredits != nil {
+			t.Fatal("presentation merge mutated the cached primary data")
+		}
+	})
+
+	t.Run("never presents an unattachable supplemental source as its own row", func(t *testing.T) {
+		for _, target := range []string{"", "codex", "claude:"} {
+			results := map[string]*UsageData{
+				"claude":     {Provider: "claude"},
+				"claude_web": {Provider: "claude_web", SourceID: "default", SourceLabel: "Default", ResetCreditsTarget: target, ResetCredits: &UsageResetCredits{AvailableCount: 1}},
+			}
+			got := PresentResetCreditSources(results)
+			if _, ok := got["claude_web"]; ok {
+				t.Fatalf("target %q left a separate claude_web row", target)
+			}
+			if got["claude"].ResetCredits != nil {
+				t.Fatalf("target %q attached to Claude Default", target)
+			}
+		}
+	})
+	t.Run("never attaches to a different source key", func(t *testing.T) {
+		results := map[string]*UsageData{
+			"claude":         {Provider: "claude", SourceID: "default"},
+			"claude:odl":     {Provider: "claude", SourceID: "odl"},
+			"claude_web:odl": {Provider: "claude_web", SourceID: "odl", ResetCreditsTarget: "claude", ResetCredits: &UsageResetCredits{AvailableCount: 1}},
+		}
+		got := PresentResetCreditSources(results)
+		if got["claude"].ResetCredits != nil || got["claude:odl"].ResetCredits != nil || got["claude_web:odl"] != nil {
+			t.Fatalf("mismatched supplemental was attached or kept: %#v", got)
+		}
+	})
+	t.Run("creates selected source placeholder when usage has no result", func(t *testing.T) {
+		results := map[string]*UsageData{
+			"claude_web:odl": {Provider: "claude_web", SourceID: "odl", SourceLabel: "ODL", ResetCreditsTarget: "claude:odl", ResetCredits: &UsageResetCredits{AvailableCount: 1}},
+		}
+		got := PresentResetCreditSources(results)
+		data := got["claude:odl"]
+		if data == nil || data.Provider != "claude" || data.SourceID != "odl" || data.SourceLabel != "ODL" || data.ResetCredits == nil {
+			t.Fatalf("placeholder source = %#v", data)
+		}
+		if _, exists := got["claude_web:odl"]; exists {
+			t.Fatal("linked reset snapshot remained as a duplicate provider row")
+		}
+	})
+	for name, primary := range map[string]*UsageData{
+		"stale":        {Provider: "claude", Stale: true, Error: "rate limited", Windows: []UsageWindow{{Name: "7d All"}}},
+		"errored":      {Provider: "claude", Error: "usage request failed (500)"},
+		"rate limited": {Provider: "claude", Error: "HTTP 429 rate limit exceeded", Warning: "retry later"},
+		"expired":      {Provider: "claude", IsExpired: true, Error: "token expired"},
+	} {
+		t.Run("attaches reset snapshot when usage is "+name, func(t *testing.T) {
+			results := map[string]*UsageData{
+				"claude":     primary,
+				"claude_web": {Provider: "claude_web", SourceID: "default", SourceLabel: "Default", ResetCreditsTarget: "claude", ResetCredits: &UsageResetCredits{AvailableCount: 1, Snapshot: true}},
+			}
+			got := PresentResetCreditSources(results)
+			merged := got["claude"]
+			if merged == primary || merged.ResetCredits == nil || merged.Stale != primary.Stale || merged.Error != primary.Error || merged.IsExpired != primary.IsExpired {
+				t.Fatalf("usage state and reset snapshot were not preserved together: %#v", merged)
+			}
+			if _, exists := got["claude_web"]; exists {
+				t.Fatalf("linked reset snapshot remained separate during %s usage", name)
+			}
+			if primary.ResetCredits != nil {
+				t.Fatal("presentation merge mutated the cached primary data")
+			}
+		})
+	}
+	t.Run("keeps provider-native credits without a separate row", func(t *testing.T) {
+		results := map[string]*UsageData{
+			"claude":     {Provider: "claude", ResetCredits: &UsageResetCredits{AvailableCount: 2}},
+			"claude_web": {Provider: "claude_web", SourceID: "default", ResetCreditsTarget: "claude", ResetCredits: &UsageResetCredits{AvailableCount: 1}},
+		}
+		got := PresentResetCreditSources(results)
+		if _, ok := got["claude_web"]; ok {
+			t.Fatal("browser snapshot stayed as a separate row beside provider-native credits")
+		}
+		if n := got["claude"].ResetCredits.DisplayCount(time.Now()); n != 2 {
+			t.Fatalf("provider-native credits = %d, want 2 kept", n)
+		}
+	})
+	t.Run("empty provider-native inventory does not hide browser snapshot", func(t *testing.T) {
+		results := map[string]*UsageData{
+			"claude":     {Provider: "claude", ResetCredits: &UsageResetCredits{}},
+			"claude_web": {Provider: "claude_web", SourceID: "default", ResetCreditsTarget: "claude", ResetCredits: &UsageResetCredits{AvailableCount: 1, EarliestExpiresAt: time.Now().Add(24 * time.Hour), Snapshot: true}},
+		}
+		got := PresentResetCreditSources(results)
+		if got["claude"] == results["claude"] || got["claude"].ResetCredits == nil || got["claude"].ResetCredits.DisplayCount(time.Now()) != 1 {
+			t.Fatalf("browser reset snapshot was not attached over empty native metadata: %#v", got["claude"])
+		}
+		if _, exists := got["claude_web"]; exists {
+			t.Fatal("linked browser reset snapshot remained as a separate row")
+		}
+	})
+}
+
 type rotatingSourceProvider struct {
 	revision string
 	next     []string
@@ -283,6 +396,13 @@ type stubProvider struct {
 	safeLookup *bool
 }
 
+type familyStubProvider struct {
+	*stubProvider
+	family string
+}
+
+func (p familyStubProvider) ProviderFamily() string { return p.family }
+
 type providerWithoutCapability struct{}
 
 func (providerWithoutCapability) Name() string         { return "legacy" }
@@ -358,6 +478,21 @@ func TestGetConfigured_RespectsEnabledFilter(t *testing.T) {
 	names = providerNames(r.GetConfigured())
 	if want := []string{"alpha", "beta"}; !equalSlice(names, want) {
 		t.Errorf("nil filter: got %v, want %v", names, want)
+	}
+}
+
+func TestImplementationSourceInheritsProviderFamilyEnablement(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(familyStubProvider{stubProvider: &stubProvider{name: "claude_web", configured: true}, family: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	r.SetEnabledFilter(enablementSet{disabled: map[string]bool{"claude": true}})
+	if got := r.GetConfigured(); len(got) != 0 {
+		t.Fatalf("supplemental source ignored disabled Claude family: %#v", got)
+	}
+	r.SetEnabledFilter(enablementSet{explicit: map[string]bool{"claude": true}})
+	if got := r.GetConfigured(); len(got) != 1 {
+		t.Fatalf("supplemental source ignored explicitly enabled Claude family: %#v", got)
 	}
 }
 
@@ -736,5 +871,51 @@ func TestFilterUsageDataByNames(t *testing.T) {
 	}
 	if _, ok := filtered["openrouter"]; ok {
 		t.Fatal("openrouter should have been filtered out")
+	}
+}
+
+func TestSnapshotResetCreditsDoNotMakeFailedUsagePresentable(t *testing.T) {
+	grant := &UsageResetCredits{AvailableCount: 1, Snapshot: true, EarliestExpiresAt: time.Now().Add(24 * time.Hour)}
+	failed := &UsageData{Provider: "claude", Error: "HTTP 429", ResetCredits: grant}
+	if failed.HasPresentableUsage() {
+		t.Fatal("a manual reset snapshot must not make a failed usage fetch look successful")
+	}
+	if failed.ResetCredits.DisplayCount(time.Now()) != 1 {
+		t.Fatal("the snapshot must stay visible on a failed row")
+	}
+	healthyResetOnly := &UsageData{Provider: "claude", ResetCredits: grant}
+	if !healthyResetOnly.HasPresentableUsage() {
+		t.Fatal("a reset-only row without an error must stay presentable")
+	}
+}
+
+func TestSnapshotDisplayCountDropsCreditsThatExpireAfterFetch(t *testing.T) {
+	now := time.Now()
+	r := &UsageResetCredits{
+		AvailableCount: 2, Snapshot: true, EarliestExpiresAt: now.Add(-time.Hour),
+		Credits: []UsageResetCredit{
+			{Status: "available", ExpiresAt: now.Add(-time.Hour)},
+			{Status: "available", ExpiresAt: now.Add(time.Hour)},
+		},
+	}
+	if got := r.DisplayCount(now); got != 1 {
+		t.Fatalf("DisplayCount() = %d, want 1 (one credit expired since the snapshot was read)", got)
+	}
+	r.Credits = r.Credits[:1]
+	if got := r.DisplayCount(now); got != 0 {
+		t.Fatalf("DisplayCount() = %d, want 0 when every detailed credit expired", got)
+	}
+}
+
+func TestResetOnlyClaudeRowIsMarkedUsageUnavailable(t *testing.T) {
+	results := map[string]*UsageData{
+		"claude_web": {Provider: "claude_web", SourceID: "default", ResetCreditsTarget: "claude", ResetCredits: &UsageResetCredits{AvailableCount: 1, EarliestExpiresAt: time.Now().Add(24 * time.Hour), Snapshot: true}},
+	}
+	got := PresentResetCreditSources(results)["claude"]
+	if got == nil || got.ResetCredits.DisplayCount(time.Now()) != 1 {
+		t.Fatalf("reset-only row = %#v, want the browser observation under Claude", got)
+	}
+	if got.Error == "" || got.HasPresentableUsage() {
+		t.Fatalf("reset-only row error=%q presentable=%v; a manual reset observation is not a usage reading", got.Error, got.HasPresentableUsage())
 	}
 }

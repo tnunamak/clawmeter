@@ -5,8 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime/debug"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -217,6 +217,9 @@ func TestProvidersList_DistinguishesDisabledFromDetected(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "disabled") {
 		t.Errorf("expected 'disabled' in output: %s", stdout)
+	}
+	if strings.Contains(stdout, "Browser-observed Claude reset inventory") {
+		t.Errorf("internal Claude reset adapter leaked into provider list: %s", stdout)
 	}
 }
 

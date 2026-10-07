@@ -46,6 +46,9 @@ func TestNames_IncludesKnownProviders(t *testing.T) {
 			t.Errorf("expected %q in Names(), got %v", want, got)
 		}
 	}
+	if have["claude_web"] {
+		t.Fatal("implementation-only Claude reset source leaked into public provider names")
+	}
 }
 
 func TestRegisterInjectsResolverIntoEveryEnvCredentialProvider(t *testing.T) {
@@ -112,6 +115,26 @@ func TestNames_Sorted(t *testing.T) {
 		if got[i-1] > got[i] {
 			t.Fatalf("Names() not sorted: %v", got)
 		}
+	}
+}
+
+func TestClaudeWebIsAHiddenSupplementalSourceBoundToItsClaudeSource(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("LOCALAPPDATA", dir)
+	t.Setenv("HOME", dir)
+	cfg := config.DefaultConfig()
+	registry := provider.NewRegistry()
+	Register(registry, cfg)
+	web, ok := registry.Get("claude_web")
+	if !ok || web.Name() != "claude_web" || web.DisplayName() != "Claude" {
+		t.Fatalf("Claude Web source = %#v, %t", web, ok)
+	}
+	if web.IsConfigured() {
+		t.Fatal("Claude Web should not be configured before a browser observation exists")
+	}
+	if provider.SourceKey(web) != "claude_web" || web.Name() == "claude" {
+		t.Fatalf("Claude Web identity was merged with Claude Code: key=%q name=%q", provider.SourceKey(web), web.Name())
 	}
 }
 

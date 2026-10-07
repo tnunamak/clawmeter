@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
+	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/diagnose"
@@ -174,6 +175,22 @@ func run() int {
 		return setupCmd(os.Args[2:])
 	case "doctor":
 		return doctorCmd(os.Args[2:])
+	case "claude-web-bookmarklet":
+		fmt.Println("Create a browser bookmark named Clawmeter reset check, then set its URL to:")
+		fmt.Println()
+		fmt.Println(claudeweb.Bookmarklet())
+		return 0
+	case "claude-web-setup":
+		if err := claudeweb.OpenSetupPage(); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+			return 1
+		}
+		if err := claudeweb.MarkSetupStarted(); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: opened setup page but could not save setup state: %v\n", err)
+			return 1
+		}
+		fmt.Println("Opened Claude reset bookmark setup in your default browser. Save the bookmark, then start a source-specific check from the tray.")
+		return 0
 	case "tray":
 		return trayCmd(os.Args[2:])
 	case "config":
@@ -606,6 +623,9 @@ func providersCmd(args []string) int {
 
 	experimentalLearnMore := ""
 	for _, p := range registry.GetAll() {
+		if !isUserFacingProvider(p) {
+			continue
+		}
 		st := describeProviderState(p, cfg)
 
 		indicator := "○"
@@ -1027,10 +1047,13 @@ func providersDiagnoseCmd(args []string) int {
 	registry := provider.NewRegistry()
 	all.Register(registry, cfg)
 
-	selected := registry.GetAll()
+	selected := userFacingProviders(registry.GetAll())
 	probeNames := make(map[string]bool)
 	if selection == "all" {
 		for _, p := range registry.GetConfigured() {
+			if !isUserFacingProvider(p) {
+				continue
+			}
 			probeNames[p.Name()] = true
 		}
 	} else {
@@ -1083,6 +1106,22 @@ func providersDiagnoseCmd(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// isUserFacingProvider hides supplemental sources (Claude browser reset
+// observations) that are shown under another provider instead.
+func isUserFacingProvider(p provider.Provider) bool {
+	return p.Name() != "claude_web"
+}
+
+func userFacingProviders(providers []provider.Provider) []provider.Provider {
+	filtered := make([]provider.Provider, 0, len(providers))
+	for _, p := range providers {
+		if isUserFacingProvider(p) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
 }
 
 func providerPollingState(p provider.Provider, cfg *config.Config) string {
@@ -1185,6 +1224,8 @@ Commands:
   providers                 List, connect, or configure providers
   setup                     Install or show local integrations
   doctor                    Check provider and integration readiness
+  claude-web-setup          Open setup for the reusable Claude reset bookmark
+  claude-web-bookmarklet    Print setup instructions for Claude Web reset checks
   tray                      Run as system tray icon
   config                    Manage configuration
   update                    Self-update to the latest release

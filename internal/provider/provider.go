@@ -45,6 +45,17 @@ type UsageSource interface {
 	SourceLabel() string
 }
 
+// ProviderFamilyCapability lets an implementation-only source inherit the
+// user's enablement policy from its public provider family.
+type ProviderFamilyCapability interface{ ProviderFamily() string }
+
+func FamilyName(p Provider) string {
+	if family, ok := p.(ProviderFamilyCapability); ok && strings.TrimSpace(family.ProviderFamily()) != "" {
+		return strings.TrimSpace(family.ProviderFamily())
+	}
+	return p.Name()
+}
+
 // SourceRevision is an optional non-secret identity of the credential source.
 type SourceRevisionCapability interface{ SourceRevision() string }
 
@@ -329,10 +340,12 @@ func (c UsageResetCredit) MarshalJSON() ([]byte, error) {
 
 // UsageResetCredits summarizes banked usage-limit resets for a provider.
 type UsageResetCredits struct {
-	AvailableCount int                `json:"available_count"`
-	Credits        []UsageResetCredit `json:"credits,omitempty"`
-	FetchedAt      time.Time          `json:"fetched_at,omitempty"`
-	Warning        string             `json:"warning,omitempty"`
+	AvailableCount    int                `json:"available_count"`
+	EarliestExpiresAt time.Time          `json:"earliest_expires_at,omitempty"`
+	Credits           []UsageResetCredit `json:"credits,omitempty"`
+	FetchedAt         time.Time          `json:"fetched_at,omitempty"`
+	Warning           string             `json:"warning,omitempty"`
+	Snapshot          bool               `json:"snapshot,omitempty"`
 }
 
 // DisplayCount returns the best non-sensitive available reset count.
@@ -340,11 +353,19 @@ func (r *UsageResetCredits) DisplayCount(now time.Time) int {
 	if r == nil {
 		return 0
 	}
+	if r.Snapshot && len(r.Credits) > 0 {
+		// A manual snapshot ages: derive the count from per-credit expiry so a
+		// stored or cached copy stops counting credits that have since expired.
+		return len(r.Available(now))
+	}
 	count := r.AvailableCount
 	if count < 0 {
 		count = 0
 	}
 	if count > 0 || len(r.Credits) == 0 {
+		if len(r.Credits) == 0 && !r.EarliestExpiresAt.IsZero() && !r.EarliestExpiresAt.After(now) {
+			return 0
+		}
 		return count
 	}
 	return len(r.Available(now))
@@ -388,25 +409,112 @@ func (r *UsageResetCredits) EarliestExpiry(now time.Time) (time.Time, bool) {
 			return credit.ExpiresAt, true
 		}
 	}
+	if r != nil && !r.EarliestExpiresAt.IsZero() && r.EarliestExpiresAt.After(now) {
+		return r.EarliestExpiresAt, true
+	}
 	return time.Time{}, false
 }
 
 // UsageData contains usage information for a provider.
 type UsageData struct {
-	Provider     string             `json:"provider"` // Provider name
-	SourceID     string             `json:"source_id,omitempty"`
-	SourceLabel  string             `json:"source_label,omitempty"`
-	FetchedAt    time.Time          `json:"fetched_at"`              // When this data was fetched
-	Windows      []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
-	Balances     []UsageBalance     `json:"balances,omitempty"`      // Non-resetting balances
-	ResetCredits *UsageResetCredits `json:"reset_credits,omitempty"` // Optional banked usage-limit reset metadata
-	IsExpired    bool               `json:"is_expired,omitempty"`    // True if credentials are expired
-	Error        string             `json:"error,omitempty"`         // Error message if fetch failed
-	Stale        bool               `json:"stale,omitempty"`         // True if showing last good data after refresh failed
-	Warning      string             `json:"warning,omitempty"`       // Short non-blocking data quality note
+	Provider           string             `json:"provider"` // Provider name
+	SourceID           string             `json:"source_id,omitempty"`
+	SourceLabel        string             `json:"source_label,omitempty"`
+	ResetCreditsTarget string             `json:"reset_credits_target,omitempty"`
+	FetchedAt          time.Time          `json:"fetched_at"`              // When this data was fetched
+	Windows            []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
+	Balances           []UsageBalance     `json:"balances,omitempty"`      // Non-resetting balances
+	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"` // Optional banked usage-limit reset metadata
+	IsExpired          bool               `json:"is_expired,omitempty"`    // True if credentials are expired
+	Error              string             `json:"error,omitempty"`         // Error message if fetch failed
+	Stale              bool               `json:"stale,omitempty"`         // True if showing last good data after refresh failed
+	Warning            string             `json:"warning,omitempty"`       // Short non-blocking data quality note
 	// InvalidatesPriorUsage means the current response disproves the semantic
 	// validity of earlier readings, so callers must not use stale fallback.
 	InvalidatesPriorUsage bool `json:"-"`
+}
+
+// ClaudeResetSourceName is the provider name of the hidden supplemental source
+// that carries browser-observed Claude reset grants. It is never presented as
+// its own row.
+const ClaudeResetSourceName = "claude_web"
+
+// PresentResetCreditSources returns a shallow-copied result map in which each
+// supplemental Claude reset observation is folded under the Claude source it
+// is bound to, whatever that source's usage state (missing, errored, stale, or
+// rate limited). Supplemental entries are always removed from the result: they
+// never appear as a separate row, even when they cannot be attached. If the
+// Claude source already reports its own non-empty reset inventory, that
+// provider-native inventory wins and the browser snapshot is dropped. The
+// backing fetch/cache map is not modified.
+func PresentResetCreditSources(results map[string]*UsageData) map[string]*UsageData {
+	var presented map[string]*UsageData
+	for supplementalKey, supplemental := range results {
+		if !isClaudeResetSupplemental(supplementalKey, supplemental) {
+			continue
+		}
+		if presented == nil {
+			presented = make(map[string]*UsageData, len(results))
+			for key, data := range results {
+				presented[key] = data
+			}
+		}
+		delete(presented, supplementalKey)
+
+		targetKey, sourceID, ok := claudeResetTarget(supplementalKey, supplemental)
+		if !ok {
+			continue
+		}
+		target := presented[targetKey]
+		if target != nil && !UsageDataMatchesSource(target, "claude", sourceID) {
+			continue
+		}
+		// Without a usage reading the row carries only a manual reset
+		// observation; keep it an error so health checks don't report success.
+		merged := UsageData{Provider: "claude", SourceID: sourceID, SourceLabel: "Default", Error: "usage unavailable"}
+		if sourceID != "default" {
+			merged.SourceLabel = supplemental.SourceLabel
+		}
+		if target != nil {
+			merged = *target
+			if merged.ResetCredits.DisplayCount(time.Now()) > 0 {
+				continue
+			}
+		}
+		credits := *supplemental.ResetCredits
+		merged.ResetCredits = &credits
+		presented[targetKey] = &merged
+	}
+	if presented == nil {
+		return results
+	}
+	return presented
+}
+
+func isClaudeResetSupplemental(key string, data *UsageData) bool {
+	return (data != nil && data.Provider == ClaudeResetSourceName) ||
+		key == ClaudeResetSourceName || strings.HasPrefix(key, ClaudeResetSourceName+":")
+}
+
+// claudeResetTarget validates that a supplemental entry is bound to exactly the
+// Claude source its own key and source ID name, and returns that source.
+func claudeResetTarget(supplementalKey string, supplemental *UsageData) (targetKey, sourceID string, ok bool) {
+	if supplemental == nil || supplemental.ResetCredits == nil || supplemental.Provider != ClaudeResetSourceName {
+		return "", "", false
+	}
+	targetKey = supplemental.ResetCreditsTarget
+	sourceID = "default"
+	expectedSupplementalKey := ClaudeResetSourceName
+	if id, named := strings.CutPrefix(targetKey, "claude:"); named {
+		sourceID = id
+		expectedSupplementalKey += ":" + id
+	} else if targetKey != "claude" {
+		return "", "", false
+	}
+	if supplementalKey != expectedSupplementalKey || supplemental.SourceID != sourceID {
+		return "", "", false
+	}
+	return targetKey, sourceID, true
 }
 
 // Clone returns a deep-enough copy for UI/cache fallback paths.
@@ -446,7 +554,18 @@ func (u *UsageData) HasUsageWindows() bool {
 // balances. It is intentionally broader than HasUsageWindows: forecasts and
 // pacing must continue to use only reset-backed windows.
 func (u *UsageData) HasPresentableUsage() bool {
-	return u != nil && !u.IsExpired && (len(u.Windows) > 0 || len(u.Balances) > 0)
+	if u == nil || u.IsExpired {
+		return false
+	}
+	if len(u.Windows) > 0 || len(u.Balances) > 0 {
+		return true
+	}
+	// A browser reset snapshot is manual inventory, not a usage reading. It
+	// stays visible on a failed row but must not make the failure look healthy.
+	if u.ResetCredits != nil && u.ResetCredits.Snapshot && u.Error != "" {
+		return false
+	}
+	return u.ResetCredits.DisplayCount(time.Now()) > 0
 }
 
 // PresentationWindows returns every reported window, including windows with
@@ -509,6 +628,11 @@ func ShouldShowInPrimaryUI(data *UsageData, hadPriorUsefulData, explicitlyEnable
 		return true
 	}
 	if data.HasPresentableUsage() {
+		return true
+	}
+	// A failed row that carries a browser reset snapshot stays visible so the
+	// observed grant is not hidden, even though it does not count as usage.
+	if data.ResetCredits != nil && data.ResetCredits.Snapshot && data.ResetCredits.DisplayCount(time.Now()) > 0 {
 		return true
 	}
 	return hadPriorUsefulData && (data.IsExpired || data.Error != "")
@@ -765,12 +889,13 @@ func (r *Registry) GetConfigured() []Provider {
 		if !p.IsConfigured() && !IsEnrolledSource(p) {
 			continue
 		}
-		if filter != nil && filter.IsProviderDisabled(p.Name()) {
+		family := FamilyName(p)
+		if filter != nil && filter.IsProviderDisabled(family) {
 			continue
 		}
 		explicitlyEnabled := false
 		if explicitFilter, ok := filter.(ExplicitEnablementFilter); ok {
-			explicitlyEnabled = explicitFilter.IsProviderExplicitlyEnabled(p.Name())
+			explicitlyEnabled = explicitFilter.IsProviderExplicitlyEnabled(family)
 		}
 		if !explicitlyEnabled && !SafeForAutoPolling(p) {
 			continue

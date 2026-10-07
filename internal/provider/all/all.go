@@ -13,6 +13,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/alibabatoken"
 	"github.com/tnunamak/clawmeter/internal/provider/anthropic"
 	"github.com/tnunamak/clawmeter/internal/provider/antigravity"
+	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/provider/copilot"
 	"github.com/tnunamak/clawmeter/internal/provider/deepseek"
 	"github.com/tnunamak/clawmeter/internal/provider/gemini"
@@ -81,6 +82,11 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 		}
 	}
+	for _, source := range registry.GetFamily("claude") {
+		if err := registry.Register(claudewebprovider.NewFor(source)); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
+		}
+	}
 }
 
 // SourceCapability returns the provider-owned enrollment capability, if any.
@@ -130,12 +136,9 @@ func canonicalRegistrationName(name string) (string, bool) {
 // This is the source of truth the CLI uses to validate `config enable/disable`
 // arguments without paying for full registry construction.
 func Names() []string {
-	reg := provider.NewRegistry()
-	Register(reg, config.DefaultConfig())
-	all := reg.GetAll()
-	names := make([]string, 0, len(all))
-	for _, p := range all {
-		names = append(names, p.Name())
+	names := make([]string, 0, len(registrations))
+	for _, registration := range registrations {
+		names = append(names, registration.name)
 	}
 	sort.Strings(names)
 	return names

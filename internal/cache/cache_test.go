@@ -11,6 +11,41 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
+func TestUpdateProviderPreservesOtherDataAndCacheAge(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("LOCALAPPDATA", dir)
+	t.Setenv("HOME", dir)
+	originalFetchedAt := time.Now().Add(-30 * time.Second).Truncate(time.Second)
+	if err := Write(&provider.MultiFetchResult{
+		Results:   map[string]*provider.UsageData{"codex": {Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d"}}}},
+		FetchedAt: originalFetchedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resetData := &provider.UsageData{Provider: "claude_web", SourceID: "web", ResetCredits: &provider.UsageResetCredits{Credits: []provider.UsageResetCredit{{Status: "available", ExpiresAt: time.Now().Add(time.Hour)}}}}
+	if err := UpdateProvider("claude_web:web", resetData, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.FetchedAt.Equal(originalFetchedAt) {
+		t.Fatalf("cache fetched_at = %s, want unchanged %s", got.FetchedAt, originalFetchedAt)
+	}
+	if got.ProviderData["codex"] == nil || got.ProviderData["claude_web:web"] == nil {
+		t.Fatalf("provider cache entries = %#v, want Codex and Claude Web", got.ProviderData)
+	}
+	path, err := cachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInvalidatingErrorRoundTripCannotResurrectUsage(t *testing.T) {
 	entry := Entry{ProviderData: map[string]*provider.UsageData{
 		"xai": {

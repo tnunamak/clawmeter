@@ -18,9 +18,14 @@ import (
 	"github.com/tnunamak/clawmeter/internal/update"
 )
 
-type sourceMenuTestProvider struct{ id, revision string }
+type sourceMenuTestProvider struct{ name, id, revision string }
 
-func (p sourceMenuTestProvider) Name() string           { return "claude" }
+func (p sourceMenuTestProvider) Name() string {
+	if p.name == "" {
+		return "claude"
+	}
+	return p.name
+}
 func (p sourceMenuTestProvider) DisplayName() string    { return "Claude" }
 func (p sourceMenuTestProvider) Description() string    { return "" }
 func (p sourceMenuTestProvider) DashboardURL() string   { return "" }
@@ -94,6 +99,113 @@ func TestConfigureNotificationIdentity(t *testing.T) {
 
 	if beeep.AppName != "Clawmeter" {
 		t.Fatalf("beeep.AppName = %q, want Clawmeter", beeep.AppName)
+	}
+}
+
+func TestClaudeWebTrayActionsAreDiscoverableWithoutCLI(t *testing.T) {
+	if got := claudeWebActionTitle(); got != "Check Claude reset" {
+		t.Fatalf("per-account action title = %q", got)
+	}
+	if !strings.Contains(claudeWebActionTooltip, "repeat after switching accounts") {
+		t.Fatalf("action tooltip does not warn about account switches: %q", claudeWebActionTooltip)
+	}
+	if !strings.Contains(claudeWebSetupTooltip, "recreate the bookmark if it is deleted") {
+		t.Fatalf("setup action does not explain recovery: %q", claudeWebSetupTooltip)
+	}
+}
+
+func TestClaudeWebSetupPlacementAvoidsDuplicateActions(t *testing.T) {
+	if claudeWebSetupIsGlobal(1) {
+		t.Fatal("single Claude source should keep bookmark setup inside its account section")
+	}
+	if !claudeWebSetupIsGlobal(2) {
+		t.Fatal("multiple Claude sources should use one shared setup action outside account sections")
+	}
+}
+
+func TestClaudeWebTimeoutExplainsBookmarkRecovery(t *testing.T) {
+	message := claudeWebCheckTimeoutMessage()
+	for _, want := range []string{"bookmark", "Set up Claude reset bookmark", "try again"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("timeout message %q missing %q", message, want)
+		}
+	}
+}
+
+func TestClaudeWebResetActionsUseTheSelectedSource(t *testing.T) {
+	for _, tc := range []struct{ target, want string }{
+		{"claude", "claude_web"},
+		{"claude:odl", "claude_web:odl"},
+	} {
+		if got := claudeWebProviderKey(tc.target); got != tc.want {
+			t.Errorf("claudeWebProviderKey(%q) = %q, want %q", tc.target, got, tc.want)
+		}
+	}
+	if got := sourceLabelOrDefault(sourceMenuTestProvider{id: "odl"}); got != "odl" {
+		t.Fatalf("sourceLabelOrDefault(named source) = %q", got)
+	}
+	if got := sourceLabelOrDefault(sourceMenuTestProvider{}); got != "Default" {
+		t.Fatalf("sourceLabelOrDefault(default source) = %q", got)
+	}
+}
+
+type resetIdentityTestProvider struct {
+	sourceMenuTestProvider
+	revision string
+}
+
+func (p resetIdentityTestProvider) ResetSnapshotSourceRevision() string { return p.revision }
+
+func TestClaudeResetActionTooltipSaysWhenDefaultHasNoProfileIdentity(t *testing.T) {
+	if got := claudeWebActionTooltipFor(resetIdentityTestProvider{revision: ""}); !strings.Contains(got, "no stable profile identity") {
+		t.Fatalf("Default tooltip = %q, want the identity limitation stated", got)
+	}
+	if got := claudeWebActionTooltipFor(sourceMenuTestProvider{}); !strings.Contains(got, "no stable profile identity") {
+		t.Fatalf("identity-less provider tooltip = %q", got)
+	}
+	if got := claudeWebActionTooltipFor(resetIdentityTestProvider{revision: "profile"}); strings.Contains(got, "no stable profile identity") {
+		t.Fatalf("explicit profile tooltip = %q, should not claim missing identity", got)
+	}
+}
+
+func TestTrayDoesNotCreateMenusForLinkedClaudeResetSources(t *testing.T) {
+	if shouldCreateProviderMenu(sourceMenuTestProvider{name: "claude_web", id: "default"}) {
+		t.Fatal("linked Claude snapshot source should merge into its Claude account menu")
+	}
+	if !shouldCreateProviderMenu(sourceMenuTestProvider{name: "claude", id: "default"}) {
+		t.Fatal("Claude account must keep its menu")
+	}
+}
+
+func TestTrayProviderHeadingNamesAccountOnlyWhenRepeated(t *testing.T) {
+	if got := trayProviderDisplayName("Claude", "Default", false); got != "Claude" {
+		t.Fatalf("single default account heading = %q, want concise heading", got)
+	}
+	if got := trayProviderDisplayName("Claude", "ODL", true); got != "Claude · ODL" {
+		t.Fatalf("multiple-account heading = %q", got)
+	}
+}
+
+func TestResetCreditSnapshotCopyIsExplicitAndVisibleWhenUsageIsStale(t *testing.T) {
+	observedAt := time.Date(2026, time.September, 24, 17, 28, 0, 0, time.FixedZone("CDT", -5*60*60))
+	data := &provider.UsageData{
+		Provider: "claude",
+		Stale:    true,
+		ResetCredits: &provider.UsageResetCredits{
+			AvailableCount:    1,
+			EarliestExpiresAt: observedAt.Add(28 * 24 * time.Hour),
+			FetchedAt:         observedAt,
+			Snapshot:          true,
+		},
+	}
+	got := resetCreditTraySummary(data, observedAt.Add(time.Hour))
+	for _, want := range []string{"1 reset credit observed", "browser account match confirmed by you", "earliest expires", "last observed " + observedAt.Local().Format("Jan 2, 2006 3:04 PM")} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reset snapshot copy %q missing %q", got, want)
+		}
+	}
+	if got := resetCreditTraySummary(&provider.UsageData{Stale: true, ResetCredits: &provider.UsageResetCredits{AvailableCount: 1}}, time.Now()); got != "" {
+		t.Fatalf("stale non-snapshot reset inventory = %q, want hidden", got)
 	}
 }
 
@@ -1001,6 +1113,33 @@ func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
 	}
 	if strings.Count(got, "\n") != 4 {
 		t.Fatalf("trayTooltip() = %q, want five newline-separated lines with reset credits", got)
+	}
+}
+
+func TestTrayTooltipShowsClaudeResetSnapshotWhenUsageIsErroredAndNeverNamesTheSupplementalSource(t *testing.T) {
+	now := time.Now()
+	for name, usage := range map[string]*provider.UsageData{
+		"errored":      {Provider: "claude", SourceID: "default", Error: "usage request failed (500)"},
+		"rate limited": {Provider: "claude", SourceID: "default", Error: "HTTP 429 rate limit exceeded"},
+		"expired":      {Provider: "claude", SourceID: "default", IsExpired: true},
+		"unavailable":  nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := map[string]*provider.UsageData{"claude_web": {
+				Provider: "claude_web", SourceID: "default", SourceLabel: "Default", ResetCreditsTarget: "claude", FetchedAt: now,
+				ResetCredits: &provider.UsageResetCredits{Snapshot: true, AvailableCount: 1, FetchedAt: now, EarliestExpiresAt: now.Add(24 * time.Hour)},
+			}}
+			if usage != nil {
+				raw["claude"] = usage
+			}
+			s.mu.Lock()
+			s.iconTargetOverride = iconTarget{}
+			s.mu.Unlock()
+			got := trayTooltip(provider.PresentResetCreditSources(raw), map[string]string{"claude": "Claude"})
+			if !strings.HasPrefix(got, "Claude") || !strings.Contains(got, "1 reset credit observed") || strings.Contains(got, "claude_web") {
+				t.Fatalf("trayTooltip() = %q, want the Claude account with its reset observation only", got)
+			}
+		})
 	}
 }
 

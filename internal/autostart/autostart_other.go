@@ -9,6 +9,6 @@ import (
 
 const supported = false
 
-func install(string) error      { return fmt.Errorf("autostart not supported on %s", runtime.GOOS) }
-func uninstall() error          { return fmt.Errorf("autostart not supported on %s", runtime.GOOS) }
-func isInstalled() bool         { return false }
+func install(string) error { return fmt.Errorf("autostart not supported on %s", runtime.GOOS) }
+func uninstall() error     { return fmt.Errorf("autostart not supported on %s", runtime.GOOS) }
+func isInstalled() bool    { return false }

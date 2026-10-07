@@ -193,6 +193,24 @@ func (p *Provider) SourceRevision() string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%o", canonical, info.Size(), info.ModTime().UnixNano(), info.Mode().Perm()))))
 }
 
+// ResetSnapshotSourceRevision identifies an explicitly configured local
+// profile without following routine OAuth token-file refreshes. The native
+// Default route can resolve through environment variables or Keychain, so it
+// has no stable local profile identity to expose.
+func (p *Provider) ResetSnapshotSourceRevision() string {
+	if !p.explicitSource {
+		return ""
+	}
+	path, err := filepath.Abs(p.configDir)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte("claude-reset-profile\x00"+path)))
+}
+
 // Name returns the provider identifier.
 func (p *Provider) Name() string {
 	return "claude"

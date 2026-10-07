@@ -63,10 +63,36 @@ Setup installs the mainstream local surface Clawmeter can verify today: a Claude
 
 - See your riskiest quota without opening provider dashboards.
 - Compare current usage with expected pace for the reset window.
-- See Codex banked reset credits and their earliest known expiry when available.
+- See reset credits and their earliest expiry under the matching provider source.
 - Cycle the tray icon between concrete provider/quota windows.
 - Reuse existing credentials without rewriting them. When required, Clawmeter
   refreshes short-lived access tokens only against the provider's own OAuth service.
+
+### Claude Web Reset Grants
+
+Claude's Usage page can show promotional reset grants that are not available
+through Claude Code's local usage data. In the tray menu, choose **Set up
+Claude reset bookmark** and save the reusable bookmark in your browser. This
+action stays available so you can reopen setup and replace the bookmark if it
+is deleted. After setup, choose **Check Claude reset** under the Claude source
+you want to check, then click the saved bookmark. The bookmark asks you to
+confirm that the browser is signed into the same Claude account as the selected
+source. Clawmeter cannot verify that match; repeat the check after switching
+accounts in the browser or local CLI.
+The grant count and expiry appear in that Claude source section beside its
+usage, with the full time when Clawmeter last observed them. The tray labels
+the browser/account association as user-confirmed because Clawmeter cannot
+verify account identity.
+
+The bookmark reads the already-open page and sends only each grant's remaining
+count, start, expiry, and paused state to Clawmeter over a one-time local
+connection. Only grants usable now (started, not paused, not expired) count.
+The native Default Claude source has no stable profile identity, so Clawmeter
+cannot notice if its login changes; recheck after switching accounts. Clawmeter stores the selected local source key and an opaque
+profile-path fingerprint when available, but not browser cookies,
+organization IDs, or raw usage responses. The browser may ask for local-network
+permission. The result is a manual snapshot, not a live poll; the count can
+change if a reset is used after the observation.
 
 ## Read The Icon
 

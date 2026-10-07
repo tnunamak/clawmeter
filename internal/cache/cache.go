@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -17,6 +18,8 @@ const defaultTTL = 60 * time.Second
 // Claude extra-usage Used/Limit were written 100x too large before; entries
 // without this version are dropped on read, including stale fallbacks.
 const schemaVersion = 2
+
+var writeMu sync.Mutex
 
 // Entry represents cached usage data for all providers.
 type Entry struct {
@@ -120,6 +123,42 @@ func (e *Entry) GetProvider(name string) (*provider.UsageData, bool) {
 
 // Write saves usage data to the cache.
 func Write(result *provider.MultiFetchResult) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return writeEntry(Entry{
+		ProviderData: result.Results, SourceRevisions: result.SourceRevisions,
+		FetchedAt: result.FetchedAt,
+	})
+}
+
+// UpdateProvider merges one locally observed provider source without extending
+// the freshness lifetime of the other providers in the cache.
+func UpdateProvider(name string, data *provider.UsageData, sourceRevision string) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	entry, err := Read()
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		entry = &Entry{ProviderData: make(map[string]*provider.UsageData)}
+	}
+	if entry.ProviderData == nil {
+		entry.ProviderData = make(map[string]*provider.UsageData)
+	}
+	entry.ProviderData[name] = data
+	if entry.SourceRevisions == nil {
+		entry.SourceRevisions = make(map[string]string)
+	}
+	if sourceRevision == "" {
+		delete(entry.SourceRevisions, name)
+	} else {
+		entry.SourceRevisions[name] = sourceRevision
+	}
+	return writeEntry(*entry)
+}
+
+func writeEntry(entry Entry) error {
 	dir, err := cacheDir()
 	if err != nil {
 		return err
@@ -128,11 +167,7 @@ func Write(result *provider.MultiFetchResult) error {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
 
-	entry := Entry{
-		Version:      schemaVersion,
-		ProviderData: result.Results, SourceRevisions: result.SourceRevisions,
-		FetchedAt: result.FetchedAt,
-	}
+	entry.Version = schemaVersion
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err

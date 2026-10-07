@@ -175,6 +175,28 @@ func TestSourceRevisionIsStableSecretFreeAndChangesWithFile(t *testing.T) {
 	}
 }
 
+func TestResetSnapshotSourceRevisionTracksProfilePathNotOAuthRefresh(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	writeTestCredentials(t, one, "before", "refresh-before")
+	writeTestCredentials(t, two, "two", "refresh-two")
+	oneSource := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: one}})
+	first := oneSource.ResetSnapshotSourceRevision()
+	if first == "" || strings.Contains(first, one) {
+		t.Fatalf("profile identity = %q, want opaque stable identity", first)
+	}
+	writeTestCredentials(t, one, "after-refresh", "refresh-after")
+	if got := oneSource.ResetSnapshotSourceRevision(); got != first {
+		t.Fatalf("routine credential refresh changed snapshot profile identity: %q != %q", got, first)
+	}
+	twoSource := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "work", Credential: config.CredentialRef{Kind: "config-dir", Ref: two}})
+	if got := twoSource.ResetSnapshotSourceRevision(); got == first {
+		t.Fatal("repointing explicit profile did not change snapshot identity")
+	}
+	if New(config.ProviderConfig{}).ResetSnapshotSourceRevision() != "" {
+		t.Fatal("native default must not claim a stable profile identity")
+	}
+}
+
 func TestUsageResponseDoesNotTurnMissingUtilizationIntoZero(t *testing.T) {
 	var response usageResponse
 	if err := json.Unmarshal([]byte(`{"five_hour":{"resets_at":"2026-08-01T00:00:00Z"}}`), &response); err != nil {
@@ -577,6 +599,15 @@ func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
 	}
 	if rev != pinned.(*Provider).SourceRevision() {
 		t.Fatal("pinned revision is not stable")
+	}
+	// Browser reset snapshots use a separate identity. Pinning must not change
+	// it, or a Default snapshot saved before a second source was added would
+	// stop attaching to Default.
+	if got := pinned.(*Provider).ResetSnapshotSourceRevision(); got != "" {
+		t.Fatalf("pinned native reset snapshot revision = %q, want empty", got)
+	}
+	if got := alone.(*Provider).ResetSnapshotSourceRevision(); got != "" {
+		t.Fatalf("lone native reset snapshot revision = %q, want empty", got)
 	}
 }
 

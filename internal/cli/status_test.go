@@ -384,6 +384,29 @@ func TestFormatPlainIncludesResetCredits(t *testing.T) {
 	}
 }
 
+func TestClaudeResetSnapshotRemainsExplicitWhenUsageIsStale(t *testing.T) {
+	observedAt := time.Date(2026, time.September, 24, 17, 28, 0, 0, time.FixedZone("CDT", -5*60*60))
+	data := &provider.UsageData{
+		Provider: "claude", SourceID: "odl", SourceLabel: "ODL", Stale: true,
+		FetchedAt: observedAt.Add(-time.Hour),
+		ResetCredits: &provider.UsageResetCredits{
+			Snapshot: true, AvailableCount: 1, FetchedAt: observedAt,
+			EarliestExpiresAt: observedAt.Add(28 * 24 * time.Hour),
+		},
+	}
+	pf := ProviderFormatter{Display: "Claude · ODL", Data: data}
+	plain := pf.FormatPlain()
+	for _, want := range []string{"reset credits: 1 observed", "browser account match confirmed by you", "earliest expires", "last observed " + observedAt.Local().Format("Jan 2, 2006 3:04 PM")} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("plain output %q missing %q", plain, want)
+		}
+	}
+	agent := (&MultiProviderOutput{Providers: []ProviderFormatter{pf}}).agentResetCreditSummaries()
+	if len(agent) != 1 || !strings.Contains(agent[0], "observed_count=1 snapshot=true account_match=user_confirmed") || !strings.Contains(agent[0], "last_observed_at=") || strings.Contains(agent[0], "available=1") {
+		t.Fatalf("agent reset snapshot = %v, want timestamped observation, not live availability", agent)
+	}
+}
+
 func TestFormatPrecisePctUsesMoreDecimalsNearBoundaries(t *testing.T) {
 	tests := []struct {
 		pct  float64
@@ -828,6 +851,40 @@ func (p sourcedCLIProvider) FetchUsage(context.Context) (*provider.UsageData, er
 	return nil, nil
 }
 
+type unconfiguredSourcedCLIProvider struct{ sourcedCLIProvider }
+
+func (unconfiguredSourcedCLIProvider) IsConfigured() bool { return false }
+
+type sourcedClaudeWebCLIProvider struct{ id string }
+
+type unconfiguredSourcedClaudeWebCLIProvider struct{ sourcedClaudeWebCLIProvider }
+
+func (unconfiguredSourcedClaudeWebCLIProvider) IsConfigured() bool { return false }
+
+func (p sourcedClaudeWebCLIProvider) Name() string           { return "claude_web" }
+func (p sourcedClaudeWebCLIProvider) ProviderFamily() string { return "claude" }
+func (p sourcedClaudeWebCLIProvider) DisplayName() string    { return "Claude" }
+func (p sourcedClaudeWebCLIProvider) Description() string    { return "test" }
+func (p sourcedClaudeWebCLIProvider) DashboardURL() string   { return "" }
+func (p sourcedClaudeWebCLIProvider) IsConfigured() bool     { return true }
+func (p sourcedClaudeWebCLIProvider) SourceID() string       { return p.id }
+func (p sourcedClaudeWebCLIProvider) SourceLabel() string    { return strings.ToUpper(p.id) }
+func (p sourcedClaudeWebCLIProvider) SourceRevision() string {
+	return "claude-web-snapshot-v3:claude:" + p.id + ":"
+}
+func (p sourcedClaudeWebCLIProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return nil, nil
+}
+
+func TestLinkedClaudeResetSourceIsNotUserFacing(t *testing.T) {
+	if isUserFacingProviderSource(sourcedClaudeWebCLIProvider{id: "odl"}) {
+		t.Fatal("linked browser reset adapter must not be a separate user-facing source")
+	}
+	if !isUserFacingProviderSource(sourcedCLIProvider{id: "odl"}) {
+		t.Fatal("Claude account source must stay user-facing")
+	}
+}
+
 func TestBuildOutputFromCacheRejectsRotatedSourceCredential(t *testing.T) {
 	registry := provider.NewRegistry()
 	if err := registry.Register(sourcedCLIProvider{id: "work", revision: "account-b"}); err != nil {
@@ -851,5 +908,130 @@ func TestPlainOutputShowsExtraUsageMoney(t *testing.T) {
 	}}}
 	if got := pf.FormatPlain(); !strings.Contains(got, "Extra usage: 83%") || !strings.Contains(got, "[$16.58 / $20.00]") {
 		t.Fatalf("plain = %q", got)
+	}
+}
+
+func TestBuildOutputFromResultShowsClaudeWebResetsUnderLinkedSource(t *testing.T) {
+	registry := provider.NewRegistry()
+	if err := registry.Register(sourcedCLIProvider{id: "odl"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(sourcedClaudeWebCLIProvider{id: "odl"}); err != nil {
+		t.Fatal(err)
+	}
+	result := &provider.MultiFetchResult{Results: map[string]*provider.UsageData{
+		"claude:odl": {
+			Provider: "claude", SourceID: "odl", SourceLabel: "ODL",
+			Windows: []provider.UsageWindow{{Name: "7d All", Utilization: 65}},
+		},
+		"claude_web:odl": {
+			Provider: "claude_web", SourceID: "odl", SourceLabel: "ODL", ResetCreditsTarget: "claude:odl",
+			ResetCredits: &provider.UsageResetCredits{AvailableCount: 1, EarliestExpiresAt: time.Now().Add(24 * time.Hour)},
+		},
+	}}
+
+	output := buildOutputFromResult(registry, config.DefaultConfig(), result, nil)
+	output.HideUnavailable()
+	if len(output.Providers) != 1 || output.Providers[0].Name != "claude:odl" {
+		t.Fatalf("visible providers = %#v, want only linked Claude source", output.Providers)
+	}
+	if output.Providers[0].Data.ResetCredits == nil || output.Providers[0].Data.ResetCredits.DisplayCount(time.Now()) != 1 {
+		t.Fatalf("linked Claude source = %#v, want its reset grant attached", output.Providers[0].Data)
+	}
+	if result.Results["claude:odl"].ResetCredits != nil {
+		t.Fatal("building CLI output mutated fetched provider data")
+	}
+}
+
+func TestBuildOutputKeepsBrowserResetUnderClaudeWhenUsageIsUnavailable(t *testing.T) {
+	registry := provider.NewRegistry()
+	if err := registry.Register(unconfiguredSourcedCLIProvider{sourcedCLIProvider{id: "default"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(sourcedClaudeWebCLIProvider{id: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	result := &provider.MultiFetchResult{Results: map[string]*provider.UsageData{
+		"claude_web": {
+			Provider: "claude_web", SourceID: "default", SourceLabel: "DEFAULT", ResetCreditsTarget: "claude",
+			ResetCredits: &provider.UsageResetCredits{Snapshot: true, AvailableCount: 1, EarliestExpiresAt: now.Add(24 * time.Hour)},
+		},
+	}}
+
+	output := buildOutputFromResult(registry, config.DefaultConfig(), result, nil)
+	output.HideUnavailable()
+	if len(output.Providers) != 1 {
+		t.Fatalf("visible rows = %#v, want one Claude account row", output.Providers)
+	}
+	row := output.Providers[0]
+	if row.Name != "claude" || row.Display != "Claude" || row.Data == nil || row.Data.ResetCredits == nil {
+		t.Fatalf("browser reset row = %#v, want reset-only Claude Default row", row)
+	}
+	if len(row.Data.Windows) != 0 {
+		t.Fatalf("browser reset invented Claude usage windows: %#v", row.Data.Windows)
+	}
+
+	entry := &cache.Entry{
+		ProviderData: map[string]*provider.UsageData{
+			"claude_web": result.Results["claude_web"],
+		},
+		SourceRevisions: map[string]string{
+			"claude_web": provider.SourceRevision(sourcedClaudeWebCLIProvider{id: "default"}),
+		},
+	}
+	cached := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	if len(cached.Providers) != 1 || cached.Providers[0].Name != "claude" || cached.Providers[0].Data.ResetCredits == nil {
+		t.Fatalf("cached reset-only Claude row = %#v, want one row under Claude", cached.Providers)
+	}
+}
+
+func TestBuildOutputFromCacheDropsResetSnapshotWhenClaudeSourceChanged(t *testing.T) {
+	registry := provider.NewRegistry()
+	if err := registry.Register(sourcedCLIProvider{id: "odl", revision: "current"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(unconfiguredSourcedClaudeWebCLIProvider{sourcedClaudeWebCLIProvider{id: "odl"}}); err != nil {
+		t.Fatal(err)
+	}
+	entry := &cache.Entry{
+		ProviderData: map[string]*provider.UsageData{
+			"claude:odl": {
+				Provider: "claude", SourceID: "odl", Windows: []provider.UsageWindow{{Name: "7d All", Utilization: 65}},
+			},
+			"claude_web:odl": {
+				Provider: "claude_web", SourceID: "odl", SourceLabel: "ODL", ResetCreditsTarget: "claude:odl",
+				ResetCredits: &provider.UsageResetCredits{AvailableCount: 1, EarliestExpiresAt: time.Now().Add(24 * time.Hour)},
+			},
+		},
+		SourceRevisions: map[string]string{
+			"claude:odl":     "previous",
+			"claude_web:odl": "claude-web-snapshot-v3:claude:odl:",
+		},
+	}
+
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	var claude *ProviderFormatter
+	for i := range output.Providers {
+		switch output.Providers[i].Name {
+		case "claude:odl":
+			claude = &output.Providers[i]
+		}
+	}
+	if claude == nil || claude.Data != nil {
+		t.Fatalf("rotated Claude source should not receive old reset credits: %#v", claude)
+	}
+	if len(output.Providers) != 1 {
+		t.Fatalf("stale reset snapshot leaked as another row after source rotation: %#v", output.Providers)
+	}
+}
+
+func TestClassifyProviderTreatsFailedUsageWithResetSnapshotAsError(t *testing.T) {
+	pf := ProviderFormatter{Name: "claude", ExplicitlyEnabled: true, Data: &provider.UsageData{
+		Provider: "claude", Error: "HTTP 429",
+		ResetCredits: &provider.UsageResetCredits{AvailableCount: 1, Snapshot: true, EarliestExpiresAt: time.Now().Add(24 * time.Hour)},
+	}}
+	if got := classifyProvider(&pf).tier; got != 1 {
+		t.Fatalf("tier = %d, want 1 (error) despite attached reset snapshot", got)
 	}
 }
