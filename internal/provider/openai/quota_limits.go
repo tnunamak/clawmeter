@@ -143,6 +143,9 @@ func resolveScopeLabels(names []string) []string {
 			pending = append(pending, i)
 		}
 	}
+	// Suffixes follow the backend name, not payload order, so a bucket keeps
+	// its window name across polls and between the two fetch paths.
+	sort.SliceStable(pending, func(a, b int) bool { return names[pending[a]] < names[pending[b]] })
 	for _, i := range pending {
 		candidate := shorts[i]
 		if v := versionToken(names[i]); v != "" {

@@ -354,3 +354,11 @@ func TestSecondaryWithoutDurationKeepsWeeklyWindowBesidePrimary(t *testing.T) {
 		t.Fatalf("windows = %+v, want primary and the 99%% secondary both kept", got)
 	}
 }
+
+func TestCollisionSuffixesDoNotDependOnPayloadOrder(t *testing.T) {
+	a := resolveScopeLabels([]string{"Codex-Alpha-Spark", "Codex-Bravo-Spark"})
+	b := resolveScopeLabels([]string{"Codex-Bravo-Spark", "Codex-Alpha-Spark"})
+	if a[0] != b[1] || a[1] != b[0] {
+		t.Fatalf("labels depend on order: %v vs %v", a, b)
+	}
+}
