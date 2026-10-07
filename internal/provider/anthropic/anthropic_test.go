@@ -644,3 +644,19 @@ func TestConcurrentRateLimitsKeepEverySourcesBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenOverrideHasNoOrganization(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	writeTestProfile(t, filepath.Join(home, ".claude.json"), "org-home")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "other-account-token")
+	if got := New(config.ProviderConfig{}).ClaudeOrganizationUUID(); got != "" {
+		t.Fatalf("env token override: org = %q, want empty", got)
+	}
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	if got := New(config.ProviderConfig{OAuthToken: "configured-token"}).ClaudeOrganizationUUID(); got != "" {
+		t.Fatalf("config token override: org = %q, want empty", got)
+	}
+}

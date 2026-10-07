@@ -197,6 +197,11 @@ func (p *Provider) SourceRevision() string {
 // this profile (oauthAccount.organizationUuid in its .claude.json), or "".
 // Browser reset checks use it to file results under the matching source.
 func (p *Provider) ClaudeOrganizationUUID() string {
+	// A token override can belong to any account, and nothing local records
+	// its organization, so it can't receive browser reset results.
+	if p.usesTokenOverride() {
+		return ""
+	}
 	var paths []string
 	switch {
 	case p.explicitSource:
@@ -465,6 +470,27 @@ func (c *Credentials) IsExpired() bool {
 		return false // can't check expiry for raw tokens
 	}
 	return time.Now().UnixMilli() >= c.ClaudeAiOauth.ExpiresAt
+}
+
+// usesTokenOverride reports whether readCredentials would use a bare OAuth
+// token from config or the environment instead of a Claude profile.
+func (p *Provider) usesTokenOverride() bool {
+	if p.explicitSource {
+		return false
+	}
+	if p.cfg.OAuthToken != "" {
+		return true
+	}
+	if p.pinnedNative {
+		return false
+	}
+	if p.sessionEnvironmentResolver != nil {
+		values := p.sessionEnvironmentResolver.ResolveSessionEnvironment(provider.SessionEnvironmentRequest{
+			EnvNames: []string{"CLAUDE_CODE_OAUTH_TOKEN"}, AllowSessionEnvironmentFallback: true,
+		})
+		return values["CLAUDE_CODE_OAUTH_TOKEN"] != ""
+	}
+	return os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != ""
 }
 
 // readCredentials tries multiple sources to find credentials.

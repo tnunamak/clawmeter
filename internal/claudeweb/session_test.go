@@ -380,3 +380,18 @@ process.on("beforeExit", () => { console.log(JSON.stringify({ posted, alerts }))
 		t.Fatalf("Go handler rejected the real bookmarklet payload: %d %q (%s)", response.Code, response.Body.String(), run.Posted[0])
 	}
 }
+
+func TestResultAfterTimeoutIsNotReportedAsSaved(t *testing.T) {
+	isolateUserCache(t)
+	s := newSession(testNonce, testAccounts)
+	s.mu.Lock()
+	s.status = Status{State: stateEnded, Message: msgTimedOut}
+	s.mu.Unlock()
+	got := serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-odl"))
+	if got.Code == http.StatusOK || message(t, got) != msgTimedOut {
+		t.Fatalf("late result = %d %q, want the timeout message", got.Code, got.Body.String())
+	}
+	if _, err := ReadSummaryFor("claude:odl"); err == nil {
+		t.Fatal("late result was saved")
+	}
+}

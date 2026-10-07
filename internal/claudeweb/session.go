@@ -353,9 +353,16 @@ func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
 	summary := GrantSummary{Credits: credits, ObservedAt: now, ResetCreditsTarget: account.Key, MatchSalt: salt, MatchHash: AccountHash(salt, account.OrgUUID)}
 
 	s.mu.Lock()
-	if s.saved || s.status.State == stateEnded {
+	if s.saved {
 		s.mu.Unlock()
 		s.reply(w, http.StatusConflict, msgDone, false)
+		return
+	}
+	if s.status.State == stateEnded {
+		// Timed out or closed before this result arrived; nothing is saved.
+		message := s.status.Message
+		s.mu.Unlock()
+		s.reply(w, http.StatusGone, message, false)
 		return
 	}
 	if err := WriteSummary(summary); err != nil {
