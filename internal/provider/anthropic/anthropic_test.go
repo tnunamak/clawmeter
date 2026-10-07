@@ -636,3 +636,15 @@ func TestTokenOverrideHasNoOrganization(t *testing.T) {
 		t.Fatalf("config token override: org = %q, want empty", got)
 	}
 }
+
+func TestExplicitDefaultDirectoryReadsHomeProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	writeTestProfile(t, filepath.Join(home, ".claude.json"), "org-home")
+	src := NewSource(config.ProviderConfig{}, config.SourceConfig{ID: "main", Credential: config.CredentialRef{Kind: "config-dir", Ref: filepath.Join(home, ".claude")}})
+	if got := src.ClaudeOrganizationUUID(); got != "org-home" {
+		t.Fatalf("explicit ~/.claude: org = %q, want the ~/.claude.json record", got)
+	}
+}

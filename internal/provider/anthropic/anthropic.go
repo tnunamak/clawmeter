@@ -206,6 +206,11 @@ func (p *Provider) ClaudeOrganizationUUID() string {
 	switch {
 	case p.explicitSource:
 		paths = []string{filepath.Join(p.configDir, ".claude.json")}
+		// Claude Code keeps the default profile's record at ~/.claude.json,
+		// beside ~/.claude rather than inside it.
+		if home, err := os.UserHomeDir(); err == nil && provider.CanonicalPath(p.configDir) == provider.CanonicalPath(filepath.Join(home, ".claude")) {
+			paths = append([]string{filepath.Join(home, ".claude.json")}, paths...)
+		}
 	case !p.pinnedNative && strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")) != "":
 		paths = []string{filepath.Join(strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")), ".claude.json")}
 	default:
