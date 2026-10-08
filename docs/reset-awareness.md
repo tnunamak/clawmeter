@@ -79,10 +79,11 @@ one shared presentation:
 
 For Claude, the tray has one action, **Check Claude resets**. It starts a
 10-minute loopback session and opens its page, `http://127.0.0.1:17343/check`.
-The page shows all three setup steps until the bookmark has delivered a result
-(proof, not "the page was opened"); after that it shows only **Open Claude
-Usage**, with the save step behind "Bookmark missing? Save it again". If a check
-ends without the bookmark ever answering, the next check shows all steps again.
+The page always shows the same three steps: save the bookmark if you don't
+have it, **Open Claude Usage**, click the bookmark there. A browser cannot tell
+Clawmeter whether the bookmark still exists, so Clawmeter keeps no "set up"
+state that could go stale. If the bookmark has not answered 45 seconds after
+**Open Claude Usage**, the page says so and points back to step 1.
 The page polls the session and shows the outcome: waiting, a retryable problem
 (for example, an account that is not in Clawmeter), the result, or a timeout.
 A timeout raises no tray notification.

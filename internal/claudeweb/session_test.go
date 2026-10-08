@@ -239,77 +239,43 @@ func TestSavedSnapshotContainsNoRawOrganizationID(t *testing.T) {
 	}
 }
 
-func TestBookmarkIsProvenOnlyByAResult(t *testing.T) {
+func TestTimedOutCheckEndsWithTheTimeoutMessage(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
-	serve(t, s, http.MethodGet, "/check", "", "")
-	if BookmarkProven() {
-		t.Fatal("opening the setup page proved the bookmark")
-	}
-	// A rejected result still proves the bookmark runs.
-	serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-unknown"))
-	if !BookmarkProven() {
-		t.Fatal("a result from the bookmark did not prove it")
-	}
-	// A later check the bookmark never answered: show setup again.
-	silent := newSession("other", testAccounts)
+	silent := newSession(testNonce, testAccounts)
 	silent.timeOut()
-	if BookmarkProven() {
-		t.Fatal("bookmark still proven after a check it never answered")
-	}
 	if _, err := silent.Wait(context.Background()); err != ErrTimedOut {
 		t.Fatalf("Wait() after timeout = %v, want ErrTimedOut", err)
 	}
 	if got := silent.currentStatus(); got != (Status{State: stateEnded, Message: msgTimedOut}) {
 		t.Fatalf("page status after timeout = %+v", got)
 	}
-	// A check the bookmark answered without a match does not unprove it.
-	if err := recordBookmarkWorked(time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	answered := newSession("third", testAccounts)
-	serve(t, answered, http.MethodGet, "/challenge", claudeOrigin, "")
-	answered.timeOut()
-	if !BookmarkProven() {
-		t.Fatal("a check the bookmark answered unproved it")
-	}
 }
 
-func renderCheckPage(t *testing.T, proven bool) string {
-	t.Helper()
+// The browser can't tell Clawmeter whether the bookmark still exists, so every
+// check shows how to save it and points back there if the bookmark is silent.
+func TestCheckPageAlwaysOffersTheBookmark(t *testing.T) {
 	var page bytes.Buffer
-	if err := checkPage.Execute(&page, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, Proven: proven, Ended: msgEnded}); err != nil {
+	if err := checkPage.Execute(&page, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, Ended: msgEnded}); err != nil {
 		t.Fatal(err)
 	}
-	return page.String()
-}
-
-func TestCheckPageShowsAllStepsUntilTheBookmarkIsProven(t *testing.T) {
-	first := renderCheckPage(t, false)
+	got := page.String()
 	for _, want := range []string{
 		"<h1>Check Claude resets</h1>",
 		`href="javascript:`,
+		"If you don't have the bookmark yet, drag",
 		">Clawmeter resets</a> to your bookmarks bar.",
 		"Copy bookmark URL</button> and paste it as a new bookmark's URL.",
 		`href="https://claude.ai/settings/usage" target="_blank"`,
 		">Open Claude Usage</a>",
-		"<li>Click the bookmark there.</li>",
+		"<li>Click the Clawmeter resets bookmark there.</li>",
 		"Waiting for the bookmark…",
+		"No response from the bookmark. If it's missing, save it again in step 1.",
 		"If your browser asks to let claude.ai access your local network, allow it.",
 		`fetch("/status"`,
 	} {
-		if !strings.Contains(first, want) {
-			t.Errorf("first-run page missing %q", want)
+		if !strings.Contains(got, want) {
+			t.Errorf("check page missing %q", want)
 		}
-	}
-	proven := renderCheckPage(t, true)
-	for _, want := range []string{">Open Claude Usage</a>", "Then click the Clawmeter resets bookmark there.", "<summary>Bookmark missing? Save it again</summary>", "Copy bookmark URL"} {
-		if !strings.Contains(proven, want) {
-			t.Errorf("proven page missing %q", want)
-		}
-	}
-	if strings.Contains(proven, "<ol>") || strings.Contains(proven, "local network") {
-		t.Error("proven page still shows first-run steps")
 	}
 }
 

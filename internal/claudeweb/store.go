@@ -82,66 +82,6 @@ func summaryPathFor(target string) (string, error) {
 	return filepath.Join(dir, "claude-web-resets-"+hex.EncodeToString(sourceHash[:8])+".json"), nil
 }
 
-// bookmarkProof records evidence about the shared bookmark. Opening the
-// setup page proves nothing; only a result from the bookmark does.
-type bookmarkProof struct {
-	LastWorkedAt time.Time `json:"last_worked_at,omitempty"`
-	LastMissedAt time.Time `json:"last_missed_at,omitempty"`
-}
-
-// BookmarkProven reports whether the bookmark has delivered a result since
-// the last check it failed to answer.
-func BookmarkProven() bool {
-	proof, _ := readBookmarkProof()
-	return !proof.LastWorkedAt.IsZero() && proof.LastWorkedAt.After(proof.LastMissedAt)
-}
-
-func recordBookmarkWorked(at time.Time) error {
-	proof, _ := readBookmarkProof()
-	proof.LastWorkedAt = at
-	return writeBookmarkProof(proof)
-}
-
-func recordBookmarkMissed(at time.Time) error {
-	proof, _ := readBookmarkProof()
-	proof.LastMissedAt = at
-	return writeBookmarkProof(proof)
-}
-
-func readBookmarkProof() (bookmarkProof, error) {
-	path, err := bookmarkProofPath()
-	if err != nil {
-		return bookmarkProof{}, err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return bookmarkProof{}, err
-	}
-	var proof bookmarkProof
-	err = json.Unmarshal(data, &proof)
-	return proof, err
-}
-
-func writeBookmarkProof(proof bookmarkProof) error {
-	path, err := bookmarkProofPath()
-	if err != nil {
-		return err
-	}
-	data, err := json.Marshal(proof)
-	if err != nil {
-		return err
-	}
-	return writePrivateFile(path, data)
-}
-
-func bookmarkProofPath() (string, error) {
-	dir, err := stateDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "claude-reset-bookmark.json"), nil
-}
-
 func stateDir() (string, error) {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {

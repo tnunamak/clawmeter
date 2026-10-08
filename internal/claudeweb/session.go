@@ -122,7 +122,6 @@ type Session struct {
 
 	mu        sync.Mutex
 	status    Status
-	contacted bool
 	result    GrantSummary
 	saved     bool
 	done      chan struct{}
@@ -184,11 +183,7 @@ func (s *Session) timeOut() {
 		return
 	}
 	s.status = Status{State: stateEnded, Message: msgTimedOut}
-	contacted := s.contacted
 	s.mu.Unlock()
-	if !contacted {
-		_ = recordBookmarkMissed(time.Now())
-	}
 	s.end()
 }
 
@@ -243,7 +238,7 @@ func (s *Session) handleCheckPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	_ = checkPage.Execute(w, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, Proven: BookmarkProven(), Ended: msgEnded})
+	_ = checkPage.Execute(w, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, Ended: msgEnded})
 }
 
 // handleStatus serves the page's poll. It has no CORS headers, so other
@@ -267,9 +262,6 @@ func (s *Session) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	if !admitClaude(w, r, http.MethodGet) {
 		return
 	}
-	s.mu.Lock()
-	s.contacted = true
-	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"nonce": s.nonce})
 }
 
@@ -333,8 +325,6 @@ func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	// A result carrying this session's nonce proves the bookmark works.
-	_ = recordBookmarkWorked(now)
 	credits, err := activeGrantExpiries(payload.Grants, now)
 	if err != nil {
 		s.reply(w, http.StatusBadRequest, msgUnreadable, true)

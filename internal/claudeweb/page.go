@@ -5,14 +5,14 @@ import "html/template"
 type checkPageData struct {
 	Bookmark template.URL
 	UsageURL string
-	// Proven means the bookmark has delivered a result before, so the save
-	// step moves behind a disclosure.
-	Proven bool
-	Ended  string
+	Ended    string
 }
 
 // checkPage is the one page a check opens. Claude Usage opens in a new tab so
-// this tab can keep showing progress.
+// this tab can keep showing progress. The save step is always shown: a
+// browser can't tell Clawmeter whether the bookmark still exists, so the page
+// never assumes it does. If the bookmark stays silent after Claude Usage
+// opens, the page points back to that step.
 var checkPage = template.Must(template.New("check").Parse(`<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -31,27 +31,19 @@ var checkPage = template.Must(template.New("check").Parse(`<!doctype html>
   #status { margin-top: 1.5rem; padding: .6rem .8rem; border-radius: 6px; background: #f1f3f4; }
   #status[data-state="done"] { background: #e6f4ea; font-weight: 600; }
   #status[data-state="retry"], #status[data-state="ended"] { background: #fef7e0; }
-  details { margin-top: 1.5rem; }
+  #save.attention { background: #fef7e0; border-radius: 6px; padding: .4rem .6rem; }
+  #hint { margin-top: .75rem; }
 </style>
-{{define "save"}}Drag <a class="button bookmark" id="bookmarklet" href="{{.Bookmark}}" draggable="true">Clawmeter resets</a> to your bookmarks bar.<br>
-<small>Or <button id="copy" type="button">Copy bookmark URL</button> and paste it as a new bookmark's URL.</small>{{end}}
 <h1>Check Claude resets</h1>
-{{if .Proven}}
-<p><a class="button primary" href="{{.UsageURL}}" target="_blank" rel="noopener noreferrer">Open Claude Usage</a></p>
-<p>Then click the Clawmeter resets bookmark there.</p>
-{{else}}
 <ol>
-  <li>{{template "save" .}}</li>
-  <li><a class="button primary" href="{{.UsageURL}}" target="_blank" rel="noopener noreferrer">Open Claude Usage</a></li>
-  <li>Click the bookmark there.</li>
+  <li id="save">If you don't have the bookmark yet, drag <a class="button bookmark" id="bookmarklet" href="{{.Bookmark}}" draggable="true">Clawmeter resets</a> to your bookmarks bar.<br>
+  <small>Or <button id="copy" type="button">Copy bookmark URL</button> and paste it as a new bookmark's URL.</small></li>
+  <li><a class="button primary" id="open" href="{{.UsageURL}}" target="_blank" rel="noopener noreferrer">Open Claude Usage</a></li>
+  <li>Click the Clawmeter resets bookmark there.</li>
 </ol>
-{{end}}
 <p id="status" role="status" data-state="waiting">Waiting for the bookmark…</p>
-{{if .Proven}}
-<details><summary>Bookmark missing? Save it again</summary><p>{{template "save" .}}</p></details>
-{{else}}
+<p id="hint" hidden>No response from the bookmark. If it's missing, save it again in step 1.</p>
 <p><small>If your browser asks to let claude.ai access your local network, allow it.</small></p>
-{{end}}
 <script>
   document.querySelector("#copy").addEventListener("click", async event => {
     const value = document.querySelector("#bookmarklet").getAttribute("href");
@@ -68,7 +60,20 @@ var checkPage = template.Must(template.New("check").Parse(`<!doctype html>
     event.target.textContent = "Copied";
   });
   const status = document.querySelector("#status");
-  const show = (state, message) => { status.dataset.state = state; status.textContent = message; };
+  const hint = document.querySelector("#hint");
+  const show = (state, message) => {
+    status.dataset.state = state;
+    status.textContent = message;
+    if (state !== "waiting") hint.hidden = true;
+  };
+  // A bookmark that never answers is most likely missing.
+  document.querySelector("#open").addEventListener("click", () => {
+    setTimeout(() => {
+      if (status.dataset.state !== "waiting") return;
+      hint.hidden = false;
+      document.querySelector("#save").classList.add("attention");
+    }, 45000);
+  });
   const poll = async () => {
     try {
       const response = await fetch("/status", { cache: "no-store" });

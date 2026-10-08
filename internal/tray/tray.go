@@ -509,8 +509,7 @@ func onReady() {
 	updateTicker := time.NewTicker(updateCheckInterval)
 	// startClaudeResetCheck runs one browser handoff for every Claude source.
 	// It always opens the local check page, which shows the steps and live
-	// progress. A timeout is silent: the page already says so, and the next
-	// check shows the setup steps again unless the bookmark has proven itself.
+	// progress. A timeout is silent: the page already says so.
 	startClaudeResetCheck := func() {
 		session, err := beginClaudeResetCheck(&claudeWebChecking, func() (*claudeweb.Session, error) {
 			return claudewebprovider.StartCheck(registry.GetFamily("claude"))
