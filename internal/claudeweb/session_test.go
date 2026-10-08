@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -359,5 +360,52 @@ func TestResultAfterTimeoutIsNotReportedAsSaved(t *testing.T) {
 	}
 	if _, err := ReadSummaryFor("claude:odl"); err == nil {
 		t.Fatal("late result was saved")
+	}
+}
+
+// TestBookmarkletExplainsWhyClawmeterIsUnreachable runs the real bookmarklet
+// with the loopback fetch failing, once per browser permission state.
+func TestBookmarkletExplainsWhyClawmeterIsUnreachable(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	for state, want := range map[string]string{
+		"denied":      "Your browser is blocking claude.ai from reaching Clawmeter.",
+		"prompt":      "choose Allow when it asks about local network access.",
+		"granted":     "Clawmeter isn't waiting.",
+		"unsupported": "Couldn't reach Clawmeter.",
+	} {
+		harness := `
+const alerts = [];
+const state = ` + strconv.Quote(state) + `;
+globalThis.location = { origin: "https://claude.ai" };
+globalThis.document = { cookie: "lastActiveOrg=org-odl" };
+globalThis.window = {};
+globalThis.alert = message => alerts.push(message);
+Object.defineProperty(globalThis, "navigator", { value: { permissions: { query: async ({ name }) => {
+  if (state === "unsupported" || name !== "loopback-network") throw new TypeError("unknown permission");
+  return { state };
+} } } });
+const json = (status, body) => ({ ok: status < 300, status, json: async () => body });
+globalThis.fetch = async url => {
+  if (url === "/api/organizations") return json(200, [{ uuid: "org-odl" }]);
+  if (url.startsWith("/api/organizations/org-odl/usage")) return json(200, { cedar_ember: { eligible: true, grants: [] } });
+  throw new TypeError("Failed to fetch");
+};
+process.on("beforeExit", () => { console.log(JSON.stringify(alerts)); process.exit(0); });
+`
+		script := filepath.Join(t.TempDir(), "run.js")
+		if err := os.WriteFile(script, []byte(harness+strings.TrimPrefix(Bookmarklet(), "javascript:")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(node, script).Output()
+		if err != nil {
+			t.Fatalf("%s: node: %v", state, err)
+		}
+		var alerts []string
+		if err := json.Unmarshal(out, &alerts); err != nil || len(alerts) != 1 || !strings.Contains(alerts[0], want) {
+			t.Errorf("%s: alerts = %q, want one containing %q", state, out, want)
+		}
 	}
 }

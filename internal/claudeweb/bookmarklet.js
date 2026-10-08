@@ -57,8 +57,17 @@
     const { message } = await result.json();
     say(message || `Result rejected (${result.status}).`);
   } catch {
-    say(stage === "local"
-      ? "Clawmeter isn't waiting. Choose Check Claude resets in the tray, then click the bookmark again. If your browser asks about local network access, allow it."
-      : "Claude didn't respond. Sign in and try again.");
+    if (stage !== "local") return say("Claude didn't respond. Sign in and try again.");
+    let access = "";
+    for (const name of ["loopback-network", "local-network-access"]) {
+      try { access = (await navigator.permissions.query({ name })).state; break; } catch {}
+    }
+    say(access === "denied"
+      ? "Your browser is blocking claude.ai from reaching Clawmeter. Open site settings (left of the address bar), allow local network access, then click the bookmark again."
+      : access === "prompt"
+        ? "Your browser didn't let claude.ai reach Clawmeter. Click the bookmark again and choose Allow when it asks about local network access."
+        : access === "granted"
+          ? "Clawmeter isn't waiting. Choose Check Claude resets in the tray, then click the bookmark again."
+          : "Couldn't reach Clawmeter. If your browser asks about local network access, allow it. Otherwise choose Check Claude resets in the tray, then click the bookmark again.");
   }
 })();
