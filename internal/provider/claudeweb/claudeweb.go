@@ -134,12 +134,6 @@ func Accounts(sources []provider.Provider) []claudeweb.Account {
 	return accounts
 }
 
-// StartCheck starts a browser handoff for every local Claude source. The
-// browser result is filed under the source whose organization matches.
-func StartCheck(sources []provider.Provider) (*claudeweb.Session, error) {
-	return claudeweb.Start(Accounts(sources))
-}
-
 func availableCount(summary claudeweb.GrantSummary, now time.Time) int {
 	count := 0
 	for _, expiresAt := range summary.Credits {

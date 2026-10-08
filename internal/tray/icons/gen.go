@@ -54,6 +54,7 @@ var (
 var ProviderLogos = map[string][]byte{
 	"antigravity": ProviderAntigravity,
 	"claude":      ProviderClaude,
+	"claude_api":  ProviderClaude,
 	"openai":      ProviderOpenAI,
 	"gemini":      ProviderGemini,
 	"kimi":        ProviderKimi,

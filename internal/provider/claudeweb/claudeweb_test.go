@@ -73,7 +73,7 @@ func TestBrowserCheckRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	cfg := config.ProviderConfig{Sources: []config.SourceConfig{native, odl}}
 	sources := []provider.Provider{anthropic.NewSource(cfg, native), anthropic.NewSource(cfg, odl)}
 
-	session, err := StartCheck(sources)
+	session, err := claudeweb.Start(claudeweb.KindResets, Accounts(sources))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestBrowserCheckRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	summary, err := session.Wait(ctx)
-	if err != nil || summary.ResetCreditsTarget != "claude:odl" {
+	if err != nil || summary.Resets.ResetCreditsTarget != "claude:odl" {
 		t.Fatalf("Wait() = %+v, %v", summary, err)
 	}
 	if NewFor(sources[0]).IsConfigured() {

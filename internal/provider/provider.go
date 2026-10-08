@@ -459,6 +459,7 @@ type UsageData struct {
 	FetchedAt          time.Time          `json:"fetched_at"`              // When this data was fetched
 	Windows            []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
 	Balances           []UsageBalance     `json:"balances,omitempty"`      // Non-resetting balances
+	CreditPools        []UsageCreditPool  `json:"credit_pools,omitempty"`  // Prepaid API credit pools
 	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"` // Optional banked usage-limit reset metadata
 	IsExpired          bool               `json:"is_expired,omitempty"`    // True if credentials are expired
 	Error              string             `json:"error,omitempty"`         // Error message if fetch failed
@@ -592,7 +593,7 @@ func (u *UsageData) HasPresentableUsage() bool {
 	if u == nil || u.IsExpired {
 		return false
 	}
-	if len(u.Windows) > 0 || len(u.Balances) > 0 {
+	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditPools) > 0 {
 		return true
 	}
 	// A browser reset snapshot is manual inventory, not a usage reading. It
@@ -805,6 +806,12 @@ func (r *Registry) enabledFilter() EnabledFilter {
 	r.filterMu.RLock()
 	defer r.filterMu.RUnlock()
 	return r.filter
+}
+
+// IsDisabled reports whether the user explicitly disabled p's family.
+func (r *Registry) IsDisabled(p Provider) bool {
+	filter := r.enabledFilter()
+	return filter != nil && filter.IsProviderDisabled(FamilyName(p))
 }
 
 // Register adds a provider to the registry.

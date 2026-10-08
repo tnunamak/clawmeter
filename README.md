@@ -88,6 +88,33 @@ checked Oct 7`. It is a snapshot, not a live poll: check again after you use a
 reset. Your browser may ask to let claude.ai access your local network; allow
 it. `clawmeter claude-web-bookmarklet` prints the bookmark URL.
 
+### Claude API Credits
+
+Prepaid Claude API credits (for example the monthly API credit a Max plan
+grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
+Admin API is unavailable to individual accounts. Clawmeter reads them from the
+Claude Console with the same bookmark: choose **Check API credits** in the
+tray, open the Claude Console, and click the bookmark there.
+
+Each Console organization shows as a pool under **Claude API**:
+
+```
+Claude API: Family's Individual Organization: $199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 24 19:00 · checked 12:24
+```
+
+The balance is what the Console's billing page shows: purchased plus
+promotional credit. Spend this month is the Console's own total. The pace is the
+average daily cost from the Console's cost report over up to 7 days (at least
+one day), and the projection extends it to the next credit expiry, or to when
+the balance runs out first. Expiry shows in local time; the Console shows UTC
+dates. The bookmark refuses to send data when the Console's daily costs and its
+month total disagree. `clawmeter status --agent` lists every pool under
+`api_credits=[...]` with exact amounts so agents can budget API spend.
+
+The bookmark sends a hash of the organization ID, never the ID, and Clawmeter
+stores no cookies. Like resets, a pool is a snapshot: check again after heavy
+API use.
+
 ## Read The Icon
 
 The provider logo stays in the circular center chip. The text names the quota window: `5H`, `7D`, `7A`, `7S`, or `MO`.

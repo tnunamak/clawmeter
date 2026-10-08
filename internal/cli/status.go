@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -153,6 +154,13 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %.2f remaining",
 			pf.Display, label, balance.Remaining))
 	}
+	for _, pool := range pf.Data.CreditPools {
+		label := ""
+		if len(lines) == 0 {
+			label = pf.Display
+		}
+		lines = append(lines, fmt.Sprintf(pad+" %s: %s", label, pool.Name, pool.Summary(time.Now())))
+	}
 	if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
 		label := ""
 		if len(lines) == 0 {
@@ -222,6 +230,9 @@ func (pf *ProviderFormatter) FormatPlain() string {
 			label = balance.Name
 		}
 		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
+	}
+	for _, pool := range pf.Data.CreditPools {
+		parts = append(parts, fmt.Sprintf("%s: %s", pool.Name, pool.Summary(time.Now())))
 	}
 	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
 }
@@ -375,8 +386,15 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	if !ok {
 		// Reset observations are independent of Claude usage: keep them visible
 		// when usage is unavailable.
+		extra := ""
 		if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
-			return "Quota: no active quota data; reset_credits=[" + strings.Join(resets, " | ") + "]."
+			extra += "; reset_credits=[" + strings.Join(resets, " | ") + "]"
+		}
+		if pools := m.agentCreditPoolSummaries(); len(pools) > 0 {
+			extra += "; api_credits=[" + strings.Join(pools, " | ") + "]"
+		}
+		if extra != "" {
+			return "Quota: no active quota data" + extra + "."
 		}
 		return "Quota: no active quota data. Run `clawmeter providers` if setup may be incomplete."
 	}
@@ -418,6 +436,9 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	}
 	if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
 		parts = append(parts, "reset_credits=["+strings.Join(resets, " | ")+"]")
+	}
+	if pools := m.agentCreditPoolSummaries(); len(pools) > 0 {
+		parts = append(parts, "api_credits=["+strings.Join(pools, " | ")+"]")
 	}
 
 	return strings.Join(parts, "; ") + "."
@@ -564,6 +585,61 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 	out := make([]string, 0, len(summaries))
 	for _, summary := range summaries {
 		out = append(out, summary.text)
+	}
+	return out
+}
+
+// agentCreditPoolSummaries lists prepaid API credit pools with exact amounts
+// in major currency units, so agents can budget API spend.
+func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
+	now := time.Now()
+	out := make([]string, 0)
+	for i := range m.Providers {
+		pf := &m.Providers[i]
+		if pf.Data == nil {
+			continue
+		}
+		for _, pool := range pf.Data.CreditPools {
+			money := func(minor float64) string { return strconv.FormatFloat(minor/100, 'f', 2, 64) }
+			if !pool.ExpiredSinceCheck.IsZero() {
+				// The saved balance no longer holds: never offer it as budget.
+				out = append(out, strings.Join([]string{
+					pf.Display + " · " + pool.Name,
+					"status=expired_since_check",
+					"balance=unknown",
+					"expired_at=" + pool.ExpiredSinceCheck.Local().Format(time.RFC3339),
+					"last_observed_at=" + pool.ObservedAt.Local().Format(time.RFC3339),
+					"action=check_again",
+				}, " "))
+				continue
+			}
+			fields := []string{
+				pf.Display + " · " + pool.Name,
+				"currency=" + pool.Currency,
+				"balance=" + money(float64(pool.Balance)),
+			}
+			if pool.MonthSpend != nil {
+				fields = append(fields, "spent_this_month="+money(float64(*pool.MonthSpend)))
+			}
+			fields = append(fields,
+				"burn_per_day="+money(pool.BurnPerDay),
+				fmt.Sprintf("burn_basis_days=%d", pool.BurnDays),
+			)
+			if !pool.ExpiresAt.IsZero() {
+				fields = append(fields,
+					"expires_at="+pool.ExpiresAt.Local().Format(time.RFC3339),
+					"expires_in="+formatExactDuration(clampDuration(pool.ExpiresAt.Sub(now))),
+					"expiring_amount="+money(float64(pool.Expiring)),
+					"projected_spend_before_expiry="+money(float64(pool.ProjectedSpend)),
+					"projected_unused_at_expiry="+money(float64(pool.ProjectedUnused)),
+				)
+				if !pool.RunsOutAt.IsZero() {
+					fields = append(fields, "projected_runs_out_at="+pool.RunsOutAt.Local().Format(time.RFC3339))
+				}
+			}
+			fields = append(fields, "last_observed_at="+pool.ObservedAt.Local().Format(time.RFC3339), "snapshot=true")
+			out = append(out, strings.Join(fields, " "))
+		}
 	}
 	return out
 }

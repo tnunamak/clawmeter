@@ -13,6 +13,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/alibabatoken"
 	"github.com/tnunamak/clawmeter/internal/provider/anthropic"
 	"github.com/tnunamak/clawmeter/internal/provider/antigravity"
+	"github.com/tnunamak/clawmeter/internal/provider/claudeapi"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/provider/copilot"
 	"github.com/tnunamak/clawmeter/internal/provider/deepseek"
@@ -42,7 +43,13 @@ var aliases = map[string]string{
 	"alibaba-token-plan": "alibaba_token",
 	"alibaba-token":      "alibaba_token",
 	"bailian-token-plan": "alibaba_token",
+	"claude-api":         "claude_api",
 }
+
+// localProviders read only what Clawmeter itself saved, such as a browser
+// check of the Claude Console. They hold no credentials, so they have no
+// enrolled sources, but they are named providers users can select and disable.
+var localProviders = []provider.Provider{claudeapi.New()}
 
 type registration struct {
 	name string
@@ -84,6 +91,11 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 	}
 	for _, source := range registry.GetFamily("claude") {
 		if err := registry.Register(claudewebprovider.NewFor(source)); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
+		}
+	}
+	for _, local := range localProviders {
+		if err := registry.Register(local); err != nil {
 			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 		}
 	}
@@ -129,6 +141,11 @@ func canonicalRegistrationName(name string) (string, bool) {
 			return normalized, true
 		}
 	}
+	for _, local := range localProviders {
+		if local.Name() == normalized {
+			return normalized, true
+		}
+	}
 	return "", false
 }
 
@@ -136,9 +153,12 @@ func canonicalRegistrationName(name string) (string, bool) {
 // This is the source of truth the CLI uses to validate `config enable/disable`
 // arguments without paying for full registry construction.
 func Names() []string {
-	names := make([]string, 0, len(registrations))
+	names := make([]string, 0, len(registrations)+len(localProviders))
 	for _, registration := range registrations {
 		names = append(names, registration.name)
+	}
+	for _, local := range localProviders {
+		names = append(names, local.Name())
 	}
 	sort.Strings(names)
 	return names

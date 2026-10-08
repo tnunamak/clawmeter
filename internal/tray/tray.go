@@ -53,12 +53,16 @@ func pollIntervalForConfig(seconds int) time.Duration {
 const (
 	claudeResetsTitle   = "Check Claude resets"
 	claudeResetsWaiting = "Waiting for Claude bookmark…"
+	apiCreditsTitle     = "Check API credits"
+	apiCreditsWaiting   = "Waiting for Console bookmark…"
 )
 
 // Global Claude reset check: the only tray affordance for browser reset checks.
 var (
 	claudeResetsItem  *systray.MenuItem
 	claudeResetsState menuItemState
+	apiCreditsItem    *systray.MenuItem
+	apiCreditsState   menuItemState
 )
 
 // beginClaudeResetCheck is the whole behavior of "Check Claude resets": it
@@ -244,6 +248,9 @@ func onReady() {
 	claudeResetsItem = systray.AddMenuItem(claudeResetsTitle, "Read reset grants from Claude's Usage page in your browser")
 	claudeResetsItem.Hide()
 	claudeResetsState = menuItemState{title: claudeResetsTitle, visible: false, enabled: true, initialized: true}
+	apiCreditsItem = systray.AddMenuItem(apiCreditsTitle, "Read prepaid API credits from the Claude Console in your browser")
+	apiCreditsItem.Hide()
+	apiCreditsState = menuItemState{title: apiCreditsTitle, visible: false, enabled: true, initialized: true}
 	systray.AddSeparator()
 	iconActionCh := iconClickActions
 	if iconActionCh == nil {
@@ -507,38 +514,48 @@ func onReady() {
 	ticker := time.NewTicker(pollInterval)
 	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
 	updateTicker := time.NewTicker(updateCheckInterval)
-	// startClaudeResetCheck runs one browser handoff for every Claude source.
-	// It always opens the local check page, which shows the steps and live
-	// progress. A timeout is silent: the page already says so.
-	startClaudeResetCheck := func() {
+	// startClaudeWebCheck runs one browser handoff: reset grants for every
+	// Claude source, or prepaid API credits from the Claude Console. Both use
+	// the same loopback port, so one check runs at a time. It always opens the
+	// local check page, which shows the steps and live progress. A timeout is
+	// silent: the page already says so.
+	startClaudeWebCheck := func(kind claudeweb.Kind) {
+		item, state, title, waiting := claudeResetsItem, &claudeResetsState, claudeResetsTitle, claudeResetsWaiting
+		if kind == claudeweb.KindAPICredits {
+			item, state, title, waiting = apiCreditsItem, &apiCreditsState, apiCreditsTitle, apiCreditsWaiting
+		}
 		session, err := beginClaudeResetCheck(&claudeWebChecking, func() (*claudeweb.Session, error) {
-			return claudewebprovider.StartCheck(registry.GetFamily("claude"))
+			return claudeweb.Start(kind, claudewebprovider.Accounts(registry.GetFamily("claude")))
 		}, openURL)
 		if err != nil {
-			notify("Clawmeter", "Couldn't start the Claude reset check. Is another Clawmeter running?", "normal")
-			log.Printf("claude reset check: %v", err)
+			notify("Clawmeter", "Couldn't start the Claude check. Is another Clawmeter running?", "normal")
+			log.Printf("claude browser check: %v", err)
 			return
 		}
 		if session == nil {
 			return // a check is already running; its page was reopened
 		}
 		trayRenderMu.Lock()
-		setMenuItemTitle(claudeResetsItem, &claudeResetsState, claudeResetsWaiting)
+		setMenuItemTitle(item, state, waiting)
 		trayRenderMu.Unlock()
 		go func() {
 			defer claudeWebChecking.Store(false)
 			defer session.Finish()
-			summary, err := session.Wait(context.Background())
+			result, err := session.Wait(context.Background())
 			trayRenderMu.Lock()
-			setMenuItemTitle(claudeResetsItem, &claudeResetsState, claudeResetsTitle)
+			setMenuItemTitle(item, state, title)
 			trayRenderMu.Unlock()
 			if err != nil {
 				return
 			}
 			refreshing.Lock()
 			defer refreshing.Unlock()
-			if !publishLocalResetSource(registry, claudeWebProviderKey(summary.ResetCreditsTarget), providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
-				notify("Clawmeter", "Claude resets were saved but can't be shown yet. Choose Refresh Now.", "normal")
+			sourceKey := "claude_api"
+			if kind == claudeweb.KindResets {
+				sourceKey = claudeWebProviderKey(result.Resets.ResetCreditsTarget)
+			}
+			if !publishLocalResetSource(registry, sourceKey, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
+				notify("Clawmeter", "The check was saved but can't be shown yet. Choose Refresh Now.", "normal")
 			}
 		}()
 	}
@@ -557,7 +574,9 @@ func onReady() {
 				go refresh(true)
 				go checkUpdate()
 			case <-claudeResetsItem.ClickedCh:
-				startClaudeResetCheck()
+				startClaudeWebCheck(claudeweb.KindResets)
+			case <-apiCreditsItem.ClickedCh:
+				startClaudeWebCheck(claudeweb.KindAPICredits)
 			case action := <-iconActionCh:
 				if action == iconClickResetAuto {
 					resetIconSelection(providerMenus, mIconProvider, mIconAutoMode)
@@ -908,9 +927,14 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	visibleProviderCount := 0
 	claudeVisible := false
 	defer func() {
-		// The global check is offered only while a Claude account is shown.
+		// Reset checks are offered only while a Claude account is shown.
 		if claudeResetsItem != nil {
 			setMenuItemVisible(claudeResetsItem, &claudeResetsState, claudeVisible)
+		}
+		// API credits need no Claude Code login, so their check is always
+		// offered.
+		if apiCreditsItem != nil {
+			setMenuItemVisible(apiCreditsItem, &apiCreditsState, true)
 		}
 	}()
 
@@ -1024,7 +1048,20 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemTitle(menu.balanceItems[i], &menu.balanceStates[i], fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
 			setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], true)
 		}
-		for i := len(data.Balances); i < len(menu.balanceItems); i++ {
+		rows := len(data.Balances)
+		for _, pool := range data.CreditPools {
+			if rows >= len(menu.balanceItems) {
+				break
+			}
+			title := pool.TrayLine(time.Now())
+			if len(data.CreditPools) > 1 {
+				title = pool.Name + ": " + title
+			}
+			setMenuItemTitle(menu.balanceItems[rows], &menu.balanceStates[rows], title)
+			setMenuItemVisible(menu.balanceItems[rows], &menu.balanceStates[rows], true)
+			rows++
+		}
+		for i := rows; i < len(menu.balanceItems); i++ {
 			setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 		}
 
@@ -1071,6 +1108,9 @@ func publishLocalResetSource(registry *provider.Registry, sourceKey string, menu
 	p, ok := registry.Get(sourceKey)
 	if !ok {
 		return false
+	}
+	if registry.IsDisabled(p) {
+		return true // saved; a disabled provider stays hidden
 	}
 	data, err := provider.FetchSource(context.Background(), p)
 	if err != nil || data == nil {

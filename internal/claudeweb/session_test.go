@@ -1,10 +1,8 @@
 package claudeweb
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -72,14 +70,14 @@ func message(t *testing.T, response *httptest.ResponseRecorder) string {
 
 func TestOrgHashRoutesResultToTheMatchingSource(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	expires := time.Now().Add(24 * time.Hour)
 	response := serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-odl", activeGrant(expires, 1)))
 	if response.Code != http.StatusOK || message(t, response) != "Found 1 reset for ODL." {
 		t.Fatalf("result = %d %q, want 200 \"Found 1 reset for ODL.\"", response.Code, response.Body.String())
 	}
 	got, err := s.Wait(context.Background())
-	if err != nil || got.ResetCreditsTarget != "claude:odl" {
+	if err != nil || got.Resets.ResetCreditsTarget != "claude:odl" {
 		t.Fatalf("Wait() = %+v, %v; want the ODL source", got, err)
 	}
 	saved, err := ReadSummaryFor("claude:odl")
@@ -96,7 +94,7 @@ func TestOrgHashRoutesResultToTheMatchingSource(t *testing.T) {
 
 func TestOrgHashWithNoMatchingSourceIsRejectedAndCheckKeepsWaiting(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	response := serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-unknown"))
 	if response.Code != http.StatusNotFound || message(t, response) != msgNotSetUp {
 		t.Fatalf("result = %d %q, want 404 not-set-up", response.Code, response.Body.String())
@@ -113,7 +111,7 @@ func TestOrgHashWithNoMatchingSourceIsRejectedAndCheckKeepsWaiting(t *testing.T)
 func TestOrgHashMatchingTwoSourcesIsRejectedAsAmbiguous(t *testing.T) {
 	isolateUserCache(t)
 	accounts := []Account{{Key: "claude", Label: "Default", OrgUUID: "org-same"}, {Key: "claude:odl", Label: "ODL", OrgUUID: "org-same"}}
-	s := newSession(testNonce, accounts)
+	s := newSession(KindResets, testNonce, accounts)
 	response := serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-same"))
 	if response.Code != http.StatusConflict || message(t, response) != msgAmbiguous {
 		t.Fatalf("result = %d %q, want 409 ambiguous", response.Code, response.Body.String())
@@ -127,7 +125,7 @@ func TestOrgHashMatchingTwoSourcesIsRejectedAsAmbiguous(t *testing.T) {
 
 func TestResultRequiresClaudeOriginLoopbackHostAndNonce(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	body := resultBody(t, testNonce, "org-odl")
 	if got := serve(t, s, http.MethodPost, "/result", "https://evil.example", body).Code; got != http.StatusForbidden {
 		t.Fatalf("foreign origin = %d, want 403", got)
@@ -147,7 +145,7 @@ func TestResultRequiresClaudeOriginLoopbackHostAndNonce(t *testing.T) {
 
 func TestResultIsSingleUse(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	body := resultBody(t, testNonce, "org-odl")
 	if got := serve(t, s, http.MethodPost, "/result", claudeOrigin, body).Code; got != http.StatusOK {
 		t.Fatalf("first result = %d", got)
@@ -159,7 +157,7 @@ func TestResultIsSingleUse(t *testing.T) {
 
 func TestOldBookmarkPayloadAndExtraFieldsAreRejected(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	expires := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
 	for _, body := range []string{
 		`{"nonce":"test-nonce","count":1,"earliest":"` + expires + `"}`,             // v0.35.0 bookmark
@@ -198,7 +196,7 @@ func TestGrantInventoryRejectsUnknownPauseOrSchedule(t *testing.T) {
 }
 
 func TestChallengeExposesOnlyTheNonce(t *testing.T) {
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	response := serve(t, s, http.MethodGet, "/challenge", claudeOrigin, "")
 	var payload map[string]string
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil || len(payload) != 1 || payload["nonce"] != testNonce {
@@ -210,7 +208,7 @@ func TestChallengeExposesOnlyTheNonce(t *testing.T) {
 }
 
 func TestStatusIsNotReadableByOtherSites(t *testing.T) {
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	response := serve(t, s, http.MethodGet, "/status", "https://evil.example", "")
 	if response.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("status endpoint sent CORS headers")
@@ -223,7 +221,7 @@ func TestStatusIsNotReadableByOtherSites(t *testing.T) {
 
 func TestSavedSnapshotContainsNoRawOrganizationID(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-odl", activeGrant(time.Now().Add(time.Hour), 1)))
 	path, err := summaryPathFor("claude:odl")
 	if err != nil {
@@ -242,7 +240,7 @@ func TestSavedSnapshotContainsNoRawOrganizationID(t *testing.T) {
 
 func TestTimedOutCheckEndsWithTheTimeoutMessage(t *testing.T) {
 	isolateUserCache(t)
-	silent := newSession(testNonce, testAccounts)
+	silent := newSession(KindResets, testNonce, testAccounts)
 	silent.timeOut()
 	if _, err := silent.Wait(context.Background()); err != ErrTimedOut {
 		t.Fatalf("Wait() after timeout = %v, want ErrTimedOut", err)
@@ -255,27 +253,39 @@ func TestTimedOutCheckEndsWithTheTimeoutMessage(t *testing.T) {
 // The browser can't tell Clawmeter whether the bookmark still exists, so every
 // check shows how to save it and points back there if the bookmark is silent.
 func TestCheckPageAlwaysOffersTheBookmark(t *testing.T) {
-	var page bytes.Buffer
-	if err := checkPage.Execute(&page, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, Ended: msgEnded}); err != nil {
-		t.Fatal(err)
-	}
-	got := page.String()
-	for _, want := range []string{
-		"<h1>Check Claude resets</h1>",
+	common := []string{
 		`href="javascript:`,
-		"If you don't have the bookmark yet, drag",
-		">Clawmeter resets</a> to your bookmarks bar.",
+		"If you don't have the bookmark yet, or saved it before API credits were added, drag",
+		">Clawmeter</a> to your bookmarks bar.",
 		"Copy bookmark URL</button> and paste it as a new bookmark's URL.",
-		`href="https://claude.ai/settings/usage" target="_blank"`,
-		">Open Claude Usage</a>",
-		"<li>Click the Clawmeter resets bookmark there.</li>",
+		"<li>Click the Clawmeter bookmark there.</li>",
 		"Waiting for the bookmark…",
-		"No response from the bookmark. If it's missing, save it again in step 1.",
-		"If your browser asks to let claude.ai access your local network, allow it.",
+		"No response from the bookmark. If it's missing or old, save it again in step 1.",
 		`fetch("/status"`,
+	}
+	for kind, wants := range map[Kind][]string{
+		KindResets: {
+			"<h1>Check Claude resets</h1>",
+			`href="https://claude.ai/settings/usage" target="_blank"`,
+			">Open Claude Usage</a>",
+			"If your browser asks to let claude.ai access your local network, allow it.",
+		},
+		KindAPICredits: {
+			"<h1>Check API credits</h1>",
+			`href="https://platform.claude.com/settings/billing" target="_blank"`,
+			">Open Claude Console</a>",
+			"If your browser asks to let platform.claude.com access your local network, allow it.",
+		},
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("check page missing %q", want)
+		page := serve(t, newSession(kind, testNonce, testAccounts), http.MethodGet, "/check", "", "")
+		if page.Code != http.StatusOK {
+			t.Fatalf("kind %d: GET /check = %d", kind, page.Code)
+		}
+		got := page.Body.String()
+		for _, want := range append(wants, common...) {
+			if !strings.Contains(got, want) {
+				t.Errorf("kind %d: check page missing %q", kind, want)
+			}
 		}
 	}
 }
@@ -341,7 +351,7 @@ process.on("beforeExit", () => { console.log(JSON.stringify({ posted, alerts }))
 		t.Fatalf("bookmarklet posted the raw organization ID: %s", run.Posted[0])
 	}
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	response := serve(t, s, http.MethodPost, "/result", claudeOrigin, run.Posted[0])
 	if response.Code != http.StatusOK || message(t, response) != "Found 1 reset for ODL." {
 		t.Fatalf("Go handler rejected the real bookmarklet payload: %d %q (%s)", response.Code, response.Body.String(), run.Posted[0])
@@ -350,7 +360,7 @@ process.on("beforeExit", () => { console.log(JSON.stringify({ posted, alerts }))
 
 func TestResultAfterTimeoutIsNotReportedAsSaved(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(testNonce, testAccounts)
+	s := newSession(KindResets, testNonce, testAccounts)
 	s.mu.Lock()
 	s.status = Status{State: stateEnded, Message: msgTimedOut}
 	s.mu.Unlock()

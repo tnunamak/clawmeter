@@ -3,22 +3,26 @@ package claudeweb
 import "html/template"
 
 type checkPageData struct {
-	Bookmark template.URL
-	UsageURL string
-	Ended    string
+	Bookmark  template.URL
+	Title     string
+	OpenURL   string
+	OpenLabel string
+	Site      string
+	Ended     string
 }
 
-// checkPage is the one page a check opens. Claude Usage opens in a new tab so
+// checkPage is the one page a check opens. The Claude page opens in a new tab so
 // this tab can keep showing progress. The save step is always shown: a
 // browser can't tell Clawmeter whether the bookmark still exists, so the page
 // never assumes it does. If the bookmark stays silent after Claude Usage
-// opens, the page points back to that step.
+// opens, the page points back to that step. One bookmark serves both Claude
+// Usage (resets) and the Claude Console (API credits).
 var checkPage = template.Must(template.New("check").Parse(`<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>Check Claude resets</title>
+<title>{{.Title}}</title>
 <style>
   body { max-width: 34rem; margin: 3rem auto; padding: 0 1.25rem; font: 16px/1.6 system-ui, sans-serif; color: #202124; }
   h1 { font-size: 1.4rem; margin-bottom: 1.25rem; }
@@ -34,16 +38,16 @@ var checkPage = template.Must(template.New("check").Parse(`<!doctype html>
   #save.attention { background: #fef7e0; border-radius: 6px; padding: .4rem .6rem; }
   #hint { margin-top: .75rem; }
 </style>
-<h1>Check Claude resets</h1>
+<h1>{{.Title}}</h1>
 <ol>
-  <li id="save">If you don't have the bookmark yet, drag <a class="button bookmark" id="bookmarklet" href="{{.Bookmark}}" draggable="true">Clawmeter resets</a> to your bookmarks bar.<br>
+  <li id="save">If you don't have the bookmark yet, or saved it before API credits were added, drag <a class="button bookmark" id="bookmarklet" href="{{.Bookmark}}" draggable="true">Clawmeter</a> to your bookmarks bar.<br>
   <small>Or <button id="copy" type="button">Copy bookmark URL</button> and paste it as a new bookmark's URL.</small></li>
-  <li><a class="button primary" id="open" href="{{.UsageURL}}" target="_blank" rel="noopener noreferrer">Open Claude Usage</a></li>
-  <li>Click the Clawmeter resets bookmark there.</li>
+  <li><a class="button primary" id="open" href="{{.OpenURL}}" target="_blank" rel="noopener noreferrer">{{.OpenLabel}}</a></li>
+  <li>Click the Clawmeter bookmark there.</li>
 </ol>
 <p id="status" role="status" data-state="waiting">Waiting for the bookmark…</p>
-<p id="hint" hidden>No response from the bookmark. If it's missing, save it again in step 1.</p>
-<p><small>If your browser asks to let claude.ai access your local network, allow it.</small></p>
+<p id="hint" hidden>No response from the bookmark. If it's missing or old, save it again in step 1.</p>
+<p><small>If your browser asks to let {{.Site}} access your local network, allow it.</small></p>
 <script>
   document.querySelector("#copy").addEventListener("click", async event => {
     const value = document.querySelector("#bookmarklet").getAttribute("href");

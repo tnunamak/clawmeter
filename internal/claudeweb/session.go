@@ -35,6 +35,15 @@ const CheckURL = "http://" + listenAddress + "/check"
 // UsageURL is the Claude page where the bookmark runs.
 const UsageURL = claudeOrigin + "/settings/usage"
 
+// Kind is what a check reads: reset grants on Claude Usage, or prepaid API
+// credits in the Claude Console. The same bookmark does both.
+type Kind int
+
+const (
+	KindResets Kind = iota
+	KindAPICredits
+)
+
 // ErrTimedOut means the check window ended without a result.
 var ErrTimedOut = errors.New("claude reset check timed out")
 
@@ -103,34 +112,45 @@ type Status struct {
 
 // Copy shown by both the bookmark alert (after "Clawmeter: ") and the page.
 const (
-	msgWaiting    = "Waiting for the bookmark…"
-	msgOutdated   = "This bookmark is out of date. Save it again from the Clawmeter page."
-	msgEnded      = "This check ended. Choose Check Claude resets in the tray to start again."
-	msgTimedOut   = "Timed out. Choose Check Claude resets in the tray to start again."
-	msgUnreadable = "Claude sent reset data Clawmeter can't read. Nothing was saved."
-	msgNotSetUp   = "This Claude account isn't in Clawmeter. Switch to the account you use with Claude Code, then click the bookmark again."
-	msgAmbiguous  = "Two Clawmeter Claude profiles use this account, so Clawmeter can't tell where to save it."
-	msgSaveFailed = "Couldn't save the result. Click the bookmark again."
-	msgDone       = "Already saved. You can close the Clawmeter tab."
+	msgWaiting     = "Waiting for the bookmark…"
+	msgOutdated    = "This bookmark is out of date. Save it again from the Clawmeter page."
+	msgEnded       = "This check ended. Choose Check Claude resets in the tray to start again."
+	msgTimedOut    = "Timed out. Choose Check Claude resets in the tray to start again."
+	msgUnreadable  = "Claude sent reset data Clawmeter can't read. Nothing was saved."
+	msgNotSetUp    = "This Claude account isn't in Clawmeter. Switch to the account you use with Claude Code, then click the bookmark again."
+	msgAmbiguous   = "Two Clawmeter Claude profiles use this account, so Clawmeter can't tell where to save it."
+	msgSaveFailed  = "Couldn't save the result. Click the bookmark again."
+	msgDone        = "Already saved. You can close the Clawmeter tab."
+	msgWantUsage   = "This check is for Claude resets. Open Claude Usage, then click the bookmark there."
+	msgWantConsole = "This check is for API credits. Open Claude Console billing, then click the bookmark there."
 )
 
 type Session struct {
 	server   *http.Server
+	kind     Kind
 	nonce    string
 	accounts []Account
 	timer    *time.Timer
 
 	mu        sync.Mutex
 	status    Status
-	result    GrantSummary
+	result    Result
 	saved     bool
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
-// Start opens the loopback handoff for Window. The browser result is filed
-// under the single account whose organization matches the browser's.
-func Start(accounts []Account) (*Session, error) {
+// Result is what a check saved: Resets for KindResets, APICredits for
+// KindAPICredits.
+type Result struct {
+	Resets     GrantSummary
+	APICredits APICreditPool
+}
+
+// Start opens the loopback handoff for Window. A reset result is filed under
+// the single account whose organization matches the browser's; an API credit
+// result is filed under its Console organization.
+func Start(kind Kind, accounts []Account) (*Session, error) {
 	listener, err := net.Listen("tcp4", listenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("start Claude reset check: %w", err)
@@ -140,15 +160,15 @@ func Start(accounts []Account) (*Session, error) {
 		_ = listener.Close()
 		return nil, err
 	}
-	s := newSession(nonce, accounts)
+	s := newSession(kind, nonce, accounts)
 	s.server = &http.Server{Handler: s.handler(), ReadHeaderTimeout: 2 * time.Second}
 	s.timer = time.AfterFunc(Window, s.timeOut)
 	go func() { _ = s.server.Serve(listener) }()
 	return s, nil
 }
 
-func newSession(nonce string, accounts []Account) *Session {
-	return &Session{nonce: nonce, accounts: accounts, status: Status{State: stateWaiting, Message: msgWaiting}, done: make(chan struct{})}
+func newSession(kind Kind, nonce string, accounts []Account) *Session {
+	return &Session{kind: kind, nonce: nonce, accounts: accounts, status: Status{State: stateWaiting, Message: msgWaiting}, done: make(chan struct{})}
 }
 
 func randomHex() (string, error) {
@@ -160,16 +180,16 @@ func randomHex() (string, error) {
 }
 
 // Wait returns the saved result, or ErrTimedOut when the window ends first.
-func (s *Session) Wait(ctx context.Context) (GrantSummary, error) {
+func (s *Session) Wait(ctx context.Context) (Result, error) {
 	select {
 	case <-s.done:
 	case <-ctx.Done():
-		return GrantSummary{}, ctx.Err()
+		return Result{}, ctx.Err()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.saved {
-		return GrantSummary{}, ErrTimedOut
+		return Result{}, ErrTimedOut
 	}
 	return s.result, nil
 }
@@ -220,6 +240,7 @@ func (s *Session) handler() http.Handler {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/challenge", s.handleChallenge)
 	mux.HandleFunc("/result", s.handleResult)
+	mux.HandleFunc("/credits", s.handleCredits)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Reject DNS-rebinding requests: only the loopback name is served.
 		if r.Host != listenAddress {
@@ -238,7 +259,11 @@ func (s *Session) handleCheckPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	_ = checkPage.Execute(w, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, Ended: msgEnded})
+	data := checkPageData{Bookmark: template.URL(Bookmarklet()), Title: "Check Claude resets", OpenURL: UsageURL, OpenLabel: "Open Claude Usage", Site: "claude.ai", Ended: msgEnded}
+	if s.kind == KindAPICredits {
+		data.Title, data.OpenURL, data.OpenLabel, data.Site = "Check API credits", ConsoleURL, "Open Claude Console", "platform.claude.com"
+	}
+	_ = checkPage.Execute(w, data)
 }
 
 // handleStatus serves the page's poll. It has no CORS headers, so other
@@ -259,20 +284,25 @@ func (s *Session) currentStatus() Status {
 }
 
 func (s *Session) handleChallenge(w http.ResponseWriter, r *http.Request) {
-	if !admitClaude(w, r, http.MethodGet) {
+	if !admit(w, r, http.MethodGet, claudeOrigin, consoleOrigin) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"nonce": s.nonce})
 }
 
-// admitClaude allows only claude.ai, answers preflights, and reports whether
-// the caller should handle the request.
-func admitClaude(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Header.Get("Origin") != claudeOrigin {
+// admit allows only the given Claude origins, answers preflights, and reports
+// whether the caller should handle the request.
+func admit(w http.ResponseWriter, r *http.Request, method string, origins ...string) bool {
+	origin := r.Header.Get("Origin")
+	allowed := false
+	for _, candidate := range origins {
+		allowed = allowed || origin == candidate
+	}
+	if !allowed {
 		http.Error(w, "not allowed", http.StatusForbidden)
 		return false
 	}
-	w.Header().Set("Access-Control-Allow-Origin", claudeOrigin)
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -307,7 +337,11 @@ func (s *Session) reply(w http.ResponseWriter, status int, message string, showO
 }
 
 func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
-	if !admitClaude(w, r, http.MethodPost) {
+	if !admit(w, r, http.MethodPost, claudeOrigin) {
+		return
+	}
+	if s.kind != KindResets {
+		s.reply(w, http.StatusConflict, msgWantConsole, true)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -341,7 +375,12 @@ func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary := GrantSummary{Credits: credits, ObservedAt: now, ResetCreditsTarget: account.Key, MatchSalt: salt, MatchHash: AccountHash(salt, account.OrgUUID)}
+	s.save(w, Result{Resets: summary}, func() error { return WriteSummary(summary) }, FoundMessage(len(credits), account.Label))
+}
 
+// save stores one result for the session, unless it already saved one or
+// ended, and reports the outcome to the bookmark and the page.
+func (s *Session) save(w http.ResponseWriter, result Result, write func() error, found string) {
 	s.mu.Lock()
 	if s.saved {
 		s.mu.Unlock()
@@ -355,13 +394,12 @@ func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
 		s.reply(w, http.StatusGone, message, false)
 		return
 	}
-	if err := WriteSummary(summary); err != nil {
+	if err := write(); err != nil {
 		s.mu.Unlock()
 		s.reply(w, http.StatusInternalServerError, msgSaveFailed, true)
 		return
 	}
-	found := FoundMessage(len(credits), account.Label)
-	s.result, s.saved = summary, true
+	s.result, s.saved = result, true
 	s.status = Status{State: stateDone, Message: found + " You can close this tab."}
 	s.mu.Unlock()
 	if s.timer != nil {
