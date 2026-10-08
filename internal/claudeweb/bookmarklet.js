@@ -76,6 +76,14 @@
           }
         }
       }
+      let plan = null;
+      try {
+        const state = await read(`/api/quirky-lollipop/organizations/${encodeURIComponent(organizationID)}/link-state`);
+        const planOrganization = String(state?.link?.organization?.id || "");
+        if (state?.status === "linked" && planOrganization && /^[a-z0-9_]{1,40}$/.test(String(state.plan || "")) && isAmount(state.monthly_credit_usd_cents)) {
+          plan = { organization: planOrganization, plan: state.plan, monthly_credit: state.monthly_credit_usd_cents };
+        }
+      } catch {}
       const month = new Date().toISOString().slice(0, 8);
       const monthTotal = Object.entries(daily).filter(([date]) => date.startsWith(month)).reduce((sum, [, amount]) => sum + amount, 0);
       if (Math.abs(monthTotal - spend.amount) > Math.max(5, spend.amount * 0.1)) return say("Claude Console's cost and spend totals don't match. Nothing was sent. Try again in a few minutes.");
@@ -84,13 +92,14 @@
       const challenge = await fetch(`${local}/challenge`, { mode: "cors", cache: "no-store" });
       const { nonce } = await challenge.json();
       if (!challenge.ok || !nonce) throw new Error("no check");
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`clawmeter-api-pool\u0000${organizationID}`));
-      const pool = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      const hash = async text => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), byte => byte.toString(16).padStart(2, "0")).join("");
+      const pool = await hash(`clawmeter-api-pool\u0000${organizationID}`);
+      const link = plan && { account: await hash(`clawmeter-claude-reset\u0000${nonce}\u0000${plan.organization}`), plan: plan.plan, monthly_credit: plan.monthly_credit };
       const result = await fetch(`${local}/credits`, {
         method: "POST",
         mode: "cors",
         headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ nonce, pool, name: String(organization.name || "Claude API").trim().slice(0, 120), currency: credits.currency.toUpperCase(), balance, grants, month_spend: spend.amount, month_resets_at: spend.resets_at, daily }),
+        body: JSON.stringify({ nonce, pool, name: String(organization.name || "Claude API").trim().slice(0, 120), currency: credits.currency.toUpperCase(), balance, grants, month_spend: spend.amount, month_resets_at: spend.resets_at, daily, link }),
       });
       const { message } = await result.json();
       return say(message || `Result rejected (${result.status}).`);

@@ -98,7 +98,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
-		return appendResetSnapshotLine([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
+		return appendSnapshotLines([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
 	}
 
 	if pf.Data.Error != "" {
@@ -106,7 +106,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		if statusLine != "" {
 			line += "  " + statusLine
 		}
-		return appendResetSnapshotLine([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
+		return appendSnapshotLines([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
 	}
 
 	windows := pf.Data.PresentationWindows()
@@ -188,11 +188,11 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		if pf.Data.Error != "" {
 			expiredMsg += " — " + format.HumanizeError(pf.Data.Error)
 		}
-		return appendResetSnapshotPlain(fmt.Sprintf("%s: %s%s", pf.Display, expiredMsg, suffix), pf.Data)
+		return appendSnapshotsPlain(fmt.Sprintf("%s: %s%s", pf.Display, expiredMsg, suffix), pf.Data)
 	}
 
 	if pf.Data.Error != "" {
-		return appendResetSnapshotPlain(fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix), pf.Data)
+		return appendSnapshotsPlain(fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix), pf.Data)
 	}
 
 	windows := pf.Data.PresentationWindows()
@@ -261,16 +261,25 @@ func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 	return data.ResetCredits.Summary(now)
 }
 
-func appendResetSnapshotLine(lines []string, data *provider.UsageData, indent string) []string {
+// appendSnapshotLines keeps browser-checked facts (reset grants, API credit
+// pools) visible on a row whose usage reading failed or expired.
+func appendSnapshotLines(lines []string, data *provider.UsageData, indent string) []string {
 	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
-		return append(lines, indent+" "+summary)
+		lines = append(lines, indent+" "+summary)
+	}
+	for _, pool := range data.CreditPools {
+		lines = append(lines, indent+" "+pool.Name+": "+pool.Summary(time.Now()))
 	}
 	return lines
 }
 
-func appendResetSnapshotPlain(line string, data *provider.UsageData) string {
+// appendSnapshotsPlain is appendSnapshotLines for one-line output.
+func appendSnapshotsPlain(line string, data *provider.UsageData) string {
 	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
-		return line + "  " + summary
+		line += "  " + summary
+	}
+	for _, pool := range data.CreditPools {
+		line += "  " + pool.Name + ": " + pool.Summary(time.Now())
 	}
 	return line
 }
@@ -1172,8 +1181,11 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 			continue
 		}
 		key := provider.SourceKey(p)
-		data := presented[key]
+		data, ok := presented[key]
 		seen[key] = struct{}{}
+		if !ok && sources[key] != nil {
+			continue // folded under another row, like linked API credit pools
+		}
 		output.Providers = append(output.Providers, ProviderFormatter{
 			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
 			Display:           sourceDisplay(p, counts),
@@ -1570,9 +1582,13 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 	defer cancel()
 
 	// Fetch usage and status in parallel
-	// Claude reset observations are local files fetched alongside their Claude
-	// sources and folded under them before rendering.
+	// Claude reset observations and plan-funded API credit pools are local
+	// files fetched alongside their Claude sources and folded under them
+	// before rendering.
 	fetchSet := append(append([]provider.Provider{}, providers...), supplementalResetSources(registry, family, display)...)
+	if api, ok := registry.Get(provider.ClaudeAPISourceName); ok && family == "claude" && api.IsConfigured() && !registry.IsDisabled(api) {
+		fetchSet = append(fetchSet, api)
+	}
 	result := provider.FetchProvidersParallel(ctx, fetchSet)
 	cacheEntry, _ := cache.Read()
 	hadFetchError := applySourceFallbacks(providers, result, cacheEntry)

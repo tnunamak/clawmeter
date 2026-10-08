@@ -12,9 +12,18 @@ import (
 // from the console snapshot taken at ObservedAt; the projection fields extend
 // the observed burn rate from that moment, so they are labelled projections.
 type UsageCreditPool struct {
-	Name     string `json:"name"`
-	Currency string `json:"currency"`
-	Balance  int64  `json:"balance"`
+	// Name labels the pool where it shows: its organization on the Claude API
+	// row, "API credits" when folded under the Claude source whose plan funds
+	// it.
+	Name         string `json:"name"`
+	Organization string `json:"organization"`
+	// Source is the Claude source key ("claude", "claude:odl") whose plan
+	// funds this pool, verified against that source's current organization.
+	Source        string `json:"claude_source,omitempty"`
+	Plan          string `json:"plan,omitempty"`
+	MonthlyCredit int64  `json:"monthly_credit,omitempty"`
+	Currency      string `json:"currency"`
+	Balance       int64  `json:"balance"`
 	// MonthSpend is this billing month's spend; nil once the month observed
 	// in the snapshot has ended.
 	MonthSpend    *int64    `json:"month_spend,omitempty"`
@@ -58,7 +67,7 @@ const burnWindowDays = 7
 // Once an observed grant expires, how much of it was spent first is unknown,
 // so the pool reports ExpiredSinceCheck instead of a guessed balance.
 func NewCreditPool(name, currency string, balance, monthSpend int64, monthResetsAt time.Time, grants []CreditGrant, daily []DailySpend, observedAt, now time.Time) UsageCreditPool {
-	pool := UsageCreditPool{Name: name, Currency: currency, Balance: balance, MonthResetsAt: monthResetsAt, ObservedAt: observedAt}
+	pool := UsageCreditPool{Name: name, Organization: name, Currency: currency, Balance: balance, MonthResetsAt: monthResetsAt, ObservedAt: observedAt}
 	if now.Before(monthResetsAt) {
 		pool.MonthSpend = &monthSpend
 	}

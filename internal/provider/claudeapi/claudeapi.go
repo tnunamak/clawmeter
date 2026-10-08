@@ -15,13 +15,18 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
 )
 
 const name = "claude_api"
 
-type Provider struct{}
+// Provider reads saved pools. Claude sources are the local accounts a pool
+// may be linked to through the Claude plan that funds it.
+type Provider struct {
+	claude []provider.Provider
+}
 
-func New() *Provider { return &Provider{} }
+func New(claude []provider.Provider) *Provider { return &Provider{claude: claude} }
 
 func (*Provider) Name() string        { return name }
 func (*Provider) DisplayName() string { return "Claude API" }
@@ -30,10 +35,11 @@ func (*Provider) Description() string {
 }
 func (*Provider) DashboardURL() string { return claudeweb.ConsoleURL }
 
-// SourceRevision changes with every saved check, and whenever a saved grant
-// expires or the billing month ends, so a cached pool is never shown past
-// the moment its numbers stop holding.
-func (*Provider) SourceRevision() string {
+// SourceRevision changes with every saved check, whenever a saved grant
+// expires or the billing month ends, and when a linked Claude source signs in
+// elsewhere, so a cached pool is never shown past the moment its numbers or
+// its placement stop holding.
+func (p *Provider) SourceRevision() string {
 	pools, _ := claudeweb.ReadAPICreditPools()
 	now := time.Now()
 	parts := make([]string, 0, len(pools))
@@ -44,7 +50,7 @@ func (*Provider) SourceRevision() string {
 				expired++
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt)))
+		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), p.linkedSource(pool)))
 	}
 	return "claude-api-credits-v1:" + strings.Join(parts, ",")
 }
@@ -61,7 +67,7 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check API credits in the tray"}
 }
 
-func (*Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
+func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -75,12 +81,28 @@ func (*Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
 	now := time.Now()
 	data := &provider.UsageData{Provider: name}
 	for _, pool := range saved {
-		data.CreditPools = append(data.CreditPools, Pool(pool, now))
+		presented := Pool(pool, now)
+		presented.Source = p.linkedSource(pool)
+		data.CreditPools = append(data.CreditPools, presented)
 		if pool.ObservedAt.After(data.FetchedAt) {
 			data.FetchedAt = pool.ObservedAt
 		}
 	}
 	return data, nil
+}
+
+// linkedSource returns the key of the Claude source the pool was linked to,
+// if that source is still signed in to the plan's organization.
+func (p *Provider) linkedSource(pool claudeweb.APICreditPool) string {
+	if pool.LinkedTarget == "" {
+		return ""
+	}
+	for _, source := range p.claude {
+		if provider.SourceKey(source) == pool.LinkedTarget && pool.LinkedTo(claudewebprovider.OrganizationUUID(source)) {
+			return pool.LinkedTarget
+		}
+	}
+	return ""
 }
 
 // Pool turns a saved Console snapshot into a credit pool as of now.
@@ -96,5 +118,7 @@ func Pool(saved claudeweb.APICreditPool, now time.Time) provider.UsageCreditPool
 		}
 	}
 	sort.Slice(daily, func(i, j int) bool { return daily[i].Day.Before(daily[j].Day) })
-	return provider.NewCreditPool(saved.Name, saved.Currency, saved.Balance, saved.MonthSpend, saved.MonthResetsAt, grants, daily, saved.ObservedAt, now)
+	pool := provider.NewCreditPool(saved.Name, saved.Currency, saved.Balance, saved.MonthSpend, saved.MonthResetsAt, grants, daily, saved.ObservedAt, now)
+	pool.Plan, pool.MonthlyCredit = saved.Plan, saved.MonthlyCredit
+	return pool
 }

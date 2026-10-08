@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/cache"
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
@@ -41,5 +44,43 @@ func TestAgentSummaryNeverOffersExpiredCreditsAsBudget(t *testing.T) {
 	got := creditPoolOutput(pool).AgentSummary()
 	if !strings.Contains(got, "Claude API · Org status=expired_since_check balance=unknown") || strings.Contains(got, "balance=200.00") {
 		t.Fatalf("AgentSummary() = %q", got)
+	}
+}
+
+type claudeAPICLIProvider struct{}
+
+func (claudeAPICLIProvider) Name() string         { return "claude_api" }
+func (claudeAPICLIProvider) DisplayName() string  { return "Claude API" }
+func (claudeAPICLIProvider) Description() string  { return "" }
+func (claudeAPICLIProvider) DashboardURL() string { return "" }
+func (claudeAPICLIProvider) IsConfigured() bool   { return true }
+func (claudeAPICLIProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return nil, nil
+}
+
+// When every pool folds under its Claude source, an explicitly enabled Claude
+// API provider must not leave an empty row behind, fresh or cached.
+func TestFoldedCreditPoolsLeaveNoEmptyRow(t *testing.T) {
+	registry := provider.NewRegistry()
+	for _, p := range []provider.Provider{sourcedCLIProvider{id: "default"}, claudeAPICLIProvider{}} {
+		if err := registry.Register(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.DefaultConfig()
+	cfg.Providers["claude_api"] = config.ProviderConfig{Enabled: true}
+	results := map[string]*provider.UsageData{
+		"claude":     {Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "weekly", Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}}},
+		"claude_api": {Provider: "claude_api", CreditPools: []provider.UsageCreditPool{{Name: "Org", Organization: "Org", Source: "claude", Currency: "USD", Balance: 100, ObservedAt: time.Now()}}},
+	}
+	entry := &cache.Entry{ProviderData: results, SourceRevisions: map[string]string{}}
+	for name, output := range map[string]*MultiProviderOutput{
+		"fresh":  buildOutputFromResult(registry, cfg, &provider.MultiFetchResult{Results: results}, nil),
+		"cached": buildOutputFromCache(registry, cfg, entry),
+	} {
+		output.HideUnavailable()
+		if len(output.Providers) != 1 || output.Providers[0].Name != "claude" || len(output.Providers[0].Data.CreditPools) != 1 {
+			t.Errorf("%s: rows = %+v", name, output.Providers)
+		}
 	}
 }

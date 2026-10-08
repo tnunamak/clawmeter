@@ -769,6 +769,39 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setProviderDashboardVisible(menu, false)
 }
 
+// showBalanceRows fills the balance rows with balances, then API credit
+// pools, and hides the rest. Pools are browser-checked snapshots, so they
+// stay visible even when the row's usage reading failed.
+func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances []provider.UsageBalance) {
+	rows := 0
+	show := func(title string) {
+		if rows < len(menu.balanceItems) {
+			setMenuItemTitle(menu.balanceItems[rows], &menu.balanceStates[rows], title)
+			setMenuItemVisible(menu.balanceItems[rows], &menu.balanceStates[rows], true)
+			rows++
+		}
+	}
+	for _, balance := range balances {
+		label := balance.DisplayName
+		if label == "" {
+			label = balance.Name
+		}
+		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
+	}
+	for _, pool := range data.CreditPools {
+		title := pool.TrayLine(time.Now())
+		// A lone pool on the Claude API row needs no label; anywhere else it
+		// sits among other rows.
+		if data.Provider != provider.ClaudeAPISourceName || len(data.CreditPools) > 1 {
+			title = pool.Name + ": " + title
+		}
+		show(title)
+	}
+	for i := rows; i < len(menu.balanceItems); i++ {
+		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
+	}
+}
+
 func hideProviderWindows(menu *providerMenuItems) {
 	for i, w := range menu.windowItems {
 		setMenuItemVisible(w, &menu.windowStates[i], false)
@@ -901,6 +934,7 @@ func providerConnectFailureMessage(stdout, stderr string) string {
 }
 
 func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
+	fetched := results
 	results = provider.PresentResetCreditSources(results)
 	setups := make(map[string]provider.SetupStatus, len(menus))
 	for name, menu := range menus {
@@ -941,6 +975,11 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
 		data := results[name]
+		if data == nil && fetched[name] != nil {
+			// Folded under another row, like linked API credit pools.
+			hideProviderMenu(menu)
+			continue
+		}
 
 		if data != nil && data.EstablishesPrimaryUIHistory() {
 			menu.everHealthy = true
@@ -1002,6 +1041,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			}
 			setMenuItemTitle(menu.statusItem, &menu.statusState, expiredMsg)
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			showBalanceRows(menu, data, nil)
 			setProviderDashboardVisible(menu, true)
 			continue
 		}
@@ -1011,6 +1051,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			hideProviderWindows(menu)
 			setMenuItemTitle(menu.statusItem, &menu.statusState, format.HumanizeError(data.Error))
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			showBalanceRows(menu, data, nil)
 			setProviderDashboardVisible(menu, true)
 			continue
 		}
@@ -1037,34 +1078,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		for i := len(windows); i < len(menu.windowItems); i++ {
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
 		}
-		for i, balance := range data.Balances {
-			if i >= len(menu.balanceItems) {
-				break
-			}
-			label := balance.DisplayName
-			if label == "" {
-				label = balance.Name
-			}
-			setMenuItemTitle(menu.balanceItems[i], &menu.balanceStates[i], fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
-			setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], true)
-		}
-		rows := len(data.Balances)
-		for _, pool := range data.CreditPools {
-			if rows >= len(menu.balanceItems) {
-				break
-			}
-			title := pool.TrayLine(time.Now())
-			if len(data.CreditPools) > 1 {
-				title = pool.Name + ": " + title
-			}
-			setMenuItemTitle(menu.balanceItems[rows], &menu.balanceStates[rows], title)
-			setMenuItemVisible(menu.balanceItems[rows], &menu.balanceStates[rows], true)
-			rows++
-		}
-		for i := rows; i < len(menu.balanceItems); i++ {
-			setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
-		}
-
+		showBalanceRows(menu, data, data.Balances)
 		setProviderDashboardVisible(menu, true)
 	}
 

@@ -34,6 +34,20 @@ type APICreditPool struct {
 	MonthResetsAt time.Time          `json:"month_resets_at"`
 	DailySpend    map[string]float64 `json:"daily_spend,omitempty"`
 	ObservedAt    time.Time          `json:"observed_at"`
+	// Plan and MonthlyCredit describe a Claude plan whose monthly API credit
+	// funds this organization. LinkedTarget is the local Claude source signed
+	// in to that plan's organization; LinkHash is AccountHash(LinkSalt, org),
+	// so the link is dropped if that source later signs in elsewhere.
+	Plan          string `json:"plan,omitempty"`
+	MonthlyCredit int64  `json:"monthly_credit,omitempty"`
+	LinkedTarget  string `json:"linked_target,omitempty"`
+	LinkSalt      string `json:"link_salt,omitempty"`
+	LinkHash      string `json:"link_hash,omitempty"`
+}
+
+// LinkedTo reports whether the pool is funded by the Claude plan of orgUUID.
+func (p APICreditPool) LinkedTo(orgUUID string) bool {
+	return orgUUID != "" && p.LinkSalt != "" && p.LinkHash == AccountHash(p.LinkSalt, orgUUID)
 }
 
 // APICreditGrant is one credit tranche: a monthly plan credit, a promotion,
@@ -48,6 +62,7 @@ type APICreditGrant struct {
 
 var (
 	poolIDPattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	planPattern    = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
 	currencyFormat = regexp.MustCompile(`^[A-Z]{3}$`)
 	dayFormat      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
@@ -83,6 +98,15 @@ func (p APICreditPool) Validate() error {
 		if !validPoolName(grant.Name) || grant.Granted < 0 || grant.Granted > maxMinor || grant.Remaining < 0 || grant.Remaining > grant.Granted || grant.GrantedAt.IsZero() {
 			return fmt.Errorf("invalid grant")
 		}
+	}
+	if (p.Plan != "" && !planPattern.MatchString(p.Plan)) || p.MonthlyCredit < 0 || p.MonthlyCredit > maxMinor {
+		return fmt.Errorf("invalid plan")
+	}
+	if p.LinkedTarget != "" && (!validResetCreditsTarget(p.LinkedTarget) || !poolIDPattern.MatchString(p.LinkSalt) || !poolIDPattern.MatchString(p.LinkHash)) {
+		return fmt.Errorf("invalid plan link")
+	}
+	if p.LinkedTarget == "" && (p.LinkSalt != "" || p.LinkHash != "") {
+		return fmt.Errorf("invalid plan link")
 	}
 	if len(p.DailySpend) > maxSpendDays {
 		return fmt.Errorf("too many spend days")
@@ -166,6 +190,15 @@ type creditsPayload struct {
 	MonthSpend    *int64             `json:"month_spend"`
 	MonthResetsAt string             `json:"month_resets_at"`
 	Daily         map[string]float64 `json:"daily"`
+	// Link is set when a Claude plan funds this organization: Account is
+	// AccountHash(nonce, plan organization), as for reset results.
+	Link *creditsLink `json:"link"`
+}
+
+type creditsLink struct {
+	Account       string `json:"account"`
+	Plan          string `json:"plan"`
+	MonthlyCredit int64  `json:"monthly_credit"`
 }
 
 type grantTranche struct {
@@ -207,6 +240,24 @@ func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found := "Saved API credits for " + pool.Name + "."
+	if payload.Link != nil {
+		pool.Plan, pool.MonthlyCredit = payload.Link.Plan, payload.Link.MonthlyCredit
+		// A plan with no matching local Claude source still saves the pool,
+		// shown on its own.
+		if account, status, _ := s.matchAccount(payload.Link.Account); status == http.StatusOK {
+			salt, err := randomHex()
+			if err != nil {
+				s.reply(w, http.StatusInternalServerError, msgSaveFailed, true)
+				return
+			}
+			pool.LinkedTarget, pool.LinkSalt, pool.LinkHash = account.Key, salt, AccountHash(salt, account.OrgUUID)
+			found = "Saved API credits for " + account.Label + "."
+		}
+		if pool.Validate() != nil {
+			s.reply(w, http.StatusBadRequest, msgConsoleUnreadable, true)
+			return
+		}
+	}
 	s.save(w, Result{APICredits: pool}, func() error { return WriteAPICreditPool(pool) }, found)
 }
 

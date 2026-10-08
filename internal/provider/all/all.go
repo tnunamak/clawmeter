@@ -46,10 +46,11 @@ var aliases = map[string]string{
 	"claude-api":         "claude_api",
 }
 
-// localProviders read only what Clawmeter itself saved, such as a browser
-// check of the Claude Console. They hold no credentials, so they have no
-// enrolled sources, but they are named providers users can select and disable.
-var localProviders = []provider.Provider{claudeapi.New()}
+// localProviders name the providers that read only what Clawmeter itself
+// saved, such as a browser check of the Claude Console. They hold no
+// credentials, so they have no enrolled sources, but users can select and
+// disable them by name. Register builds the live instances.
+var localProviders = []provider.Provider{claudeapi.New(nil)}
 
 type registration struct {
 	name string
@@ -94,10 +95,8 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 		}
 	}
-	for _, local := range localProviders {
-		if err := registry.Register(local); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
-		}
+	if err := registry.Register(claudeapi.New(registry.GetFamily("claude"))); err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 	}
 }
 

@@ -96,11 +96,18 @@ Admin API is unavailable to individual accounts. Clawmeter reads them from the
 Claude Console with the same bookmark: choose **Check API credits** in the
 tray, open the Claude Console, and click the bookmark there.
 
-Each Console organization shows as a pool under **Claude API**:
+When a Claude plan funds the organization (the Console links it to that
+plan's claude.ai organization), the pool shows on the Claude source signed in
+to that plan:
 
 ```
-Claude API: Family's Individual Organization: $199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 24 19:00 · checked 12:24
+Claude · Default: 5h: 1% … · API credits: $199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 24 19:00 · checked 12:53
 ```
+
+Other Console organizations show as their own pools under **Claude API**. The
+bookmark proves the plan link with a salted hash of the plan's organization ID,
+as reset checks do, and the pool moves back under Claude API if that source
+signs in elsewhere.
 
 The balance is what the Console's billing page shows: purchased plus
 promotional credit. Spend this month is the Console's own total. The pace is the

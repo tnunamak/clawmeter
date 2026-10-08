@@ -22,7 +22,7 @@ func TestSourceRevisionChangesWhenAGrantExpires(t *testing.T) {
 	if err := claudeweb.WriteAPICreditPool(pool); err != nil {
 		t.Fatal(err)
 	}
-	p := New()
+	p := New(nil)
 	before := p.SourceRevision()
 	time.Sleep(2 * time.Second)
 	if after := p.SourceRevision(); after == before {

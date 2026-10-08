@@ -483,7 +483,65 @@ const ClaudeResetSourceName = "claude_web"
 // Claude source already reports its own non-empty reset inventory, that
 // provider-native inventory wins and the browser snapshot is dropped. The
 // backing fetch/cache map is not modified.
+//
+// API credit pools funded by a Claude plan move the same way: from the Claude
+// API row to the Claude source signed in to that plan. The Claude API row
+// stays only for pools with no such source.
 func PresentResetCreditSources(results map[string]*UsageData) map[string]*UsageData {
+	return presentLinkedCreditPools(presentResetCreditSources(results))
+}
+
+// ClaudeAPISourceName is the provider name of the Claude API credit pools.
+const ClaudeAPISourceName = "claude_api"
+
+// LinkedCreditPoolName labels a pool shown under its Claude source.
+const LinkedCreditPoolName = "API credits"
+
+func presentLinkedCreditPools(results map[string]*UsageData) map[string]*UsageData {
+	api := results[ClaudeAPISourceName]
+	if api == nil || api.Provider != ClaudeAPISourceName {
+		return results
+	}
+	var presented map[string]*UsageData
+	remaining := make([]UsageCreditPool, 0, len(api.CreditPools))
+	for _, pool := range api.CreditPools {
+		target := results[pool.Source]
+		if presented != nil {
+			target = presented[pool.Source]
+		}
+		sourceID := "default"
+		if id, named := strings.CutPrefix(pool.Source, "claude:"); named {
+			sourceID = id
+		}
+		if pool.Source == "" || target == nil || !UsageDataMatchesSource(target, "claude", sourceID) {
+			remaining = append(remaining, pool)
+			continue
+		}
+		if presented == nil {
+			presented = make(map[string]*UsageData, len(results))
+			for key, data := range results {
+				presented[key] = data
+			}
+		}
+		merged := *target
+		pool.Name = LinkedCreditPoolName
+		merged.CreditPools = append(append([]UsageCreditPool{}, target.CreditPools...), pool)
+		presented[pool.Source] = &merged
+	}
+	if presented == nil {
+		return results
+	}
+	if len(remaining) == 0 {
+		delete(presented, ClaudeAPISourceName)
+	} else {
+		rest := *api
+		rest.CreditPools = remaining
+		presented[ClaudeAPISourceName] = &rest
+	}
+	return presented
+}
+
+func presentResetCreditSources(results map[string]*UsageData) map[string]*UsageData {
 	var presented map[string]*UsageData
 	for supplementalKey, supplemental := range results {
 		if !isClaudeResetSupplemental(supplementalKey, supplemental) {
@@ -593,8 +651,13 @@ func (u *UsageData) HasPresentableUsage() bool {
 	if u == nil || u.IsExpired {
 		return false
 	}
-	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditPools) > 0 {
+	if len(u.Windows) > 0 || len(u.Balances) > 0 {
 		return true
+	}
+	// API credit pools are browser snapshots too: they keep a failed row
+	// visible but must not make the failure look healthy.
+	if len(u.CreditPools) > 0 {
+		return u.Error == ""
 	}
 	// A browser reset snapshot is manual inventory, not a usage reading. It
 	// stays visible on a failed row but must not make the failure look healthy.
@@ -666,9 +729,13 @@ func ShouldShowInPrimaryUI(data *UsageData, hadPriorUsefulData, explicitlyEnable
 	if data.HasPresentableUsage() {
 		return true
 	}
-	// A failed row that carries a browser reset snapshot stays visible so the
-	// observed grant is not hidden, even though it does not count as usage.
+	// A failed row that carries a browser snapshot (reset grants, API credit
+	// pools) stays visible so the observation is not hidden, even though it
+	// does not count as usage.
 	if data.ResetCredits != nil && data.ResetCredits.Snapshot && data.ResetCredits.DisplayCount(time.Now()) > 0 {
+		return true
+	}
+	if len(data.CreditPools) > 0 {
 		return true
 	}
 	return hadPriorUsefulData && (data.IsExpired || data.Error != "")
