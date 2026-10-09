@@ -3,7 +3,7 @@
 // or its expiry, and its Admin API is unavailable to individual
 // organizations, so the Console is the only source. This provider never
 // reads browser credentials or calls the Console: it reads what the
-// Clawmeter bookmark saved.
+// Clawmeter extension or bookmark saved.
 package claudeapi
 
 import (
@@ -41,7 +41,11 @@ func (*Provider) DashboardURL() string { return claudeweb.ConsoleURL }
 // its placement stop holding.
 func (p *Provider) SourceRevision() string {
 	pools, _ := claudeweb.ReadAPICreditPools()
-	now := time.Now()
+	state, _ := claudeweb.ReadExtensionState()
+	return p.sourceRevision(pools, time.Now(), state)
+}
+
+func (p *Provider) sourceRevision(pools []claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState) string {
 	parts := make([]string, 0, len(pools))
 	for _, pool := range pools {
 		expired := 0
@@ -50,7 +54,7 @@ func (p *Provider) SourceRevision() string {
 				expired++
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), p.linkedSource(pool)))
+		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s:%s:%t:%t", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), p.linkedSource(pool), pool.Source, poolLive(pool, now, state), poolSignedOut(pool, state)))
 	}
 	return "claude-api-credits-v1:" + strings.Join(parts, ",")
 }
@@ -107,6 +111,19 @@ func (p *Provider) linkedSource(pool claudeweb.APICreditPool) string {
 
 // Pool turns a saved Console snapshot into a credit pool as of now.
 func Pool(saved claudeweb.APICreditPool, now time.Time) provider.UsageCreditPool {
+	state, _ := claudeweb.ReadExtensionState()
+	return poolWithState(saved, now, state)
+}
+
+func poolSignedOut(saved claudeweb.APICreditPool, state claudeweb.ExtensionState) bool {
+	return saved.Source == "extension" && state.Status == "signed_out" && state.At.After(saved.ObservedAt)
+}
+
+func poolLive(saved claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState) bool {
+	return saved.Source == "extension" && now.Sub(saved.ObservedAt) <= 5*time.Minute && !poolSignedOut(saved, state)
+}
+
+func poolWithState(saved claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState) provider.UsageCreditPool {
 	grants := make([]provider.CreditGrant, 0, len(saved.Grants))
 	for _, grant := range saved.Grants {
 		grants = append(grants, provider.CreditGrant{Remaining: grant.Remaining, ExpiresAt: grant.ExpiresAt})
@@ -120,5 +137,8 @@ func Pool(saved claudeweb.APICreditPool, now time.Time) provider.UsageCreditPool
 	sort.Slice(daily, func(i, j int) bool { return daily[i].Day.Before(daily[j].Day) })
 	pool := provider.NewCreditPool(saved.Name, saved.Currency, saved.Balance, saved.MonthSpend, saved.MonthResetsAt, grants, daily, saved.ObservedAt, now)
 	pool.Plan, pool.MonthlyCredit = saved.Plan, saved.MonthlyCredit
+	pool.ObservationSource = saved.Source
+	pool.SignedOut = poolSignedOut(saved, state)
+	pool.Live = poolLive(saved, now, state)
 	return pool
 }

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Clawmeter",
+  "version": "0.1.0",
+  "description": "Live Claude Console API credits in Clawmeter.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://platform.claude.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn6nbo1Fc3BhQA9QseG+LIOeUiR2GnZm4DRMY0egNhLAHKDJV7Fboq5Wak5sLbHJBYWKTsAffkY1QZeAHGEdecGy6SIJK3ARVnuMgTIXjtvYR3pzDIeS028dP5bVtI/1ovc5tKyo4U+Ik1vZHPx8XNSZlMuHNKYjcOFIJ7dzaNWaBB+K7GSNOy9ihIiBfRWnd37VcDxnE1eR+HtKf3c5ThD1RmJ84oQgsHbPCROCIhuSRPi6IJjilPz/PvsinjFFCCiMPPdpweD+w1EIE4wyfLtaz6tqfGUlAmcoYRWSXfnBrvaTXKSo1t1Y3uHW5zDrgjKbkniiseZDzZQEH4EqsQQIDAQAB"
+}
