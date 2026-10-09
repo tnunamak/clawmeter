@@ -75,3 +75,19 @@ func TestExtensionPoolFreshness(t *testing.T) {
 		}
 	}
 }
+
+func TestSignOutIsOrderedPerPool(t *testing.T) {
+	observed := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	state := claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Minute)}
+	a := claudeweb.APICreditPool{Pool: strings.Repeat("a", 64), Name: "A", Currency: "USD", Source: "extension", Balance: 100, ObservedAt: observed, MonthResetsAt: observed.Add(24 * time.Hour)}
+	b := a
+	b.Pool, b.Name, b.ObservedAt = strings.Repeat("b", 64), "B", observed.Add(2*time.Minute)
+	now := b.ObservedAt
+	older, newer := poolWithState(a, now, state), poolWithState(b, now, state)
+	if older.Live || !older.SignedOut || !strings.Contains(older.Summary(now), "sign in to the Claude Console") {
+		t.Fatalf("A revived: %+v", older)
+	}
+	if !newer.Live || newer.SignedOut {
+		t.Fatalf("B not live: %+v", newer)
+	}
+}

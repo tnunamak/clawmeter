@@ -58,11 +58,12 @@ test("alarm lifecycle and one poll at a time", async () => {
 
 test("authenticated GET and local JSON POST with failures quiet", async () => {
   const requests = [];
-  const w = worker(async (getJSON, now, cache) => {
-    assert.equal(typeof now, "number");
+  const w = worker(async (getJSON, now, cache, post) => {
+    assert.equal(typeof now, "function");
     assert.deepEqual(JSON.parse(JSON.stringify(await getJSON("https://platform.claude.com/api/organizations"))),
       { status: 200, body: [] });
-    cache.hashed = { at: now, daily: {} };
+    cache.hashed = { at: now(), daily: {} };
+    await post({ pool: "hashed", balance: 10 });
     return { status: "ok", payloads: [{ pool: "hashed", balance: 10 }] };
   }, async (url, options) => {
     requests.push({ url, options });
@@ -111,4 +112,15 @@ test("timeout covers response JSON and a failed poll can run again", async () =>
   [...w.timers.values()][0]();
   await again;
   assert.equal(calls, 2);
+});
+
+test("an org is posted even if a later org fails", async () => {
+  const posts = [];
+  const w = worker(async (_get, _now, _cache, post) => {
+    await post({ pool: "first", observed_at: "2026-10-08T12:00:00Z" });
+    throw new Error("second org failed");
+  }, async (_url, options) => { posts.push(JSON.parse(options.body)); return {}; });
+  await vm.runInContext("poll()", w.context);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].pool, "first");
 });

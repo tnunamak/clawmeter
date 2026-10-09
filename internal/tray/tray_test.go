@@ -1548,3 +1548,25 @@ func TestNewResetPeriodIgnoresJitter(t *testing.T) {
 		}
 	}
 }
+
+func TestNextAPICreditDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	early := provider.UsageCreditPool{ObservationSource: "extension", ObservedAt: now.Add(-4 * time.Minute), Live: true}
+	late := provider.UsageCreditPool{ObservationSource: "extension", ObservedAt: now, Live: true}
+	stale := early
+	stale.ObservedAt = now.Add(-6 * time.Minute)
+	out := early
+	out.SignedOut = true
+	bookmark := early
+	bookmark.ObservationSource = "bookmark"
+	results := map[string]*provider.UsageData{"claude_api": {CreditPools: []provider.UsageCreditPool{late, stale, out, bookmark, early}}, "empty": nil}
+	if got, want := nextAPICreditDeadline(results, now), now.Add(time.Minute+time.Second); !got.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", got, want)
+	}
+	if got := nextAPICreditDeadline(results, now.Add(time.Minute+time.Second)); !got.Equal(now.Add(5*time.Minute + time.Second)) {
+		t.Fatalf("second deadline = %v", got)
+	}
+	if got := nextAPICreditDeadline(results, now.Add(6*time.Minute)); !got.IsZero() {
+		t.Fatalf("stale deadline = %v", got)
+	}
+}
