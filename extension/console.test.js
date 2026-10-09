@@ -48,7 +48,7 @@ test("healthy balance, all cost kinds, grants and plan link", async () => {
   const f = fixture(), cache = {};
   const { payloads } = await readConsole(f.getJSON, now, cache);
   assert.deepEqual(payloads, [{
-    pool: poolHash("org-api"), name: "Example", currency: "USD", balance: 19988,
+    pool: poolHash("org-api"), observed_at: new Date(now).toISOString(), name: "Example", currency: "USD", balance: 19988,
     grants: [{ name: "API credit", granted: 20000, remaining: 19888,
       granted_at: "2026-10-01T00:00:00Z", expires_at: "2026-10-25T00:00:00Z" }],
     month_spend: 11, month_resets_at: "2026-11-01T00:00:00Z",
@@ -165,6 +165,7 @@ test("payload matches the real bookmarklet except nonce and link proof", async (
   assert.equal(bookmark.link.account, proof);
   delete bookmark.nonce;
   bookmark.link = { organization: "org-plan", plan: bookmark.link.plan, monthly_credit: bookmark.link.monthly_credit };
+  delete extension.observed_at;
   assert.deepEqual(extension, bookmark);
 });
 
@@ -187,4 +188,43 @@ test("multiple billing orgs have separate cached reports", async () => {
   assert.deepEqual(Object.keys(cache).sort(), [poolHash("org-api"), poolHash("second")].sort());
   await readConsole(f.getJSON, now + 60000, cache);
   assert.equal(f.calls.filter(url => url.includes("usage_cost")).length, 4);
+});
+
+test("retained costs expire without moving reconciliation time", async () => {
+  const f = fixture(), cache = {}, pool = poolHash("org-api");
+  await readConsole(f.getJSON, now, cache);
+  assert.equal(cache[pool].reconciledAt, now);
+  f.data["/api/organizations/org-api/current_spend"].amount = 1000;
+  assert.equal((await readConsole(f.getJSON, now + 59 * 60000, cache)).payloads.length, 1);
+  assert.equal(cache[pool].at, now + 59 * 60000);
+  assert.equal(cache[pool].reconciledAt, now);
+  // Also enforce the bound on a throttled poll, without another report.
+  assert.equal((await readConsole(f.getJSON, now + 61 * 60000, cache)).payloads.length, 0);
+  assert.equal((await readConsole(f.getJSON, now + 65 * 60000, cache)).payloads.length, 0);
+  assert.equal(cache[pool].reconciledAt, now);
+  delete cache[pool].reconciledAt;
+  assert.equal((await readConsole(f.getJSON, now + 66 * 60000, cache)).payloads.length, 0);
+});
+
+test("each org is timestamped at its requests and posted before the next org", async () => {
+  const f = fixture(), posts = [];
+  f.data["/api/organizations"].push({ uuid: "second", name: "Second", capabilities: ["api"] });
+  for (const [path, body] of Object.entries(f.data)) {
+    if (path.includes("org-api")) f.data[path.replace("org-api", "second")] = structuredClone(body);
+  }
+  let clock = now;
+  const get = async url => {
+    if (url.includes("/second/prepaid/credits")) {
+      assert.equal(posts.length, 1);
+      assert.equal(posts[0].observed_at, new Date(now).toISOString());
+      clock += 60000; // The response latency must not become observation time.
+    }
+    return f.getJSON(url);
+  };
+  const result = await readConsole(get, () => clock, {}, async payload => {
+    posts.push(payload);
+    clock += 120000;
+  });
+  assert.equal(posts.length, 2);
+  assert.equal(result.payloads[1].observed_at, new Date(now + 120000).toISOString());
 });

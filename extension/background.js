@@ -42,12 +42,10 @@ async function poll() {
         method: "GET", credentials: "include", cache: "no-store",
         headers: { Accept: "application/json" },
       }, async response => ({ status: response.status, body: response.ok ? await response.json() : null }));
-    }, Date.now(), cache);
+    }, Date.now, cache, payload => post("/v1/api-credits", payload));
     if (result.status === "signed_out") {
       cache = {};
       await post("/v1/status", { status: "signed_out" });
-    } else {
-      for (const payload of result.payloads) await post("/v1/api-credits", payload);
     }
   } catch {
     // Failed polls never refresh the receiver's observation time.

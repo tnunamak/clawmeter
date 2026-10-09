@@ -146,7 +146,9 @@ var (
 	// systray's Linux implementation performs a synchronous D-Bus refresh for
 	// every menu mutation. Keep background refreshes and click handlers from
 	// mutating the native menu concurrently.
-	trayRenderMu sync.Mutex
+	trayRenderMu              sync.Mutex
+	apiCreditsTimer           *time.Timer
+	apiCreditsTimerGeneration uint64
 )
 
 func Run(ver string) int {
@@ -504,8 +506,6 @@ func onReady() {
 
 	extensionCtx, stopExtension := context.WithCancel(context.Background())
 	publishAPICredits := func() {
-		refreshing.Lock()
-		defer refreshing.Unlock()
 		publishLocalResetSource(registry, "claude_api", providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
 	}
 	go func() {
@@ -636,6 +636,12 @@ func onReady() {
 				go toggleAutostart(mAutostart)
 			case <-mQuit.ClickedCh:
 				stopExtension()
+				trayRenderMu.Lock()
+				apiCreditsTimerGeneration++
+				if apiCreditsTimer != nil {
+					apiCreditsTimer.Stop()
+				}
+				trayRenderMu.Unlock()
 				ticker.Stop()
 				statusTicker.Stop()
 				updateTicker.Stop()
@@ -1124,6 +1130,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	updateTrayIcon(activeResults)
 	updateTrayTitle(activeResults)
 	updateTrayTooltip(activeResults, displayNames)
+
+	// Reset the independent deadline whenever API credit rows are rendered.
+	scheduleAPICreditRows(results, menus, time.Now())
 
 	// Check notification thresholds
 	checkThresholds(activeResults, displayNames)
@@ -2124,4 +2133,59 @@ func providerSeverity(data *provider.UsageData) providerSeverityRank {
 	}
 	_, proj, ok := selectedIconWindow(data, "")
 	return providerSeverityRank{tier: 2, projection: proj, hasProjection: ok}
+}
+
+// nextAPICreditDeadline excludes bookmarks and already stale/signed-out pools.
+func nextAPICreditDeadline(results map[string]*provider.UsageData, now time.Time) time.Time {
+	var earliest time.Time
+	for _, data := range results {
+		if data == nil {
+			continue
+		}
+		for _, pool := range data.CreditPools {
+			if pool.ObservationSource != "extension" || !pool.IsLive(now) {
+				continue
+			}
+			deadline := pool.ObservedAt.Add(5*time.Minute + time.Second)
+			if earliest.IsZero() || deadline.Before(earliest) {
+				earliest = deadline
+			}
+		}
+	}
+	return earliest
+}
+
+// Called under trayRenderMu. The callback only redraws the displayed credit
+// rows from local snapshots. It never takes refreshing or probes providers.
+func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[string]*providerMenuItems, now time.Time) {
+	apiCreditsTimerGeneration++
+	generation := apiCreditsTimerGeneration
+	if apiCreditsTimer != nil {
+		apiCreditsTimer.Stop()
+	}
+	deadline := nextAPICreditDeadline(results, now)
+	if deadline.IsZero() {
+		return
+	}
+	apiCreditsTimer = time.AfterFunc(time.Until(deadline), func() {
+		trayRenderMu.Lock()
+		defer trayRenderMu.Unlock()
+		if generation != apiCreditsTimerGeneration {
+			return
+		}
+		systray.BeginMenuUpdate()
+		defer systray.EndMenuUpdate()
+		for name, menu := range menus {
+			data := results[name]
+			if !menu.headerState.visible || data == nil || len(data.CreditPools) == 0 {
+				continue
+			}
+			balances := data.Balances
+			if data.IsExpired || data.Error != "" {
+				balances = nil
+			}
+			showBalanceRows(menu, data, balances)
+		}
+		scheduleAPICreditRows(results, menus, time.Now())
+	})
 }
