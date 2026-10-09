@@ -610,16 +610,20 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 		}
 		for _, pool := range pf.Data.CreditPools {
 			money := func(minor float64) string { return strconv.FormatFloat(minor/100, 'f', 2, 64) }
+			freshness := []string{fmt.Sprintf("live=%t", pool.IsLive(now))}
+			if !pool.IsLive(now) {
+				freshness = append(freshness, "updated_at="+pool.ObservedAt.Local().Format(time.RFC3339))
+			}
 			if !pool.ExpiredSinceCheck.IsZero() {
 				// The saved balance no longer holds: never offer it as budget.
-				out = append(out, strings.Join([]string{
+				out = append(out, strings.Join(append([]string{
 					pf.Display + " · " + pool.Name,
 					"status=expired_since_check",
 					"balance=unknown",
 					"expired_at=" + pool.ExpiredSinceCheck.Local().Format(time.RFC3339),
 					"last_observed_at=" + pool.ObservedAt.Local().Format(time.RFC3339),
 					"action=check_again",
-				}, " "))
+				}, freshness...), " "))
 				continue
 			}
 			fields := []string{
@@ -646,7 +650,9 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 					fields = append(fields, "projected_runs_out_at="+pool.RunsOutAt.Local().Format(time.RFC3339))
 				}
 			}
-			fields = append(fields, "last_observed_at="+pool.ObservedAt.Local().Format(time.RFC3339), "snapshot=true")
+			fields = append(fields, freshness...)
+			fields = append(fields, "last_observed_at="+pool.ObservedAt.Local().Format(time.RFC3339),
+				fmt.Sprintf("snapshot=%t", pool.ObservationSource != "extension"))
 			out = append(out, strings.Join(fields, " "))
 		}
 	}

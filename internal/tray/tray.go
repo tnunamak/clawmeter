@@ -502,6 +502,21 @@ func onReady() {
 		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
 	}
 
+	extensionCtx, stopExtension := context.WithCancel(context.Background())
+	publishAPICredits := func() {
+		refreshing.Lock()
+		defer refreshing.Unlock()
+		publishLocalResetSource(registry, "claude_api", providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+	}
+	go func() {
+		err := claudeweb.ServeExtension(extensionCtx, func() []claudeweb.Account {
+			return claudewebprovider.Accounts(registry.GetFamily("claude"))
+		}, publishAPICredits)
+		if err != nil {
+			log.Printf("claude extension listener: %v", err)
+		}
+	}()
+
 	// Initial refresh in background (don't block tray UI)
 	go refresh(false)
 	go refreshStatus()
@@ -565,6 +580,8 @@ func onReady() {
 		for {
 			select {
 			case <-ticker.C:
+				// Re-read local pools even while remote providers are refreshing.
+				go publishAPICredits()
 				go refresh(false)
 			case <-statusTicker.C:
 				go refreshStatus()
@@ -618,6 +635,10 @@ func onReady() {
 			case <-mAutostart.ClickedCh:
 				go toggleAutostart(mAutostart)
 			case <-mQuit.ClickedCh:
+				stopExtension()
+				ticker.Stop()
+				statusTicker.Stop()
+				updateTicker.Stop()
 				systray.Quit()
 				return
 			}

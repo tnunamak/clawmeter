@@ -1,6 +1,11 @@
 package provider
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestLinkedCreditPoolsMoveUnderTheirClaudeSource(t *testing.T) {
 	linked := UsageCreditPool{Name: "Family's Individual Organization", Organization: "Family's Individual Organization", Source: "claude", Balance: 19988}
@@ -43,5 +48,32 @@ func TestLinkedCreditPoolDoesNotMaskAFailedUsageReading(t *testing.T) {
 	}
 	if !(&UsageData{Provider: ClaudeAPISourceName, CreditPools: []UsageCreditPool{{Name: "Org"}}}).HasPresentableUsage() {
 		t.Fatal("a healthy Claude API row must stay presentable")
+	}
+}
+
+func TestExtensionCreditPoolPresentation(t *testing.T) {
+	observed := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	pool := UsageCreditPool{Name: "Org", Currency: "USD", Balance: 100, ObservedAt: observed, Live: true, ObservationSource: "extension"}
+	for _, render := range []func(time.Time) string{pool.Summary, pool.TrayLine} {
+		if got := render(observed); !strings.Contains(got, "$1.00 left") || strings.Contains(got, "checked") || strings.Contains(got, "browser") {
+			t.Fatalf("live = %q", got)
+		}
+		if got := render(observed.Add(6 * time.Minute)); !strings.HasSuffix(got, "not updated since "+observed.Local().Format("15:04")+" · is your browser open?") || !strings.Contains(got, "$1.00 left") {
+			t.Fatalf("stale = %q", got)
+		}
+	}
+	pool.Live, pool.SignedOut = false, true
+	for _, got := range []string{pool.Summary(observed), pool.TrayLine(observed)} {
+		if !strings.HasSuffix(got, "sign in to the Claude Console in your browser") {
+			t.Fatalf("signed out = %q", got)
+		}
+	}
+	data, err := json.Marshal(pool)
+	if err != nil || !strings.Contains(string(data), "\"live\":false") {
+		t.Fatalf("JSON = %s, %v", data, err)
+	}
+	var restored UsageCreditPool
+	if err := json.Unmarshal(data, &restored); err != nil || restored.TrayLine(observed) != pool.TrayLine(observed) {
+		t.Fatalf("cached presentation changed: %+v, %v", restored, err)
 	}
 }

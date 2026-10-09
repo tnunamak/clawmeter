@@ -29,3 +29,49 @@ func TestSourceRevisionChangesWhenAGrantExpires(t *testing.T) {
 		t.Fatalf("revision stayed %q after the grant expired", before)
 	}
 }
+
+func TestExtensionPoolFreshness(t *testing.T) {
+	observed := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	saved := claudeweb.APICreditPool{
+		Pool: strings.Repeat("a", 64), Name: "Org", Currency: "USD",
+		Source: "extension", Balance: 100, ObservedAt: observed,
+		MonthResetsAt: observed.Add(24 * time.Hour),
+	}
+	for _, tc := range []struct {
+		name      string
+		now       time.Time
+		state     claudeweb.ExtensionState
+		live      bool
+		signedOut bool
+	}{
+		{"fresh", observed, claudeweb.ExtensionState{}, true, false},
+		{"boundary", observed.Add(5 * time.Minute), claudeweb.ExtensionState{}, true, false},
+		{"stale", observed.Add(5*time.Minute + time.Nanosecond), claudeweb.ExtensionState{}, false, false},
+		{"signed out", observed.Add(time.Minute), claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Second)}, false, true},
+		{"old sign out", observed.Add(time.Minute), claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(-time.Second)}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := poolWithState(saved, tc.now, tc.state)
+			if got.Live != tc.live || got.SignedOut != tc.signedOut || got.Balance != 100 {
+				t.Fatalf("pool = %+v", got)
+			}
+		})
+	}
+	p := New(nil)
+	before := p.sourceRevision([]claudeweb.APICreditPool{saved}, observed, claudeweb.ExtensionState{})
+	stale := p.sourceRevision([]claudeweb.APICreditPool{saved}, observed.Add(6*time.Minute), claudeweb.ExtensionState{})
+	out := p.sourceRevision([]claudeweb.APICreditPool{saved}, observed, claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Second)})
+	if before == stale || before == out || stale == out {
+		t.Fatal("freshness or signed-out change did not invalidate the revision")
+	}
+	saved.ObservedAt = observed.Add(time.Second)
+	if after := p.sourceRevision([]claudeweb.APICreditPool{saved}, observed.Add(time.Second), claudeweb.ExtensionState{}); after == before {
+		t.Fatal("a saved poll did not invalidate the revision")
+	}
+	for _, source := range []string{"", "bookmark"} {
+		saved.Source = source
+		if got := poolWithState(saved, observed, claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Second)}); got.Live || got.SignedOut || !strings.Contains(got.Summary(observed), "checked ") {
+			t.Fatalf("bookmark changed: %+v", got)
+		}
+	}
+}
