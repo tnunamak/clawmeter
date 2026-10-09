@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func extensionBody(t *testing.T) map[string]any {
@@ -17,6 +18,7 @@ func extensionBody(t *testing.T) map[string]any {
 		t.Fatal(err)
 	}
 	delete(body, "nonce")
+	body["observed_at"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
 	body["link"] = map[string]any{"organization": "org-odl", "plan": "max_20x", "monthly_credit": 20000}
 	return body
 }
@@ -33,6 +35,24 @@ func extensionRequest(handler http.Handler, method, path, host, origin, body str
 func TestExtensionRejectsBadRequests(t *testing.T) {
 	isolateUserCache(t)
 	handler := extensionHandler(func() []Account { return testAccounts }, nil)
+	valid := extensionBody(t)
+	encode := func(body map[string]any) string {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	validJSON := encode(valid)
+	valid["token"] = "x"
+	unknownJSON := encode(valid)
+	delete(valid, "token")
+	// Organization is an optional matching hint with no length restriction.
+	valid["link"].(map[string]any)["organization"] = strings.Repeat("x", maxBodyBytes)
+	largeJSON := encode(valid)
+	if got := extensionRequest(handler, "POST", "/v1/api-credits", extensionAddress, ExtensionOrigins[0], validJSON); got.Code != 204 {
+		t.Fatalf("valid control = %d: %s", got.Code, got.Body.String())
+	}
 	for _, tc := range []struct {
 		name, method, host, origin, body string
 		want                             int
@@ -40,11 +60,11 @@ func TestExtensionRejectsBadRequests(t *testing.T) {
 		{"origin", "POST", extensionAddress, consoleOrigin, "{}", 403},
 		{"missing origin", "POST", extensionAddress, "", "{}", 403},
 		{"host", "POST", "localhost:17344", ExtensionOrigins[0], "{}", 403},
-		{"unknown", "POST", extensionAddress, ExtensionOrigins[0], `{"token":"x"}`, 400},
+		{"unknown", "POST", extensionAddress, ExtensionOrigins[0], unknownJSON, 400},
 		{"missing fields", "POST", extensionAddress, ExtensionOrigins[0], "{}", 400},
 		{"nonce", "POST", extensionAddress, ExtensionOrigins[0], creditsBody(t, testNonce), 400},
-		{"trailing", "POST", extensionAddress, ExtensionOrigins[0], "{} {}", 400},
-		{"large", "POST", extensionAddress, ExtensionOrigins[0], strings.Repeat(" ", maxBodyBytes+1), 400},
+		{"trailing", "POST", extensionAddress, ExtensionOrigins[0], validJSON + validJSON, 400},
+		{"large", "POST", extensionAddress, ExtensionOrigins[0], largeJSON, 400},
 		{"method", "GET", extensionAddress, ExtensionOrigins[0], "", 405},
 		{"preflight", "OPTIONS", extensionAddress, ExtensionOrigins[0], "", 204},
 	} {
@@ -77,7 +97,7 @@ func TestExtensionSavesAndLinksPrivately(t *testing.T) {
 	first, second := post(), post()
 	if saves != 2 || second.Source != "extension" || second.LinkedTarget != "claude:odl" ||
 		!second.LinkedTo("org-odl") || second.LinkedTo("org-default") || first.LinkSalt == second.LinkSalt ||
-		!second.ObservedAt.After(first.ObservedAt) {
+		!second.ObservedAt.Equal(first.ObservedAt) {
 		t.Fatalf("saved pools = %+v, %+v; callbacks %d", first, second, saves)
 	}
 	dir, _ := stateDir()
@@ -127,7 +147,49 @@ func TestExtensionSignOutRoundTrip(t *testing.T) {
 	raw, _ := json.Marshal(extensionBody(t))
 	got = extensionRequest(handler, "POST", "/v1/api-credits", extensionAddress, ExtensionOrigins[0], string(raw))
 	state, err = ReadExtensionState()
-	if got.Code != 204 || err != nil || state.Status != "" || saves != 2 {
-		t.Fatalf("clear state = %+v, %v, response %d", state, err, got.Code)
+	if got.Code != 204 || err != nil || state.Status != "signed_out" || saves != 2 {
+		t.Fatalf("retained state = %+v, %v, response %d", state, err, got.Code)
+	}
+}
+
+func TestExtensionObservationTime(t *testing.T) {
+	isolateUserCache(t)
+	handler := extensionHandler(nil, nil)
+	for _, tc := range []struct {
+		name     string
+		observed string
+		want     int
+	}{
+		{"missing", "", 400},
+		{"invalid", "yesterday", 400},
+		{"past", time.Now().Add(-5*time.Minute - time.Second).UTC().Format(time.RFC3339Nano), 400},
+		{"future", time.Now().Add(time.Minute + 10*time.Second).UTC().Format(time.RFC3339Nano), 400},
+		{"valid", time.Now().Add(-4 * time.Minute).UTC().Format(time.RFC3339Nano), 204},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := extensionBody(t)
+			delete(body, "observed_at")
+			if tc.observed != "" {
+				body["observed_at"] = tc.observed
+			}
+			raw, _ := json.Marshal(body)
+			got := extensionRequest(handler, "POST", "/v1/api-credits", extensionAddress, ExtensionOrigins[0], string(raw))
+			if got.Code != tc.want {
+				t.Fatalf("status = %d: %s", got.Code, got.Body.String())
+			}
+			if tc.want == 204 {
+				pools, _ := ReadAPICreditPools()
+				observed, _ := time.Parse(time.RFC3339Nano, tc.observed)
+				if len(pools) != 1 || !pools[0].ObservedAt.Equal(observed) {
+					t.Fatalf("observation changed: %+v", pools)
+				}
+			}
+		})
+	}
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	for _, delta := range []time.Duration{-5 * time.Minute, time.Minute} {
+		if _, err := extensionObservedAt(now.Add(delta).Format(time.RFC3339Nano), now); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -5,9 +5,11 @@ const usageInterval = 30 * 60 * 1000;
 // Spend moved since the cached costs were read: refetch them, but not more
 // often than this.
 const usageRetry = 5 * 60 * 1000;
+const retainedCostAge = 60 * 60 * 1000;
 
-async function readConsole(getJSON, now, cache) {
-  const time = new Date(now).getTime();
+async function readConsole(getJSON, now, cache, post = async () => {}) {
+  const clock = typeof now === "function" ? now : () => now;
+  const time = new Date(clock()).getTime();
   if (!Number.isFinite(time) || !cache || typeof cache !== "object") throw new Error("Invalid poll state");
   const changed = () => { throw new Error("Claude Console credit data changed format"); };
   const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -53,6 +55,8 @@ async function readConsole(getJSON, now, cache) {
     seen.add(pool);
     const base = "/api/organizations/" + encodeURIComponent(id);
     let credits, spend;
+    const observedAt = new Date(clock()).toISOString();
+    const observedTime = Date.parse(observedAt);
     try {
       [credits, spend] = await Promise.all([request(base + "/prepaid/credits"), request(base + "/current_spend")]);
     } catch (error) {
@@ -113,24 +117,28 @@ async function readConsole(getJSON, now, cache) {
       Math.abs(Object.entries(daily).filter(([date]) => date.startsWith(month))
         .reduce((sum, [, value]) => sum + value, 0) - spend.amount) <= Math.max(5, spend.amount * 0.1);
     let entry = cache[pool];
-    const age = entry && Number.isFinite(entry.at) && entry.at <= time ? time - entry.at : Infinity;
-    if (age >= usageInterval || (!reconciles(entry.daily) && age >= usageRetry)) {
+    const age = entry && Number.isFinite(entry.at) && entry.at <= observedTime ? observedTime - entry.at : Infinity;
+    if (age >= usageInterval || ((!Number.isFinite(entry.reconciledAt) || !reconciles(entry.daily)) && age >= usageRetry)) {
       const daily = await readCosts();
       if (reconciles(daily)) {
-        entry = { at: time, daily };
+        entry = { at: observedTime, reconciledAt: observedTime, daily };
       } else if (entry) {
         // Cost reports can lag spend by minutes. Keep the last costs that
         // matched, so only the pace lags; the balance and spend stay current.
-        entry = { ...entry, at: time };
+        entry = { ...entry, at: observedTime };
       } else {
         continue;
       }
       // Only hashed pool IDs and aggregate costs survive worker restarts.
       cache[pool] = entry;
     }
-    payloads.push({ pool, name: String(organization.name || "Claude API").trim().slice(0, 120),
+    if (!Number.isFinite(entry.reconciledAt) || entry.reconciledAt > observedTime ||
+        observedTime - entry.reconciledAt > retainedCostAge) continue;
+    const payload = { pool, observed_at: observedAt, name: String(organization.name || "Claude API").trim().slice(0, 120),
       currency: credits.currency.toUpperCase(), balance, grants, month_spend: spend.amount,
-      month_resets_at: spend.resets_at, daily: entry.daily, link });
+      month_resets_at: spend.resets_at, daily: entry.daily, link };
+    await post(payload);
+    payloads.push(payload);
   }
   for (const pool of Object.keys(cache)) {
     if (!seen.has(pool)) delete cache[pool];

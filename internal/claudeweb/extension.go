@@ -111,6 +111,7 @@ type extensionLink struct {
 
 // Shadow the bookmark's nonce and link; nonce is not accepted on this route.
 type extensionCreditsPayload struct {
+	ObservedAt    string             `json:"observed_at"`
 	Pool          string             `json:"pool"`
 	Name          string             `json:"name"`
 	Currency      string             `json:"currency"`
@@ -162,12 +163,17 @@ func extensionHandler(accounts func() []Account, saved func()) http.Handler {
 				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
 				return
 			}
+			observedAt, err := extensionObservedAt(payload.ObservedAt, now)
+			if err != nil {
+				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
+				return
+			}
 			shared := creditsPayload{
 				Pool: payload.Pool, Name: payload.Name, Currency: payload.Currency,
 				Balance: payload.Balance, Grants: payload.Grants, MonthSpend: payload.MonthSpend,
 				MonthResetsAt: payload.MonthResetsAt, Daily: payload.Daily,
 			}
-			pool, err := shared.pool(now)
+			pool, err := shared.pool(observedAt)
 			if err != nil {
 				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
 				return
@@ -196,7 +202,7 @@ func extensionHandler(accounts func() []Account, saved func()) http.Handler {
 				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
 				return
 			}
-			if WriteAPICreditPool(pool) != nil || writeExtensionState(ExtensionState{}) != nil {
+			if WriteAPICreditPool(pool) != nil {
 				http.Error(w, msgSaveFailed, http.StatusInternalServerError)
 				return
 			}
@@ -206,4 +212,12 @@ func extensionHandler(accounts func() []Account, saved func()) http.Handler {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+func extensionObservedAt(value string, now time.Time) (time.Time, error) {
+	observed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil || observed.IsZero() || observed.After(now.Add(time.Minute)) || observed.Before(now.Add(-5*time.Minute)) {
+		return time.Time{}, fmt.Errorf("invalid observation time")
+	}
+	return observed, nil
 }
