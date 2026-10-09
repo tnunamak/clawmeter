@@ -34,9 +34,12 @@ type UsageCreditPool struct {
 	Expiring  int64     `json:"expiring,omitempty"`
 	// BurnPerDay is the average daily spend over BurnDays (at most 7) of
 	// console cost data ending at ObservedAt.
-	BurnPerDay float64   `json:"burn_per_day"`
-	BurnDays   int       `json:"burn_days"`
-	ObservedAt time.Time `json:"observed_at"`
+	BurnPerDay        float64   `json:"burn_per_day"`
+	BurnDays          int       `json:"burn_days"`
+	ObservedAt        time.Time `json:"observed_at"`
+	Live              bool      `json:"live"`
+	ObservationSource string    `json:"observation_source,omitempty"`
+	SignedOut         bool      `json:"signed_out,omitempty"`
 	// Projection from ObservedAt at BurnPerDay, set only with ExpiresAt.
 	ProjectedSpend  int64     `json:"projected_spend_before_expiry,omitempty"`
 	ProjectedUnused int64     `json:"projected_unused_at_expiry,omitempty"`
@@ -154,7 +157,9 @@ func (p UsageCreditPool) Summary(now time.Time) string {
 	default:
 		parts = append(parts, "on pace to spend "+formatMinorUnits(int(p.ProjectedSpend), p.Currency)+" more before it expires "+expiryTime(p.ExpiresAt, now))
 	}
-	parts = append(parts, "checked "+shortDate(p.ObservedAt, now))
+	if freshness := p.freshness(now); freshness != "" {
+		parts = append(parts, freshness)
+	}
 	return strings.Join(parts, " · ")
 }
 
@@ -171,8 +176,28 @@ func (p UsageCreditPool) TrayLine(now time.Time) string {
 	case !p.ExpiresAt.IsZero():
 		parts = append(parts, formatMinorUnits(int(p.ProjectedUnused), p.Currency)+" expires "+expiryTime(p.ExpiresAt, now))
 	}
-	parts = append(parts, "checked "+shortDate(p.ObservedAt, now))
+	if freshness := p.freshness(now); freshness != "" {
+		parts = append(parts, freshness)
+	}
 	return strings.Join(parts, " · ")
+}
+
+// IsLive also checks age when a cached pool is rendered.
+func (p UsageCreditPool) IsLive(now time.Time) bool {
+	return p.Live && !p.SignedOut && now.Sub(p.ObservedAt) <= 5*time.Minute
+}
+
+func (p UsageCreditPool) freshness(now time.Time) string {
+	if p.ObservationSource != "extension" {
+		return "checked " + shortDate(p.ObservedAt, now)
+	}
+	if p.SignedOut {
+		return "sign in to the Claude Console in your browser"
+	}
+	if p.IsLive(now) {
+		return ""
+	}
+	return "not updated since " + p.ObservedAt.Local().Format("15:04") + " · is your browser open?"
 }
 
 // expiryTime shows the local date and time. Consoles often show expiry as a
@@ -186,7 +211,14 @@ func expiryTime(t, now time.Time) string {
 }
 
 func (p UsageCreditPool) expiredLine(now time.Time) string {
-	return "credits expired " + expiryTime(p.ExpiredSinceCheck, now) + ", after the last check · check again"
+	line := "credits expired " + expiryTime(p.ExpiredSinceCheck, now) + ", after the last check"
+	if p.ObservationSource == "extension" {
+		if freshness := p.freshness(now); freshness != "" {
+			return line + " · " + freshness
+		}
+		return line
+	}
+	return line + " · check again"
 }
 
 // MarshalJSON omits unknown times instead of serializing Go's zero time.

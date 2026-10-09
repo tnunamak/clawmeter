@@ -25,6 +25,7 @@ const consoleOrigin = "https://platform.claude.com"
 // never stored. Amounts are minor units of Currency; DailySpend values are
 // fractional minor units keyed by UTC date, as the Console reports them.
 type APICreditPool struct {
+	Source        string             `json:"source,omitempty"`
 	Pool          string             `json:"pool"`
 	Name          string             `json:"name"`
 	Currency      string             `json:"currency"`
@@ -76,6 +77,9 @@ const (
 // Validate rejects a snapshot Clawmeter can't trust, so a changed Console
 // format never shows as a wrong balance.
 func (p APICreditPool) Validate() error {
+	if p.Source != "" && p.Source != "bookmark" && p.Source != "extension" {
+		return fmt.Errorf("invalid source")
+	}
 	if !poolIDPattern.MatchString(p.Pool) {
 		return fmt.Errorf("invalid pool")
 	}
@@ -174,6 +178,9 @@ func ReadAPICreditPools() ([]APICreditPool, error) {
 		if json.Unmarshal(data, &pool) != nil || pool.Validate() != nil || filepath.Base(path) != apiCreditFilePrefix+pool.Pool[:16]+".json" {
 			continue
 		}
+		if pool.Source == "" {
+			pool.Source = "bookmark"
+		}
 		pools = append(pools, pool)
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].Name < pools[j].Name })
@@ -262,12 +269,15 @@ func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p creditsPayload) pool(now time.Time) (APICreditPool, error) {
+	if p.Balance == nil || p.MonthSpend == nil || p.Grants == nil || p.Daily == nil {
+		return APICreditPool{}, fmt.Errorf("missing credit data")
+	}
 	monthResetsAt, err := time.Parse(time.RFC3339Nano, p.MonthResetsAt)
 	if err != nil {
 		return APICreditPool{}, fmt.Errorf("invalid month reset")
 	}
 	pool := APICreditPool{
-		Pool: p.Pool, Name: p.Name, Currency: p.Currency, Balance: *p.Balance,
+		Source: "bookmark", Pool: p.Pool, Name: p.Name, Currency: p.Currency, Balance: *p.Balance,
 		MonthSpend: *p.MonthSpend, MonthResetsAt: monthResetsAt, DailySpend: p.Daily, ObservedAt: now,
 	}
 	if len(p.Grants) > maxGrants {

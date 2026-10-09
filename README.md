@@ -95,7 +95,18 @@ it. `clawmeter claude-web-bookmarklet` prints the bookmark URL.
 Prepaid Claude API credits (for example the monthly API credit a Max plan
 grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
 Admin API is unavailable to individual accounts. Clawmeter reads them from the
-Claude Console with the same bookmark: choose **Check API credits** in the
+Claude Console through the Clawmeter Chrome extension:
+
+1. Open the browser's Extensions page and enable **Developer mode**.
+2. Choose **Load unpacked** and select this repository's `extension` folder.
+3. Sign in to the Claude Console and keep the browser and Clawmeter tray running.
+
+The extension checks each minute. A reading is live for up to five minutes;
+older readings keep their numbers with a browser reminder, and signing out
+shows a sign-in reminder. Usage-cost reports used for the pace are cached for
+30 minutes; readings that no longer reconcile with current spend are rejected.
+
+The bookmark remains a one-off fallback: choose **Check API credits** in the
 tray, open the Claude Console, and click the bookmark there.
 
 When a Claude plan funds the organization (the Console links it to that
@@ -120,9 +131,10 @@ dates. The bookmark refuses to send data when the Console's daily costs and its
 month total disagree. `clawmeter status --agent` lists every pool under
 `api_credits=[...]` with exact amounts so agents can budget API spend.
 
-The bookmark sends a hash of the organization ID, never the ID, and Clawmeter
-stores no cookies. Like resets, a pool is a snapshot: check again after heavy
-API use.
+The bookmark sends a hash of the organization ID, never the ID. The extension
+sends the linked plan organization ID only to the local receiver, which hashes
+it before saving. Clawmeter stores no cookies or raw organization IDs. Bookmark
+checks remain snapshots: check again after heavy API use.
 
 ## Read The Icon
 

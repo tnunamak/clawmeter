@@ -84,3 +84,22 @@ func TestFoldedCreditPoolsLeaveNoEmptyRow(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentCreditPoolFreshness(t *testing.T) {
+	now := time.Now()
+	pool := provider.UsageCreditPool{Name: "Org", Currency: "USD", Balance: 100, ObservedAt: now, Live: true, ObservationSource: "extension"}
+	got := creditPoolOutput(pool).AgentSummary()
+	if !strings.Contains(got, "live=true") || strings.Contains(got, "updated_at=") || !strings.Contains(got, "snapshot=false") {
+		t.Fatalf("live summary = %q", got)
+	}
+	pool.ObservedAt = now.Add(-6 * time.Minute)
+	got = creditPoolOutput(pool).AgentSummary()
+	if !strings.Contains(got, "live=false") || !strings.Contains(got, "updated_at="+pool.ObservedAt.Local().Format(time.RFC3339)) {
+		t.Fatalf("stale summary = %q", got)
+	}
+	pool.ExpiredSinceCheck = now.Add(-time.Minute)
+	got = creditPoolOutput(pool).AgentSummary()
+	if !strings.Contains(got, "live=false") || !strings.Contains(got, "updated_at=") || !strings.Contains(got, "balance=unknown") {
+		t.Fatalf("expired summary = %q", got)
+	}
+}
