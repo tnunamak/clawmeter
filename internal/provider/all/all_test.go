@@ -308,6 +308,12 @@ func TestInvalidConfiguredSourcesDoNotRegisterLegacyBase(t *testing.T) {
 	}
 }
 
+func TestSourceValidatorAcceptsLocalProviderWithoutSources(t *testing.T) {
+	if err := SourceValidator()("claude_api", nil); err != nil {
+		t.Fatalf("claude_api with no sources should validate, got %v", err)
+	}
+}
+
 func TestIsKnown(t *testing.T) {
 	if !IsKnown("openai") {
 		t.Error("openai should be known")
