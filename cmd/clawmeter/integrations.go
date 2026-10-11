@@ -55,7 +55,7 @@ func setupTmuxIntegration(dryRun bool) integrationResult {
 	return integrationResult{Name: "tmux", Status: "installed", Detail: "prepended clawmeter statusline", Changed: true}
 }
 
-func setupClaudeStatuslineIntegration(dryRun bool, force ...bool) integrationResult {
+func setupClaudeStatuslineIntegration(dryRun, force bool) integrationResult {
 	path, err := claudeSettingsPath()
 	if err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
@@ -78,7 +78,7 @@ func setupClaudeStatuslineIntegration(dryRun bool, force ...bool) integrationRes
 			}
 		}
 	}
-	next, changed, err := mergeClaudeStatusLine(data, force...)
+	next, changed, err := mergeClaudeStatusLine(data, force)
 	if err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
@@ -152,7 +152,7 @@ func claudeSettingsPath() (string, error) {
 	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-func mergeClaudeStatusLine(data []byte, force ...bool) ([]byte, bool, error) {
+func mergeClaudeStatusLine(data []byte, force bool) ([]byte, bool, error) {
 	settings := map[string]any{}
 	if len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &settings); err != nil {
@@ -174,7 +174,7 @@ func mergeClaudeStatusLine(data []byte, force ...bool) ([]byte, bool, error) {
 		}
 	}
 
-	if _, exists := settings["statusLine"]; exists && (len(force) == 0 || !force[0]) {
+	if _, exists := settings["statusLine"]; exists && !force {
 		return data, false, nil
 	}
 

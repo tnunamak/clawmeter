@@ -299,6 +299,7 @@ func setupCmd(args []string) int {
 	tmuxFlag := fs.Bool("tmux", false, "install tmux status-right integration")
 	claudeFlag := fs.Bool("claude-statusline", false, "install Claude Code statusline integration")
 	dryRun := fs.Bool("dry-run", false, "show changes without writing files or tmux settings")
+	force := fs.Bool("force", false, "replace an existing custom Claude Code statusline")
 	fs.Parse(args)
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "clawmeter: setup does not take positional arguments\n")
@@ -315,7 +316,7 @@ func setupCmd(args []string) int {
 			printIntegrationResult(setupTmuxIntegration(*dryRun))
 		}
 		if *claudeFlag {
-			printIntegrationResult(setupClaudeStatuslineIntegration(*dryRun))
+			printIntegrationResult(setupClaudeStatuslineIntegration(*dryRun, *force))
 		}
 		fmt.Println()
 		fmt.Println("Agent pull command: clawmeter status --agent")

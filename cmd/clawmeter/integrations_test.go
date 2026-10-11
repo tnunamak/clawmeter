@@ -32,7 +32,7 @@ func TestTmuxStatusRightWithClawmeter_PrependsAndIsIdempotent(t *testing.T) {
 }
 
 func TestMergeClaudeStatusLine_CreatesSettings(t *testing.T) {
-	out, changed, err := mergeClaudeStatusLine(nil)
+	out, changed, err := mergeClaudeStatusLine(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestMergeClaudeStatusLine_CreatesSettings(t *testing.T) {
 
 func TestMergeClaudeStatusLine_PreservesExistingSettings(t *testing.T) {
 	input := []byte(`{"permissions":{"allow":["Bash(go test ./...)"]},"model":"sonnet"}`)
-	out, changed, err := mergeClaudeStatusLine(input)
+	out, changed, err := mergeClaudeStatusLine(input, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestMergeClaudeStatusLine_PreservesExistingSettings(t *testing.T) {
 
 func TestMergeClaudeStatusLine_IsIdempotent(t *testing.T) {
 	input := []byte(`{"statusLine":{"type":"command","command":"clawmeter statusline"},"theme":"dark"}` + "\n")
-	out, changed, err := mergeClaudeStatusLine(input)
+	out, changed, err := mergeClaudeStatusLine(input, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestSetupClaudeStatuslineIntegration_WritesIsolatedHome(t *testing.T) {
 	t.Setenv("HOMEDRIVE", volume)
 	t.Setenv("HOMEPATH", strings.TrimPrefix(home, volume))
 
-	result := setupClaudeStatuslineIntegration(false)
+	result := setupClaudeStatuslineIntegration(false, false)
 	if result.Status != "installed" {
 		t.Fatalf("expected installed, got %#v", result)
 	}
@@ -114,7 +114,7 @@ func TestSetupClaudeStatuslineIntegration_WritesIsolatedHome(t *testing.T) {
 		t.Fatalf("settings missing command: %s", data)
 	}
 
-	result = setupClaudeStatuslineIntegration(false)
+	result = setupClaudeStatuslineIntegration(false, false)
 	if result.Status != "ok" {
 		t.Fatalf("expected idempotent ok, got %#v", result)
 	}
@@ -142,7 +142,7 @@ func TestClaudeSettingsUserLevelAndLegacyNotice(t *testing.T) {
 	if err := os.WriteFile(legacy, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := setupClaudeStatuslineIntegration(false)
+	result := setupClaudeStatuslineIntegration(false, false)
 	if result.Status != "installed" {
 		t.Errorf("expected user-level install, got %#v", result)
 	}
@@ -164,7 +164,7 @@ func TestClaudeNullSettings(t *testing.T) {
 			t.Errorf("null settings must not panic: %v", r)
 		}
 	}()
-	out, changed, err := mergeClaudeStatusLine([]byte("null"))
+	out, changed, err := mergeClaudeStatusLine([]byte("null"), false)
 	if err != nil || !changed || !json.Valid(out) {
 		t.Fatalf("null should become object: %q, %v, %v", out, changed, err)
 	}
@@ -177,7 +177,7 @@ func TestClaudeCustomStatuslinePreserved(t *testing.T) {
 		`{"statusLine":null}`,
 	} {
 		t.Run(input, func(t *testing.T) {
-			out, changed, err := mergeClaudeStatusLine([]byte(input))
+			out, changed, err := mergeClaudeStatusLine([]byte(input), false)
 			if err != nil || changed || string(out) != input {
 				t.Errorf("custom statusLine changed: %q, %v, %v", out, changed, err)
 			}
@@ -198,7 +198,7 @@ func TestClaudeCustomStatuslineOutput(t *testing.T) {
 	if err := os.WriteFile(path, input, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := setupClaudeStatuslineIntegration(false)
+	result := setupClaudeStatuslineIntegration(false, false)
 	if result.Changed || !strings.Contains(result.Detail, "preserved") {
 		t.Errorf("custom statusline must be reported preserved: %#v", result)
 	}
@@ -232,7 +232,7 @@ func TestClaudeBackupFailureAborts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result := setupClaudeStatuslineIntegration(false)
+	result := setupClaudeStatuslineIntegration(false, false)
 	if result.Status != "error" || result.Changed {
 		t.Errorf("backup failure must abort: %#v", result)
 	}
@@ -262,7 +262,7 @@ func TestClaudeSettingsAtomicReplacement(t *testing.T) {
 	if err := os.WriteFile(path+".tmp", []byte("sentinel"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := setupClaudeStatuslineIntegration(false)
+	result := setupClaudeStatuslineIntegration(false, false)
 	if result.Status != "installed" {
 		t.Fatalf("install failed: %#v", result)
 	}
@@ -277,10 +277,6 @@ func TestClaudeSettingsAtomicReplacement(t *testing.T) {
 }
 
 func TestClaudeForceReplacesCustomStatusline(t *testing.T) {
-	setup, ok := any(setupClaudeStatuslineIntegration).(func(bool, ...bool) integrationResult)
-	if !ok {
-		t.Fatal("setup must accept an explicit force option")
-	}
 	integrationTestHome(t)
 	path, err := claudeSettingsPath()
 	if err != nil {
@@ -293,14 +289,14 @@ func TestClaudeForceReplacesCustomStatusline(t *testing.T) {
 	if err := os.WriteFile(path, input, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := setup(true, true); got.Status != "would change" {
+	if got := setupClaudeStatuslineIntegration(true, true); got.Status != "would change" {
 		t.Fatalf("force preview: %#v", got)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != string(input) {
 		t.Fatal("dry run changed settings")
 	}
-	result := setup(false, true)
+	result := setupClaudeStatuslineIntegration(false, true)
 	if result.Status != "installed" || !result.Changed {
 		t.Fatalf("force did not install: %#v", result)
 	}
