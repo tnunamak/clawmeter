@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const sumsName = "SHA256SUMS.txt"
+const (
+	sumsName   = "SHA256SUMS.txt"
+	bundleName = sumsName + ".sigstore.json"
+)
 
 func validateDownloadURL(u *url.URL) error {
 	if u.Scheme != "https" || u.User != nil || u.Opaque != "" || (u.Port() != "" && u.Port() != "443") {
@@ -105,9 +108,12 @@ func downloadSums(ctx context.Context, raw string) ([]byte, error) {
 	return data, nil
 }
 
-// verifyArtifact is the integrity gate, before chmod, execution, or replacement.
-// A future release can add signature verification here.
-func verifyArtifact(filename, asset string, sums []byte) error {
+// verifyArtifact authenticates checksums before checking the binary, chmod,
+// execution, or replacement.
+func verifyArtifact(filename, asset string, sums, bundle []byte) error {
+	if err := verifySums(sums, bundle); err != nil {
+		return fmt.Errorf("checksum signature: %w", err)
+	}
 	var expected string
 	matches := 0
 	scanner := bufio.NewScanner(strings.NewReader(string(sums)))

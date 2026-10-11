@@ -150,8 +150,9 @@ var (
 		cmd.WaitDelay = time.Second
 		return cmd.Run()
 	}
-	renameFile   = os.Rename
-	copyArtifact = io.Copy
+	renameFile    = os.Rename
+	chmodArtifact = os.Chmod
+	copyArtifact  = io.Copy
 )
 
 func ApplyTo(ctx context.Context, rawURL, exe string) error {
@@ -165,6 +166,10 @@ func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	sums, err := downloadSums(ctx, sumsURL)
 	if err != nil {
 		return err
+	}
+	bundle, err := downloadSums(ctx, sumsURL+".sigstore.json")
+	if err != nil {
+		return fmt.Errorf("download signature bundle: %w", err)
 	}
 
 	// Stage on the destination filesystem so Unix replacement is one rename.
@@ -195,10 +200,10 @@ func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close binary: %w", err)
 	}
-	if err := verifyArtifact(tmpBin, asset, sums); err != nil {
+	if err := verifyArtifact(tmpBin, asset, sums, bundle); err != nil {
 		return fmt.Errorf("verify artifact: %w", err)
 	}
-	if err := os.Chmod(tmpBin, 0755); err != nil {
+	if err := chmodArtifact(tmpBin, 0755); err != nil {
 		return fmt.Errorf("chmod: %w", err)
 	}
 

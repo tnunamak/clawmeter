@@ -19,10 +19,15 @@ import (
 // hooks. security_test.go is independently runnable on the unmodified base.
 func stubUpdate(t *testing.T, sums string) (exe string, runs, renames *int) {
 	t.Helper()
-	oldTransport, oldRun, oldRename, oldCopy := http.DefaultTransport, runSmoke, renameFile, copyArtifact
+	oldTransport, oldRun, oldRename, oldCopy, oldVerify := http.DefaultTransport, runSmoke, renameFile, copyArtifact, verifySums
 	t.Cleanup(func() {
 		http.DefaultTransport, runSmoke, renameFile, copyArtifact = oldTransport, oldRun, oldRename, oldCopy
+		verifySums = oldVerify
 	})
+	signature, trusted := signedFixture(t, []byte(sums), releaseIdentity, releaseIssuer)
+	verifySums = func(sums, signature []byte) error {
+		return verifyChecksumSignatureWithRoot(sums, signature, trusted)
+	}
 	dir := t.TempDir()
 	exe = filepath.Join(dir, "clawmeter")
 	if err := os.WriteFile(exe, []byte("original"), 0700); err != nil {
@@ -33,6 +38,8 @@ func stubUpdate(t *testing.T, sums string) (exe string, runs, renames *int) {
 		data := "verified fixture, never executed"
 		if strings.HasSuffix(r.URL.Path, "/SHA256SUMS.txt") {
 			data = sums
+		} else if strings.HasSuffix(r.URL.Path, "/"+bundleName) {
+			data = string(signature)
 		}
 		return fixtureResponse(r, 200, data), nil
 	})
@@ -48,9 +55,6 @@ func stubUpdate(t *testing.T, sums string) (exe string, runs, renames *int) {
 		got, err := os.ReadFile(staged)
 		if err != nil || string(got) != "verified fixture, never executed" {
 			t.Errorf("unexpected staged data: %q %v", got, err)
-		}
-		if err := verifyArtifact(staged, "clawmeter-linux-amd64", []byte(validFixtureSums())); err != nil {
-			t.Errorf("runner reached unverified data: %v", err)
 		}
 		return nil
 	}
@@ -113,7 +117,7 @@ func TestApplyRejectsRedirectBeforeTransport(t *testing.T) {
 		"https://objects.githubusercontent.com.evil.example/payload",
 		"https://release-assets.githubusercontent.com:444/payload",
 	} {
-		for _, resource := range []string{"sums", "binary"} {
+		for _, resource := range []string{"sums", "bundle", "binary"} {
 			t.Run(resource+"_"+target, func(t *testing.T) {
 				exe, runs, renames := stubUpdate(t, validFixtureSums())
 				base := http.DefaultTransport
@@ -123,8 +127,14 @@ func TestApplyRejectsRedirectBeforeTransport(t *testing.T) {
 						forbiddenRequests++
 						return nil, errors.New("forbidden transport reached")
 					}
-					isSums := strings.HasSuffix(r.URL.Path, "/SHA256SUMS.txt")
-					if (resource == "sums") == isSums {
+					requestResource := "binary"
+					if strings.HasSuffix(r.URL.Path, "/"+sumsName) {
+						requestResource = "sums"
+					}
+					if strings.HasSuffix(r.URL.Path, "/"+bundleName) {
+						requestResource = "bundle"
+					}
+					if resource == requestResource {
 						res := fixtureResponse(r, 302, "")
 						res.Header.Set("Location", target)
 						return res, nil

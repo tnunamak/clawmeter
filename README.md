@@ -50,6 +50,9 @@ Advanced/manual fallback: download `clawmeter-windows-amd64.exe` from the same r
 
 You can also download `.deb`, `.rpm`, macOS, Linux, and Windows binaries from the [latest release](https://github.com/tnunamak/clawmeter/releases/latest).
 
+For signed releases, download `SHA256SUMS.txt` and `SHA256SUMS.txt.sigstore.json`, then use the [manual verification commands](SECURITY.md#release-integrity) before checking the binary's SHA-256.
+The self-updater requires a Sigstore signature from this repository's release workflow and transparency-log evidence, then checks the binary's SHA-256 before granting execute permission or replacing the installed binary.
+
 Then run:
 
 ```bash
