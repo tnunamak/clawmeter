@@ -36,7 +36,15 @@ dry_run="${WINGET_DRY_RUN:-0}"
 target_parent="manifests/t/tnunamak/Clawmeter"
 
 package_exists_upstream() {
-  gh api "repos/${upstream_repo}/contents/${target_parent}" >/dev/null 2>&1
+  local response
+  if response="$(gh api --include "repos/${upstream_repo}/contents/${target_parent}" 2>/dev/null)"; then
+    return 0
+  fi
+  if [[ "$response" =~ ^HTTP/[^[:space:]]+[[:space:]]+404([[:space:]]|$) ]]; then
+    return 1
+  fi
+  echo "upstream package lookup failed" >&2
+  return 2
 }
 
 open_package_prs() {
@@ -78,6 +86,8 @@ fi
 if package_exists_upstream; then
   kind="New version"
 else
+  lookup_status=$?
+  [[ "$lookup_status" -eq 1 ]] || exit "$lookup_status"
   kind="New package"
 fi
 
