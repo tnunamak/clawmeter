@@ -42,10 +42,11 @@ func color(projectedPct float64) string {
 const reset = "\033[0m"
 
 func bar(pct float64) string {
-	filled := int(math.Round(pct / 100 * barWidth))
-	if filled > barWidth {
-		filled = barWidth
+	if math.IsNaN(pct) || math.IsInf(pct, 0) {
+		pct = 0
 	}
+	pct = max(0, min(100, pct))
+	filled := int(math.Round(pct / 100 * barWidth))
 	return strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 }
 
@@ -373,6 +374,10 @@ func (m *MultiProviderOutput) StatusLineSummary() string {
 		return "CM no quota data"
 	}
 
+	if pf.Data.Stale {
+		return fmt.Sprintf("CM~ %s %s last %.0f%% stale", pf.Display, window.Name, window.Utilization)
+	}
+
 	prefix := "CM"
 	if proj.ProjectedPct >= 100 {
 		prefix = "CM!"
@@ -482,6 +487,9 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		tier := classifyProvider(pf).tier
 		for _, window := range pf.Data.PresentationWindows() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+			if pf.Data.Stale {
+				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
+			}
 			quotas = append(quotas, agentQuotaSummary{
 				Provider: pf.Display,
 				Window:   window,
@@ -708,6 +716,9 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		tier := classifyProvider(pf).tier
 		for _, window := range pf.Data.PresentationWindows() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+			if pf.Data.Stale {
+				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
+			}
 			if bestPF == nil || tier < bestTier || (tier == bestTier && compareWindowRisk(window, proj, bestWindow, bestProj) < 0) {
 				bestPF = pf
 				bestWindow = window
@@ -1214,6 +1225,10 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 		if !provider.UsageDataMatchesSource(data, p.Name(), provider.SourceID(p)) ||
 			!cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
+		}
+		if data != nil && cacheEntry.IsStale() && data.HasPresentableUsage() {
+			data = data.Clone()
+			data.MarkStale("cache expired")
 		}
 		sources[key] = data
 	}
