@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestMergeClaudeStatusLine_PreservesExistingSettings(t *testing.T) {
 	if settings["model"] != "sonnet" {
 		t.Fatalf("model setting was not preserved: %#v", settings)
 	}
-	if _, ok := settings["permissions"].(map[string]any); !ok {
+	if !reflect.DeepEqual(settings["permissions"], map[string]any{"allow": []any{"Bash(go test ./...)"}}) {
 		t.Fatalf("permissions setting was not preserved: %#v", settings)
 	}
 }
