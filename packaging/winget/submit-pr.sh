@@ -103,6 +103,17 @@ if (( ${#existing_package_prs[@]} > 1 )); then
 fi
 if (( ${#existing_package_prs[@]} == 1 )); then
   existing_package_pr="${existing_package_prs[0]}"
+  existing_title="$(cut -f2 <<<"$existing_package_pr")"
+  pending_version="${existing_title##* version }"
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! "$pending_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "refusing to replace an open PR with an unrecognized version" >&2
+    exit 1
+  fi
+  newest="$(printf '%s\n' "$version" "$pending_version" | sort -V | tail -n 1)"
+  if [[ "$newest" != "$version" ]]; then
+    echo "refusing to replace newer pending version ${pending_version} with ${version}" >&2
+    exit 1
+  fi
   existing_number="$(cut -f1 <<<"$existing_package_pr")"
   existing_url="$(cut -f3 <<<"$existing_package_pr")"
   branch="$(cut -f4 <<<"$existing_package_pr")"
