@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-const trayDoubleClickWindow = 240 * time.Millisecond
+// defaultDoubleClickWindow is used where the OS does not tell us its setting.
+const defaultDoubleClickWindow = 240 * time.Millisecond
 
 type iconClickAction int
 
