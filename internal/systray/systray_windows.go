@@ -38,6 +38,7 @@ var (
 
 	k32              = windows.NewLazySystemDLL("Kernel32.dll")
 	pGetModuleHandle = k32.NewProc("GetModuleHandleW")
+	pLstrcmp         = k32.NewProc("lstrcmpW")
 
 	s32              = windows.NewLazySystemDLL("Shell32.dll")
 	pShellNotifyIcon = s32.NewProc("Shell_NotifyIconW")
@@ -204,6 +205,9 @@ func (t *winTray) readd() {
 			}
 			t.muNID.Unlock()
 			if ok {
+				// Refresh only after registration succeeds so a DPI/theme
+				// change during Explorer's restart is not lost.
+				notifyAppearanceChange()
 				return
 			}
 		}
@@ -407,16 +411,42 @@ func (t *winTray) setTooltip(src string) error {
 
 var wt = winTray{}
 
+var appearanceChange = struct {
+	sync.RWMutex
+	handler func()
+}{}
+
+// SetAppearanceChangeHandler registers a callback for taskbar appearance,
+// DPI, display, and successful Explorer-restart changes.
+func SetAppearanceChangeHandler(handler func()) {
+	appearanceChange.Lock()
+	appearanceChange.handler = handler
+	appearanceChange.Unlock()
+}
+
+func notifyAppearanceChange() {
+	appearanceChange.RLock()
+	handler := appearanceChange.handler
+	appearanceChange.RUnlock()
+	if handler != nil {
+		go handler()
+	}
+}
+
 // WindowProc callback function that processes messages sent to a window.
 // https://msdn.microsoft.com/en-us/library/windows/desktop/ms633573(v=vs.85).aspx
 func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam uintptr) (lResult uintptr) {
 	const (
-		WM_RBUTTONUP  = 0x0205
-		WM_LBUTTONUP  = 0x0202
-		WM_COMMAND    = 0x0111
-		WM_ENDSESSION = 0x0016
-		WM_CLOSE      = 0x0010
-		WM_DESTROY    = 0x0002
+		WM_RBUTTONUP     = 0x0205
+		WM_LBUTTONUP     = 0x0202
+		WM_COMMAND       = 0x0111
+		WM_SETTINGCHANGE = 0x001A
+		WM_DISPLAYCHANGE = 0x007E
+		WM_DPICHANGED    = 0x02E0
+		WM_THEMECHANGED  = 0x031A
+		WM_ENDSESSION    = 0x0016
+		WM_CLOSE         = 0x0010
+		WM_DESTROY       = 0x0002
 	)
 	switch message {
 	case WM_COMMAND:
@@ -448,6 +478,12 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		}
 	case t.wmTaskbarCreated: // on explorer.exe restarts
 		t.readd()
+	case WM_SETTINGCHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_THEMECHANGED:
+		// Settings changes include taskbar moves and sizing changes, not just
+		// ImmersiveColorSet. The callback samples the actual taskbar's DPI,
+		// rather than assuming this hidden window is on the same monitor.
+		notifyAppearanceChange()
+		fallthrough
 	default:
 		// Calls the default window procedure to provide default processing for any window messages that an application does not process.
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/ms633572(v=vs.85).aspx
@@ -1018,7 +1054,7 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	}
 	bmi.BmiHeader.BiSize = uint32(unsafe.Sizeof(bmi.BmiHeader))
 
-	var bits uintptr
+	var bits unsafe.Pointer // set by CreateDIBSection; OS-owned memory
 	hColorBmp, _, _ := pCreateDIBSection.Call(
 		hMemDC,
 		uintptr(unsafe.Pointer(&bmi)),
@@ -1034,7 +1070,7 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	defer pDeleteObject.Call(hColorBmp)
 
 	// Write BGRA pixel data into the DIB.
-	pixelData := unsafe.Slice((*byte)(unsafe.Pointer(bits)), int(w)*int(h)*4)
+	pixelData := unsafe.Slice((*byte)(bits), int(w)*int(h)*4)
 	for y := int32(0); y < h; y++ {
 		for x := int32(0); x < w; x++ {
 			r, g, b, a := img.At(bounds.Min.X+int(x), bounds.Min.Y+int(y)).RGBA()
