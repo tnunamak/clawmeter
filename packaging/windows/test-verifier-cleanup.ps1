@@ -13,7 +13,7 @@ try {
     $global:installed = $false
     $global:capturedArguments = @()
     function Get-ChildItem {
-        if ($global:installed) { [pscustomobject]@{ FullName = $global:fixtureUninstaller; LastWriteTime = Get-Date } }
+        if ($global:installed -and -not $global:noUninstaller) { [pscustomobject]@{ FullName = $global:fixtureUninstaller; LastWriteTime = Get-Date } }
     }
     function Remove-ItemProperty { }
     function Start-Process {
@@ -29,6 +29,21 @@ try {
     if (-not (Test-Path $marker)) { throw 'installer assertion failure left the installed fixture behind' }
     if ($global:capturedArguments -match '/TASKS=') { throw 'default verification overrode installer task defaults' }
     Remove-Item $marker
+
+    $global:installed = $false
+    $global:noUninstaller = $true
+    $partialInstall = Join-Path $root 'Programs\Clawmeter'
+    function Start-Process {
+        param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru)
+        $global:installed = $true
+        New-Item -ItemType Directory -Force $partialInstall | Out-Null
+        [pscustomobject]@{ ExitCode = 1 }
+    }
+    $failed = $false
+    try { & (Join-Path $PSScriptRoot 'verify-installer.ps1') -InstallerPath $installer -WarningAction SilentlyContinue } catch { $failed = $true }
+    if (-not $failed) { throw 'failed installer did not fail verification' }
+    if (Test-Path $partialInstall) { throw 'partial installation without an uninstaller was left behind' }
+    $global:noUninstaller = $false
     }
 
     function winget {

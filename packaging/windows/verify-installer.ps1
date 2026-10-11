@@ -174,6 +174,7 @@ Wait-PathGone -Path $installDir
 $installationStarted = $false
 Assert-NotExists -Path $exePath -Message "removed installed clawmeter.exe"
 Assert-NotExists -Path $startMenu -Message "removed Start Menu shortcut"
+Assert-NotExists -Path $uninstallKey -Message "removed uninstall registry entry"
 
 $startupAfter = (Get-ItemProperty -Path $runKey -Name $runValue -ErrorAction SilentlyContinue).$runValue
 Assert-True -Condition ($null -eq $startupAfter) -Message "removed launch-at-login registry value"
@@ -193,6 +194,11 @@ finally {
             if ($cleanupUninstaller) {
                 & $cleanupUninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
                 if ($LASTEXITCODE -ne 0) { Write-Warning "Cleanup uninstaller exited $LASTEXITCODE" }
+            } else {
+                Write-Warning "No uninstaller found; removing partial installation from $installDir"
+                Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+                Remove-Item -Force $startMenu -ErrorAction SilentlyContinue
+                Remove-ItemProperty -Path $runKey -Name $runValue -ErrorAction SilentlyContinue
             }
         } catch { Write-Warning "Installer cleanup failed: $_" }
     }

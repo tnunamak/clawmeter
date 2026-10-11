@@ -18,6 +18,7 @@ try {
  $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'verify-winget.ps1'), [ref]$tokens, [ref]$errors)
  function Assert-True { param([bool]$Condition, [string]$Message) if (-not $Condition) { throw $Message } }
  $blocks = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.IfStatementAst] -and $node.Extent.Text -match 'expected version' }, $true))
+ if ($errors.Count -ne 0 -or $blocks.Count -ne 2) { throw "expected two exact-version checks in verify-winget.ps1, found $($blocks.Count)" }
  $ExpectedVersion = '1.2.3'
  foreach ($actual in @('1.2.30', '11.2.3', '1.2.3-beta')) {
   $showOutput = "Version: $actual"

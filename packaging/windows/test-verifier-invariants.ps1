@@ -17,6 +17,8 @@ foreach ($name in @('verify-installer.ps1', 'verify-winget.ps1')) {
         } catch { $failed = $true }
         if (-not $failed) { throw "$name accepted an incorrect shortcut target or arguments" }
     }
+    $shortcut = [pscustomobject]@{ TargetPath = $exePath; Arguments = 'tray' }
+    foreach ($command in $assertions | Where-Object { $_.Extent.Text -match 'shortcut' }) { Invoke-Expression $command.Extent.Text }
     }
     $installDir = 'C:\Programs\Clawmeter'
     $pathPartsBefore = @('C:\keep-a', 'C:\keep-b')
@@ -26,5 +28,7 @@ foreach ($name in @('verify-installer.ps1', 'verify-winget.ps1')) {
         foreach ($command in $assertions | Where-Object { $_.Extent.Text -match 'preserved existing user PATH' }) { Invoke-Expression $command.Extent.Text }
     } catch { $failed = $true }
     if (-not $failed) { throw "$name accepted deletion of an unrelated PATH entry" }
+    $pathPartsAfter = @('C:\keep-a', 'C:\keep-b')
+    foreach ($command in $assertions | Where-Object { $_.Extent.Text -match 'preserved existing user PATH' }) { Invoke-Expression $command.Extent.Text }
 }
 Write-Host 'PASS shortcut and PATH preservation verifier regressions'
