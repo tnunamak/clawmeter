@@ -415,14 +415,14 @@ cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
 # Fetch recent releases (not just latest — latest may still be building).
-# Do not follow API redirects: the token must stay on api.github.com.
+# Ignore curlrc and do not follow API redirects: the token must stay on api.github.com.
 _api_url="https://api.github.com/repos/${REPO}/releases?per_page=5"
 _token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 if command -v curl >/dev/null 2>&1; then
   if [ -n "$_token" ]; then
-    _status="$(curl -fsS -H "Authorization: Bearer $_token" -w '%{http_code}' "$_api_url" -o "$TMPDIR/releases.json" 2>/dev/null)" || _status=""
+    _status="$(curl -q -fsS -H "Authorization: Bearer $_token" -w '%{http_code}' "$_api_url" -o "$TMPDIR/releases.json" 2>/dev/null)" || _status=""
   else
-    _status="$(curl -fsS -w '%{http_code}' "$_api_url" -o "$TMPDIR/releases.json" 2>/dev/null)" || _status=""
+    _status="$(curl -q -fsS -w '%{http_code}' "$_api_url" -o "$TMPDIR/releases.json" 2>/dev/null)" || _status=""
   fi
   _api_ok=0
   [ "$_status" = 200 ] && _api_ok=1
@@ -471,7 +471,7 @@ else
   fi
   _location="$(tr -d '\r' < "$TMPDIR/latest.headers" | awk 'tolower($1) == "location:" { print $2; exit }')"
   case "$_location" in
-    "https://github.com/${REPO}/releases/tag/"*) LATEST="${_location##*/}" ;;
+    "https://github.com/${REPO}/releases/tag/"*) LATEST="${_location#https://github.com/${REPO}/releases/tag/}" ;;
   esac
   if ! printf '%s\n' "$LATEST" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
     err "latest release redirect did not contain a valid version tag"

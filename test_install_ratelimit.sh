@@ -99,6 +99,11 @@ MOCK_LOCATION='https://github.com/tnunamak/clawmeter/releases/tag/v01.2.3' \
 [ ! -e "$INSTALL_DIR/clawmeter" ] || fail 'invalid tag installed a binary'
 printf 'PASS: shell rejects invalid fallback tag\n'
 
+MOCK_LOCATION='https://github.com/tnunamak/clawmeter/releases/tag/extra/v0.39.0' \
+  run_install && fail 'fallback accepted a redirect with an extra path segment'
+[ ! -e "$INSTALL_DIR/clawmeter" ] || fail 'extra path segment installed a binary'
+printf 'PASS: shell rejects noncanonical redirect path\n'
+
 rm -f "$SANDBOX/requests"
 unset GITHUB_TOKEN
 export MOCK_API_STATUS=429
@@ -162,6 +167,14 @@ try {
     if ($_.Exception.Message -notlike '*valid version tag*') { throw }
 }
 Write-Host 'PASS: PowerShell rejects invalid fallback tag'
+$script:location = 'https://github.com/tnunamak/clawmeter/releases/tag/extra/v0.39.0'
+try {
+    Get-LatestReleaseAsset | Out-Null
+    throw 'PowerShell accepted an extra redirect path segment'
+} catch {
+    if ($_.Exception.Message -notlike '*valid version tag*') { throw }
+}
+Write-Host 'PASS: PowerShell rejects noncanonical redirect path'
 $script:location = 'https://github.com/tnunamak/clawmeter/releases/tag/v0.39.0'
 Remove-Item Env:GITHUB_TOKEN
 $release = Get-LatestReleaseAsset
