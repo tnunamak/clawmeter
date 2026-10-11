@@ -56,3 +56,22 @@ jobs:
 
       - name: Validate packaging shell scripts
         run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
+
+      - name: Run Windows packaging PowerShell tests
+        shell: pwsh
+        run: |
+          Get-ChildItem packaging/windows -Filter test-*.ps1 | ForEach-Object {
+            pwsh -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Packaging regression failed: $($_.Name)" }
+          }
+
+      - name: Run packaging Python regression tests
+        run: |
+          python3 -m unittest discover -s packaging/winget -p 'test_*.py'
+          python3 -m unittest discover -s packaging/windows -p 'test_*.py'
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Verify Windows VM cleanup scope
+        run: |
+          bash -n scripts/windows-vm-smoke.sh scripts/test-windows-vm-smoke-scope.sh
+          bash scripts/test-windows-vm-smoke-scope.sh

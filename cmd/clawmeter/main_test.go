@@ -366,7 +366,14 @@ func TestProvidersList_DistinguishesDisabledFromDetected(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()
 
-	// Disable a provider.
+	// Seed a separately detected provider, then disable Codex.
+	path := filepath.Join(home, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"claudeAiOauth":{"accessToken":"synthetic-provider","expiresAt":4102444800000}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, stderr, code := runWithHome(t, bin, home, "config", "disable", "openai"); code != 0 {
 		t.Fatalf("disable: exit %d (%s)", code, stderr)
 	}
@@ -375,8 +382,17 @@ func TestProvidersList_DistinguishesDisabledFromDetected(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("providers: exit %d", code)
 	}
-	if !strings.Contains(stdout, "disabled") {
-		t.Errorf("expected 'disabled' in output: %s", stdout)
+	disabled, detected := false, false
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "○ Codex (") || strings.HasPrefix(strings.TrimSpace(line), "● Codex (") {
+			disabled = strings.Contains(line, "disabled")
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "● Claude (") {
+			detected = strings.Contains(line, "detected")
+		}
+	}
+	if !disabled || !detected {
+		t.Fatalf("expected disabled Codex row and detected Claude row: %s", stdout)
 	}
 	if strings.Contains(stdout, "Browser-observed Claude reset inventory") {
 		t.Errorf("internal Claude reset adapter leaked into provider list: %s", stdout)

@@ -57,10 +57,10 @@ $privacy = Resolve-Path (Join-Path $repoRoot "PRIVACY.md")
 $script = Resolve-Path (Join-Path $PSScriptRoot "clawmeter.iss")
 $compiler = Resolve-InnoCompiler -RequestedPath $CompilerPath
 $versionValue = $Version.TrimStart("v")
-$stage = Join-Path $repoRoot "tmp\inno-stage"
+$stage = Join-Path $repoRoot ("tmp\inno-stage-" + [Guid]::NewGuid().ToString("N"))
 $out = New-Item -ItemType Directory -Force -Path $OutputDir
 
-Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+try {
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item -Force $binary (Join-Path $stage "clawmeter.exe")
 Copy-Item -Force $icon (Join-Path $stage "clawmeter.ico")
@@ -95,3 +95,6 @@ if (!(Test-Path $setup)) {
 }
 
 Write-Host "Built $setup"
+} finally {
+    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+}

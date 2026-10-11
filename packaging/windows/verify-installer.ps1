@@ -66,6 +66,7 @@ function Wait-PathGone {
     while ((Test-Path $Path) -and ((Get-Date) -lt $deadline)) {
         Start-Sleep -Milliseconds 500
     }
+    if (Test-Path $Path) { throw "FAIL: path still exists after ${TimeoutSeconds}s: $Path" }
 }
 
 function Find-Uninstaller {
@@ -86,6 +87,8 @@ $runValue = "Clawmeter"
 $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{92EEFACA-DA48-4099-937D-F16E591F1DEE}_is1"
 $configPath = Join-Path $env:APPDATA "clawmeter\config.yaml"
 $configBackup = $null
+$installationStarted = $false
+$pathPartsBefore = @([Environment]::GetEnvironmentVariable("Path", "User") -split ";" | Where-Object { $_ -and $_.TrimEnd("\") -ne $installDir.TrimEnd("\") } | ForEach-Object { $_.TrimEnd("\") })
 
 if (Test-Path $configPath) {
     $configBackup = "$configPath.verify-backup-$([System.Guid]::NewGuid().ToString("N"))"
@@ -119,16 +122,20 @@ $tasks = $selectedTasks -join ","
 $arguments = @(
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
-    "/NORESTART",
-    "/TASKS=$tasks"
+    "/NORESTART"
 )
+if ($DisableUpdates -or $IncludeStartup) { $arguments += "/TASKS=$tasks" }
 
+$installationStarted = $true
 $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
 Assert-True -Condition ($process.ExitCode -eq 0) -Message "installer exited 0"
 Assert-True -Condition (Test-Path $exePath) -Message "installed clawmeter.exe"
 $uninstaller = Find-Uninstaller -InstallDirectory $installDir
 Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($uninstaller)) -Message "installed uninstaller"
 Assert-True -Condition (Test-Path $startMenu) -Message "created Start Menu shortcut"
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startMenu)
+Assert-True -Condition ($shortcut.TargetPath -eq $exePath) -Message "shortcut targets installed executable"
+Assert-True -Condition ($shortcut.Arguments.Trim() -eq "tray") -Message "shortcut launches tray mode"
 Assert-True -Condition (Test-Path $uninstallKey) -Message "created uninstall registry entry"
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -164,8 +171,10 @@ Assert-True -Condition ($LASTEXITCODE -eq 0) -Message "uninstaller exited 0"
 Wait-PathGone -Path $exePath
 Wait-PathGone -Path $startMenu
 Wait-PathGone -Path $installDir
+$installationStarted = $false
 Assert-NotExists -Path $exePath -Message "removed installed clawmeter.exe"
 Assert-NotExists -Path $startMenu -Message "removed Start Menu shortcut"
+Assert-NotExists -Path $uninstallKey -Message "removed uninstall registry entry"
 
 $startupAfter = (Get-ItemProperty -Path $runKey -Name $runValue -ErrorAction SilentlyContinue).$runValue
 Assert-True -Condition ($null -eq $startupAfter) -Message "removed launch-at-login registry value"
@@ -176,8 +185,23 @@ if ($null -eq $userPathAfter) {
 }
 $pathPartsAfter = @($userPathAfter -split ";" | ForEach-Object { $_.TrimEnd("\") })
 Assert-True -Condition (-not ($pathPartsAfter -contains $installDir.TrimEnd("\"))) -Message "removed install directory from user PATH"
+Assert-True -Condition (@($pathPartsBefore | Where-Object { $pathPartsAfter -notcontains $_ }).Count -eq 0) -Message "preserved existing user PATH entries"
 }
 finally {
+    if ($installationStarted) {
+        try {
+            $cleanupUninstaller = Find-Uninstaller -InstallDirectory $installDir
+            if ($cleanupUninstaller) {
+                & $cleanupUninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Cleanup uninstaller exited $LASTEXITCODE" }
+            } else {
+                Write-Warning "No uninstaller found; removing partial installation from $installDir"
+                Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+                Remove-Item -Force $startMenu -ErrorAction SilentlyContinue
+                Remove-ItemProperty -Path $runKey -Name $runValue -ErrorAction SilentlyContinue
+            }
+        } catch { Write-Warning "Installer cleanup failed: $_" }
+    }
     Remove-Item -Force $configPath -ErrorAction SilentlyContinue
     if ($configBackup -and (Test-Path $configBackup)) {
         New-Item -ItemType Directory -Force -Path (Split-Path $configPath -Parent) | Out-Null

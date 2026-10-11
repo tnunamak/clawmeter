@@ -260,15 +260,26 @@ func quit() {
 }
 
 func nativeStart() {
-	systrayReady()
+	started := false
+	defer func() {
+		if !started {
+			Quit()
+		}
+	}()
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		log.Printf("systray error: failed to connect to DBus: %v\n", err)
 		return
 	}
+	defer func() {
+		if !started {
+			conn.Close()
+		}
+	}()
 	err = notifier.ExportStatusNotifierItem(conn, path, newLeftRightNotifierItem())
 	if err != nil {
 		log.Printf("systray error: failed to export status notifier item: %v\n", err)
+		return
 	}
 	err = menu.ExportDbusmenu(conn, menuPath, instance)
 	if err != nil {
@@ -328,6 +339,8 @@ func nativeStart() {
 	instance.menuProps = menuProps
 	instance.lock.Unlock()
 
+	started = true
+	systrayReady()
 	go stayRegistered()
 }
 
