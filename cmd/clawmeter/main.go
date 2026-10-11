@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1196,7 +1197,11 @@ func updateCmd() int {
 	fmt.Printf("found %s\n", rel.Version)
 	fmt.Printf("Downloading and installing %s... ", rel.Version)
 
-	if err := update.Apply(ctx, rel.URL); err != nil {
+	if err := update.Apply(ctx, rel.URL); errors.Is(err, update.ErrNotNewer) {
+		fmt.Println()
+		fmt.Println("already up to date: a newer version is installed. Restart any running tray instances.")
+		return 0
+	} else if err != nil {
 		fmt.Println()
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
