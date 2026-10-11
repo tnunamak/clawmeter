@@ -365,7 +365,13 @@ func (w UsageWindow) MoneyDetail() string {
 }
 
 func formatMinorUnits(minor int, currency string) string {
-	amount := fmt.Sprintf("%d.%02d", minor/100, minor%100)
+	whole, fraction := minor/100, minor%100
+	sign := ""
+	if minor < 0 {
+		sign = "-"
+		whole, fraction = -whole, -fraction
+	}
+	amount := fmt.Sprintf("%s%d.%02d", sign, whole, fraction)
 	if strings.EqualFold(currency, "USD") {
 		return "$" + amount
 	}
@@ -1208,6 +1214,11 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 				if revisionBefore == revisionAfter {
 					break
 				}
+				if ctx.Err() != nil {
+					err = ctx.Err()
+					data = nil
+					break
+				}
 				if attempt == 1 {
 					err = fmt.Errorf("credential source changed during refresh")
 					data = &UsageData{
@@ -1235,8 +1246,12 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 		}(p)
 	}
 
-	for i := 0; i < len(providers); i++ {
-		res := <-resultCh
+	pending := make(map[string]Provider, len(providers))
+	for _, p := range providers {
+		pending[SourceKey(p)] = p
+	}
+	collect := func(res fetchResult) {
+		delete(pending, res.name)
 		result.Results[res.name] = res.data
 		if res.err != nil {
 			result.Errors[res.name] = res.err
@@ -1245,8 +1260,73 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 			result.SourceRevisions[res.name] = res.revision
 		}
 	}
+	for i := 0; i < len(providers); i++ {
+		select {
+		case res := <-resultCh:
+			collect(res)
+		case <-ctx.Done():
+			// Keep results already queued when cancellation wins the select.
+			for {
+				select {
+				case res := <-resultCh:
+					collect(res)
+				default:
+					for name, p := range pending {
+						result.Errors[name] = ctx.Err()
+						result.Results[name] = &UsageData{
+							Provider: p.Name(), SourceID: SourceID(p), SourceLabel: SourceLabel(p),
+							FetchedAt: time.Now(), Error: "connection timed out",
+						}
+					}
+					retainCancelledSourceRevisions(result, pending)
+					return result
+				}
+			}
+		}
+	}
 
 	return result
+}
+
+// retainCancelledSourceRevisions rechecks current provenance before permitting
+// cached fallback. Reading a revision may itself block on local credential
+// discovery, so all checks share a short budget and fail closed if unfinished.
+// Only this collector writes result; late revision checks only send to a
+// buffered channel, just like late fetch workers.
+func retainCancelledSourceRevisions(result *MultiFetchResult, pending map[string]Provider) {
+	type revisionResult struct {
+		name     string
+		revision string
+	}
+	revisions := make(chan revisionResult, len(pending))
+	remaining := 0
+	for name, p := range pending {
+		if _, ok := p.(SourceRevisionCapability); !ok {
+			continue
+		}
+		result.Results[name].InvalidatesPriorUsage = true
+		remaining++
+		go func(name string, p Provider) {
+			revisions <- revisionResult{name: name, revision: SourceRevision(p)}
+		}(name, p)
+	}
+	if remaining == 0 {
+		return
+	}
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	for remaining > 0 {
+		select {
+		case revision := <-revisions:
+			if revision.revision != "" {
+				result.SourceRevisions[revision.name] = revision.revision
+			}
+			result.Results[revision.name].InvalidatesPriorUsage = false
+			remaining--
+		case <-timer.C:
+			return
+		}
+	}
 }
 
 // SafeFetchError reduces provider and transport errors to a closed, non-secret
@@ -1255,22 +1335,18 @@ func SafeFetchError(err error) string {
 	if err == nil {
 		return ""
 	}
-	lower := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(lower, "rate limit"), strings.Contains(lower, "429"):
+	switch ClassifyError(err) {
+	case "rate_limited":
 		return "rate limited"
-	case strings.Contains(lower, "unauthor"), strings.Contains(lower, "forbidden"),
-		strings.Contains(lower, "expired"), strings.Contains(lower, "credential"),
-		strings.Contains(lower, "token"), strings.Contains(lower, "401"), strings.Contains(lower, "403"):
+	case "auth":
 		return "authentication failed"
-	case strings.Contains(lower, "timeout"), strings.Contains(lower, "deadline"):
-		return "connection timed out"
-	case strings.Contains(lower, "connection"), strings.Contains(lower, "network"),
-		strings.Contains(lower, "no such host"), strings.Contains(lower, "dns"),
-		strings.Contains(lower, "no response"), strings.Contains(lower, "eof"):
+	case "network":
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline") || strings.Contains(lower, "context canceled") {
+			return "connection timed out"
+		}
 		return "connection failed"
-	case strings.Contains(lower, "decode"), strings.Contains(lower, "parse"),
-		strings.Contains(lower, "malformed"), strings.Contains(lower, "invalid character"):
+	case "parse":
 		return "provider response unavailable"
 	default:
 		return "provider request failed"
