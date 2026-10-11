@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -20,9 +21,11 @@ cleanup_vm_runtime_files() { :; }
 capture_screen() { :; }
 probe_ssh_ready() { return 0; }
 run_guest_cli_smoke() { echo application-smoke >> "$fixture/events"; return 0; }
-sleep() { echo "sleep:$1" >> "$fixture/events"; }
+sleep() { echo "sleep:$1" >> "$fixture/events"; SECONDS=$((SECONDS + $1)); }
 '''
-            p = subprocess.run(['bash', '-c', harness + statements, 'fixture', str(library), str(root)], cwd=root, text=True, capture_output=True)
+            home = root / 'home'
+            home.mkdir()
+            p = subprocess.run(['bash', '-c', harness + statements, 'fixture', str(library), str(root)], cwd=root, env={**os.environ, 'HOME': str(home)}, text=True, capture_output=True)
             events = (root/'events').read_text() if (root/'events').exists() else ''
             return p, events
 
@@ -39,5 +42,31 @@ start_quickemu_vm() { return 2; }; start_tcg_fallback() { return 0; }
 kill_vm_processes() { :; }; cleanup_safe_vm_conf() { :; }
 main''')
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_cli_smoke_failure_fails_fallback(self):
+        result, events = self.run_fixture('''
+probe_ssh_ready() { return 0; }
+run_guest_cli_smoke() { echo application-smoke-failed >> "$fixture/events"; return 42; }
+start_tcg_fallback
+''')
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn('application-smoke-failed', events)
+
+    def test_fallback_readiness_timeout_fails_within_budget(self):
+        result, events = self.run_fixture('''
+probe_ssh_ready() { return 1; }
+start_tcg_fallback
+''')
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('sleep:60', events)
+        self.assertEqual(sum(int(line.split(':')[1]) for line in events.splitlines() if line.startswith('sleep:')), 2)
+
+    def test_failed_kvm_and_failed_fallback_keep_main_failed(self):
+        result, _ = self.run_fixture('''RUN_VM=1
+run_quota_preflight() { :; }; build_artifacts() { :; }; check_pe_subsystem() { :; }; run_wine_smoke() { :; }
+start_quickemu_vm() { return 2; }; start_tcg_fallback() { return 4; }
+kill_vm_processes() { :; }; cleanup_safe_vm_conf() { :; }
+main''')
+        self.assertNotEqual(result.returncode, 0, result.stderr)
 
 if __name__ == '__main__': unittest.main()
