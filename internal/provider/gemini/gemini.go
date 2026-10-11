@@ -631,8 +631,13 @@ func oauthCredentialCandidates(shimPath string, env map[string]string) []string 
 		filepath.Join(baseDir, "share", "gemini-cli", coreOAuthFile),
 		filepath.Join(baseDir, coreOAuthFile),
 	}
+	npmOAuthFile := filepath.Join(binDir, "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js")
+	candidates = append(candidates, npmOAuthFile)
 	if appData := env["APPDATA"]; appData != "" {
-		candidates = append(candidates, filepath.Join(appData, "npm", "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"))
+		appDataOAuthFile := filepath.Join(appData, "npm", "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js")
+		if appDataOAuthFile != npmOAuthFile {
+			candidates = append(candidates, appDataOAuthFile)
+		}
 	}
 	return candidates
 }
