@@ -76,6 +76,7 @@ function Wait-PathGone {
     while ((Test-Path $Path) -and ((Get-Date) -lt $deadline)) {
         Start-Sleep -Milliseconds 500
     }
+    if (Test-Path $Path) { throw "FAIL: path still exists after ${TimeoutSeconds}s: $Path" }
 }
 
 Assert-True -Condition ($null -ne (Get-Command winget -ErrorAction SilentlyContinue)) -Message "winget is available"
@@ -92,9 +93,13 @@ $showOutput = Invoke-WinGetChecked -Message "winget show" -Arguments @(
 )
 Assert-True -Condition ($showOutput -match [regex]::Escape($PackageId)) -Message "winget default source exposes $PackageId"
 if ($ExpectedVersion) {
-    Assert-True -Condition ($showOutput -match "Version:\s+$([regex]::Escape($ExpectedVersion))") -Message "winget shows expected version $ExpectedVersion"
+    Assert-True -Condition ($showOutput -match "(?m)^Version:\s+$([regex]::Escape($ExpectedVersion))\r?$") -Message "winget shows expected version $ExpectedVersion"
 }
 
+$installationStarted = $false
+$pathPartsBefore = @([Environment]::GetEnvironmentVariable("Path", "User") -split ";" | Where-Object { $_ } | ForEach-Object { $_.TrimEnd("\") })
+try {
+$installationStarted = $true
 Invoke-WinGetChecked -Message "winget install" -Arguments @(
     "install",
     "--id", $PackageId,
@@ -113,6 +118,9 @@ $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{92EE
 
 Assert-True -Condition (Test-Path $exePath) -Message "installed clawmeter.exe"
 Assert-True -Condition (Test-Path $startMenu) -Message "created Start Menu shortcut"
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($startMenu)
+Assert-True -Condition ($shortcut.TargetPath -eq $exePath) -Message "shortcut targets installed executable"
+Assert-True -Condition ($shortcut.Arguments.Trim() -eq "tray") -Message "shortcut launches tray mode"
 Assert-True -Condition (Test-Path $uninstallKey) -Message "created uninstall registry entry"
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -124,7 +132,7 @@ Assert-True -Condition ($pathParts -contains $installDir.TrimEnd("\")) -Message 
 
 $versionOutput = Assert-CommandOutput -Message "clawmeter version" -Command { & $exePath version }
 if ($ExpectedVersion) {
-    Assert-True -Condition ($versionOutput -match [regex]::Escape($ExpectedVersion)) -Message "installed binary reports expected version $ExpectedVersion"
+    Assert-True -Condition ($versionOutput.Trim() -match "^clawmeter v?$([regex]::Escape($ExpectedVersion))$") -Message "installed binary reports expected version $ExpectedVersion"
 }
 
 Assert-CommandOutput -Message "clawmeter providers" -Command { & $exePath providers }
@@ -148,7 +156,19 @@ if (-not $SkipUninstall) {
         "--disable-interactivity"
     )
     Wait-PathGone -Path $exePath
+    $installationStarted = $false
     Assert-True -Condition (-not (Test-Path $exePath)) -Message "winget uninstall removed clawmeter.exe"
+    $pathPartsAfter = @([Environment]::GetEnvironmentVariable("Path", "User") -split ";" | ForEach-Object { $_.TrimEnd("\") })
+    Assert-True -Condition (@($pathPartsBefore | Where-Object { $_ -ne $installDir.TrimEnd("\") -and $pathPartsAfter -notcontains $_ }).Count -eq 0) -Message "preserved existing user PATH entries"
 }
 
 Write-Host "WinGet verification finished."
+} finally {
+    if ($installationStarted -and -not $SkipUninstall) {
+        try {
+            Invoke-WinGetChecked -Message "winget failure cleanup" -Arguments @(
+                "uninstall", "--id", $PackageId, "-e", "--silent", "--disable-interactivity"
+            ) | Out-Null
+        } catch { Write-Warning "WinGet cleanup failed: $_" }
+    }
+}
