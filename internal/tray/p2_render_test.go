@@ -3,6 +3,7 @@
 package tray
 
 import (
+	"errors"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/status"
@@ -35,6 +36,43 @@ func TestP2ProviderEnablementRace(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestP2FailedProviderConnectionRestoresRetry(t *testing.T) {
+	defer systray.ResetMenu()
+	menu := &providerMenuItems{
+		connectItem:  systray.AddMenuItem("Connecting...", ""),
+		connectState: menuItemState{title: "Connecting...", visible: true, enabled: false, initialized: true},
+	}
+	menu.connecting.Store(true)
+
+	finishProviderConnection(menu, errors.New("connection failed"))
+
+	if menu.connecting.Load() {
+		t.Fatal("connection remains marked as active")
+	}
+	if !menu.connectState.enabled || !menu.connectState.visible || menu.connectState.title != "Retry quota access" {
+		t.Fatalf("retry action not restored: %+v", menu.connectState)
+	}
+}
+
+func TestP2PollTickerResetsOnlyWhenIntervalChanges(t *testing.T) {
+	var resets []time.Duration
+	reset := func(interval time.Duration) { resets = append(resets, interval) }
+
+	current := resetPollIntervalIfChanged(300, 300, reset)
+	if current != 300 || len(resets) != 0 {
+		t.Fatalf("unchanged interval caused reset: current=%d resets=%v", current, resets)
+	}
+	current = resetPollIntervalIfChanged(current, 600, reset)
+	if current != 600 || len(resets) != 1 || resets[0] != 10*time.Minute {
+		t.Fatalf("changed interval was not applied once: current=%d resets=%v", current, resets)
+	}
+	current = resetPollIntervalIfChanged(current, 600, reset)
+	if current != 600 || len(resets) != 1 {
+		t.Fatalf("unchanged refresh postponed polling: current=%d resets=%v", current, resets)
+	}
+}
+
 func TestP2OutageRemainsVisibleWithUsage(t *testing.T) {
 	p := sourceMenuTestProvider{name: "openai"}
 	menu := createProviderMenuItems(p, false, nil, false)

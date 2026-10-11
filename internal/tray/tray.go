@@ -50,6 +50,14 @@ func pollIntervalForConfig(seconds int) time.Duration {
 	return interval
 }
 
+func resetPollIntervalIfChanged(currentSeconds, nextSeconds int, reset func(time.Duration)) int {
+	if currentSeconds == nextSeconds {
+		return currentSeconds
+	}
+	reset(pollIntervalForConfig(nextSeconds))
+	return nextSeconds
+}
+
 const (
 	claudeResetsTitle   = "Check Claude resets"
 	claudeResetsWaiting = "Waiting for Claude bookmark…"
@@ -332,6 +340,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	var refreshing sync.Mutex
 
 	ticker := time.NewTicker(pollIntervalForConfig(loaded.Settings.PollInterval))
+	pollIntervalSeconds := loaded.Settings.PollInterval
 
 	// reloadConfig re-reads config.yaml from disk and propagates changes
 	// to the registry filter and per-provider menu state. This is what
@@ -347,7 +356,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		s.mu.Unlock()
 		registry.SetEnabledFilter(newCfg)
 		applyProviderEnablement(providerMenus, newCfg)
-		ticker.Reset(pollIntervalForConfig(newCfg.Settings.PollInterval))
+		pollIntervalSeconds = resetPollIntervalIfChanged(pollIntervalSeconds, newCfg.Settings.PollInterval, ticker.Reset)
 	}
 
 	// Refresh usage only (lightweight, runs every poll cycle)
@@ -655,12 +664,9 @@ func onReadyWithConfig(loaded *config.Config) {
 				setProviderConnectionItemLocked(menu, "", true)
 				trayRenderMu.Unlock()
 				go func(providerName string, menu *providerMenuItems) {
-					defer menu.connecting.Store(false)
-					if err := connectProviderFromTray(providerName); err != nil {
-						menu.connecting.Store(false)
-						trayRenderMu.Lock()
-						setProviderConnectionItemLocked(menu, "Retry quota access", true)
-						trayRenderMu.Unlock()
+					err := connectProviderFromTray(providerName)
+					finishProviderConnection(menu, err)
+					if err != nil {
 						notify(menu.provider.DisplayName(), err.Error(), "normal")
 						return
 					}
@@ -951,6 +957,16 @@ func setProviderConnectionItemLocked(menu *providerMenuItems, action string, sho
 	setMenuItemTitle(menu.connectItem, &menu.connectState, action)
 	setMenuItemEnabled(menu.connectItem, &menu.connectState, true)
 	setMenuItemVisible(menu.connectItem, &menu.connectState, true)
+}
+
+func finishProviderConnection(menu *providerMenuItems, err error) {
+	menu.connecting.Store(false)
+	if err == nil {
+		return
+	}
+	trayRenderMu.Lock()
+	setProviderConnectionItemLocked(menu, "Retry quota access", true)
+	trayRenderMu.Unlock()
 }
 
 func connectProviderFromTray(providerName string) error {
