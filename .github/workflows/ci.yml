@@ -56,3 +56,6 @@ jobs:
 
       - name: Validate packaging shell scripts
         run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
+
+      - name: Test documented WinGet overrides
+        run: python3 -I packaging/winget/test_documented_overrides.py
