@@ -14,3 +14,10 @@ func TestHumanizeErrorPortsRemainNetwork(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanizeErrorUnwrapsTokenRefreshTransportFailure(t *testing.T) {
+	input := `token refresh: Post "https://auth.openai.com/oauth/token": EOF`
+	if got := HumanizeError(input); got != "EOF" {
+		t.Fatalf("HumanizeError(%q) = %q, want EOF", input, got)
+	}
+}

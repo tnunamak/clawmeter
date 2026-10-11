@@ -1262,7 +1262,7 @@ func SafeFetchError(err error) string {
 		return "authentication failed"
 	case "network":
 		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline") || strings.Contains(lower, "context canceled") {
+		if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline") {
 			return "connection timed out"
 		}
 		return "connection failed"

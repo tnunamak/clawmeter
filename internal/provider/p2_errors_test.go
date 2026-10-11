@@ -43,9 +43,15 @@ func TestSafeFetchErrorTypedNetworkWithPortAndTokenURL(t *testing.T) {
 	}
 }
 
+func TestSafeFetchErrorContextCanceledRemainsRequestFailed(t *testing.T) {
+	if got := SafeFetchError(errors.New("context canceled")); got != "provider request failed" {
+		t.Fatalf("SafeFetchError(context canceled) = %q, want provider request failed", got)
+	}
+}
+
 func TestClassifyErrorHTTPFailurePrecedesRefreshKeywords(t *testing.T) {
 	for _, err := range []error{
-		fmt.Errorf("token refresh: %w", &HTTPError{StatusCode: 500}),
+		fmt.Errorf("token refresh: %w", e2HTTPError(500)),
 		errors.New("token refresh returned 503"),
 		errors.New("HTTP status 502: invalid token refresh response"),
 	} {

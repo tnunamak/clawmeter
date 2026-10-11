@@ -2,10 +2,13 @@ package format
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
+
+var authStatusPrefix = regexp.MustCompile(`(?i)\b(?:http(?:/\d(?:\.\d)?)?(?:\s+status(?:\s+code)?)?|status(?:\s+code)?|api returned|refresh returned|token refresh returned|unexpected status)\s*[:=]?\s*(?:401|403)\b`)
 
 // HumanizeError converts raw Go error strings into short, human-readable messages.
 // It strips URL noise, Go error wrapping chains, and maps common patterns to
@@ -50,7 +53,8 @@ func HumanizeError(errMsg string) string {
 		return truncate(core, 80)
 	case category == "rate_limited":
 		return "rate limited"
-	case category == "auth":
+	case strings.Contains(fullLowered, "unauthorized") ||
+		strings.Contains(fullLowered, "forbidden") || authStatusPrefix.MatchString(fullLowered):
 		// Already actionable — keep the full message for context.
 		return truncate(errMsg, 80)
 	}
