@@ -138,7 +138,18 @@ func backupTmuxStatusRight(current string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, []byte(current), 0o644); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, os.ErrExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if _, err := file.Write([]byte(current)); err != nil {
+		file.Close()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -202,7 +213,17 @@ func backupFile(path, suffix string) (string, error) {
 		return "", err
 	}
 	backup := fmt.Sprintf("%s.%s.%s", path, suffix, time.Now().Format("20060102150405"))
-	if err := os.WriteFile(backup, data, 0o644); err != nil {
+	file, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return "", err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(backup)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(backup)
 		return "", err
 	}
 	return backup, nil
