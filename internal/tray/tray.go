@@ -567,7 +567,7 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	extensionCtx, stopExtension := context.WithCancel(context.Background())
 	publishAPICredits := func() {
-		publishLocalResetSource(registry, "claude_api", providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+		publishLocalResetSource(&refreshing, registry, "claude_api", providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
 	}
 	go func() {
 		err := claudeweb.ServeExtension(extensionCtx, func() []claudeweb.Account {
@@ -625,7 +625,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				if result.IsResets() {
 					sourceKey = claudeWebProviderKey(result.Resets.ResetCreditsTarget)
 				}
-				if !publishLocalResetSource(registry, sourceKey, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
+				if !publishLocalResetSource(&refreshing, registry, sourceKey, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
 					notify("Clawmeter", "The check was saved but can't be shown yet. Choose Refresh Now.", "normal")
 				}
 			}
@@ -642,9 +642,11 @@ func onReadyWithConfig(loaded *config.Config) {
 		for {
 			select {
 			case <-ticker.C:
-				// Re-read local pools even while remote providers are refreshing.
-				go publishAPICredits()
-				go refresh(false)
+				// Let the remote refresh start before queuing a local publication.
+				go func() {
+					refresh(false)
+					publishAPICredits()
+				}()
 			case <-statusTicker.C:
 				go refreshStatus()
 			case <-updateTicker.C:
@@ -1226,7 +1228,11 @@ func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now
 	setMenuItemVisible(menu.resetItem, &menu.resetState, true)
 }
 
-func publishLocalResetSource(registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth, mIconProvider, mEmpty, mProviderSetup *systray.MenuItem) bool {
+func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth, mIconProvider, mEmpty, mProviderSetup *systray.MenuItem) bool {
+	// Read and publish after any in-flight refresh has finished publishing.
+	refreshing.Lock()
+	defer refreshing.Unlock()
+
 	p, ok := registry.Get(sourceKey)
 	if !ok {
 		return false
@@ -2277,11 +2283,12 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		return
 	}
 	apiCreditsTimer = time.AfterFunc(time.Until(deadline), func() {
-		trayRenderMu.Lock()
+		latest, _ := lockLatestTrayState(&trayRenderMu)
 		defer trayRenderMu.Unlock()
 		if generation != apiCreditsTimerGeneration {
 			return
 		}
+		results := provider.PresentResetCreditSources(latest)
 		systray.BeginMenuUpdate()
 		defer systray.EndMenuUpdate()
 		for name, menu := range menus {
