@@ -11,6 +11,49 @@ import (
 	"testing"
 )
 
+func TestRedteamSourceAddWithNullProviders(t *testing.T) {
+	bin := buildBinary(t)
+	for _, body := range []string{"providers: null\n", "providers:\n  # no entries\n"} {
+		t.Run(strings.TrimSpace(body), func(t *testing.T) {
+			home := t.TempDir()
+			path := configPathForHome(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, code := runWithHome(t, bin, home, "providers", "source", "add", "claude", "default", "native")
+			if code != 0 {
+				t.Fatalf("source enrollment with empty providers must succeed without panic: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			stdout, stderr, code = runWithHome(t, bin, home, "providers", "source", "list", "claude")
+			if code != 0 || !strings.Contains(stdout, "claude\tdefault\t") {
+				t.Fatalf("enrollment was not persisted: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestRedteamZeroWarningPreservesThresholdOrderingAfterReload(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	// Reach a valid low critical threshold using only accepted CLI operations.
+	for _, setting := range [][2]string{{"warning_threshold", "10"}, {"critical_threshold", "50"}, {"warning_threshold", "0"}} {
+		stdout, stderr, code := runWithHome(t, bin, home, "config", "set", setting[0], setting[1])
+		if code != 0 {
+			t.Fatalf("set %s=%s: exit=%d stdout=%q stderr=%q", setting[0], setting[1], code, stdout, stderr)
+		}
+	}
+	stdout, stderr, code := runWithHome(t, bin, home, "config", "show")
+	if code != 0 {
+		t.Fatalf("reload: exit=%d stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Warning threshold: 0%") || !strings.Contains(stdout, "Critical threshold: 50%") {
+		t.Fatalf("accepted warning=0 must survive reload and remain below critical=50; got %q", stdout)
+	}
+}
+
 func TestConfigClaudeAPIDisableEnableReload(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()
