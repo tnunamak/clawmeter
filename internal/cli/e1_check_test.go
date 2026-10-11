@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,5 +37,28 @@ func TestE1CheckExitCodes(t *testing.T) {
 				t.Errorf("exit=%d want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// An exhausted window whose length is unknown has no projection, but it is
+// still the provider's worst window: the headline and agent output must not
+// pick a healthy sibling while --check reports the provider critical.
+func TestWorstWindowPrefersExhaustedOverHealthySibling(t *testing.T) {
+	reset := time.Now().Add(time.Hour)
+	data := &provider.UsageData{Windows: []provider.UsageWindow{
+		{Name: "mystery", Utilization: 100, ResetsAt: reset},
+		{Name: "5h", Utilization: 10, ResetsAt: reset},
+	}}
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{{Display: "Test", Data: data}}}
+	if got := statusCheckExitCode(output); got != 2 {
+		t.Fatalf("exit=%d want 2", got)
+	}
+	_, window, _, ok := output.worstReadableWindow()
+	if !ok || window.Name != "mystery" {
+		t.Fatalf("worst window = %q, want mystery", window.Name)
+	}
+	agent := output.AgentSummary()
+	if !strings.Contains(agent, "worst=Test mystery;") || !strings.Contains(agent, "Test mystery(current=100%,projected_at_reset=unknown,reset_in=1h00m,status=at_risk)") || strings.Contains(agent, "; status=unknown;") {
+		t.Fatalf("agent summary = %q", agent)
 	}
 }

@@ -419,7 +419,7 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	}
 
 	resetIn := clampDuration(time.Until(window.ResetsAt))
-	status := agentStatus(proj)
+	status := agentStatus(window, proj)
 
 	parts := []string{
 		fmt.Sprintf("Quota: worst=%s %s", pf.Display, window.Name),
@@ -486,7 +486,7 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 				Provider: pf.Display,
 				Window:   window,
 				Proj:     proj,
-				Status:   agentStatus(proj),
+				Status:   agentStatus(window, proj),
 				Tier:     tier,
 				Stale:    pf.Data.Stale,
 			})
@@ -670,9 +670,12 @@ func projectionPct(proj forecast.Projection) string {
 	return formatPrecisePct(proj.ProjectedPct)
 }
 
-func agentStatus(proj forecast.Projection) string {
+func agentStatus(window provider.UsageWindow, proj forecast.Projection) string {
 	if proj.Stale {
 		return "stale"
+	}
+	if window.Utilization >= 100 {
+		return "at_risk" // used up now, whatever the projection
 	}
 	if proj.Unknown {
 		return "unknown"
@@ -705,7 +708,7 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		tier := classifyProvider(pf).tier
 		for _, window := range pf.Data.PresentationWindows() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			if bestPF == nil || tier < bestTier || (tier == bestTier && forecast.CompareRisk(proj, bestProj) < 0) {
+			if bestPF == nil || tier < bestTier || (tier == bestTier && compareWindowRisk(window, proj, bestWindow, bestProj) < 0) {
 				bestPF = pf
 				bestWindow = window
 				bestProj = proj
@@ -718,6 +721,19 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		return nil, provider.UsageWindow{}, forecast.Projection{}, false
 	}
 	return bestPF, bestWindow, bestProj, true
+}
+
+// compareWindowRisk orders windows like classifyProvider: a window used up
+// now outranks any projection, even when its length is unknown.
+func compareWindowRisk(a provider.UsageWindow, aProj forecast.Projection, b provider.UsageWindow, bProj forecast.Projection) int {
+	aExhausted, bExhausted := a.Utilization >= 100 && !aProj.Stale, b.Utilization >= 100 && !bProj.Stale
+	if aExhausted != bExhausted {
+		if aExhausted {
+			return -1
+		}
+		return 1
+	}
+	return forecast.CompareRisk(aProj, bProj)
 }
 
 func clampDuration(d time.Duration) time.Duration {
