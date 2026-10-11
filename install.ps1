@@ -42,13 +42,36 @@ function Get-LatestReleaseAsset {
     foreach ($release in $releases) {
         $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
         if ($asset) {
+            $sums = @($release.assets | Where-Object { $_.name -ceq "SHA256SUMS.txt" })
+            if ($sums.Count -ne 1) {
+                throw "Release $($release.tag_name) must contain exactly one SHA256SUMS.txt asset"
+            }
             return [pscustomobject]@{
                 Version = $release.tag_name
                 Url = $asset.browser_download_url
+                SumsUrl = $sums[0].browser_download_url
             }
         }
     }
     throw "No release found with $AssetName"
+}
+
+function Assert-ArtifactChecksum([string]$BinaryPath, [string]$SumsPath) {
+    $entries = @(Get-Content -LiteralPath $SumsPath | Where-Object {
+        $fields = $_.Trim() -split '\s+'
+        $fields.Count -ge 2 -and ($fields[1] -replace '^\*', '') -ceq $AssetName
+    })
+    if ($entries.Count -ne 1) {
+        throw "Expected exactly one checksum for $AssetName"
+    }
+    $fields = $entries[0].Trim() -split '\s+'
+    if ($fields.Count -ne 2 -or $fields[0] -cnotmatch '^[0-9a-fA-F]{64}$') {
+        throw "Invalid SHA-256 checksum for $AssetName"
+    }
+    $actual = (Get-FileHash -LiteralPath $BinaryPath -Algorithm SHA256).Hash
+    if ($actual -ine $fields[0]) {
+        throw "SHA-256 mismatch for $AssetName; existing binary was not changed"
+    }
 }
 
 function New-ClawmeterShortcut([string]$Path, [string]$TargetPath, [string]$Arguments) {
@@ -194,6 +217,9 @@ if ($LocalBinary) {
     }
     Say "Installing clawmeter from local binary $LocalBinary (windows/amd64)..."
     $release = [pscustomobject]@{ Version = "local"; Url = $null }
+} elseif ($DryRun) {
+    $release = [pscustomobject]@{ Version = "latest"; Url = "(release asset)"; SumsUrl = "(release checksums)" }
+    Say "[dry-run] would find the latest release containing $AssetName and SHA256SUMS.txt"
 } else {
     $release = Get-LatestReleaseAsset
     Say "Installing clawmeter $($release.Version) (windows/amd64)..."
@@ -202,6 +228,7 @@ if ($LocalBinary) {
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("clawmeter-" + [Guid]::NewGuid().ToString("N"))
 $tmpExe = Join-Path $tmp "clawmeter.exe"
 $tmpIcon = Join-Path $tmp "clawmeter.ico"
+$tmpSums = Join-Path $tmp "SHA256SUMS.txt"
 
 DoStep "create temporary directory $tmp" {
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -213,8 +240,10 @@ try {
             Copy-Item -Force $LocalBinary $tmpExe
         }
     } else {
-        DoStep "download $AssetName to $tmpExe" {
+        DoStep "download and verify $AssetName against its release checksums" {
+            Invoke-WebRequest -Uri $release.SumsUrl -OutFile $tmpSums
             Invoke-WebRequest -Uri $release.Url -OutFile $tmpExe
+            Assert-ArtifactChecksum -BinaryPath $tmpExe -SumsPath $tmpSums
         }
     }
 
