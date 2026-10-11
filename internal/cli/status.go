@@ -1226,7 +1226,7 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 			!cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
 		}
-		if data != nil && cacheEntry.IsStale() && data.HasPresentableUsage() {
+		if data != nil && cacheEntry.IsProviderStale(key) && data.HasPresentableUsage() {
 			data = data.Clone()
 			data.MarkStale("cache expired")
 		}

@@ -218,3 +218,100 @@ func TestE2RedteamFreshLocalUpdateInOldCacheIsNotStale(t *testing.T) {
 		}
 	}
 }
+
+type e2ChangedRevisionProvider struct {
+	e2RedteamRevisionedBlockingProvider
+	changed <-chan struct{}
+	before  string
+	after   string
+}
+
+func (p e2ChangedRevisionProvider) SourceRevision() string {
+	select {
+	case <-p.changed:
+		return p.after
+	default:
+		return p.before
+	}
+}
+
+func TestE2CancellationRejectsChangedCacheRevision(t *testing.T) {
+	for _, revisions := range [][2]string{{"old-source", "new-source"}, {"", "new-source"}, {"old-source", ""}} {
+		t.Run(fmt.Sprintf("%q_to_%q", revisions[0], revisions[1]), func(t *testing.T) {
+			changed := make(chan struct{})
+			p := e2ChangedRevisionProvider{
+				e2RedteamRevisionedBlockingProvider: e2RedteamRevisionedBlockingProvider{
+					cliStubProvider: cliStubProvider{name: "changed"},
+					started:         make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{}),
+				},
+				changed: changed, before: revisions[0], after: revisions[1],
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			returned := make(chan *provider.MultiFetchResult, 1)
+			go func() { returned <- provider.FetchProvidersParallel(ctx, []provider.Provider{p}) }()
+			select {
+			case <-p.started:
+			case <-time.After(time.Second):
+				close(p.release)
+				t.Fatal("provider did not start")
+			}
+			defer func() {
+				close(p.release)
+				<-p.finished
+			}()
+			close(changed)
+			cancel()
+			var result *provider.MultiFetchResult
+			select {
+			case result = <-returned:
+			case <-time.After(time.Second):
+				t.Fatal("cancellation did not return promptly")
+			}
+			key := provider.SourceKey(p)
+			entry := &cache.Entry{
+				ProviderData: map[string]*provider.UsageData{key: {
+					Provider: p.Name(), SourceID: provider.SourceID(p),
+					Windows: []provider.UsageWindow{{Name: "5h", Utilization: 25}},
+				}},
+				SourceRevisions: map[string]string{key: revisions[0]},
+			}
+			if cached, ok := staleFallback(entry, key, result.Results[key], result.SourceRevisions[key]); ok || cached != nil {
+				t.Fatalf("changed source reused prior cache: %#v", cached)
+			}
+		})
+	}
+}
+
+func TestE2CachedFreshnessUsesIndividualTimestampAndLegacyFallback(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	for _, tc := range []struct {
+		name      string
+		aggregate time.Time
+		fetched   time.Time
+		stale     bool
+	}{
+		{"old reading in fresh aggregate", now, old, true},
+		{"fresh reading in old aggregate", old, now, false},
+		{"legacy old aggregate", old, time.Time{}, true},
+		{"legacy fresh aggregate", now, time.Time{}, false},
+		{"no timestamps", time.Time{}, time.Time{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := provider.NewRegistry()
+			if err := registry.Register(cliStubProvider{name: "claude"}); err != nil {
+				t.Fatal(err)
+			}
+			data := &provider.UsageData{Provider: "claude", FetchedAt: tc.fetched, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 25}}}
+			entry := &cache.Entry{FetchedAt: tc.aggregate, ProviderData: map[string]*provider.UsageData{"claude": data}}
+			output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+			if len(output.Providers) != 1 || output.Providers[0].Data == nil || output.Providers[0].Data.Stale != tc.stale {
+				t.Fatalf("cached output = %#v, want stale=%v", output.Providers, tc.stale)
+			}
+			if data.Stale || data.Warning != "" {
+				t.Fatal("cached display mutated persisted reading")
+			}
+		})
+	}
+}

@@ -115,3 +115,71 @@ func TestE2RedteamTypedServerStatusPrecedesWrapperKeywords(t *testing.T) {
 		})
 	}
 }
+
+// An explicit status must also win for legacy providers that return strings.
+func TestE2ExplicitStatusPrecedesKeywords(t *testing.T) {
+	for _, message := range []string{
+		"HTTP 503: refresh token endpoint",
+		"API returned 500: rate limit service unavailable",
+		"unexpected status 502: upstream connection pool exhausted",
+		"HTTP/1.1 404: missing response",
+	} {
+		if got := ClassifyError(errors.New(message)); got != "api" {
+			t.Errorf("%q classified as %q, want api", message, got)
+		}
+	}
+	for _, code := range []int{0, -1, 600, 40123} {
+		err := fmt.Errorf("network unavailable: %w", e2HTTPError(code))
+		if got := ClassifyError(err); got != "network" {
+			t.Errorf("invalid typed status %d classified as %q, want text fallback", code, got)
+		}
+	}
+}
+
+type e2RevisionFuncProvider struct {
+	Provider
+	revision func() string
+}
+
+func (p e2RevisionFuncProvider) SourceRevision() string { return p.revision() }
+
+func TestE2CancellationBoundsBlockedRevisionLookup(t *testing.T) {
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	finished := make(chan struct{}, 3)
+	p := e2RevisionFuncProvider{
+		Provider: fakeSourceProvider{id: "blocked-revision"},
+		revision: func() string {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			defer func() { finished <- struct{}{} }()
+			return "late-revision"
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer close(release)
+	returned := make(chan *MultiFetchResult, 1)
+	go func() { returned <- FetchProvidersParallel(ctx, []Provider{p}) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("revision lookup did not start")
+	}
+	cancel()
+	var result *MultiFetchResult
+	select {
+	case result = <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("blocked revision lookup prevented prompt cancellation")
+	}
+	key := SourceKey(p)
+	if !errors.Is(result.Errors[key], context.Canceled) || result.Results[key] == nil {
+		t.Fatalf("cancelled result = %#v", result)
+	}
+	if !result.Results[key].InvalidatesPriorUsage || result.SourceRevisions[key] != "" {
+		t.Fatalf("unverified provenance permitted fallback: %#v", result)
+	}
+}

@@ -75,6 +75,17 @@ func (e *Entry) IsStale() bool {
 	return time.Since(e.FetchedAt) >= defaultTTL+staleMargin
 }
 
+// IsProviderStale uses the reading's own timestamp so a local update neither
+// inherits nor refreshes another source's age. Legacy readings without a
+// timestamp fall back to the aggregate age; a missing timestamp stays stale.
+func (e *Entry) IsProviderStale(name string) bool {
+	fetchedAt := e.FetchedAt
+	if data := e.ProviderData[name]; data != nil && !data.FetchedAt.IsZero() {
+		fetchedAt = data.FetchedAt
+	}
+	return time.Since(fetchedAt) >= defaultTTL+staleMargin
+}
+
 // Covers reports whether the cache contains an entry — error or data — for
 // every name in want. Callers use this in addition to IsValid to avoid
 // serving a stale cache that pre-dates a provider becoming configured:

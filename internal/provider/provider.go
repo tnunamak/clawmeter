@@ -1214,6 +1214,11 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 				if revisionBefore == revisionAfter {
 					break
 				}
+				if ctx.Err() != nil {
+					err = ctx.Err()
+					data = nil
+					break
+				}
 				if attempt == 1 {
 					err = fmt.Errorf("credential source changed during refresh")
 					data = &UsageData{
@@ -1273,6 +1278,7 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 							FetchedAt: time.Now(), Error: "connection timed out",
 						}
 					}
+					retainCancelledSourceRevisions(result, pending)
 					return result
 				}
 			}
@@ -1280,6 +1286,47 @@ func FetchProvidersParallel(ctx context.Context, providers []Provider) *MultiFet
 	}
 
 	return result
+}
+
+// retainCancelledSourceRevisions rechecks current provenance before permitting
+// cached fallback. Reading a revision may itself block on local credential
+// discovery, so all checks share a short budget and fail closed if unfinished.
+// Only this collector writes result; late revision checks only send to a
+// buffered channel, just like late fetch workers.
+func retainCancelledSourceRevisions(result *MultiFetchResult, pending map[string]Provider) {
+	type revisionResult struct {
+		name     string
+		revision string
+	}
+	revisions := make(chan revisionResult, len(pending))
+	remaining := 0
+	for name, p := range pending {
+		if _, ok := p.(SourceRevisionCapability); !ok {
+			continue
+		}
+		result.Results[name].InvalidatesPriorUsage = true
+		remaining++
+		go func(name string, p Provider) {
+			revisions <- revisionResult{name: name, revision: SourceRevision(p)}
+		}(name, p)
+	}
+	if remaining == 0 {
+		return
+	}
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	for remaining > 0 {
+		select {
+		case revision := <-revisions:
+			if revision.revision != "" {
+				result.SourceRevisions[revision.name] = revision.revision
+			}
+			result.Results[revision.name].InvalidatesPriorUsage = false
+			remaining--
+		case <-timer.C:
+			return
+		}
+	}
 }
 
 // SafeFetchError reduces provider and transport errors to a closed, non-secret

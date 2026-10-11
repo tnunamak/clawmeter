@@ -32,11 +32,9 @@ func ClassifyError(err error) string {
 	var status interface{ HTTPStatusCode() int }
 	if errors.As(err, &status) {
 		code = status.HTTPStatusCode()
-	} else {
-		var network net.Error
-		if errors.As(err, &network) {
-			return "network"
-		}
+	}
+	if code < 100 || code > 599 {
+		code = 0
 		if match := httpErrorStatus.FindStringSubmatch(err.Error()); match != nil {
 			code, _ = strconv.Atoi(match[1])
 		}
@@ -46,6 +44,14 @@ func ClassifyError(err error) string {
 		return "auth"
 	case 429:
 		return "rate_limited"
+	default:
+		if code >= 100 && code <= 599 {
+			return "api"
+		}
+	}
+	var network net.Error
+	if errors.As(err, &network) {
+		return "network"
 	}
 	lower := strings.ToLower(err.Error())
 	switch {
