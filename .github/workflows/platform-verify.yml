@@ -417,6 +417,12 @@ jobs:
         # area, which hosted runners do not have.
         run: go test -tags tray -v -skip '^TestBaseWindowsTray$' ./internal/systray/
 
+      - name: Vet Windows tray build
+        run: go vet -tags tray ./...
+
+      - name: Test DPI manifest verifier fixtures
+        run: .\packaging\windows\verify-dpi-manifest.ps1 -SelfTest
+
       - name: Create temp dir
         run: New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
 

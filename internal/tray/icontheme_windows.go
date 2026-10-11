@@ -4,6 +4,7 @@ package tray
 
 import (
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/tnunamak/clawmeter/internal/systray"
@@ -18,6 +19,8 @@ var (
 	lastIconProvider string
 	lastIconMeter    icons.MeterState
 	hasDynamicIcon   bool
+	lastIconSize     int
+	iconThemeStop    chan struct{}
 
 	user32                 = windows.NewLazySystemDLL("user32.dll")
 	findWindow             = user32.NewProc("FindWindowW")
@@ -30,11 +33,39 @@ var (
 func setupIconTheme() {
 	iconThemeMu.Lock()
 	trayPalette = resolveTrayPalette()
+	if iconThemeStop != nil {
+		close(iconThemeStop)
+	}
+	stop := make(chan struct{})
+	iconThemeStop = stop
 	iconThemeMu.Unlock()
 	systray.SetAppearanceChangeHandler(refreshIconTheme)
+
+	// The hidden window may stay on a different monitor from the taskbar and
+	// never receive its DPI change. Bound that missed-notification delay.
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				refreshIconAppearance(false)
+			}
+		}
+	}()
 }
 
-func cleanupIconTheme() { systray.SetAppearanceChangeHandler(nil) }
+func cleanupIconTheme() {
+	systray.SetAppearanceChangeHandler(nil)
+	iconThemeMu.Lock()
+	defer iconThemeMu.Unlock()
+	if iconThemeStop != nil {
+		close(iconThemeStop)
+		iconThemeStop = nil
+	}
+}
 
 // Windows tray displays one HICON at the system tray icon size. Passing in
 // a 128x128 source means Windows downscales aggressively, which kills the
@@ -55,24 +86,38 @@ func setIconDynamic(providerName string, meter icons.MeterState, _ []byte) {
 	renderDynamicIcon()
 }
 
-func refreshIconTheme() {
-	palette := resolveTrayPalette()
+// OS notifications force a render even when provider data is unchanged.
+// In particular, a successful taskbar re-add must retry a render that may
+// have failed while Explorer was unavailable.
+func refreshIconTheme() { refreshIconAppearance(true) }
+
+func refreshIconAppearance(force bool) {
 	iconThemeMu.Lock()
 	defer iconThemeMu.Unlock()
-	if palette == trayPalette {
+	if iconThemeStop == nil {
+		return
+	}
+	// Resolve and commit under the same lock: an older callback cannot read
+	// a palette early, wait for a newer callback, and then overwrite it.
+	palette := resolveTrayPalette()
+	size := systemTrayIconSize()
+	if !force && palette == trayPalette && size == lastIconSize {
 		return
 	}
 	trayPalette = palette
 	if hasDynamicIcon {
-		renderDynamicIcon()
+		renderDynamicIconAtSize(size)
 	}
 }
 
 // Caller holds iconThemeMu.
-func renderDynamicIcon() {
-	size := systemTrayIconSize()
+func renderDynamicIcon() { renderDynamicIconAtSize(systemTrayIconSize()) }
+
+// Caller holds iconThemeMu. Cache the size used to generate this exact icon.
+func renderDynamicIconAtSize(size int) {
 	icon := icons.GenerateProviderIconWithMeterPalette(lastIconProvider, lastIconMeter, size, trayPalette)
 	systray.SetIcon(icon)
+	lastIconSize = size
 }
 
 // systemTrayIconSize uses the taskbar's DPI, which can differ from the

@@ -205,6 +205,9 @@ func (t *winTray) readd() {
 			}
 			t.muNID.Unlock()
 			if ok {
+				// Refresh only after registration succeeds so a DPI/theme
+				// change during Explorer's restart is not lost.
+				notifyAppearanceChange()
 				return
 			}
 		}
@@ -413,11 +416,21 @@ var appearanceChange = struct {
 	handler func()
 }{}
 
-// SetAppearanceChangeHandler registers a callback for taskbar theme changes.
+// SetAppearanceChangeHandler registers a callback for taskbar appearance,
+// DPI, display, and successful Explorer-restart changes.
 func SetAppearanceChangeHandler(handler func()) {
 	appearanceChange.Lock()
 	appearanceChange.handler = handler
 	appearanceChange.Unlock()
+}
+
+func notifyAppearanceChange() {
+	appearanceChange.RLock()
+	handler := appearanceChange.handler
+	appearanceChange.RUnlock()
+	if handler != nil {
+		go handler()
+	}
 }
 
 // WindowProc callback function that processes messages sent to a window.
@@ -428,6 +441,9 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		WM_LBUTTONUP     = 0x0202
 		WM_COMMAND       = 0x0111
 		WM_SETTINGCHANGE = 0x001A
+		WM_DISPLAYCHANGE = 0x007E
+		WM_DPICHANGED    = 0x02E0
+		WM_THEMECHANGED  = 0x031A
 		WM_ENDSESSION    = 0x0016
 		WM_CLOSE         = 0x0010
 		WM_DESTROY       = 0x0002
@@ -462,20 +478,11 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 		}
 	case t.wmTaskbarCreated: // on explorer.exe restarts
 		t.readd()
-	case WM_SETTINGCHANGE:
-		if lParam != 0 {
-			immersiveColorSet, _ := windows.UTF16PtrFromString("ImmersiveColorSet")
-			comparison, _, _ := pLstrcmp.Call(lParam, uintptr(unsafe.Pointer(immersiveColorSet)))
-			if comparison == 0 {
-				appearanceChange.RLock()
-				handler := appearanceChange.handler
-				appearanceChange.RUnlock()
-				if handler != nil {
-					go handler()
-				}
-				return 0
-			}
-		}
+	case WM_SETTINGCHANGE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_THEMECHANGED:
+		// Settings changes include taskbar moves and sizing changes, not just
+		// ImmersiveColorSet. The callback samples the actual taskbar's DPI,
+		// rather than assuming this hidden window is on the same monitor.
+		notifyAppearanceChange()
 		fallthrough
 	default:
 		// Calls the default window procedure to provide default processing for any window messages that an application does not process.
