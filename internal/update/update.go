@@ -152,13 +152,35 @@ var (
 	}
 	renameFile   = os.Rename
 	copyArtifact = io.Copy
+	// installedVersion asks the binary at exe for its version. It runs only
+	// the already-installed binary, never a download.
+	installedVersion = func(ctx context.Context, exe string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, exe, "--version")
+		cmd.WaitDelay = time.Second
+		out, err := cmd.Output()
+		if err != nil {
+			return "", err
+		}
+		for _, field := range strings.Fields(string(out)) {
+			if _, err := parseVersion(field); err == nil {
+				return field, nil
+			}
+		}
+		return "", errors.New("no version in output")
+	}
 )
+
+// ErrNotNewer means the installed binary is already at or past the release:
+// another updater ran after this release was checked.
+var ErrNotNewer = errors.New("installed version is already up to date")
 
 func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	if exe == "" {
 		return errors.New("executable path is empty")
 	}
-	asset, sumsURL, err := artifactURLs(rawURL)
+	asset, sumsURL, tag, err := artifactURLs(rawURL)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
@@ -209,6 +231,15 @@ func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	}
 	if err := smokeCtx.Err(); err != nil {
 		return fmt.Errorf("verify binary: %w", err)
+	}
+
+	// The release was checked against the running version; another updater
+	// may have installed something newer since. An unreadable version keeps
+	// the old behaviour.
+	if installed, err := installedVersion(ctx, exe); err == nil {
+		if newer, err := newerVersion(installed, tag); err == nil && !newer {
+			return ErrNotNewer
+		}
 	}
 
 	if runtime.GOOS == "windows" {

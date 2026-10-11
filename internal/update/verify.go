@@ -31,29 +31,29 @@ func validateDownloadURL(u *url.URL) error {
 	}
 }
 
-func artifactURLs(raw string) (asset, sums string, err error) {
+func artifactURLs(raw string) (asset, sums, tag string, err error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if err := validateDownloadURL(u); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	prefix := "/" + repo + "/releases/download/"
 	if strings.ToLower(u.Hostname()) != "github.com" || !strings.HasPrefix(u.Path, prefix) || u.RawQuery != "" || u.Fragment != "" {
-		return "", "", errors.New("expected a canonical clawmeter GitHub release asset URL")
+		return "", "", "", errors.New("expected a canonical clawmeter GitHub release asset URL")
 	}
 	parts := strings.Split(strings.TrimPrefix(u.Path, prefix), "/")
 	if len(parts) != 2 || parts[1] == "" || parts[1] == "." || parts[1] == ".." {
-		return "", "", errors.New("invalid release asset path")
+		return "", "", "", errors.New("invalid release asset path")
 	}
 	if _, err := parseVersion(parts[0]); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	asset = parts[1]
 	u.Path = prefix + parts[0] + "/" + sumsName
 	u.RawPath = ""
-	return asset, u.String(), nil
+	return asset, u.String(), parts[0], nil
 }
 
 func download(ctx context.Context, raw string) (*http.Response, error) {
