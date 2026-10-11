@@ -332,7 +332,7 @@ func applyKey(data *provider.UsageData, k *keyData) {
 	if pct > 100 {
 		pct = 100
 	}
-	data.Windows = append(data.Windows, provider.UsageWindow{Name: "key", DisplayName: "API key", Utilization: pct, Limit: int(limit), Used: int(used), ResetPolicy: k.LimitReset})
+	data.Windows = append(data.Windows, provider.UsageWindow{Name: "key", Length: provider.WindowLengthFromName(k.LimitReset), DisplayName: "API key", Utilization: pct, Limit: int(limit), Used: int(used), ResetPolicy: k.LimitReset})
 }
 
 func Register(registry *provider.Registry, cfg *config.Config) error {

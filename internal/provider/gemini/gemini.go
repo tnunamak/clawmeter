@@ -552,6 +552,7 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 		}
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        t.name,
+			Length:      24 * time.Hour,
 			DisplayName: t.disp,
 			Utilization: (1 - t.info.worst) * 100,
 			ResetsAt:    t.info.resetAt,

@@ -628,6 +628,12 @@ func (p *Provider) limitToWindow(l *limitItem) *provider.UsageWindow {
 	return &provider.UsageWindow{
 		Name:        name,
 		DisplayName: displayName,
+		Length: func() time.Duration {
+			if l.Window == nil {
+				return 0
+			}
+			return provider.WindowDuration(int64(l.Window.Duration), l.Window.TimeUnit)
+		}(),
 		Utilization: utilization,
 		ResetsAt:    resetsAt,
 		Limit:       limit,

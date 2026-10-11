@@ -375,6 +375,7 @@ func appendSnapshotWindow(
 	resetAt, _ := snap.resetAt(fallbackReset, fallbackResetKnown)
 	data.Windows = append(data.Windows, provider.UsageWindow{
 		Name:        name,
+		Length:      30 * 24 * time.Hour,
 		DisplayName: displayName,
 		Utilization: clamp(100-percent, 0, 100),
 		ResetsAt:    resetAt,

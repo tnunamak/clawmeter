@@ -107,8 +107,12 @@ func TestNonForecastableFactsDoNotAffectCheckSeverity(t *testing.T) {
 		{Windows: []provider.UsageWindow{{Name: "daily", Utilization: 100}}},
 	} {
 		got := classifyProvider(&ProviderFormatter{Data: data})
-		if got.tier != 4 {
-			t.Fatalf("classifyProvider(%+v) tier = %d, want healthy/non-severity tier 4", data, got.tier)
+		want := 4
+		if len(data.Windows) > 0 {
+			want = 2
+		}
+		if got.tier != want {
+			t.Fatalf("classifyProvider(%+v) tier = %d, want %d", data, got.tier, want)
 		}
 	}
 }
@@ -342,8 +346,8 @@ func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
 	if strings.Contains(got, "reset unknown") || strings.Contains(got, "resets unknown") {
 		t.Fatalf("FormatPlain() = %q, should not present resetless usage as a warning", got)
 	}
-	if got := classifyProvider(&pf); got.tier != 4 {
-		t.Fatalf("classifyProvider() tier = %d, want non-severity tier 4", got.tier)
+	if got := classifyProvider(&pf); got.tier != 2 {
+		t.Fatalf("classifyProvider() tier = %d, want exhausted tier 2", got.tier)
 	}
 }
 

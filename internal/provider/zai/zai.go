@@ -355,6 +355,7 @@ func (p *Provider) transformLimits(resp *apiResponse) *provider.UsageData {
 
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        name,
+			Length:      provider.WindowDuration(int64(limit.Number), map[int]string{1: "day", 3: "hour", 5: "minute", 6: "week"}[limit.Unit]),
 			DisplayName: displayName,
 			Utilization: usedPct,
 			ResetsAt:    resetsAt,
