@@ -329,9 +329,10 @@ run_ssh_command() {
 }
 
 probe_ssh_ready() {
+  local limit="${1:-10}"
   local out_file="${OUT_DIR}/ssh-probe.out"
   rm -f "$out_file"
-  if timeout 10 ssh \
+  if timeout "$limit" ssh \
     -o BatchMode=yes \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
@@ -426,7 +427,7 @@ start_tcg_fallback() {
   local generated="${VM_DIR}/${VM_NAME}.sh"
   [[ -f "$generated" ]] || {
     warn "Quickemu did not generate ${generated}; cannot run TCG fallback"
-    return 0
+    return 1
   }
   log "Trying slow TCG fallback for ${BOOT_WAIT}s"
   cleanup_vm_runtime_files "$VM_DIR"
@@ -435,13 +436,29 @@ start_tcg_fallback() {
     "$generated" | (cd "$VM_BASE" && timeout "$BOOT_WAIT" bash) &
   local tcg_launcher=$!
   record "tcg_launcher_pid=${tcg_launcher}"
-  sleep 60
+  local deadline=$((SECONDS + BOOT_WAIT))
+  local remaining delay
+  while (( SECONDS < deadline )); do
+    remaining=$((deadline - SECONDS))
+    delay="$PROBE_INTERVAL"
+    (( delay <= remaining )) || delay="$remaining"
+    sleep "$delay"
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || break
+    (( remaining <= 10 )) || remaining=10
+    if probe_ssh_ready "$remaining"; then
+      log "TCG SSH is ready"
+      if run_guest_cli_smoke; then
+        log "TCG guest CLI smoke passed"
+        return 0
+      fi
+      warn "TCG guest CLI smoke failed"
+      return 3
+    fi
+  done
   capture_screen "tcg"
-  if probe_ssh_ready; then
-    log "TCG SSH is ready"
-  else
-    warn "TCG SSH port did not become usable"
-  fi
+  warn "TCG SSH port did not become usable within ${BOOT_WAIT}s"
+  return 4
 }
 
 main() {
@@ -460,7 +477,9 @@ main() {
     if [[ "$vm_status" -ne 0 ]]; then
       warn "Quickemu VM smoke did not complete successfully (status ${vm_status})"
       exit_status="$vm_status"
-      start_tcg_fallback || true
+      if [[ "$TCG_FALLBACK" -eq 1 ]] && start_tcg_fallback; then
+        exit_status=0
+      fi
     fi
     vm_paths
     kill_vm_processes "$VM_BASE"
