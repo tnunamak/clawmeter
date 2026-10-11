@@ -9,13 +9,20 @@ import (
 
 func TestP2ExpiredCallbackKeepsReplacementTimer(t *testing.T) {
 	actions := make(chan iconClickAction, 4)
-	d := newTrayClickDispatcher(actions, 10*time.Millisecond)
+	d := newTrayClickDispatcher(actions, time.Hour)
 	d.tapped()
 	d.mu.Lock()
-	time.Sleep(30 * time.Millisecond)
-	if d.timer.Stop() {
-		d.mu.Unlock()
-		t.Fatal("fixture timer did not expire")
+	expired := d.timer
+	// Expire the timer while holding d.mu, so its callback starts and then
+	// waits for the lock. Stop reports false once the callback has started.
+	deadline := time.Now().Add(time.Second)
+	for expired.Stop() {
+		if time.Now().After(deadline) {
+			d.mu.Unlock()
+			t.Fatal("fixture timer did not expire")
+		}
+		expired.Reset(time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	replacement := time.NewTimer(time.Hour)
 	defer replacement.Stop()
