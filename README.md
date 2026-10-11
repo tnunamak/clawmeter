@@ -61,16 +61,7 @@ Setup installs the mainstream local surface Clawmeter can verify today: a Claude
 
 ## Verify a download
 
-Releases from this version on are signed. `SHA256SUMS.txt` carries a [minisign](https://jedisct1.github.io/minisign/) signature in `SHA256SUMS.txt.minisig`. Download both files from the release, then run:
-
-```bash
-minisign -Vm SHA256SUMS.txt -P RWRW9JhIO6sI06w/ElmX9+E48kAw0MBjkIXrNX4TIJsiVG8SxAXvETXD
-sha256sum --check --ignore-missing SHA256SUMS.txt
-```
-
-The signed comment names the release, for example `clawmeter v0.40.0 SHA256SUMS.txt`.
-
-The self-updater checks this signature with keys built into the binary. It refuses unsigned updates. A backup key is kept offline for key rotation.
+Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.github.io/minisign/), and the self-updater refuses unsigned updates. To check a download yourself, see [SECURITY.md](SECURITY.md#verify-a-download).
 
 ## Why Use It
 

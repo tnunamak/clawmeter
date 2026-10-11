@@ -22,7 +22,7 @@ Release assets include checksums in `SHA256SUMS.txt`.
 
 ### Verify a download
 
-Releases from this version on are signed. `SHA256SUMS.txt` carries a [minisign](https://jedisct1.github.io/minisign/) signature in `SHA256SUMS.txt.minisig`. Download both files from the release, then run:
+Releases from v0.40.0 on are signed. `SHA256SUMS.txt` carries a [minisign](https://jedisct1.github.io/minisign/) signature in `SHA256SUMS.txt.minisig`. Download both files from the release, then run:
 
 ```bash
 minisign -Vm SHA256SUMS.txt -P RWRW9JhIO6sI06w/ElmX9+E48kAw0MBjkIXrNX4TIJsiVG8SxAXvETXD
