@@ -39,6 +39,9 @@ func TestP2ConsoleRateLimitBackoff(t *testing.T) {
 		t.Helper()
 		for i := 0; i < 2; i++ {
 			data, err := provider.FetchSource(context.Background(), p)
+			if apiRequests != nil && apiRequests.Load() != 0 {
+				t.Fatalf("API requests %d want 0 after fetch %d", apiRequests.Load(), i)
+			}
 			if err != nil || data == nil || !strings.Contains(data.Error, "rate limited") {
 				t.Fatalf("fetch %d: %#v %v", i, data, err)
 			}
@@ -64,7 +67,7 @@ func TestP2ConsoleRateLimitBackoff(t *testing.T) {
 
 	t.Run("auto source does not fall through to API key", func(t *testing.T) {
 		consoleRequests.Store(0)
-		t.Setenv("ALIBABA_CODING_PLAN_API_KEY", "synthetic-api-key")
+		t.Setenv("ALIBABA_CODING_PLAN_API_KEY", "sk-sp-synthetic-api-key")
 		var apiRequests atomic.Int32
 		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			apiRequests.Add(1)
