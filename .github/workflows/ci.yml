@@ -56,3 +56,6 @@ jobs:
 
       - name: Validate packaging shell scripts
         run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
+
+      - name: Test Windows TCG smoke fallback
+        run: python3 scripts/test_tcg_smoke.py
