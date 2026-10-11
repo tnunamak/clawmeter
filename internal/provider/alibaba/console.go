@@ -179,6 +179,9 @@ func (p *Provider) callConsole(ctx context.Context, session consoleSession, comm
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, fmt.Errorf("console login rejected")
 	}
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("console gateway returned HTTP %d", resp.StatusCode)
 	}
