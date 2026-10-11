@@ -76,26 +76,32 @@ func checkWith(ctx context.Context, currentVersion, api, dl string, client *http
 		return nil, nil
 	}
 
-	// Simple comparison: if tags differ and current isn't "dev", it's an update
+	// Development builds do not auto-update.
 	if currentVersion == "dev" {
 		return nil, nil
 	}
 
-	assetName := assetNameFor(runtime.GOOS, runtime.GOARCH)
-	url := ""
-	for _, asset := range rel.Assets {
-		if asset.Name == assetName && asset.URL != "" {
-			url = asset.URL
-			break
-		}
+	newer, err := newerVersion(currentVersion, rel.TagName)
+	if err != nil {
+		return nil, fmt.Errorf("check update: %w", err)
 	}
-	if url == "" {
-		if len(rel.Assets) > 0 {
-			return nil, fmt.Errorf("check update: release %s has no asset %s", rel.TagName, assetName)
-		}
-		url = fmt.Sprintf("%s/%s/%s", strings.TrimRight(dl, "/"), rel.TagName, assetName)
+	if !newer {
+		return nil, nil
 	}
 
+	// The download URL is always built from the checked tag, never taken from
+	// the release metadata, so a newer tag cannot point at an older asset.
+	assetName := assetNameFor(runtime.GOOS, runtime.GOARCH)
+	if len(rel.Assets) > 0 {
+		found := false
+		for _, asset := range rel.Assets {
+			found = found || asset.Name == assetName
+		}
+		if !found {
+			return nil, fmt.Errorf("check update: release %s has no asset %s", rel.TagName, assetName)
+		}
+	}
+	url := fmt.Sprintf("%s/%s/%s", strings.TrimRight(dl, "/"), rel.TagName, assetName)
 	return &Release{Version: rel.TagName, URL: url}, nil
 }
 
@@ -138,89 +144,91 @@ func Apply(ctx context.Context, url string) error {
 	return ApplyTo(ctx, url, exe)
 }
 
-func ApplyTo(ctx context.Context, url, exe string) error {
+var (
+	runSmoke = func(ctx context.Context, filename string) error {
+		cmd := exec.CommandContext(ctx, filename, "help")
+		cmd.WaitDelay = time.Second
+		return cmd.Run()
+	}
+	renameFile   = os.Rename
+	copyArtifact = io.Copy
+)
+
+func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	if exe == "" {
 		return errors.New("executable path is empty")
 	}
-	tmpDir, err := os.MkdirTemp("", "clawmeter-update-*")
+	asset, sumsURL, err := artifactURLs(rawURL)
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return fmt.Errorf("download: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	sums, err := downloadSums(ctx, sumsURL)
+	if err != nil {
+		return err
+	}
 
-	binName := "clawmeter"
+	// Stage on the destination filesystem so Unix replacement is one rename.
+	pattern := ".clawmeter-update-*"
 	if runtime.GOOS == "windows" {
-		binName = "clawmeter.exe"
+		pattern += ".exe"
 	}
-	tmpBin := filepath.Join(tmpDir, binName)
-
-	// Download
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	f, err := os.CreateTemp(filepath.Dir(exe), pattern)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return fmt.Errorf("create staged binary: %w", err)
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	tmpBin := f.Name()
+	defer os.Remove(tmpBin)
+	defer f.Close()
+
+	resp, err := download(ctx, rawURL)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: HTTP %d", resp.StatusCode)
+	_, copyErr := copyArtifact(f, resp.Body)
+	resp.Body.Close()
+	if copyErr != nil {
+		return fmt.Errorf("write binary: %w", copyErr)
 	}
-
-	f, err := os.Create(tmpBin)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync binary: %w", err)
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		return fmt.Errorf("write binary: %w", err)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close binary: %w", err)
 	}
-	f.Close()
-
+	if err := verifyArtifact(tmpBin, asset, sums); err != nil {
+		return fmt.Errorf("verify artifact: %w", err)
+	}
 	if err := os.Chmod(tmpBin, 0755); err != nil {
 		return fmt.Errorf("chmod: %w", err)
 	}
 
-	// macOS quarantine
-	if runtime.GOOS == "darwin" {
-		exec.Command("xattr", "-d", "com.apple.quarantine", tmpBin).Run()
+	smokeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := runSmoke(smokeCtx, tmpBin); err != nil {
+		return fmt.Errorf("verify binary: %w", err)
 	}
-
-	// Verify: run "help" as a smoke test
-	if err := exec.Command(tmpBin, "help").Run(); err != nil {
+	if err := smokeCtx.Err(); err != nil {
 		return fmt.Errorf("verify binary: %w", err)
 	}
 
-	// Replace the running binary.
-	// On Windows, you can't delete or overwrite a running exe, but you CAN
-	// rename it. So: rename current → .old, then move new into place.
-	// On Linux/macOS, unlink works on a running binary.
-	oldExe := exe + ".old"
-	os.Remove(oldExe) // clean up any previous .old
-
 	if runtime.GOOS == "windows" {
-		// Rename running exe out of the way, then move new one in
-		if err := os.Rename(exe, oldExe); err != nil {
+		// Windows cannot overwrite a running executable; retain a rollback copy.
+		oldExe := exe + ".old"
+		if err := os.Remove(oldExe); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove previous binary: %w", err)
+		}
+		if err := renameFile(exe, oldExe); err != nil {
 			return fmt.Errorf("rename current binary: %w", err)
 		}
-		if err := os.Rename(tmpBin, exe); err != nil {
-			// Rollback
-			os.Rename(oldExe, exe)
+		if err := renameFile(tmpBin, exe); err != nil {
+			if rollbackErr := renameFile(oldExe, exe); rollbackErr != nil {
+				return fmt.Errorf("replace binary: %v; restore %s: %w", err, oldExe, rollbackErr)
+			}
 			return fmt.Errorf("replace binary: %w", err)
 		}
-		// .old can't be deleted while the old process runs; CleanupOld() handles it next launch
-	} else {
-		os.Remove(exe)
-		if err := os.Rename(tmpBin, exe); err != nil {
-			if err := copyFile(tmpBin, exe); err != nil {
-				return fmt.Errorf("replace binary: %w", err)
-			}
-		}
+	} else if err := renameFile(tmpBin, exe); err != nil {
+		return fmt.Errorf("replace binary: %w", err)
 	}
-
 	return nil
 }
 
@@ -290,23 +298,4 @@ func parseRestartHelperArgs(args []string) (parentPID int, exe string, err error
 		}
 	}
 	return parentPID, exe, nil
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Chmod(0755)
 }

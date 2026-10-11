@@ -447,7 +447,34 @@ fi
 
 say "Installing ${BINARY} ${LATEST} (${OS}/${ARCH})..."
 
+# Require the checksum file from this exact release before touching the install.
+download "https://github.com/${REPO}/releases/download/${LATEST}/SHA256SUMS.txt" "$TMPDIR/SHA256SUMS.txt"
+_expected="$(awk -v name="$ASSET_NAME" '
+  { file = $2; sub(/^\*/, "", file) }
+  file == name { count++; hash = $1; if (NF != 2) bad = 1 }
+  END {
+    if (count != 1 || bad || length(hash) != 64 || hash !~ /^[[:xdigit:]]+$/) exit 1
+    print tolower(hash)
+  }
+' "$TMPDIR/SHA256SUMS.txt")" || {
+  err "expected exactly one valid SHA-256 checksum for ${ASSET_NAME}"
+  exit 1
+}
+
 download "$URL" "$TMPDIR/${BINARY}"
+if command -v sha256sum >/dev/null 2>&1; then
+  _actual="$(sha256sum "$TMPDIR/${BINARY}")" || exit 1
+elif command -v shasum >/dev/null 2>&1; then
+  _actual="$(shasum -a 256 "$TMPDIR/${BINARY}")" || exit 1
+else
+  err "need sha256sum or shasum to verify the download"
+  exit 1
+fi
+_actual="${_actual%% *}"
+if [ "$_actual" != "$_expected" ]; then
+  err "SHA-256 mismatch for ${ASSET_NAME}; existing binary was not changed"
+  exit 1
+fi
 ensure chmod +x "$TMPDIR/${BINARY}"
 
 # Clear macOS quarantine flag
@@ -535,8 +562,12 @@ add_to_path() {
   : "${_rcfile:=${HOME}/.profile}"
 
   # Check if already present (idempotent)
-  _line="export PATH=\"\$HOME/.local/bin:\$PATH\""
-  if [ -f "$_rcfile" ] && grep -qF '.local/bin' "$_rcfile" 2>/dev/null; then
+  if [ "$_shell" = "fish" ]; then
+    _line="set -gx PATH $(shell_single_quote "$INSTALL_DIR") \$PATH"
+  else
+    _line="export PATH=$(shell_single_quote "$INSTALL_DIR"):\$PATH"
+  fi
+  if [ -f "$_rcfile" ] && grep -qF "$_line" "$_rcfile" 2>/dev/null; then
     return
   fi
 
