@@ -414,29 +414,71 @@ TMPDIR="$(mktemp -d)" || { err "failed to create temp directory"; exit 1; }
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-# Fetch recent releases (not just latest — latest may still be building)
-download "https://api.github.com/repos/${REPO}/releases?per_page=5" "$TMPDIR/releases.json"
+# Fetch recent releases (not just latest — latest may still be building).
+# Do not follow API redirects: the token must stay on api.github.com.
+_api_url="https://api.github.com/repos/${REPO}/releases?per_page=5"
+_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+if command -v curl >/dev/null 2>&1; then
+  if [ -n "$_token" ]; then
+    _status="$(curl -fsS -H "Authorization: Bearer $_token" -w '%{http_code}' "$_api_url" -o "$TMPDIR/releases.json" 2>/dev/null)" || _status=""
+  else
+    _status="$(curl -fsS -w '%{http_code}' "$_api_url" -o "$TMPDIR/releases.json" 2>/dev/null)" || _status=""
+  fi
+  _api_ok=0
+  [ "$_status" = 200 ] && _api_ok=1
+elif command -v wget >/dev/null 2>&1; then
+  if [ -n "$_token" ]; then
+    wget -q --max-redirect=0 --header="Authorization: Bearer $_token" -O "$TMPDIR/releases.json" "$_api_url" && _api_ok=1 || _api_ok=0
+  else
+    wget -q --max-redirect=0 -O "$TMPDIR/releases.json" "$_api_url" && _api_ok=1 || _api_ok=0
+  fi
+else
+  err "need curl or wget to download files"
+  exit 1
+fi
 
 # Find the first release that has our binary asset
 LATEST=""
 URL=""
-for tag in $(grep '"tag_name"' "$TMPDIR/releases.json" | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'); do
-  _url="https://github.com/${REPO}/releases/download/${tag}/${ASSET_NAME}"
-  # HEAD request to check if asset exists
+if [ "$_api_ok" = 1 ]; then
+  for tag in $(grep '"tag_name"' "$TMPDIR/releases.json" | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/'); do
+    _url="https://github.com/${REPO}/releases/download/${tag}/${ASSET_NAME}"
+    # HEAD request to check if asset exists
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fsSL --head "$_url" >/dev/null 2>&1; then
+        LATEST="$tag"
+        URL="$_url"
+        break
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if wget --spider -q "$_url" 2>/dev/null; then
+        LATEST="$tag"
+        URL="$_url"
+        break
+      fi
+    fi
+  done
+else
+  say "GitHub API unavailable; falling back to releases/latest."
+  _latest_url="https://github.com/${REPO}/releases/latest"
   if command -v curl >/dev/null 2>&1; then
-    if curl -fsSL --head "$_url" >/dev/null 2>&1; then
-      LATEST="$tag"
-      URL="$_url"
-      break
-    fi
-  elif command -v wget >/dev/null 2>&1; then
-    if wget --spider -q "$_url" 2>/dev/null; then
-      LATEST="$tag"
-      URL="$_url"
-      break
-    fi
+    curl -fsSI -D "$TMPDIR/latest.headers" -o /dev/null "$_latest_url" || {
+      err "could not resolve latest release"
+      exit 1
+    }
+  else
+    wget -qS --spider --max-redirect=0 "$_latest_url" 2> "$TMPDIR/latest.headers" || true
   fi
-done
+  _location="$(tr -d '\r' < "$TMPDIR/latest.headers" | awk 'tolower($1) == "location:" { print $2; exit }')"
+  case "$_location" in
+    "https://github.com/${REPO}/releases/tag/"*) LATEST="${_location##*/}" ;;
+  esac
+  if ! printf '%s\n' "$LATEST" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+    err "latest release redirect did not contain a valid version tag"
+    exit 1
+  fi
+  URL="https://github.com/${REPO}/releases/download/${LATEST}/${ASSET_NAME}"
+fi
 
 if [ -z "$LATEST" ]; then
   err "no release found with binaries for ${OS}/${ARCH}"
