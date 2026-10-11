@@ -528,8 +528,9 @@ func (p *Provider) transformQuota(resp *quotaResponse) *provider.UsageData {
 		if isProModel(b.ModelID) {
 			tier = &pro
 		}
-		tier.found = true
-		if *b.RemainingFraction < tier.worst {
+		if !tier.found || *b.RemainingFraction < tier.worst {
+			tier.found = true
+			tier.resetAt = time.Time{}
 			tier.worst = *b.RemainingFraction
 			if t, err := time.Parse(time.RFC3339, b.ResetTime); err == nil {
 				tier.resetAt = t
