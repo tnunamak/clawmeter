@@ -38,6 +38,7 @@ import (
 const (
 	updateCheckInterval    = 30 * time.Minute
 	tokenPlanProviderName  = "alibaba_token"
+	retryConnectionAction  = "Retry quota access"
 	tokenPlanConnectTarget = "token-plan"
 )
 
@@ -711,6 +712,7 @@ type providerMenuItems struct {
 	everHealthy        bool // true once we've seen useful quota data
 	explicitlyEnabled  bool
 	connecting         atomic.Bool
+	connectFailed      atomic.Bool // last tray connection attempt failed
 	headerState        menuItemState
 	statusState        menuItemState
 	resetState         menuItemState
@@ -960,12 +962,13 @@ func setProviderConnectionItemLocked(menu *providerMenuItems, action string, sho
 }
 
 func finishProviderConnection(menu *providerMenuItems, err error) {
+	menu.connectFailed.Store(err != nil)
 	menu.connecting.Store(false)
 	if err == nil {
 		return
 	}
 	trayRenderMu.Lock()
-	setProviderConnectionItemLocked(menu, "Retry quota access", true)
+	setProviderConnectionItemLocked(menu, retryConnectionAction, true)
 	trayRenderMu.Unlock()
 }
 
@@ -1075,6 +1078,11 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		updateResetCreditRow(menu, data, time.Now())
 		setupReady := setup.IsReady()
 		connectionStatus, connectionAction, showConnection := providerConnectionMenuState(name, data, menu.explicitlyEnabled, setupReady)
+		if !showConnection {
+			menu.connectFailed.Store(false)
+		} else if menu.connectFailed.Load() {
+			connectionAction = retryConnectionAction
+		}
 		setProviderConnectionItemLocked(menu, connectionAction, showConnection)
 		visibleProviderCount++
 		if data != nil {
@@ -1132,11 +1140,15 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		showProviderHeader(menu)
+		var statusParts []string
+		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
+			statusParts = append(statusParts, providerStatus.Indicator.Label())
+		}
 		if data.Stale {
-			setMenuItemTitle(menu.statusItem, &menu.statusState, fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
-			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
-		} else if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
-			setMenuItemTitle(menu.statusItem, &menu.statusState, providerStatus.Indicator.Label())
+			statusParts = append(statusParts, fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
+		}
+		if len(statusParts) > 0 {
+			setMenuItemTitle(menu.statusItem, &menu.statusState, strings.Join(statusParts, " - "))
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 		} else {
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
