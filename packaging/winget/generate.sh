@@ -111,8 +111,8 @@ EOF
 if [[ "$mode" == "setup" ]]; then
   cat >>"${out_dir}/tnunamak.Clawmeter.installer.yaml" <<'EOF'
 InstallerSwitches:
-  Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=addtopath
-  SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=addtopath
+  Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=addtopath,updates
+  SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=addtopath,updates
 UpgradeBehavior: install
 EOF
 fi
