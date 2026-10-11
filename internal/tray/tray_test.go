@@ -461,8 +461,8 @@ func TestIconTargetOverrideCyclesOnlyThroughProviderQuotaWindows(t *testing.T) {
 	if got := nextIconTargetOverride(iconTarget{}, choices, false); got != (iconTarget{Provider: "claude", Window: "5h"}) {
 		t.Fatalf("next from auto without skip = %+v, want claude/5h", got)
 	}
-	if got := nextIconTargetOverride(iconTarget{}, choices, true); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
-		t.Fatalf("next from auto with skip = %+v, want claude/7d All", got)
+	if got := nextIconTargetOverride(iconTarget{}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
+		t.Fatalf("next from auto = %+v, want claude/5h", got)
 	}
 	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices, true); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
 		t.Fatalf("next from claude 5h = %+v, want claude/7d All", got)
@@ -1309,3 +1309,155 @@ func (p trayStubProvider) IsConfigured() bool {
 func (p trayStubProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
 	return &provider.UsageData{Provider: p.name}, nil
 }
+
+func TestThresholdCheckPreservesRawFoldedResults(t *testing.T) {
+	oldCfg := cfg
+	cfg = config.DefaultConfig()
+	defer func() { cfg = oldCfg; s.lastResults = nil }()
+	raw := map[string]*provider.UsageData{
+		"claude":     {Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 79, ResetsAt: time.Now().Add(time.Hour)}}},
+		"claude_api": {Provider: "claude_api"},
+	}
+	s.lastResults = raw
+	checkThresholds(map[string]*provider.UsageData{"claude": raw["claude"]}, nil)
+	if s.lastResults["claude_api"] != raw["claude_api"] {
+		t.Fatal("threshold rendering dropped raw claude_api fallback")
+	}
+}
+
+func TestAutoCycleCanPinFirstManualTarget(t *testing.T) {
+	// Auto can select a fresh provider while a stale provider ranks first
+	// in the manual choices. Every manual choice must remain reachable.
+	choices := []iconTarget{{Provider: "stale", Window: "5h"}, {Provider: "fresh", Window: "7d"}}
+	if got := nextIconTargetOverride(iconTarget{}, choices, true); got != choices[0] {
+		t.Fatalf("Auto cycle skipped first manual choice: got %+v, want %+v", got, choices[0])
+	}
+}
+
+func TestWindowBadgeDoesNotTruncateMultiDigitDuration(t *testing.T) {
+	for _, name := range []string{"24 hours", "24h", "30 days", "30d"} {
+		if got := windowBadgeLabel(name); got != "--" {
+			t.Errorf("windowBadgeLabel(%q) = %q, want neutral -- rather than a truncated duration", name, got)
+		}
+	}
+}
+
+// Supplemental headless tests below require the new tray seams.
+func TestThresholdCrossingsNotifyOnceOutsideStateLock(t *testing.T) {
+	oldCfg, oldSend := cfg, sendThresholdNotification
+	cfg = config.DefaultConfig()
+	s.thresholdUtilization = nil
+	defer func() {
+		cfg, sendThresholdNotification = oldCfg, oldSend
+		s.thresholdUtilization = nil
+		s.lastResults = nil
+	}()
+	var urgencies []string
+	sendThresholdNotification = func(title, body, urgency string) {
+		if !s.mu.TryLock() {
+			t.Fatal("notification sent while state mutex is held")
+		}
+		s.mu.Unlock()
+		urgencies = append(urgencies, urgency)
+	}
+	for _, pct := range []float64{79, 80, 80, 94, 95, 95} {
+		data := &provider.UsageData{Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: pct, ResetsAt: time.Now().Add(time.Hour)}}}
+		// This is the order used by refresh: publish raw data before rendering.
+		s.lastResults = map[string]*provider.UsageData{"claude": data, "claude_api": {Provider: "claude_api"}}
+		checkThresholds(map[string]*provider.UsageData{"claude": data}, nil)
+		if s.lastResults["claude_api"] == nil {
+			t.Fatal("raw fallback was lost")
+		}
+	}
+	if len(urgencies) != 2 || urgencies[0] != "normal" || urgencies[1] != "critical" {
+		t.Fatalf("notifications = %v, want one warning and one critical", urgencies)
+	}
+}
+
+func TestLatestTrayStateWaitsForRenderBarrier(t *testing.T) {
+	old := map[string]*provider.UsageData{"old": {Provider: "old"}}
+	fresh := map[string]*provider.UsageData{"fresh": {Provider: "fresh"}}
+	s.lastResults = old
+	defer func() { s.lastResults = nil }()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	barrier := trayTestRenderBarrier{started: started, release: release}
+	done := make(chan struct{})
+	var rendered map[string]*provider.UsageData
+	go func() {
+		rendered, _ = lockLatestTrayState(barrier)
+		barrier.Unlock()
+		close(done)
+	}()
+	<-started
+	select {
+	case <-done:
+		t.Fatal("render crossed the locked barrier")
+	default:
+	}
+	// A usage refresh publishes while the older status render is queued.
+	s.mu.Lock()
+	s.lastResults = fresh
+	s.mu.Unlock()
+	close(release)
+	<-done
+	if rendered["fresh"] != fresh["fresh"] || rendered["old"] != nil {
+		t.Fatalf("queued older render used stale snapshot: %v", rendered)
+	}
+}
+
+func TestTrayConfigRetryRecoversAfterRepeatedLoadErrors(t *testing.T) {
+	ticks := make(chan time.Time)
+	quit := make(chan struct{})
+	attempted := make(chan int)
+	done := make(chan struct{})
+	want := config.DefaultConfig()
+	var got *config.Config
+	attempts, stops := 0, 0
+	go func() {
+		retryTrayConfig(ticks, quit, func() (*config.Config, error) {
+			attempts++
+			attempted <- attempts
+			if attempts < 3 {
+				return nil, errors.New("invalid config")
+			}
+			return want, nil
+		}, func(c *config.Config) { got = c }, func() { stops++ })
+		close(done)
+	}()
+	for i := 1; i <= 3; i++ {
+		ticks <- time.Now()
+		if got := <-attempted; got != i {
+			t.Fatalf("attempt = %d, want %d", got, i)
+		}
+	}
+	<-done
+	if got != want || stops != 0 {
+		t.Fatalf("retry recovery: config=%p stops=%d", got, stops)
+	}
+}
+
+func TestTrayConfigRetryQuitRemainsResponsive(t *testing.T) {
+	quit := make(chan struct{})
+	close(quit)
+	stopped := false
+	retryTrayConfig(make(chan time.Time), quit, func() (*config.Config, error) {
+		t.Fatal("Quit should not wait for a config load")
+		return nil, nil
+	}, func(*config.Config) { t.Fatal("invalid config should not start providers") }, func() { stopped = true })
+	if !stopped {
+		t.Fatal("Quit was not handled")
+	}
+}
+
+type trayTestRenderBarrier struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b trayTestRenderBarrier) Lock() {
+	close(b.started)
+	<-b.release
+}
+
+func (b trayTestRenderBarrier) Unlock() {}
