@@ -54,5 +54,13 @@ jobs:
             [scriptblock]::Create((Get-Content -Raw $_.FullName)) | Out-Null
           }
 
+      - name: Run Windows packaging PowerShell tests
+        shell: pwsh
+        run: |
+          Get-ChildItem packaging/windows/test-*.ps1 | ForEach-Object {
+            pwsh -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Validate packaging shell scripts
         run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
