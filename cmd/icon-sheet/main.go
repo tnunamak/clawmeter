@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -113,13 +114,18 @@ func scaleNearest(src image.Image, factor int) image.Image {
 	return dst
 }
 
+var createPNGFile = func(path string) (io.WriteCloser, error) { return os.Create(path) }
+
 func writePNG(path string, img image.Image) {
-	f, err := os.Create(path)
+	f, err := createPNGFile(path)
 	if err != nil {
 		fatal(err)
 	}
 	defer f.Close()
 	if err := png.Encode(f, img); err != nil {
+		fatal(err)
+	}
+	if err := f.Close(); err != nil {
 		fatal(err)
 	}
 	fmt.Println(path)
