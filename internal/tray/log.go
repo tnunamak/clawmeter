@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"golang.org/x/term"
 )
@@ -36,6 +37,10 @@ func redirectLogToFile() {
 	f, err := os.OpenFile(filepath.Join(dir, "tray.log"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		return
+	}
+	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
+		f.Close()
 		return
 	}
 	log.SetOutput(f)
