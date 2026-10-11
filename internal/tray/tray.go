@@ -103,7 +103,7 @@ func shouldCreateProviderMenu(p provider.Provider) bool {
 type state struct {
 	mu                        sync.Mutex
 	lastResults               map[string]*provider.UsageData
-	thresholdUtilization      map[iconTarget]float64
+	thresholdUtilization      map[iconTarget]thresholdSample
 	lastSourceRevisions       map[string]string
 	statuses                  map[string]*status.ProviderStatus
 	failureGate               *provider.FailureGate
@@ -129,6 +129,11 @@ type state struct {
 type iconTarget struct {
 	Provider string
 	Window   string
+}
+
+type thresholdSample struct {
+	Utilization float64
+	ResetsAt    time.Time
 }
 
 type iconAutoMode string
@@ -205,6 +210,13 @@ func retryTrayConfig(ticks <-chan time.Time, quit <-chan struct{}, load func() (
 			return
 		case <-ticks:
 			loaded, err := load()
+			// Quit may arrive while the synchronous config load is in flight.
+			select {
+			case <-quit:
+				stop()
+				return
+			default:
+			}
 			if err == nil {
 				ready(loaded)
 				return
@@ -1929,7 +1941,7 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 	var pending []notification
 	s.mu.Lock()
 	if s.thresholdUtilization == nil {
-		s.thresholdUtilization = make(map[iconTarget]float64)
+		s.thresholdUtilization = make(map[iconTarget]thresholdSample)
 	}
 	warningThreshold, criticalThreshold := 80.0, 95.0
 	if cfg != nil {
@@ -1942,8 +1954,13 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 		}
 		for _, window := range data.UsableWindows() {
 			key := iconTarget{Provider: name, Window: window.Name}
-			pct, oldPct := window.Utilization, s.thresholdUtilization[key]
-			s.thresholdUtilization[key] = pct
+			previous := s.thresholdUtilization[key]
+			pct, oldPct := window.Utilization, previous.Utilization
+			// A new reset period rearms thresholds even if low samples were missed.
+			if newResetPeriod(previous.ResetsAt, window.ResetsAt, time.Now()) {
+				oldPct = 0
+			}
+			s.thresholdUtilization[key] = thresholdSample{Utilization: pct, ResetsAt: window.ResetsAt}
 			display := displayNames[name]
 			if display == "" {
 				display = name
@@ -2139,4 +2156,14 @@ func providerSeverity(data *provider.UsageData) providerSeverityRank {
 	}
 	_, proj, ok := selectedIconWindow(data, "")
 	return providerSeverityRank{tier: 2, projection: proj, hasProjection: ok}
+}
+
+// newResetPeriod reports whether a window's reset time starts a new period.
+// Providers that derive the reset from time remaining move it by a few
+// seconds between polls, so only a passed reset or a large jump counts.
+func newResetPeriod(previous, current, now time.Time) bool {
+	if previous.IsZero() {
+		return true
+	}
+	return !now.Before(previous) || current.Sub(previous) > 30*time.Minute
 }

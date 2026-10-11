@@ -1360,8 +1360,9 @@ func TestThresholdCrossingsNotifyOnceOutsideStateLock(t *testing.T) {
 		s.mu.Unlock()
 		urgencies = append(urgencies, urgency)
 	}
+	reset := time.Now().Add(time.Hour)
 	for _, pct := range []float64{79, 80, 80, 94, 95, 95} {
-		data := &provider.UsageData{Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: pct, ResetsAt: time.Now().Add(time.Hour)}}}
+		data := &provider.UsageData{Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: pct, ResetsAt: reset}}}
 		// This is the order used by refresh: publish raw data before rendering.
 		s.lastResults = map[string]*provider.UsageData{"claude": data, "claude_api": {Provider: "claude_api"}}
 		checkThresholds(map[string]*provider.UsageData{"claude": data}, nil)
@@ -1524,5 +1525,26 @@ func TestRedTeamConfigRetryHonorsQuitReceivedDuringSuccessfulLoad(t *testing.T) 
 	<-done
 	if readyCalls != 0 || stopCalls != 1 {
 		t.Fatalf("Quit during config load: ready=%d stop=%d, want ready=0 stop=1", readyCalls, stopCalls)
+	}
+}
+
+func TestNewResetPeriodIgnoresJitter(t *testing.T) {
+	now := time.Now()
+	reset := now.Add(2 * time.Hour)
+	for _, tc := range []struct {
+		name              string
+		previous, current time.Time
+		want              bool
+	}{
+		{"first sample", time.Time{}, reset, true},
+		{"same reset", reset, reset, false},
+		{"jitter later", reset, reset.Add(3 * time.Second), false},
+		{"jitter earlier", reset, reset.Add(-3 * time.Second), false},
+		{"next period", reset, reset.Add(5 * time.Hour), true},
+		{"previous reset passed", now.Add(-time.Minute), now.Add(5 * time.Hour), true},
+	} {
+		if got := newResetPeriod(tc.previous, tc.current, now); got != tc.want {
+			t.Errorf("%s: newResetPeriod = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
