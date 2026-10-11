@@ -95,9 +95,9 @@ if ($defenderCommands.GetMpThreatDetection) {
     try {
         $allDetections = @(Get-MpThreatDetection)
         foreach ($detection in $allDetections) {
-            $json = $detection | ConvertTo-Json -Depth 12 -Compress
+            $resources = @($detection.Resources) -join "`n"
             foreach ($file in $resolvedPaths) {
-                if ($json.IndexOf($file, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                if ($resources.IndexOf($file, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                     $detections += $detection
                     break
                 }
