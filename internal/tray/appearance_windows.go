@@ -14,7 +14,12 @@ func detectTrayPalette() icons.TrayPalette {
 		return icons.TrayPaletteDark
 	}
 	defer key.Close()
-	value, _, err := key.GetIntegerValue("AppsUseLightTheme")
+	// The taskbar follows SystemUsesLightTheme; older systems may only have
+	// AppsUseLightTheme.
+	value, _, err := key.GetIntegerValue("SystemUsesLightTheme")
+	if err != nil {
+		value, _, err = key.GetIntegerValue("AppsUseLightTheme")
+	}
 	if err == nil && value != 0 {
 		return icons.TrayPaletteLight
 	}
