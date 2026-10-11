@@ -313,3 +313,23 @@ func writeHostsJSON(t *testing.T, path, token string) {
 		t.Fatal(err)
 	}
 }
+
+func TestTokenFromHostsPathsContinuesUntilUsable(t *testing.T) {
+	for _, firstBody := range []string{`{}`, `{"other.example":{"oauth_token":"fake-other"}}`, `not-json`} {
+		t.Run(firstBody, func(t *testing.T) {
+			dir := t.TempDir()
+			first := filepath.Join(dir, "first.json")
+			second := filepath.Join(dir, "second.json")
+			if err := os.WriteFile(first, []byte(firstBody), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(second, []byte(`{"github.com":{"oauth_token":"fake-selected"}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			token, err := tokenFromHostsPaths([]string{filepath.Join(dir, "missing.json"), first, second})
+			if err != nil || token != "fake-selected" {
+				t.Fatalf("token = %q, %v, want fake-selected", token, err)
+			}
+		})
+	}
+}

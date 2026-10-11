@@ -195,16 +195,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	consumed, hasConsumed, remaining, hasRemaining := p.extractCredits(raw)
-
-	// Also check x-credits-remaining header as fallback
-	if !hasRemaining {
-		if hdr := resp.Header.Get("x-credits-remaining"); hdr != "" {
-			if n, err := fmt.Sscanf(hdr, "%f", &remaining); err == nil && n == 1 {
-				hasRemaining = true
-			}
-		}
-	}
+	consumed, hasConsumed, remaining, hasRemaining := p.extractCreditsWithHeader(raw, resp.Header.Get("x-credits-remaining"))
 
 	data := &provider.UsageData{
 		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
@@ -213,7 +204,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	total := consumed + remaining
-	if hasConsumed && hasRemaining && total > 0 {
+	if hasConsumed && hasRemaining && consumed >= 0 && remaining >= 0 && total > 0 {
 		usedPct := (consumed / total) * 100
 		if usedPct < 0 {
 			usedPct = 0
@@ -275,6 +266,10 @@ func (p *Provider) getExplicitSourceAPIKey() (string, error) {
 
 // extractCredits searches for consumed/remaining values in a flexible JSON structure.
 func (p *Provider) extractCredits(obj map[string]interface{}) (consumed float64, hasConsumed bool, remaining float64, hasRemaining bool) {
+	return p.extractCreditsWithHeader(obj, "")
+}
+
+func (p *Provider) extractCreditsWithHeader(obj map[string]interface{}, remainingHeader string) (consumed float64, hasConsumed bool, remaining float64, hasRemaining bool) {
 	// Try root level, then nested under "data", "data.credits", "data.usage", "result", "result.credits"
 	sources := []map[string]interface{}{obj}
 	for _, key := range []string{"data", "result", "usage", "credits"} {
@@ -291,18 +286,35 @@ func (p *Provider) extractCredits(obj map[string]interface{}) (consumed float64,
 
 	consumedKeys := []string{"total_credits_consumed", "totalCreditsConsumed", "total_credits_used",
 		"totalCreditsUsed", "credits_consumed", "creditsConsumed", "consumedCredits",
-		"usedCredits", "used", "total", "consumed"}
+		"usedCredits", "used", "consumed"}
 	remainingKeys := []string{"credits_remaining", "creditsRemaining", "remaining_credits",
 		"remainingCredits", "available_credits", "availableCredits", "credits_left",
 		"creditsLeft", "remaining", "left", "available", "balance"}
 
+	var limit float64
+	var hasLimit bool
 	for _, src := range sources {
+		if !hasLimit {
+			limit, hasLimit = provider.FindFloatPresent(src, []string{"total"})
+		}
 		if !hasConsumed {
 			consumed, hasConsumed = provider.FindFloatPresent(src, consumedKeys)
 		}
 		if !hasRemaining {
 			remaining, hasRemaining = provider.FindFloatPresent(src, remainingKeys)
 		}
+	}
+	// Resolve the header fallback before deriving either missing quantity from total.
+	if !hasRemaining && remainingHeader != "" {
+		if n, err := fmt.Sscanf(remainingHeader, "%f", &remaining); err == nil && n == 1 {
+			hasRemaining = true
+		}
+	}
+	if !hasConsumed && hasLimit && hasRemaining {
+		consumed, hasConsumed = limit-remaining, true
+	}
+	if !hasRemaining && hasLimit && hasConsumed {
+		remaining, hasRemaining = limit-consumed, true
 	}
 	return
 }

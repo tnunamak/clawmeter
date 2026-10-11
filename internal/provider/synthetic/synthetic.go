@@ -297,19 +297,12 @@ func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 	// Try direct percent first
 	usedPct, hasUsedPct := number(entry, []string{"percentUsed", "usedPercent", "usagePercent", "usage_percent", "used_percent", "percent_used", "percent"})
 
-	// If <= 1.0, assume it's a fraction
-	if usedPct > 0 && usedPct <= 1.0 {
-		usedPct *= 100
-	}
-
 	// Try inverse percent
 	if !hasUsedPct {
 		remaining, ok := number(entry, []string{"percentRemaining", "remainingPercent", "remaining_percent", "percent_remaining"})
 		if ok {
-			if remaining <= 1.0 {
-				remaining *= 100
-			}
 			usedPct = 100 - remaining
+			hasUsedPct = true
 		}
 	}
 

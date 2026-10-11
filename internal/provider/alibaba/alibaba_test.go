@@ -467,7 +467,7 @@ func TestFetchUsage_LoginRequired(t *testing.T) {
 }
 
 func TestFetchUsage_FiveHourResetNormalization(t *testing.T) {
-	// Reset time <60s from now should be pushed forward by 5 hours.
+	// A future reset remains exactly as returned by the provider.
 	soonReset := float64(testNow.Add(30 * time.Second).UnixMilli())
 	resp := map[string]any{
 		"codingPlanInstanceInfos": []any{
@@ -500,8 +500,8 @@ func TestFetchUsage_FiveHourResetNormalization(t *testing.T) {
 	if reset.IsZero() {
 		t.Fatal("resetsAt should not be zero")
 	}
-	if reset.Sub(testNow) < 4*time.Hour {
-		t.Errorf("5h reset should be normalized forward, got %v from now", reset.Sub(testNow))
+	if !reset.Equal(testNow.Add(30 * time.Second)) {
+		t.Errorf("5h reset changed, got %v from now", reset.Sub(testNow))
 	}
 }
 
@@ -925,4 +925,21 @@ func TestExpiredInstanceQuotaNotUsed(t *testing.T) {
 	}
 	// An error ("no coding plan quota data found") is the correct outcome:
 	// the selected active instance lacks quota and we refuse to search siblings.
+}
+
+func TestTransformQuotaPreservesReset(t *testing.T) {
+	for _, offset := range []time.Duration{-10 * time.Hour, -5 * time.Hour, -4*time.Hour - 59*time.Minute, -time.Second, 0, 30 * time.Second, time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			reset := testNow.Add(offset)
+			p := newTestProvider("")
+			got := p.transformQuota(map[string]any{
+				"per5HourUsedQuota":            float64(10),
+				"per5HourTotalQuota":           float64(100),
+				"per5HourQuotaNextRefreshTime": float64(reset.UnixMilli()),
+			})
+			if len(got.Windows) != 1 || !got.Windows[0].ResetsAt.Equal(reset) {
+				t.Fatalf("reset changed for offset %s: %#v, want %s", offset, got, reset)
+			}
+		})
+	}
 }

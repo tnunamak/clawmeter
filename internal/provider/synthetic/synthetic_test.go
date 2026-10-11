@@ -175,3 +175,28 @@ func TestFetchUsageRejectsMalformedAndOversizedBodies(t *testing.T) {
 
 // NewParseProvider keeps parser tests independent of credentials and transport.
 func NewParseProvider() *Provider { return New(config.ProviderConfig{}) }
+
+func TestExplicitPercentUnits(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    float64
+	}{
+		{`{"percentUsed":1}`, 1},
+		{`{"percentUsed":0.5}`, 0.5},
+		{`{"percentUsed":100}`, 100},
+		{`{"percentRemaining":75}`, 25},
+		{`{"percentRemaining":1}`, 99},
+		{`{"percentRemaining":0}`, 100},
+	} {
+		t.Run(tc.payload, func(t *testing.T) {
+			var entry map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(tc.payload), &entry); err != nil {
+				t.Fatal(err)
+			}
+			got := parseQuotaEntry(entry)
+			if got == nil || got.Utilization != tc.want {
+				t.Fatalf("parseQuotaEntry(%s) = %#v, want %g percent used", tc.payload, got, tc.want)
+			}
+		})
+	}
+}
