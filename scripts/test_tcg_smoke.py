@@ -61,6 +61,15 @@ start_tcg_fallback
         self.assertNotIn('sleep:60', events)
         self.assertEqual(sum(int(line.split(':')[1]) for line in events.splitlines() if line.startswith('sleep:')), 2)
 
+    def test_fallback_probes_stay_within_budget(self):
+        result, events = self.run_fixture('''
+probe_ssh_ready() { echo "probe:${1:-10}" >> "$fixture/events"; SECONDS=$((SECONDS + ${1:-10})); return 1; }
+start_tcg_fallback
+''')
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        spent = sum(int(line.split(':')[1]) for line in events.splitlines() if line.startswith(('sleep:', 'probe:')))
+        self.assertLessEqual(spent, 2, events)
+
     def test_failed_kvm_and_failed_fallback_keep_main_failed(self):
         result, _ = self.run_fixture('''RUN_VM=1
 run_quota_preflight() { :; }; build_artifacts() { :; }; check_pe_subsystem() { :; }; run_wine_smoke() { :; }

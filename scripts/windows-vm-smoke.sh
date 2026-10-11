@@ -331,9 +331,10 @@ run_ssh_command() {
 }
 
 probe_ssh_ready() {
+  local limit="${1:-10}"
   local out_file="${OUT_DIR}/ssh-probe.out"
   rm -f "$out_file"
-  if timeout 10 ssh \
+  if timeout "$limit" ssh \
     -o BatchMode=yes \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
@@ -444,7 +445,10 @@ start_tcg_fallback() {
     delay="$PROBE_INTERVAL"
     (( delay <= remaining )) || delay="$remaining"
     sleep "$delay"
-    if probe_ssh_ready; then
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || break
+    (( remaining <= 10 )) || remaining=10
+    if probe_ssh_ready "$remaining"; then
       log "TCG SSH is ready"
       if run_guest_cli_smoke; then
         log "TCG guest CLI smoke passed"
