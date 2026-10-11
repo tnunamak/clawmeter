@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -102,6 +104,117 @@ func TestStatusLineReadsDaysOldCacheFromDisk(t *testing.T) {
 		}
 		if disk.ProviderData[provider.SourceKey(p)].Stale {
 			t.Error("cached-only output rewrote persisted usage")
+		}
+	}
+}
+
+type e2RedteamRevisionedBlockingProvider struct {
+	cliStubProvider
+	started, release, finished chan struct{}
+}
+
+func (p e2RedteamRevisionedBlockingProvider) SourceRevision() string {
+	return "test-only-unchanged-source-revision"
+}
+
+func (p e2RedteamRevisionedBlockingProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	close(p.started)
+	<-p.release
+	defer close(p.finished)
+	return &provider.UsageData{Provider: p.Name(), FetchedAt: time.Now()}, nil
+}
+
+func TestE2RedteamCancellationKeepsMatchingCacheFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home)
+	t.Setenv("LOCALAPPDATA", home)
+	p := e2RedteamRevisionedBlockingProvider{cliStubProvider: cliStubProvider{name: "e2-redteam"}}
+	p.started, p.release, p.finished = make(chan struct{}), make(chan struct{}), make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan *provider.MultiFetchResult, 1)
+	go func() { returned <- provider.FetchProvidersParallel(ctx, []provider.Provider{p}) }()
+	select {
+	case <-p.started:
+	case <-time.After(2 * time.Second):
+		close(p.release)
+		t.Fatal("test provider did not start")
+	}
+	defer func() {
+		close(p.release)
+		<-p.finished
+	}()
+	cancel()
+	var result *provider.MultiFetchResult
+	select {
+	case result = <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fetch did not return after cancellation")
+	}
+	key := provider.SourceKey(p)
+	if !errors.Is(result.Errors[key], context.Canceled) {
+		t.Fatalf("fetch error = %v, want context.Canceled", result.Errors[key])
+	}
+	old := &provider.UsageData{
+		Provider: p.Name(), SourceID: provider.SourceID(p), FetchedAt: time.Now().Add(-time.Minute),
+		Windows: []provider.UsageWindow{{Name: "5h", Utilization: 25, ResetsAt: time.Now().Add(time.Hour)}},
+	}
+	entry := &cache.Entry{ProviderData: map[string]*provider.UsageData{key: old}, SourceRevisions: map[string]string{key: p.SourceRevision()}}
+	// This is the fallback used by both loadStatusOutput and Check. The source
+	// never changed, so cancellation must not discard its known-good reading.
+	cached, ok := staleFallback(entry, key, result.Results[key], result.SourceRevisions[key])
+	if !ok || cached == nil || !cached.Stale || len(cached.Windows) != 1 {
+		t.Fatalf("cancellation discarded matching cached usage: revision=%q, cached=%#v, ok=%v",
+			result.SourceRevisions[key], cached, ok)
+	}
+}
+
+func TestE2RedteamFreshLocalUpdateInOldCacheIsNotStale(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home)
+	t.Setenv("LOCALAPPDATA", home)
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	reading := func(name string, fetched time.Time) *provider.UsageData {
+		return &provider.UsageData{
+			Provider: name, FetchedAt: fetched,
+			Windows: []provider.UsageWindow{{Name: "5h", Utilization: 25, ResetsAt: now.Add(time.Hour)}},
+		}
+	}
+	if err := cache.Write(&provider.MultiFetchResult{
+		Results:   map[string]*provider.UsageData{"claude": reading("claude", old), "openai": reading("openai", old)},
+		FetchedAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.UpdateProvider("claude", reading("claude", now), ""); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := cache.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// UpdateProvider intentionally preserves the aggregate timestamp so that
+	// updating one source does not refresh unrelated sources.
+	if !entry.FetchedAt.Equal(old) {
+		t.Fatalf("fixture changed aggregate timestamp: %v", entry.FetchedAt)
+	}
+	registry := provider.NewRegistry()
+	for _, name := range []string{"claude", "openai"} {
+		if err := registry.Register(cliStubProvider{name: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	if len(output.Providers) != 2 {
+		t.Fatalf("providers = %#v", output.Providers)
+	}
+	for _, row := range output.Providers {
+		wantStale := row.Name == "openai"
+		if row.Data == nil || row.Data.Stale != wantStale {
+			t.Errorf("%s data = %#v, want stale=%v based on the source reading", row.Name, row.Data, wantStale)
 		}
 	}
 }

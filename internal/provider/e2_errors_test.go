@@ -97,3 +97,21 @@ func TestSafeFetchErrorTypedNetworkWithPortAndTokenURL(t *testing.T) {
 		}
 	}
 }
+
+func TestE2RedteamTypedServerStatusPrecedesWrapperKeywords(t *testing.T) {
+	for _, prefix := range []string{
+		"refresh token endpoint",
+		"rate limit service unavailable",
+		"upstream connection pool exhausted",
+	} {
+		t.Run(prefix, func(t *testing.T) {
+			err := fmt.Errorf("%s: %w", prefix, &HTTPError{StatusCode: 503})
+			if got := ClassifyError(err); got != "api" {
+				t.Errorf("typed HTTP 503 classified as %q, want api", got)
+			}
+			if got := SafeFetchError(err); got != "provider request failed" {
+				t.Errorf("typed HTTP 503 rendered as %q, want provider request failed", got)
+			}
+		})
+	}
+}
