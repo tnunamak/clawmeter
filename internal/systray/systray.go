@@ -15,6 +15,7 @@ var (
 	systrayExitCalled         atomic.Bool
 	menuItems                 = make(map[uint32]*MenuItem)
 	menuItemsLock             sync.RWMutex
+	menuMutationLock          sync.Mutex
 
 	initialMenuBuilt sync.WaitGroup
 	currentID        atomic.Uint32
@@ -41,6 +42,7 @@ func init() {
 type MenuItem struct {
 	// ClickedCh is the channel which will be notified when the menu item is clicked
 	ClickedCh chan struct{}
+	removed   bool
 
 	// id uniquely identify a menu item, not supposed to be modified
 	id uint32
@@ -132,13 +134,18 @@ func Register(onReady func(), onExit func()) {
 
 // ResetMenu will remove all menu items
 func ResetMenu() {
-	menuItemsLock.Lock()
-	id := currentID.Load()
-	menuItemsLock.Unlock()
-	for i, item := range menuItems {
-		if i < id && item.parent == nil {
-			item.Remove()
+	menuMutationLock.Lock()
+	defer menuMutationLock.Unlock()
+	menuItemsLock.RLock()
+	items := make([]*MenuItem, 0, len(menuItems))
+	for _, item := range menuItems {
+		if item.parent == nil {
+			items = append(items, item)
 		}
+	}
+	menuItemsLock.RUnlock()
+	for _, item := range items {
+		item.remove()
 	}
 	resetMenu()
 }
@@ -242,26 +249,35 @@ func (item *MenuItem) Hide() {
 
 // Remove removes a menu item
 func (item *MenuItem) Remove() {
-	menuItemsLock.RLock()
-	var childList []*MenuItem
-	for _, child := range menuItems {
-		if child.parent == item {
-			childList = append(childList, child)
-		}
-	}
-	menuItemsLock.RUnlock()
-	for _, child := range childList {
-		child.Remove()
-	}
-	removeMenuItem(item)
+	menuMutationLock.Lock()
+	defer menuMutationLock.Unlock()
+	item.remove()
+}
+
+func (item *MenuItem) remove() {
 	menuItemsLock.Lock()
+	if item.removed {
+		menuItemsLock.Unlock()
+		return
+	}
+	item.removed = true
 	delete(menuItems, item.id)
 	select {
 	case <-item.ClickedCh:
 	default:
 	}
 	close(item.ClickedCh)
+	var childList []*MenuItem
+	for _, child := range menuItems {
+		if child.parent == item {
+			childList = append(childList, child)
+		}
+	}
 	menuItemsLock.Unlock()
+	for _, child := range childList {
+		child.remove()
+	}
+	removeMenuItem(item)
 }
 
 // Show shows a previously hidden menu item
@@ -288,7 +304,13 @@ func (item *MenuItem) Uncheck() {
 
 // update propagates changes on a menu item to systray
 func (item *MenuItem) update() {
+	menuMutationLock.Lock()
+	defer menuMutationLock.Unlock()
 	menuItemsLock.Lock()
+	if item.removed {
+		menuItemsLock.Unlock()
+		return
+	}
 	menuItems[item.id] = item
 	menuItemsLock.Unlock()
 	addOrUpdateMenuItem(item)
