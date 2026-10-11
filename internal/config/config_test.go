@@ -3,11 +3,108 @@ package config
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestValidateSourcesSkipsEmptyEntries(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnsureProvider("legacy_unknown", false)
+	calls := 0
+	validator := func(string, []SourceConfig) error {
+		calls++
+		return errors.New("unexpected source validation")
+	}
+	if err := cfg.ValidateSources(validator); err != nil {
+		t.Fatalf("empty entry must not invoke source validation: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("validator called %d times for empty sources", calls)
+	}
+}
+
+func TestSaveRestrictsExistingConfigMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not supported on Windows")
+	}
+	scopeHome(t)
+	cfg := DefaultConfig()
+	cfg.Providers["openai"] = ProviderConfig{APIKey: "fixture-only"}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := configPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("saved config mode = %04o, want 0600", got)
+	}
+}
+
+func TestSaveWriteFailurePreservesOriginal(t *testing.T) {
+	if os.Getenv("CLAWMETER_TEST_WRITE_LIMIT") == "1" {
+		cfg := DefaultConfig()
+		cfg.Providers["openai"] = ProviderConfig{APIKey: strings.Repeat("fixture", 16384)}
+		if err := cfg.Save(); err == nil || !strings.Contains(err.Error(), "file too large") {
+			t.Fatalf("expected injected file-size write failure, got %v", err)
+		}
+		return
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("requires a POSIX shell with file-size limits")
+	}
+	scopeHome(t)
+	cfg := DefaultConfig()
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	path, err := configPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Limit only the helper process, forcing Save's write to fail partway.
+	cmd := exec.Command("/bin/sh", "-c", "ulimit -f 1 || exit 125; exec \"$@\"", "sh", executable, "-test.run=^TestSaveWriteFailurePreservesOriginal$")
+	cmd.Env = append(os.Environ(), "CLAWMETER_TEST_WRITE_LIMIT=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("write-failure helper: %v\n%s", err, out)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("failed Save changed original config: before %d bytes, after %d bytes", len(before), len(after))
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "config.yaml" {
+		t.Fatalf("failed Save left temporary files: %v", entries)
+	}
+}
 
 func TestSourceEnabledTriStateRoundTrips(t *testing.T) {
 	scopeHome(t)

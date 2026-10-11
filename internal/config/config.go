@@ -105,6 +105,9 @@ func looksSensitiveMetadata(value string) bool {
 
 func (c *Config) ValidateSources(validators ...SourceValidator) error {
 	for family, pc := range c.Providers {
+		if len(pc.Sources) == 0 {
+			continue
+		}
 		seenIDs := map[string]bool{}
 		seenRefs := map[string]bool{}
 		for _, source := range pc.Sources {
@@ -330,8 +333,26 @@ func (c *Config) Save(validators ...SourceValidator) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(dir, ".config-*")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	if _, err := tmp.Write(data); err != nil {
 		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("set config permissions: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
 	}
 
 	return nil
@@ -339,6 +360,9 @@ func (c *Config) Save(validators ...SourceValidator) error {
 
 // EnsureProvider creates or updates a provider config.
 func (c *Config) EnsureProvider(name string, enabled bool) ProviderConfig {
+	if c.Providers == nil {
+		c.Providers = make(map[string]ProviderConfig)
+	}
 	pc, exists := c.Providers[name]
 	if !exists {
 		pc = ProviderConfig{}

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -465,8 +466,12 @@ func configSetCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
 			return 1
 		}
-		if pct < 0 || pct > 100 {
+		if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
 			fmt.Fprintf(os.Stderr, "clawmeter: warning_threshold must be 0-100\n")
+			return 1
+		}
+		if pct >= cfg.Settings.NotificationThresholds.Critical {
+			fmt.Fprintf(os.Stderr, "clawmeter: warning_threshold must be less than critical_threshold (%.0f)\n", cfg.Settings.NotificationThresholds.Critical)
 			return 1
 		}
 		cfg.Settings.NotificationThresholds.Warning = pct
@@ -476,7 +481,7 @@ func configSetCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
 			return 1
 		}
-		if pct < 0 || pct > 100 {
+		if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
 			fmt.Fprintf(os.Stderr, "clawmeter: critical_threshold must be 0-100\n")
 			return 1
 		}
