@@ -419,11 +419,11 @@ func TestFetchUsage_UsesGrokLoginBilling(t *testing.T) {
 		t.Fatalf("windows = %d, want 1", len(data.Windows))
 	}
 	w := data.Windows[0]
-	if w.Name != "7d" {
-		t.Fatalf("window name = %q, want 7d", w.Name)
+	if w.Name != "usage" {
+		t.Fatalf("window name = %q, want usage", w.Name)
 	}
-	if w.DisplayName != "Weekly usage pool" {
-		t.Fatalf("window display name = %q, want Weekly usage pool", w.DisplayName)
+	if w.DisplayName != "Usage" {
+		t.Fatalf("window display name = %q, want Usage", w.DisplayName)
 	}
 	if math.Abs(w.Utilization-42.5) > 0.001 {
 		t.Fatalf("utilization = %.3f, want 42.5", w.Utilization)
@@ -442,8 +442,8 @@ func TestGrokSubscriptionWindowLabels(t *testing.T) {
 		wantDisplay string
 	}{
 		{"unknown", time.Time{}, "usage", "Usage"},
-		{"weekly", now.Add(6 * 24 * time.Hour), "7d", "Weekly usage pool"},
-		{"monthly", now.Add(30 * 24 * time.Hour), "monthly", "Monthly usage"},
+		{"six days remaining", now.Add(6 * 24 * time.Hour), "usage", "Usage"},
+		{"thirty days remaining", now.Add(30 * 24 * time.Hour), "usage", "Usage"},
 		{"other", now.Add(48 * time.Hour), "usage", "Usage"},
 	}
 	for _, tt := range tests {
@@ -627,4 +627,63 @@ func encodeVarint(value uint64) []byte {
 		value >>= 7
 	}
 	return append(out, byte(value))
+}
+
+func TestGrokCredentialsSkipsUnusableEntriesDeterministically(t *testing.T) {
+	dir := t.TempDir()
+	p := New(config.ProviderConfig{})
+	p.grokHome = dir
+	for _, body := range []string{
+		`{"unrelated":{"key":"fake-bad","expires_at":"broken"},"https://accounts.x.ai/sign-in":{"key":"fake-good"}}`,
+		`{"https://auth.x.ai::expired":{"key":"fake-expired","expires_at":"2000-01-01T00:00:00Z"},"https://accounts.x.ai/sign-in":{"key":"fake-good"}}`,
+		`{"https://z.example/sign-in":{"key":"fake-other"},"https://accounts.x.ai/sign-in":{"key":"fake-good"}}`,
+		`{"https://auth.x.ai::z":{"key":"fake-other"},"https://auth.x.ai::a":{"key":"fake-good"},"https://accounts.x.ai/sign-in":{"key":"fake-fallback"}}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 100; i++ {
+			got, err := p.grokCredentials()
+			if err != nil || got.AccessToken != "fake-good" {
+				t.Fatalf("iteration %d: credentials = %#v, %v", i, got, err)
+			}
+		}
+	}
+}
+
+func TestFetchUsageGrokLabelsUseFullPeriod(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		period time.Duration
+		left   time.Duration
+		want   string
+	}{
+		{"monthly near reset", 30 * 24 * time.Hour, 7 * 24 * time.Hour, "monthly"},
+		{"weekly near reset", 7 * 24 * time.Hour, 2 * 24 * time.Hour, "7d"},
+		{"unknown six days", 0, 6 * 24 * time.Hour, "usage"},
+		{"unknown thirty days", 0, 30 * 24 * time.Hour, "usage"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reset := time.Now().Add(tc.left).Truncate(time.Second)
+			msg := append(protoFixed32(1, math.Float32bits(25)), protoMessage(5, protoVarint(1, uint64(reset.Unix())))...)
+			if tc.period > 0 {
+				msg = append(msg, protoMessage(4, protoVarint(1, uint64(reset.Add(-tc.period).Unix())))...)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(grokGRPCWebResponse(protoMessage(1, msg)))
+			}))
+			defer server.Close()
+			p := New(config.ProviderConfig{})
+			p.grokHome = writeGrokAuthDir(t, "fake-token", time.Now().Add(time.Hour))
+			p.grokBillingURL = server.URL
+			p.client = server.Client()
+			got, err := p.FetchUsage(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Windows) != 1 || got.Windows[0].Name != tc.want {
+				t.Fatalf("window = %#v, want %s", got, tc.want)
+			}
+		})
+	}
 }

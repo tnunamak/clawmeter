@@ -213,7 +213,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	total := consumed + remaining
-	if hasConsumed && hasRemaining && total > 0 {
+	if hasConsumed && hasRemaining && consumed >= 0 && remaining >= 0 && total > 0 {
 		usedPct := (consumed / total) * 100
 		if usedPct < 0 {
 			usedPct = 0
@@ -291,18 +291,26 @@ func (p *Provider) extractCredits(obj map[string]interface{}) (consumed float64,
 
 	consumedKeys := []string{"total_credits_consumed", "totalCreditsConsumed", "total_credits_used",
 		"totalCreditsUsed", "credits_consumed", "creditsConsumed", "consumedCredits",
-		"usedCredits", "used", "total", "consumed"}
+		"usedCredits", "used", "consumed"}
 	remainingKeys := []string{"credits_remaining", "creditsRemaining", "remaining_credits",
 		"remainingCredits", "available_credits", "availableCredits", "credits_left",
 		"creditsLeft", "remaining", "left", "available", "balance"}
 
+	var limit float64
+	var hasLimit bool
 	for _, src := range sources {
+		if !hasLimit {
+			limit, hasLimit = provider.FindFloatPresent(src, []string{"total"})
+		}
 		if !hasConsumed {
 			consumed, hasConsumed = provider.FindFloatPresent(src, consumedKeys)
 		}
 		if !hasRemaining {
 			remaining, hasRemaining = provider.FindFloatPresent(src, remainingKeys)
 		}
+	}
+	if !hasConsumed && hasLimit && hasRemaining {
+		consumed, hasConsumed = limit-remaining, true
 	}
 	return
 }

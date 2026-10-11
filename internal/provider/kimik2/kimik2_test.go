@@ -105,3 +105,39 @@ func TestExtractCreditsTracksNumericPresence(t *testing.T) {
 		t.Fatal("absent credit values were reported as present")
 	}
 }
+
+func TestFetchUsageCreditQuantities(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		valid   bool
+	}{
+		{`{"total":100,"remaining":40}`, true},
+		{`{"consumed":60,"remaining":40}`, true},
+		{`{"data":{"credits":{"total":100,"remaining":40}}}`, true},
+		{`{"total":-100,"remaining":40}`, false},
+		{`{"consumed":-1,"remaining":40}`, false},
+		{`{"consumed":60,"remaining":-1}`, false},
+		{`{"total":20,"remaining":40}`, false},
+	} {
+		t.Run(tc.payload, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.payload))
+			}))
+			defer server.Close()
+			p := New(config.ProviderConfig{APIKey: "fixture-key"})
+			p.creditsURL = server.URL
+			p.httpClient = server.Client()
+			got, err := p.FetchUsage(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.valid {
+				if len(got.Windows) != 0 || got.Error == "" {
+					t.Fatalf("negative or inconsistent credits accepted: %#v", got)
+				}
+			} else if len(got.Windows) != 1 || got.Windows[0].Utilization != 60 {
+				t.Fatalf("FetchUsage() = %#v, want 60 percent", got)
+			}
+		})
+	}
+}

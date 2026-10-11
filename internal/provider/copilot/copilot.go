@@ -211,12 +211,18 @@ func (p *Provider) getToken() (string, error) {
 	}
 
 	// 3. GitHub Copilot hosts.json (VS Code extension credential store)
-	for _, path := range copilotHostsPaths() {
+	return tokenFromHostsPaths(copilotHostsPaths())
+}
+
+func tokenFromHostsPaths(paths []string) (string, error) {
+	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		return tokenFromHostsJSON(data)
+		if token, err := tokenFromHostsJSON(data); err == nil {
+			return token, nil
+		}
 	}
 
 	return "", fmt.Errorf("no copilot credentials found")

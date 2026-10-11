@@ -464,14 +464,6 @@ func (p *Provider) transformQuota(quota map[string]any) *provider.UsageData {
 			resetsAt = parseTimestamp(reset)
 		}
 
-		// Normalize 5-hour reset: if <60s away, push forward by 5 hours.
-		if wd.name == "session_5h" && !resetsAt.IsZero() && resetsAt.Sub(now) < 60*time.Second {
-			resetsAt = resetsAt.Add(5 * time.Hour)
-			if resetsAt.Sub(now) < 60*time.Second {
-				resetsAt = now.Add(5 * time.Hour)
-			}
-		}
-
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        wd.name,
 			DisplayName: wd.displayName,
