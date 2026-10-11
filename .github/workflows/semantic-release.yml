@@ -191,6 +191,11 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          # No shared cache in a job that holds the signing key.
+          cache: false
+
+      - name: Build release signing tool
+        run: go build -o "$RUNNER_TEMP/sign-release" ./tools/sign-release
 
       - name: Detect SignPath configuration
         id: signpath
@@ -308,8 +313,8 @@ jobs:
           test -n "$TAG"
           test -n "$CLAWMETER_MINISIGN_KEY"
           test -n "$CLAWMETER_MINISIGN_PASSWORD"
-          go run ./tools/sign-release sign artifacts/SHA256SUMS.txt "$TAG"
-          go run ./tools/sign-release verify artifacts/SHA256SUMS.txt "$TAG"
+          "$RUNNER_TEMP/sign-release" sign artifacts/SHA256SUMS.txt "$TAG"
+          "$RUNNER_TEMP/sign-release" verify artifacts/SHA256SUMS.txt "$TAG"
           test -s artifacts/SHA256SUMS.txt.minisig
           # 11 release files, SHA256SUMS.txt and its signature.
           test "$(find artifacts -maxdepth 1 -type f | wc -l)" -eq 13
@@ -386,6 +391,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          cache: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
