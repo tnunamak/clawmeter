@@ -20,6 +20,7 @@ printf '%s' "$stage" > "$TEST_ROOT/stage-$version"
 if [[ "$version" == A ]]; then
  touch "$TEST_ROOT/A-ready"
  for i in {1..200}; do [[ -f "$TEST_ROOT/B-done" ]] && break; sleep .05; done
+ [[ -f "$TEST_ROOT/B-done" ]] || { echo 'second build never finished while the first was compiling' >&2; exit 97; }
 fi
 cp "$stage/clawmeter.exe" "$out/ClawmeterSetup.exe"
 if [[ "$version" == B ]]; then touch "$TEST_ROOT/B-done"; fi
@@ -43,6 +44,7 @@ if [[ "$version" == B ]]; then touch "$TEST_ROOT/B-done"; fi
                 self.assertEqual(a.returncode, 0, stdout + stderr)
                 self.assertEqual((root / 'A/ClawmeterSetup.exe').read_text(), 'A')
                 self.assertEqual((root / 'B/ClawmeterSetup.exe').read_text(), 'B')
+                self.assertNotEqual((root / 'stage-A').read_text(), (root / 'stage-B').read_text(), 'builds shared a staging directory')
                 self.assertFalse(Path((root / 'stage-A').read_text()).exists(), 'first staging directory leaked')
                 self.assertFalse(Path((root / 'stage-B').read_text()).exists(), 'second staging directory leaked')
             finally:
