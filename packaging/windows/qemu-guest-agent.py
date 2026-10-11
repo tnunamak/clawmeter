@@ -57,10 +57,13 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
     pid = start["return"]["pid"]
     deadline = time.time() + timeout
     while time.time() < deadline:
-        status = qga_call(
-            socket_path,
-            {"execute": "guest-exec-status", "arguments": {"pid": pid}},
-        )["return"]
+        try:
+            status = qga_call(
+                socket_path,
+                {"execute": "guest-exec-status", "arguments": {"pid": pid}},
+            )["return"]
+        except (OSError, RuntimeError, KeyError, ValueError) as error:
+            raise RuntimeError(f"guest status unavailable; guest pid {pid} may still be running") from error
         if status.get("exited"):
             stdout = decode_output(status.get("out-data"))
             stderr = decode_output(status.get("err-data"))
@@ -70,7 +73,7 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
                 print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             return int(status.get("exitcode", 0))
         time.sleep(1)
-    raise TimeoutError(f"guest command timed out after {timeout}s: {args}")
+    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running: {args}")
 
 
 def decode_output(value: str | None) -> str:
@@ -128,12 +131,13 @@ def create_user(socket_path: Path, username: str, password: str, timeout: int) -
     escaped_user = username.replace("'", "''")
     escaped_password = password.replace("'", "''")
     script = rf"""
-$ErrorActionPreference = 'Continue'
+$ErrorActionPreference = 'Stop'
 $password = ConvertTo-SecureString '{escaped_password}' -AsPlainText -Force
 if (-not (Get-LocalUser -Name '{escaped_user}' -ErrorAction SilentlyContinue)) {{
   New-LocalUser -Name '{escaped_user}' -Password $password -FullName 'Clawmeter VM Test' -Description 'Local account for Clawmeter VM verification' -PasswordNeverExpires
 }}
 net user '{escaped_user}' '{escaped_password}' /active:yes /passwordreq:yes /expires:never
+if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
 Enable-LocalUser -Name '{escaped_user}'
 Get-LocalUser -Name '{escaped_user}' | Format-List Name,Enabled,PasswordRequired,PasswordExpires,LastLogon
 """
