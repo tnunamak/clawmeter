@@ -46,14 +46,6 @@ jobs:
       - name: Build smoke (tray)
         run: go build -tags tray ./cmd/clawmeter
 
-      - name: Run Windows packaging regression tests
-        shell: pwsh
-        run: |
-          Get-ChildItem packaging/windows -Filter test-*.ps1 | ForEach-Object {
-            pwsh -NoProfile -File $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "Packaging regression failed: $($_.Name)" }
-          }
-
       - name: Validate PowerShell installer syntax
         shell: pwsh
         run: |
@@ -62,16 +54,24 @@ jobs:
             [scriptblock]::Create((Get-Content -Raw $_.FullName)) | Out-Null
           }
 
-      - name: Run Windows packaging PowerShell tests
-        shell: pwsh
-        run: |
-          Get-ChildItem packaging/windows/test-*.ps1 | ForEach-Object {
-            pwsh -NoProfile -File $_.FullName
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
       - name: Validate packaging shell scripts
         run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
 
-      - name: Test documented WinGet overrides
-        run: python3 -I packaging/winget/test_documented_overrides.py
+      - name: Run Windows packaging PowerShell tests
+        shell: pwsh
+        run: |
+          Get-ChildItem packaging/windows -Filter test-*.ps1 | ForEach-Object {
+            pwsh -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Packaging regression failed: $($_.Name)" }
+          }
+
+      - name: Run packaging Python regression tests
+        run: |
+          python3 -m unittest discover -s packaging/winget -p 'test_*.py'
+          python3 -m unittest discover -s packaging/windows -p 'test_*.py'
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Verify Windows VM cleanup scope
+        run: |
+          bash -n scripts/windows-vm-smoke.sh scripts/test-windows-vm-smoke-scope.sh
+          bash scripts/test-windows-vm-smoke-scope.sh
