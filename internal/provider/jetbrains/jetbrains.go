@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"time"
@@ -167,7 +168,10 @@ func (p *Provider) findQuotaFile() (string, error) {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
 
-	configDir := filepath.Join(home, ".config", "JetBrains")
+	configDir := jetBrainsConfigDir(runtime.GOOS, home, map[string]string{
+		"APPDATA":         os.Getenv("APPDATA"),
+		"XDG_CONFIG_HOME": os.Getenv("XDG_CONFIG_HOME"),
+	})
 	entries, err := os.ReadDir(configDir)
 	if err != nil {
 		return "", fmt.Errorf("read JetBrains config dir: %w", err)
@@ -202,6 +206,22 @@ func (p *Provider) findQuotaFile() (string, error) {
 	})
 
 	return files[0].path, nil
+}
+
+func jetBrainsConfigDir(goos, home string, env map[string]string) string {
+	switch goos {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "JetBrains")
+	case "windows":
+		if appData := env["APPDATA"]; appData != "" {
+			return filepath.Join(appData, "JetBrains")
+		}
+	case "linux":
+		if xdgConfigHome := env["XDG_CONFIG_HOME"]; xdgConfigHome != "" {
+			return filepath.Join(xdgConfigHome, "JetBrains")
+		}
+	}
+	return filepath.Join(home, ".config", "JetBrains")
 }
 
 // XML parsing types
