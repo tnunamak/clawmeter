@@ -210,7 +210,9 @@ func recordRateLimit(key string, retryAfter time.Duration) time.Time {
 		delay *= 2
 	}
 	delay = min(max(delay, retryAfter), backoffCap)
-	state.Until = backoffNow().Add(delay)
+	if until := backoffNow().Add(delay); until.After(state.Until) {
+		state.Until = until
+	}
 	writeBackoff(key, state)
 	return state.Until
 }
