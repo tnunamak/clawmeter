@@ -1,10 +1,12 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"testing"
 
 	"aead.dev/minisign"
+	"golang.org/x/crypto/blake2b"
 )
 
 var testPrimary, testBackup = mustGenerate(), mustGenerate()
@@ -32,8 +35,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// signSums signs prehashed, as CI does.
 func signSums(k minisign.PrivateKey, sums []byte, comment string) []byte {
-	return minisign.SignWithComments(k, sums, comment, "untrusted")
+	r := minisign.NewReader(bytes.NewReader(sums))
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		panic(err)
+	}
+	return r.SignWithComments(k, comment, "untrusted")
 }
 
 func TestEmbeddedKeyIDs(t *testing.T) {
@@ -181,5 +189,32 @@ func TestApplyAcceptsSignedRelease(t *testing.T) {
 				t.Fatalf("staging files leaked: %v", files)
 			}
 		})
+	}
+}
+
+// The algorithm field (Ed vs ED) is outside both signed messages, so a
+// prehashed CI signature can be relabelled as legacy. Accepting that would
+// authenticate BLAKE2b-512(sums), bytes the key holder never signed.
+func TestVerifySumsRejectsRelabelledLegacySignature(t *testing.T) {
+	sums := []byte("0000000000000000000000000000000000000000000000000000000000000000  clawmeter-linux-amd64\n")
+	sig := signSums(testPrimary, sums, TrustedComment("v2.0.0"))
+	if err := VerifySums(sums, sig, "v2.0.0"); err != nil {
+		t.Fatalf("genuine signature rejected: %v", err)
+	}
+	var s minisign.Signature
+	if err := s.UnmarshalText(sig); err != nil {
+		t.Fatal(err)
+	}
+	s.Algorithm = minisign.EdDSA
+	forged, err := s.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := blake2b.Sum512(sums)
+	if err := VerifySums(h[:], forged, "v2.0.0"); err == nil {
+		t.Fatal("VerifySums accepted a relabelled legacy signature over BLAKE2b(sums)")
+	}
+	if err := VerifySums(sums, minisign.SignWithComments(testPrimary, sums, TrustedComment("v2.0.0"), ""), "v2.0.0"); err == nil {
+		t.Fatal("VerifySums accepted a legacy (non-prehashed) signature")
 	}
 }

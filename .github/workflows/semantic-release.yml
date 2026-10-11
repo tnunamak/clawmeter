@@ -176,6 +176,8 @@ jobs:
       actions: read
       contents: write
     runs-on: ubuntu-latest
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -304,6 +306,7 @@ jobs:
           sha256sum * > SHA256SUMS.txt
 
       - name: Sign checksums
+        id: sign
         env:
           CLAWMETER_MINISIGN_KEY: ${{ secrets.CLAWMETER_MINISIGN_KEY }}
           CLAWMETER_MINISIGN_PASSWORD: ${{ secrets.CLAWMETER_MINISIGN_PASSWORD }}
@@ -313,6 +316,9 @@ jobs:
           test -n "$TAG"
           test -n "$CLAWMETER_MINISIGN_KEY"
           test -n "$CLAWMETER_MINISIGN_PASSWORD"
+          # Set before signing: once a signature for this tag may exist, cleanup
+          # must not free the tag for reuse.
+          echo "signed=true" >> "$GITHUB_OUTPUT"
           "$RUNNER_TEMP/sign-release" sign artifacts/SHA256SUMS.txt "$TAG"
           "$RUNNER_TEMP/sign-release" verify artifacts/SHA256SUMS.txt "$TAG"
           test -s artifacts/SHA256SUMS.txt.minisig
@@ -470,7 +476,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.release.outputs.tag }}
+          SIGNED: ${{ needs.upload.outputs.signed }}
         run: |
           if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ]; then
-            gh release delete "$TAG" --yes --cleanup-tag
+            if [ "$SIGNED" = true ]; then
+              # A signature binds this tag, and the failed run's signed sums are in
+              # its workflow artifact. Keep the tag so the version is never reused;
+              # the next release gets a new version.
+              gh release delete "$TAG" --yes
+            else
+              gh release delete "$TAG" --yes --cleanup-tag
+            fi
           fi

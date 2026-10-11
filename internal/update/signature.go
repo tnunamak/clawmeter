@@ -54,6 +54,12 @@ func VerifySumsWith(keys []minisign.PublicKey, sums, sig []byte, tag string) err
 	if err := s.UnmarshalText(sig); err != nil {
 		return fmt.Errorf("signature: unparseable: %w", err)
 	}
+	// CI signs prehashed only. The algorithm field is not covered by the
+	// signature, so accepting legacy signatures would let a relabelled CI
+	// signature authenticate BLAKE2b(sums) as if it were sums.
+	if s.Algorithm != minisign.HashEdDSA {
+		return errors.New("signature: not a prehashed (ED) minisign signature")
+	}
 	for _, key := range keys {
 		if key.ID() != s.KeyID {
 			continue
