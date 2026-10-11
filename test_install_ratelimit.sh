@@ -104,6 +104,13 @@ MOCK_LOCATION='https://github.com/tnunamak/clawmeter/releases/tag/extra/v0.39.0'
 [ ! -e "$INSTALL_DIR/clawmeter" ] || fail 'extra path segment installed a binary'
 printf 'PASS: shell rejects noncanonical redirect path\n'
 
+# A Location field is one complete URL, not a whitespace-delimited word.
+# Validation must not accept a valid tag prefix and discard the rest.
+MOCK_LOCATION='https://github.com/tnunamak/clawmeter/releases/tag/v0.39.0 unexpected-suffix' \
+  run_install && fail 'fallback accepted a redirect with a whitespace-delimited suffix'
+[ ! -e "$INSTALL_DIR/clawmeter" ] || fail 'whitespace suffix installed a binary'
+printf 'PASS: shell rejects whitespace-suffixed redirect URL\n'
+
 rm -f "$SANDBOX/requests"
 unset GITHUB_TOKEN
 export MOCK_API_STATUS=429

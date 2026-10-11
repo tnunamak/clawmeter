@@ -469,7 +469,7 @@ else
   else
     wget -qS --spider --max-redirect=0 "$_latest_url" 2> "$TMPDIR/latest.headers" || true
   fi
-  _location="$(tr -d '\r' < "$TMPDIR/latest.headers" | awk 'tolower($1) == "location:" { print $2; exit }')"
+  _location="$(tr -d '\r' < "$TMPDIR/latest.headers" | awk 'tolower($1) == "location:" { if (NF == 2) print $2; exit }')"
   case "$_location" in
     "https://github.com/${REPO}/releases/tag/"*) LATEST="${_location#https://github.com/${REPO}/releases/tag/}" ;;
   esac
