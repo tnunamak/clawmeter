@@ -489,10 +489,7 @@ func (p *Provider) grokCredentials() (*grokCredentials, error) {
 		return nil, fmt.Errorf("%w: %v", errGrokCredentialsMalformed, err)
 	}
 
-	var root map[string]struct {
-		Key       string `json:"key"`
-		ExpiresAt string `json:"expires_at"`
-	}
+	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("%w: %v", errGrokCredentialsMalformed, err)
 	}
@@ -509,7 +506,16 @@ func (p *Provider) grokCredentials() (*grokCredentials, error) {
 		if !preferred && !strings.Contains(scope, "/sign-in") {
 			continue
 		}
-		entry := root[scope]
+		var entry struct {
+			Key       string `json:"key"`
+			ExpiresAt string `json:"expires_at"`
+		}
+		if err := json.Unmarshal(root[scope], &entry); err != nil {
+			if credentialErr == nil {
+				credentialErr = errGrokCredentialsMalformed
+			}
+			continue
+		}
 		if strings.TrimSpace(entry.Key) == "" {
 			continue
 		}
