@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -13,9 +14,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -44,4 +48,11 @@ jobs:
 
       - name: Validate PowerShell installer syntax
         shell: pwsh
-        run: '[scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null'
+        run: |
+          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+          Get-ChildItem packaging/windows -Filter *.ps1 | ForEach-Object {
+            [scriptblock]::Create((Get-Content -Raw $_.FullName)) | Out-Null
+          }
+
+      - name: Validate packaging shell scripts
+        run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
