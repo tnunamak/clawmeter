@@ -42,12 +42,16 @@ func (d *trayClickDispatcher) tapped() {
 		}
 		d.timer = nil
 	}
-	d.timer = time.AfterFunc(d.window, func() {
+	var timer *time.Timer
+	timer = time.AfterFunc(d.window, func() {
 		d.mu.Lock()
-		d.timer = nil
+		if d.timer == timer {
+			d.timer = nil
+		}
 		d.mu.Unlock()
 		sendIconClickAction(d.ch, iconClickCycle)
 	})
+	d.timer = timer
 	d.mu.Unlock()
 }
 
