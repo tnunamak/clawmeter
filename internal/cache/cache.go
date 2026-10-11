@@ -14,9 +14,6 @@ import (
 
 const defaultTTL = 60 * time.Second
 
-// Allow one missed refresh before cached-only output is marked stale.
-const staleMargin = time.Minute
-
 // schemaVersion invalidates caches whose values changed meaning. Version 2:
 // Claude extra-usage Used/Limit were written 100x too large before; entries
 // without this version are dropped on read, including stale fallbacks.
@@ -68,11 +65,6 @@ func Read() (*Entry, error) {
 // IsValid returns true if the cache entry is fresh (within TTL).
 func (e *Entry) IsValid() bool {
 	return time.Since(e.FetchedAt) < defaultTTL
-}
-
-// IsStale reports when cached-only output must warn about its age.
-func (e *Entry) IsStale() bool {
-	return time.Since(e.FetchedAt) >= defaultTTL+staleMargin
 }
 
 // Covers reports whether the cache contains an entry — error or data — for
