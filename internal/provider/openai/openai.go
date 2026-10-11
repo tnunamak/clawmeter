@@ -198,6 +198,11 @@ appServerAttempts:
 	cancelAppServer()
 	if data, directErr := p.fetchUsageWithoutCLI(ctx); directErr == nil {
 		return data, nil
+	} else {
+		var limited *provider.RateLimitError
+		if errors.As(directErr, &limited) {
+			return data, directErr
+		}
 	}
 	return nil, lastErr
 }
