@@ -413,7 +413,9 @@ jobs:
         run: go test ./internal/shellpath
 
       - name: Run Windows tray tests
-        run: go test -tags tray ./internal/systray/
+        # TestBaseWindowsTray needs an interactive desktop with a notification
+        # area, which hosted runners do not have.
+        run: go test -tags tray -v -skip '^TestBaseWindowsTray$' ./internal/systray/
 
       - name: Create temp dir
         run: New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
