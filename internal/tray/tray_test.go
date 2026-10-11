@@ -1570,3 +1570,78 @@ func TestNextAPICreditDeadline(t *testing.T) {
 		t.Fatalf("stale deadline = %v", got)
 	}
 }
+
+func TestAPICreditTimerUsesLatestPublishedState(t *testing.T) {
+	oldResults := s.lastResults
+	defer func() {
+		trayRenderMu.Lock()
+		defer trayRenderMu.Unlock()
+		apiCreditsTimerGeneration++
+		if apiCreditsTimer != nil {
+			apiCreditsTimer.Stop()
+		}
+		s.mu.Lock()
+		s.lastResults = oldResults
+		s.mu.Unlock()
+	}()
+	now := time.Now()
+	old := map[string]*provider.UsageData{"claude_api": {CreditPools: []provider.UsageCreditPool{{ObservationSource: "extension", ObservedAt: now.Add(-6 * time.Minute), Live: true}}}}
+	fresh := map[string]*provider.UsageData{"claude_api": {CreditPools: []provider.UsageCreditPool{{ObservationSource: "extension", ObservedAt: now, Live: true}}}}
+	trayRenderMu.Lock()
+	// Schedule an already-due timer, then publish while its render is blocked.
+	scheduleAPICreditRows(old, nil, now.Add(-2*time.Minute))
+	generation := apiCreditsTimerGeneration
+	s.mu.Lock()
+	s.lastResults = fresh
+	s.mu.Unlock()
+	trayRenderMu.Unlock()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("credit timer failed to finish; possible render/state lock deadlock")
+		case <-ticker.C:
+			trayRenderMu.Lock()
+			completed := apiCreditsTimerGeneration > generation
+			pending := false
+			if completed {
+				pending = apiCreditsTimer.Stop()
+			}
+			trayRenderMu.Unlock()
+			if completed {
+				if !pending {
+					t.Fatal("credit timer reused the old snapshot instead of scheduling the fresh reading's deadline")
+				}
+				return
+			}
+		}
+	}
+}
+
+func TestLocalPublicationWaitsForRefresh(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	barrier := trayTestRenderBarrier{started: started, release: release}
+	done := make(chan struct{})
+	go func() {
+		publishLocalResetSource(barrier, provider.NewRegistry(), "claude_api", nil, nil, nil, nil, nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("local publication bypassed the refresh lock; an in-flight refresh can overwrite extension data")
+	case <-started:
+	}
+	select {
+	case <-done:
+		t.Fatal("local publication crossed the locked refresh barrier")
+	default:
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("local publication did not release the refresh barrier")
+	}
+}
