@@ -43,6 +43,10 @@ func TestSignThenVerify(t *testing.T) {
 	if err := run([]string{"verify", file, "v0.40.0"}, getenv); err != nil {
 		t.Fatal(err)
 	}
+	var parsed minisign.Signature
+	if err := parsed.UnmarshalText(sig); err != nil || parsed.Algorithm != minisign.HashEdDSA {
+		t.Fatalf("signature algorithm = %v (err %v), want prehashed HashEdDSA", parsed.Algorithm, err)
+	}
 	if err := run([]string{"verify", file, "v0.40.1"}, getenv); err == nil {
 		t.Fatal("verify accepted the wrong tag")
 	}

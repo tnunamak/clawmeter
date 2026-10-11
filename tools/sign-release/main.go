@@ -8,6 +8,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"aead.dev/minisign"
@@ -45,12 +46,19 @@ func sign(file, tag string, getenv func(string) string) error {
 	if err != nil {
 		return fmt.Errorf("decrypt key: %w", err)
 	}
-	data, err := os.ReadFile(file)
+	f, err := os.Open(file)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
+	// Prehashed (ED) signatures are the minisign CLI default; every CLI
+	// version verifies them.
+	reader := minisign.NewReader(f)
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		return err
+	}
 	untrusted := fmt.Sprintf("signature from private key: %016X", key.ID())
-	sig := minisign.SignWithComments(key, data, update.TrustedComment(tag), untrusted)
+	sig := reader.SignWithComments(key, update.TrustedComment(tag), untrusted)
 	return os.WriteFile(file+".minisig", sig, 0o644)
 }
 
