@@ -117,9 +117,6 @@ func (p *Provider) SourceID() string {
 func (p *Provider) SourceLabel() string    { return p.sourceLabel }
 func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
 func (p *Provider) SourceRevision() string {
-	if p.sourceCredential == "" {
-		return ""
-	}
 	return provider.CredentialSourceRevision("env-name\x00"+p.sourceCredential, p.apiKey())
 }
 
