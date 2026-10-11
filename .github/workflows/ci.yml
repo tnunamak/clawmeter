@@ -46,6 +46,14 @@ jobs:
       - name: Build smoke (tray)
         run: go build -tags tray ./cmd/clawmeter
 
+      - name: Run Windows packaging regression tests
+        shell: pwsh
+        run: |
+          Get-ChildItem packaging/windows -Filter test-*.ps1 | ForEach-Object {
+            pwsh -NoProfile -File $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Packaging regression failed: $($_.Name)" }
+          }
+
       - name: Validate PowerShell installer syntax
         shell: pwsh
         run: |
