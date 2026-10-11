@@ -89,21 +89,19 @@ func checkWith(ctx context.Context, currentVersion, api, dl string, client *http
 		return nil, nil
 	}
 
+	// The download URL is always built from the checked tag, never taken from
+	// the release metadata, so a newer tag cannot point at an older asset.
 	assetName := assetNameFor(runtime.GOOS, runtime.GOARCH)
-	url := ""
-	for _, asset := range rel.Assets {
-		if asset.Name == assetName && asset.URL != "" {
-			url = asset.URL
-			break
+	if len(rel.Assets) > 0 {
+		found := false
+		for _, asset := range rel.Assets {
+			found = found || asset.Name == assetName
 		}
-	}
-	if url == "" {
-		if len(rel.Assets) > 0 {
+		if !found {
 			return nil, fmt.Errorf("check update: release %s has no asset %s", rel.TagName, assetName)
 		}
-		url = fmt.Sprintf("%s/%s/%s", strings.TrimRight(dl, "/"), rel.TagName, assetName)
 	}
-
+	url := fmt.Sprintf("%s/%s/%s", strings.TrimRight(dl, "/"), rel.TagName, assetName)
 	return &Release{Version: rel.TagName, URL: url}, nil
 }
 

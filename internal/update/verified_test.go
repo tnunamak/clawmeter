@@ -156,11 +156,11 @@ func TestApplyVerifiedNewerArtifact(t *testing.T) {
 				}
 				return base.RoundTrip(r)
 			})
-			api, dl := newFakeGitHubWithAssets(t, "v2.0.0", map[string]string{
-				assetNameFor(runtime.GOOS, runtime.GOARCH): defaultDLPrefix+"/v2.0.0/clawmeter-linux-amd64",
+			api, _ := newFakeGitHubWithAssets(t, "v2.0.0", map[string]string{
+				assetNameFor(runtime.GOOS, runtime.GOARCH): defaultDLPrefix + "/v2.0.0/clawmeter-linux-amd64",
 			})
 			// The fixture API uses a separate client so only downloads use the stub.
-			rel, err := checkWith(context.Background(), "v1.0.0", api, dl, &http.Client{Transport: &http.Transport{}})
+			rel, err := checkWith(context.Background(), "v1.0.0", api, defaultDLPrefix, &http.Client{Transport: &http.Transport{}})
 			if err != nil || rel == nil {
 				t.Fatalf("check: %v %v", rel, err)
 			}

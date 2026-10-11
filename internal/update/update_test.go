@@ -66,11 +66,10 @@ func TestCheck_findsUpdate(t *testing.T) {
 	}
 }
 
-func TestCheck_usesReleaseAssetURL(t *testing.T) {
+func TestCheck_bindsDownloadToCheckedTag(t *testing.T) {
 	asset := assetNameFor(runtime.GOOS, runtime.GOARCH)
-	wantURL := "https://download.example/clawmeter"
 	api, dl := newFakeGitHubWithAssets(t, "v9.9.9", map[string]string{
-		asset: wantURL,
+		asset: "https://download.example/clawmeter",
 	})
 	rel, err := checkWith(context.Background(), "v0.0.1", api, dl, http.DefaultClient)
 	if err != nil {
@@ -79,8 +78,9 @@ func TestCheck_usesReleaseAssetURL(t *testing.T) {
 	if rel == nil {
 		t.Fatal("expected update, got nil")
 	}
-	if rel.URL != wantURL {
-		t.Fatalf("URL = %q, want %q", rel.URL, wantURL)
+	// The metadata's asset URL is ignored; the URL comes from the checked tag.
+	if want := strings.TrimRight(dl, "/") + "/v9.9.9/" + asset; rel.URL != want {
+		t.Fatalf("URL = %q, want %q", rel.URL, want)
 	}
 }
 
