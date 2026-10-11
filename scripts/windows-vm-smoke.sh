@@ -176,13 +176,15 @@ run_wine_smoke() {
   log "Running Wine stdout smoke"
   export WINEPREFIX="${OUT_DIR}/wineprefix"
   mkdir -p "$WINEPREFIX"
+  local wine_status=0
   timeout 90 wine "${OUT_DIR}/clawmeter-console.exe" --all --plain \
-    >"${OUT_DIR}/wine-console.out" 2>"${OUT_DIR}/wine-console.err" || true
+    >"${OUT_DIR}/wine-console.out" 2>"${OUT_DIR}/wine-console.err" || wine_status=$?
   local bytes
   bytes="$(wc -c <"${OUT_DIR}/wine-console.out")"
   log "Wine console stdout bytes=${bytes}"
   record "Wine console stdout bytes=${bytes}"
   sed -n '1,20p' "${OUT_DIR}/wine-console.out" | tee -a "$REPORT"
+  [[ "$wine_status" -eq 0 ]] || die "Wine smoke failed (status ${wine_status})"
   [[ "$bytes" -gt 0 ]] || die "Wine smoke produced no stdout"
 }
 
@@ -349,7 +351,7 @@ probe_ssh_ready() {
 }
 
 run_guest_cli_smoke() {
-  local remote='powershell -NoProfile -ExecutionPolicy Bypass -Command "& \\10.0.2.4\qemu\clawmeter-test\clawmeter.exe --all --plain | Tee-Object -FilePath $env:TEMP\clawmeter-smoke.txt; if ((Get-Content -Raw $env:TEMP\clawmeter-smoke.txt).Trim().Length -eq 0) { exit 42 }"'
+  local remote='powershell -NoProfile -ExecutionPolicy Bypass -Command "& \\10.0.2.4\qemu\clawmeter-test\clawmeter.exe --all --plain | Tee-Object -FilePath $env:TEMP\clawmeter-smoke.txt; $nativeExit = $LASTEXITCODE; if ($nativeExit -ne 0) { exit $nativeExit }; if ((Get-Content -Raw $env:TEMP\clawmeter-smoke.txt).Trim().Length -eq 0) { exit 42 }"'
   log "Running guest CLI smoke over SSH"
   run_ssh_command "$remote" | tee -a "$REPORT"
 }
