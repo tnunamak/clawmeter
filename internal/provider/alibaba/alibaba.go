@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -238,6 +239,10 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			}
 			data, err := p.fetchConsoleUsage(ctx, session)
 			if err != nil {
+				var limited *provider.RateLimitError
+				if errors.As(err, &limited) {
+					return p.withSource(data), err
+				}
 				return p.withSource(p.consoleErrorData(err)), nil
 			}
 			return p.withSource(data), nil
@@ -254,6 +259,10 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		data, err := p.fetchConsoleUsage(ctx, session)
 		if err == nil {
 			return p.withSource(data), nil
+		}
+		var limited *provider.RateLimitError
+		if errors.As(err, &limited) {
+			return p.withSource(data), err
 		}
 		if key, keyErr := p.apiKey(); keyErr == nil && key != "" {
 			data, fetchErr := p.fetchAPIUsage(ctx, key)
