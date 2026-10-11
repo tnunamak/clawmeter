@@ -126,8 +126,6 @@ kill_vm_processes() {
   if [[ -n "$vm_base" ]] && have quickemu && [[ -f "$VM_CONF" ]]; then
     (cd "$vm_base" && quickemu --vm "$(basename "$VM_CONF")" --kill >/dev/null 2>&1 || true)
   fi
-  pkill -f 'qemu-system-x86_64.*windows-11' >/dev/null 2>&1 || true
-  pkill -f 'swtpm.*windows-11' >/dev/null 2>&1 || true
 }
 
 pe_subsystem() {
