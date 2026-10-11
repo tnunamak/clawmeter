@@ -596,18 +596,9 @@ func discoverOAuthCredentials() (*appOAuthCreds, error) {
 		realPath = geminiPath
 	}
 
-	binDir := filepath.Dir(realPath)
-	baseDir := filepath.Dir(binDir)
-
-	oauthFile := "node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js"
-	candidates := []string{
-		filepath.Join(baseDir, "lib", oauthFile),
-		filepath.Join(baseDir, "libexec", "lib", oauthFile),
-		filepath.Join(baseDir, "share", "gemini-cli", "node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js"),
-		filepath.Join(baseDir, "node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js"),
-	}
-
-	for _, path := range candidates {
+	for _, path := range oauthCredentialCandidates(realPath, map[string]string{
+		"APPDATA": os.Getenv("APPDATA"),
+	}) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -627,6 +618,23 @@ func discoverOAuthCredentials() (*appOAuthCreds, error) {
 	}
 
 	return nil, fmt.Errorf("could not find OAuth credentials in gemini-cli installation")
+}
+
+func oauthCredentialCandidates(shimPath string, env map[string]string) []string {
+	binDir := filepath.Dir(shimPath)
+	baseDir := filepath.Dir(binDir)
+	oauthFile := filepath.Join("node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js")
+	coreOAuthFile := filepath.Join("node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js")
+	candidates := []string{
+		filepath.Join(baseDir, "lib", oauthFile),
+		filepath.Join(baseDir, "libexec", "lib", oauthFile),
+		filepath.Join(baseDir, "share", "gemini-cli", coreOAuthFile),
+		filepath.Join(baseDir, coreOAuthFile),
+	}
+	if appData := env["APPDATA"]; appData != "" {
+		candidates = append(candidates, filepath.Join(appData, "npm", "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"))
+	}
+	return candidates
 }
 
 // Register registers the Gemini provider with the registry.

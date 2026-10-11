@@ -66,6 +66,20 @@ func TestSourceCapabilityListsAndValidatesGeminiKinds(t *testing.T) {
 	}
 }
 
+func TestOAuthCredentialCandidatesIncludeWindowsNPMGlobalPackage(t *testing.T) {
+	root := t.TempDir()
+	shim := filepath.Join(root, "npm", "gemini.cmd")
+	appData := root
+	want := filepath.Join(root, "npm", "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js")
+
+	for _, candidate := range oauthCredentialCandidates(shim, map[string]string{"APPDATA": appData}) {
+		if candidate == want {
+			return
+		}
+	}
+	t.Fatalf("oauthCredentialCandidates(%q) does not include %q", shim, want)
+}
+
 func TestExplicitSourcesUseExactGeminiConfigDirWithoutFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
