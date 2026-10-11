@@ -46,6 +46,7 @@ function Resolve-Windres {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $icon = (Resolve-Path (Join-Path $repoRoot $IconPath)).Path
+$manifest = (Resolve-Path (Join-Path $PSScriptRoot "clawmeter.manifest")).Path
 $output = Join-Path $repoRoot $OutputPath
 $windres = Resolve-Windres -RequestedPath $WindresPath
 $versionValue = $Version.TrimStart("v")
@@ -57,8 +58,10 @@ while ($numericParts.Count -lt 4) {
 $numericVersion = ($numericParts | ForEach-Object { [int]$_ }) -join ","
 
 $escapedIcon = $icon.Replace("\", "\\")
+$escapedManifest = $manifest.Replace("\", "\\")
 $rc = @"
 1 ICON "$escapedIcon"
+1 24 "$escapedManifest"
 
 1 VERSIONINFO
 FILEVERSION $numericVersion
