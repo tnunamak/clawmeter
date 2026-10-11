@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -265,14 +267,88 @@ type SessionEnvironmentResolverConsumer interface {
 
 // UsageWindow represents a single usage limit window.
 type UsageWindow struct {
-	Name        string    `json:"name"`                   // e.g., "5h", "7d", "daily", "monthly"
-	DisplayName string    `json:"display_name,omitempty"` // e.g., "5 hours", "7 days", "Daily", "Monthly"
-	Utilization float64   `json:"utilization"`            // 0-100 percentage
-	ResetsAt    time.Time `json:"resets_at"`              // When this window resets
-	ResetPolicy string    `json:"reset_policy,omitempty"` // Provider policy when no timestamp is known
-	Limit       int       `json:"limit,omitempty"`        // Optional: actual limit number (e.g., 50 requests)
-	Used        int       `json:"used,omitempty"`         // Optional: actual usage number
-	Currency    string    `json:"currency,omitempty"`     // When set, Used and Limit are minor units (cents) of this ISO currency
+	Name        string        `json:"name"`                   // e.g., "5h", "7d", "daily", "monthly"
+	DisplayName string        `json:"display_name,omitempty"` // e.g., "5 hours", "7 days", "Daily", "Monthly"
+	Utilization float64       `json:"utilization"`            // 0-100 percentage
+	Length      time.Duration `json:"-"`                      // Total window duration; JSON uses seconds.
+	ResetsAt    time.Time     `json:"resets_at"`              // When this window resets
+	ResetPolicy string        `json:"reset_policy,omitempty"` // Provider policy when no timestamp is known
+	Limit       int           `json:"limit,omitempty"`        // Optional: actual limit number (e.g., 50 requests)
+	Used        int           `json:"used,omitempty"`         // Optional: actual usage number
+	Currency    string        `json:"currency,omitempty"`     // When set, Used and Limit are minor units (cents) of this ISO currency
+}
+
+// MarshalJSON stores window length in seconds, not time.Duration nanoseconds.
+func (w UsageWindow) MarshalJSON() ([]byte, error) {
+	type plain UsageWindow
+	return json.Marshal(struct {
+		plain
+		LengthSeconds float64 `json:"window_length_seconds,omitempty"`
+	}{plain(w), w.Length.Seconds()})
+}
+
+// UnmarshalJSON also accepts older cached windows without a length.
+func (w *UsageWindow) UnmarshalJSON(data []byte) error {
+	type plain UsageWindow
+	value := struct {
+		*plain
+		LengthSeconds float64 `json:"window_length_seconds,omitempty"`
+	}{plain: (*plain)(w)}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	if value.LengthSeconds < 0 || value.LengthSeconds >= float64(int64(1<<63-1))/float64(time.Second) {
+		return fmt.Errorf("invalid window length")
+	}
+	w.Length = time.Duration(value.LengthSeconds * float64(time.Second))
+	return nil
+}
+
+var windowLengthPattern = regexp.MustCompile(`(?:^|[^a-z0-9])([0-9]+)([mhd])(?:$|[^a-z0-9])`)
+
+// WindowLengthFromName returns zero when a window name has no known duration.
+func WindowLengthFromName(name string) time.Duration {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if match := windowLengthPattern.FindStringSubmatch(normalized); match != nil {
+		n, err := strconv.ParseInt(match[1], 10, 64)
+		unit := time.Minute
+		switch match[2] {
+		case "h":
+			unit = time.Hour
+		case "d":
+			unit = 24 * time.Hour
+		}
+		if err == nil && n > 0 && n <= int64(1<<63-1)/int64(unit) {
+			return time.Duration(n) * unit
+		}
+		return 0
+	}
+	for _, pair := range []struct {
+		word   string
+		length time.Duration
+	}{
+		{"hourly", time.Hour}, {"daily", 24 * time.Hour}, {"weekly", 7 * 24 * time.Hour}, {"monthly", 30 * 24 * time.Hour},
+	} {
+		if strings.Contains(normalized, pair.word) {
+			return pair.length
+		}
+	}
+	return 0
+}
+
+// WindowDuration converts provider duration metadata without overflow.
+func WindowDuration(n int64, unit string) time.Duration {
+	unit = strings.ToLower(strings.TrimPrefix(strings.ToUpper(unit), "TIME_UNIT_"))
+	unit = strings.TrimSuffix(unit, "s")
+	lengths := map[string]time.Duration{
+		"minute": time.Minute, "hour": time.Hour, "day": 24 * time.Hour,
+		"week": 7 * 24 * time.Hour, "month": 30 * 24 * time.Hour,
+	}
+	length := lengths[unit]
+	if n <= 0 || length <= 0 || n > int64(1<<63-1)/int64(length) {
+		return 0
+	}
+	return time.Duration(n) * length
 }
 
 // MoneyDetail renders Used and Limit as money, for example "$16.58 / $20.00".

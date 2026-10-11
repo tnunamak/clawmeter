@@ -33,6 +33,7 @@ var (
 	pCreateCompatibleDC     = g32.NewProc("CreateCompatibleDC")
 	pCreateDIBSection       = g32.NewProc("CreateDIBSection")
 	pDeleteDC               = g32.NewProc("DeleteDC")
+	pDeleteObject           = g32.NewProc("DeleteObject")
 	pSelectObject           = g32.NewProc("SelectObject")
 
 	k32              = windows.NewLazySystemDLL("Kernel32.dll")
@@ -48,6 +49,7 @@ var (
 	pCreateWindowEx        = u32.NewProc("CreateWindowExW")
 	pDefWindowProc         = u32.NewProc("DefWindowProcW")
 	pDeleteMenu            = u32.NewProc("DeleteMenu")
+	pDestroyIcon           = u32.NewProc("DestroyIcon")
 	pDestroyMenu           = u32.NewProc("DestroyMenu")
 	pRemoveMenu            = u32.NewProc("RemoveMenu")
 	pDestroyWindow         = u32.NewProc("DestroyWindow")
@@ -134,41 +136,78 @@ type notifyIconData struct {
 	BalloonIcon                windows.Handle
 }
 
-func (nid *notifyIconData) add() error {
+// addRetryDelays is the backoff before each NIM_ADD attempt, ~8s in total.
+// On Win11 25H2 (build 26100+), Shell_TrayWnd can be slow to initialize at
+// user login, causing NIM_ADD to race and fail with no last-error set
+// (surfaces as "Unspecified error"). Falls back to NIM_MODIFY for the case
+// where a stale icon is still registered. See fyne-io/systray#101,
+// wxWidgets#18588, OpenHardwareMonitor#1092.
+var addRetryDelays = []time.Duration{
+	0,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	400 * time.Millisecond,
+	800 * time.Millisecond,
+	1500 * time.Millisecond,
+	2500 * time.Millisecond,
+	2500 * time.Millisecond,
+}
+
+// addAttempt makes attempt i (0-based) to register the icon.
+func (nid *notifyIconData) addAttempt(i int) (bool, error) {
 	const NIM_ADD = 0x00000000
 	const NIM_MODIFY = 0x00000001
-	// On Win11 25H2 (build 26100+), Shell_TrayWnd can be slow to initialize at
-	// user login, causing NIM_ADD to race and fail with no last-error set
-	// (surfaces as "Unspecified error"). Retry with backoff totalling ~8s, and
-	// fall back to NIM_MODIFY for the case where a stale icon is still
-	// registered. See fyne-io/systray#101, wxWidgets#18588, OpenHardwareMonitor#1092.
-	delays := []time.Duration{
-		0,
-		100 * time.Millisecond,
-		200 * time.Millisecond,
-		400 * time.Millisecond,
-		800 * time.Millisecond,
-		1500 * time.Millisecond,
-		2500 * time.Millisecond,
-		2500 * time.Millisecond,
+	res, _, err := pShellNotifyIcon.Call(uintptr(NIM_ADD), uintptr(unsafe.Pointer(nid)))
+	if res != 0 {
+		return true, nil
 	}
+	if i >= 3 {
+		if res2, _, _ := pShellNotifyIcon.Call(uintptr(NIM_MODIFY), uintptr(unsafe.Pointer(nid))); res2 != 0 {
+			return true, nil
+		}
+	}
+	return false, err
+}
+
+func (nid *notifyIconData) add() error {
 	var lastErr error
-	for i, delay := range delays {
+	for i, delay := range addRetryDelays {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
-		res, _, err := pShellNotifyIcon.Call(uintptr(NIM_ADD), uintptr(unsafe.Pointer(nid)))
-		if res != 0 {
+		ok, err := nid.addAttempt(i)
+		if ok {
 			return nil
 		}
 		lastErr = err
-		if i >= 3 {
-			if res2, _, _ := pShellNotifyIcon.Call(uintptr(NIM_MODIFY), uintptr(unsafe.Pointer(nid))); res2 != 0 {
-				return nil
-			}
-		}
 	}
 	return lastErr
+}
+
+// readd re-registers the icon after explorer.exe restarts. It retries off the
+// window procedure so the message loop keeps running, and holds muNID only
+// during each attempt, not while sleeping.
+func (t *winTray) readd() {
+	if !t.readding.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer t.readding.Store(false)
+		for i, delay := range addRetryDelays {
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			t.muNID.Lock()
+			ok := false
+			if t.nid != nil {
+				ok, _ = t.nid.addAttempt(i)
+			}
+			t.muNID.Unlock()
+			if ok {
+				return
+			}
+		}
+	}()
 }
 
 func (nid *notifyIconData) modify() error {
@@ -244,6 +283,10 @@ type winTray struct {
 	cursor,
 	window windows.Handle
 
+	// ownedIcon is the HICON from pngToHIcon currently shown, if any. We
+	// destroy it when replaced; icons from LoadIcon/loadedImages are shared.
+	ownedIcon windows.Handle
+
 	loadedImages   map[string]windows.Handle
 	muLoadedImages sync.RWMutex
 	// menus keeps track of the submenus keyed by the menu item ID, plus 0
@@ -269,6 +312,7 @@ type winTray struct {
 	wmTaskbarCreated uint32
 
 	initialized atomic.Bool
+	readding    atomic.Bool
 }
 
 // isReady checks if the tray as already been initialized. It is not goroutine safe with in regard to the initialization function, but prevents a panic when functions are called too early.
@@ -292,11 +336,41 @@ func (t *winTray) setIcon(src string) error {
 
 	t.muNID.Lock()
 	defer t.muNID.Unlock()
-	t.nid.Icon = h
 	t.nid.Flags |= NIF_ICON
 	t.nid.Size = uint32(unsafe.Sizeof(*t.nid))
 
-	return t.nid.modify()
+	return t.swapIcon(h, false, t.nid.modify)
+}
+
+// destroyIcon frees an HICON we own.
+func destroyIcon(h windows.Handle) {
+	if h != 0 {
+		pDestroyIcon.Call(uintptr(h))
+	}
+}
+
+// swapIcon shows h in the tray via modify. If owned, h came from pngToHIcon and
+// we destroy it when replaced or when modify fails. The previous owned icon is
+// destroyed only after modify succeeds; the current icon stays alive because
+// the TaskbarCreated re-add needs it. The caller holds muNID.
+func (t *winTray) swapIcon(h windows.Handle, owned bool, modify func() error) error {
+	prev := t.nid.Icon
+	t.nid.Icon = h
+	if err := modify(); err != nil {
+		t.nid.Icon = prev
+		if owned {
+			destroyIcon(h)
+		}
+		return err
+	}
+	if t.ownedIcon != 0 && t.ownedIcon != h {
+		destroyIcon(t.ownedIcon)
+	}
+	t.ownedIcon = 0
+	if owned {
+		t.ownedIcon = h
+	}
+	return nil
 }
 
 // Sets tooltip on icon.
@@ -373,9 +447,7 @@ func (t *winTray) wndProc(hWnd windows.Handle, message uint32, wParam, lParam ui
 			systrayRightClick()
 		}
 	case t.wmTaskbarCreated: // on explorer.exe restarts
-		t.muNID.Lock()
-		t.nid.add()
-		t.muNID.Unlock()
+		t.readd()
 	default:
 		// Calls the default window procedure to provide default processing for any window messages that an application does not process.
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/ms633572(v=vs.85).aspx
@@ -958,6 +1030,8 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	if hColorBmp == 0 {
 		return 0, fmt.Errorf("CreateDIBSection failed")
 	}
+	// CreateIconIndirect copies the bitmaps, so we always free ours.
+	defer pDeleteObject.Call(hColorBmp)
 
 	// Write BGRA pixel data into the DIB.
 	pixelData := unsafe.Slice((*byte)(unsafe.Pointer(bits)), int(w)*int(h)*4)
@@ -979,6 +1053,7 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	if hMaskBmp == 0 {
 		return 0, fmt.Errorf("CreateBitmap failed")
 	}
+	defer pDeleteObject.Call(hMaskBmp)
 
 	ii := iconinfo{
 		FIcon:    1, // TRUE = icon (not cursor)
@@ -993,9 +1068,10 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	return windows.Handle(hIcon), nil
 }
 
-// setIconFromHIcon sets the tray icon from an existing HICON handle.
+// setIconFromHIcon sets the tray icon from an HICON and takes ownership of it.
 func (t *winTray) setIconFromHIcon(hIcon windows.Handle) error {
 	if !wt.isReady() {
+		destroyIcon(hIcon)
 		return ErrTrayNotReadyYet
 	}
 
@@ -1003,11 +1079,10 @@ func (t *winTray) setIconFromHIcon(hIcon windows.Handle) error {
 
 	t.muNID.Lock()
 	defer t.muNID.Unlock()
-	t.nid.Icon = hIcon
 	t.nid.Flags |= NIF_ICON
 	t.nid.Size = uint32(unsafe.Sizeof(*t.nid))
 
-	return t.nid.modify()
+	return t.swapIcon(hIcon, true, t.nid.modify)
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createdibsection

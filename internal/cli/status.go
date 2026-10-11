@@ -118,10 +118,12 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 		colorPct := window.Utilization
 		barColor := color(colorPct)
 		if !window.ResetsAt.IsZero() {
-			proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 			resetStr = format.FormatDuration(time.Until(window.ResetsAt))
 			indicator = proj.ColorIndicator()
-			colorPct = proj.ProjectedPct
+			if !proj.Unknown && !proj.Stale {
+				colorPct = proj.ProjectedPct
+			}
 			barColor = color(colorPct)
 		} else if window.ResetPolicy != "" {
 			indicator = window.ResetPolicy
@@ -209,7 +211,7 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		}
 		resetStr, indicator := "unknown", "reset unknown"
 		if !window.ResetsAt.IsZero() {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 			resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
 		} else if window.ResetPolicy != "" {
 			indicator = window.ResetPolicy
@@ -379,6 +381,14 @@ func (m *MultiProviderOutput) StatusLineSummary() string {
 	}
 
 	resetIn := time.Until(window.ResetsAt)
+	if proj.Unknown || proj.Stale {
+		if proj.Stale {
+			prefix = "CM~"
+		} else if window.Utilization >= 100 {
+			prefix = "CM!"
+		}
+		return fmt.Sprintf("%s %s %s current %.0f%% %s", prefix, pf.Display, window.Name, window.Utilization, proj.PaceIndicator())
+	}
 	line := fmt.Sprintf("%s %s %s est. %.0f%% reset %s",
 		prefix, pf.Display, window.Name, proj.ProjectedPct, format.FormatDuration(resetIn))
 	if !proj.WillLastToReset && proj.RunsOutIn > 0 {
@@ -409,12 +419,12 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	}
 
 	resetIn := clampDuration(time.Until(window.ResetsAt))
-	status := agentStatus(proj)
+	status := agentStatus(window, proj)
 
 	parts := []string{
 		fmt.Sprintf("Quota: worst=%s %s", pf.Display, window.Name),
 		fmt.Sprintf("current=%s", formatPrecisePct(window.Utilization)),
-		fmt.Sprintf("projected_at_reset=%s", formatPrecisePct(proj.ProjectedPct)),
+		fmt.Sprintf("projected_at_reset=%s", projectionPct(proj)),
 		fmt.Sprintf("reset_in_seconds=%d", int64(resetIn.Seconds())),
 		fmt.Sprintf("reset_in=%s", formatExactDuration(resetIn)),
 		"status=" + status,
@@ -470,13 +480,13 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 			continue
 		}
 		tier := classifyProvider(pf).tier
-		for _, window := range pf.Data.UsableWindows() {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+		for _, window := range pf.Data.PresentationWindows() {
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 			quotas = append(quotas, agentQuotaSummary{
 				Provider: pf.Display,
 				Window:   window,
 				Proj:     proj,
-				Status:   agentStatus(proj),
+				Status:   agentStatus(window, proj),
 				Tier:     tier,
 				Stale:    pf.Data.Stale,
 			})
@@ -502,7 +512,7 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		resetIn := clampDuration(time.Until(quota.Window.ResetsAt))
 		fields := []string{
 			fmt.Sprintf("current=%s", formatPrecisePct(quota.Window.Utilization)),
-			fmt.Sprintf("projected_at_reset=%s", formatPrecisePct(quota.Proj.ProjectedPct)),
+			fmt.Sprintf("projected_at_reset=%s", projectionPct(quota.Proj)),
 			fmt.Sprintf("reset_in=%s", formatExactDuration(resetIn)),
 			"status=" + quota.Status,
 		}
@@ -653,7 +663,23 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 	return out
 }
 
-func agentStatus(proj forecast.Projection) string {
+func projectionPct(proj forecast.Projection) string {
+	if proj.Unknown || proj.Stale {
+		return "unknown"
+	}
+	return formatPrecisePct(proj.ProjectedPct)
+}
+
+func agentStatus(window provider.UsageWindow, proj forecast.Projection) string {
+	if proj.Stale {
+		return "stale"
+	}
+	if window.Utilization >= 100 {
+		return "at_risk" // used up now, whatever the projection
+	}
+	if proj.Unknown {
+		return "unknown"
+	}
 	if proj.ProjectedPct >= 100 {
 		return "at_risk"
 	}
@@ -680,9 +706,9 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 			continue
 		}
 		tier := classifyProvider(pf).tier
-		for _, window := range pf.Data.UsableWindows() {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
-			if bestPF == nil || tier < bestTier || (tier == bestTier && forecast.CompareRisk(proj, bestProj) < 0) {
+		for _, window := range pf.Data.PresentationWindows() {
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+			if bestPF == nil || tier < bestTier || (tier == bestTier && compareWindowRisk(window, proj, bestWindow, bestProj) < 0) {
 				bestPF = pf
 				bestWindow = window
 				bestProj = proj
@@ -695,6 +721,19 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		return nil, provider.UsageWindow{}, forecast.Projection{}, false
 	}
 	return bestPF, bestWindow, bestProj, true
+}
+
+// compareWindowRisk orders windows like classifyProvider: a window used up
+// now outranks any projection, even when its length is unknown.
+func compareWindowRisk(a provider.UsageWindow, aProj forecast.Projection, b provider.UsageWindow, bProj forecast.Projection) int {
+	aExhausted, bExhausted := a.Utilization >= 100 && !aProj.Stale, b.Utilization >= 100 && !bProj.Stale
+	if aExhausted != bExhausted {
+		if aExhausted {
+			return -1
+		}
+		return 1
+	}
+	return forecast.CompareRisk(aProj, bProj)
 }
 
 func clampDuration(d time.Duration) time.Duration {
@@ -837,7 +876,7 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 				Windows: make(map[string]JSONProjection),
 			}
 			for _, window := range windows {
-				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 				providerOut.Forecast.Windows[window.Name] = JSONProjection{
 					ProjectedPct: roundPct(proj.ProjectedPct),
 					Indicator:    proj.Indicator(),
@@ -886,7 +925,7 @@ func forecastFor(data *provider.UsageData) *JSONForecast {
 	}
 	result := &JSONForecast{Windows: make(map[string]JSONProjection)}
 	for _, window := range windows {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 		result.Windows[window.Name] = JSONProjection{ProjectedPct: roundPct(proj.ProjectedPct), Indicator: proj.Indicator()}
 	}
 	return result
@@ -1137,6 +1176,10 @@ func Check() int {
 		return 2
 	}
 
+	return statusCheckExitCode(output)
+}
+
+func statusCheckExitCode(output *MultiProviderOutput) int {
 	worstTier := 4
 	for i := range output.Providers {
 		u := classifyProvider(&output.Providers[i])
@@ -1321,8 +1364,16 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	var hasWorstProjection bool
 	var runsOutIn time.Duration
 	var runsOutEarlyBy time.Duration
-	for _, w := range pf.Data.UsableWindows() {
-		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.GuessWindowType(w.Name))
+	stale := pf.Data.Stale
+	for _, w := range pf.Data.PresentationWindows() {
+		if !w.ResetsAt.IsZero() && !w.ResetsAt.After(time.Now()) {
+			stale = true
+			continue
+		}
+		if w.Utilization >= 100 && maxPct < w.Utilization {
+			maxPct = w.Utilization
+		}
+		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.WindowLength(w))
 		if proj.ProjectedPct > maxPct {
 			maxPct = proj.ProjectedPct
 		}
@@ -1339,7 +1390,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	switch {
 	case maxPct >= 100:
 		tier = 2
-	case maxPct >= 90 || pf.Data.Stale:
+	case maxPct >= 90 || stale:
 		tier = 3
 	}
 
@@ -1448,7 +1499,10 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			rest = summaryCounts(healthy-1, warning, critical, errored, expired)
 		}
 
-		paceWord := forecast.PaceLabel(worstU.worstProjection.ProjectedPct)
+		paceWord := worstU.worstProjection.PaceIndicator()
+		if worstU.tier == 3 && worstU.worstWindow == "" {
+			paceWord = "stale"
+		}
 		line = fmt.Sprintf("⚠ %s %s%s", windowLabel, paceWord, etaStr)
 		if rest != "" {
 			line += " — " + rest

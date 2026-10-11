@@ -27,3 +27,10 @@ func TestARGBForImageUsesStraightAlphaChannels(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeEndWithoutDBusConnection(t *testing.T) {
+	systrayExit = func() {}
+	systrayExitCalled.Store(false)
+	instance.conn = nil
+	nativeEnd() // must not panic when session bus setup failed
+}

@@ -289,6 +289,7 @@ func (p *Provider) transformQuota(quota *quotaData) *provider.UsageData {
 
 	data.Windows = append(data.Windows, provider.UsageWindow{
 		Name:        "monthly",
+		Length:      30 * 24 * time.Hour,
 		DisplayName: "Monthly Credits",
 		Utilization: usedPct,
 		ResetsAt:    resetsAt,

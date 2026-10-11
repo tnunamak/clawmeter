@@ -103,6 +103,7 @@ func shouldCreateProviderMenu(p provider.Provider) bool {
 type state struct {
 	mu                        sync.Mutex
 	lastResults               map[string]*provider.UsageData
+	thresholdUtilization      map[iconTarget]thresholdSample
 	lastSourceRevisions       map[string]string
 	statuses                  map[string]*status.ProviderStatus
 	failureGate               *provider.FailureGate
@@ -128,6 +129,11 @@ type state struct {
 type iconTarget struct {
 	Provider string
 	Window   string
+}
+
+type thresholdSample struct {
+	Utilization float64
+	ResetsAt    time.Time
 }
 
 type iconAutoMode string
@@ -172,14 +178,56 @@ func configureNotificationIdentity() {
 }
 
 func onReady() {
-	s.failureGate = provider.NewFailureGate()
-
-	var err error
-	cfg, err = config.Load(all.SourceValidator())
+	loaded, err := config.Load(all.SourceValidator())
 	if err != nil {
 		setErrorState("Config error")
+		systray.BeginMenuUpdate()
+		mError := systray.AddMenuItem("Config error — fix config.yaml; retrying automatically", "")
+		mError.Disable()
+		mQuit := systray.AddMenuItem("Quit", "")
+		systray.EndMenuUpdate()
+		go func() {
+			ticker := time.NewTicker(pollIntervalForConfig(0))
+			defer ticker.Stop()
+			retryTrayConfig(ticker.C, mQuit.ClickedCh, func() (*config.Config, error) {
+				return config.Load(all.SourceValidator())
+			}, func(loaded *config.Config) {
+				mError.Hide()
+				mQuit.Hide()
+				onReadyWithConfig(loaded)
+			}, systray.Quit)
+		}()
 		return
 	}
+	onReadyWithConfig(loaded)
+}
+
+func retryTrayConfig(ticks <-chan time.Time, quit <-chan struct{}, load func() (*config.Config, error), ready func(*config.Config), stop func()) {
+	for {
+		select {
+		case <-quit:
+			stop()
+			return
+		case <-ticks:
+			loaded, err := load()
+			// Quit may arrive while the synchronous config load is in flight.
+			select {
+			case <-quit:
+				stop()
+				return
+			default:
+			}
+			if err == nil {
+				ready(loaded)
+				return
+			}
+		}
+	}
+}
+
+func onReadyWithConfig(loaded *config.Config) {
+	cfg = loaded
+	s.failureGate = provider.NewFailureGate()
 
 	// Build the initial native menu as one transaction. On Linux, each menu
 	// mutation otherwise emits a separate D-Bus layout signal while Plasma is
@@ -934,8 +982,6 @@ func providerConnectFailureMessage(stdout, stderr string) string {
 }
 
 func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
-	fetched := results
-	results = provider.PresentResetCreditSources(results)
 	setups := make(map[string]provider.SetupStatus, len(menus))
 	for name, menu := range menus {
 		// Only Alibaba has a setup-only menu path today. Other providers are
@@ -950,8 +996,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 	}
 
-	trayRenderMu.Lock()
+	results, statuses = lockLatestTrayState(&trayRenderMu)
 	defer trayRenderMu.Unlock()
+	fetched := results
+	results = provider.PresentResetCreditSources(results)
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 
@@ -1108,6 +1156,15 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	checkThresholds(activeResults, displayNames)
 }
 
+// Take the snapshot only after earlier native-menu renders have finished.
+// The caller holds renderMu until its native-menu mutations are complete.
+func lockLatestTrayState(renderMu sync.Locker) (map[string]*provider.UsageData, map[string]*status.ProviderStatus) {
+	renderMu.Lock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastResults, s.statuses
+}
+
 func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now time.Time) {
 	title := resetCreditTraySummary(data, now)
 	if title == "" {
@@ -1153,6 +1210,8 @@ func publishLocalResetSource(registry *provider.Registry, sourceKey string, menu
 func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem) {
 	displayNames := providerDisplayNames(menus)
 
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
 	s.mu.Lock()
 	results := provider.PresentResetCreditSources(s.lastResults)
 	mode := normalizedIconAutoModeLocked()
@@ -1164,8 +1223,6 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.iconTargetOverride = nextIconTargetOverride(s.iconTargetOverride, choices, true)
 	s.mu.Unlock()
 
-	trayRenderMu.Lock()
-	defer trayRenderMu.Unlock()
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 	updateIconTargetSelector(results, displayNames, item)
@@ -1177,6 +1234,8 @@ func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem, modeItem *systray.MenuItem) {
 	displayNames := providerDisplayNames(menus)
 
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
 	s.mu.Lock()
 	results := provider.PresentResetCreditSources(s.lastResults)
 	mode := normalizedIconAutoModeLocked()
@@ -1185,8 +1244,6 @@ func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
-	trayRenderMu.Lock()
-	defer trayRenderMu.Unlock()
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 	updateIconTargetSelector(results, displayNames, item)
@@ -1199,6 +1256,8 @@ func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuI
 func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuItem, modeItem *systray.MenuItem) {
 	displayNames := providerDisplayNames(menus)
 
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
 	s.mu.Lock()
 	results := provider.PresentResetCreditSources(s.lastResults)
 	current := normalizedIconAutoModeLocked()
@@ -1218,8 +1277,6 @@ func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuI
 	}
 	s.mu.Unlock()
 
-	trayRenderMu.Lock()
-	defer trayRenderMu.Unlock()
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 	updateIconTargetSelector(results, displayNames, item)
@@ -1292,14 +1349,11 @@ func iconCycleMenuTitle(target iconTarget, displayNames map[string]string, mode 
 	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (click for next, double-click for Auto)"
 }
 
-func nextIconTargetOverride(current iconTarget, choices []iconTarget, skipAutoCurrent bool) iconTarget {
+func nextIconTargetOverride(current iconTarget, choices []iconTarget, _ bool) iconTarget {
 	if len(choices) == 0 {
 		return iconTarget{}
 	}
 	if current.Provider == "" {
-		if skipAutoCurrent && len(choices) > 1 {
-			return choices[1]
-		}
 		return choices[0]
 	}
 	for i, choice := range choices {
@@ -1658,6 +1712,10 @@ func providerProjectedPct(data *provider.UsageData) float64 {
 
 func windowBadgeLabel(name string) string {
 	label := strings.ToUpper(strings.TrimSpace(name))
+	// A two-character badge cannot safely abbreviate a multi-digit duration.
+	if len(label) > 1 && label[0] >= '0' && label[0] <= '9' && label[1] >= '0' && label[1] <= '9' {
+		return "--"
+	}
 	parts := strings.FieldsFunc(label, func(r rune) bool {
 		return !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
 	})
@@ -1876,55 +1934,50 @@ func compactProjectionEstimate(proj forecast.Projection) string {
 	return estimate
 }
 
+var sendThresholdNotification = notify
+
 func checkThresholds(results map[string]*provider.UsageData, displayNames map[string]string) {
+	type notification struct{ title, body, urgency string }
+	var pending []notification
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.lastResults == nil {
-		s.lastResults = make(map[string]*provider.UsageData)
+	if s.thresholdUtilization == nil {
+		s.thresholdUtilization = make(map[iconTarget]thresholdSample)
 	}
-
-	warningThreshold := 80.0
-	criticalThreshold := 95.0
+	warningThreshold, criticalThreshold := 80.0, 95.0
 	if cfg != nil {
 		warningThreshold = cfg.Settings.NotificationThresholds.Warning
 		criticalThreshold = cfg.Settings.NotificationThresholds.Critical
 	}
-
 	for name, data := range results {
-		if data == nil || data.Error != "" || data.Stale {
+		if data == nil || data.Error != "" || data.Stale || data.IsExpired {
 			continue
 		}
-
-		oldData, hadOld := s.lastResults[name]
-
 		for _, window := range data.UsableWindows() {
-			pct := window.Utilization
-			oldPct := 0.0
-
-			if hadOld && oldData != nil {
-				if oldWindow, ok := oldData.GetWindow(window.Name); ok {
-					oldPct = oldWindow.Utilization
-				}
+			key := iconTarget{Provider: name, Window: window.Name}
+			previous := s.thresholdUtilization[key]
+			pct, oldPct := window.Utilization, previous.Utilization
+			// A new reset period rearms thresholds even if low samples were missed.
+			if newResetPeriod(previous.ResetsAt, window.ResetsAt, time.Now()) {
+				oldPct = 0
 			}
-
+			s.thresholdUtilization[key] = thresholdSample{Utilization: pct, ResetsAt: window.ResetsAt}
 			display := displayNames[name]
 			if display == "" {
 				display = name
 			}
 			proj := forecast.Project(pct, window.ResetsAt, forecast.GuessWindowType(window.Name))
 			message := fmt.Sprintf("%s window at %.0f%% — %s", window.Name, pct, proj.PaceIndicator())
-
 			if pct >= criticalThreshold && oldPct < criticalThreshold {
-				notify(fmt.Sprintf("%s usage critical", display), message, "critical")
+				pending = append(pending, notification{fmt.Sprintf("%s usage critical", display), message, "critical"})
 			} else if pct >= warningThreshold && oldPct < warningThreshold {
-				notify(fmt.Sprintf("%s usage warning", display), message, "normal")
+				pending = append(pending, notification{fmt.Sprintf("%s usage warning", display), message, "normal"})
 			}
 		}
 	}
-
-	// Update stored results
-	s.lastResults = results
+	s.mu.Unlock()
+	for _, n := range pending {
+		sendThresholdNotification(n.title, n.body, n.urgency)
+	}
 }
 
 func setErrorState(msg string) {
@@ -2103,4 +2156,14 @@ func providerSeverity(data *provider.UsageData) providerSeverityRank {
 	}
 	_, proj, ok := selectedIconWindow(data, "")
 	return providerSeverityRank{tier: 2, projection: proj, hasProjection: ok}
+}
+
+// newResetPeriod reports whether a window's reset time starts a new period.
+// Providers that derive the reset from time remaining move it by a few
+// seconds between polls, so only a passed reset or a large jump counts.
+func newResetPeriod(previous, current, now time.Time) bool {
+	if previous.IsZero() {
+		return true
+	}
+	return !now.Before(previous) || current.Sub(previous) > 30*time.Minute
 }

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -298,6 +299,7 @@ func setupCmd(args []string) int {
 	tmuxFlag := fs.Bool("tmux", false, "install tmux status-right integration")
 	claudeFlag := fs.Bool("claude-statusline", false, "install Claude Code statusline integration")
 	dryRun := fs.Bool("dry-run", false, "show changes without writing files or tmux settings")
+	force := fs.Bool("force", false, "replace an existing custom Claude Code statusline")
 	fs.Parse(args)
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "clawmeter: setup does not take positional arguments\n")
@@ -314,7 +316,7 @@ func setupCmd(args []string) int {
 			printIntegrationResult(setupTmuxIntegration(*dryRun))
 		}
 		if *claudeFlag {
-			printIntegrationResult(setupClaudeStatuslineIntegration(*dryRun))
+			printIntegrationResult(setupClaudeStatuslineIntegration(*dryRun, *force))
 		}
 		fmt.Println()
 		fmt.Println("Agent pull command: clawmeter status --agent")
@@ -465,8 +467,12 @@ func configSetCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
 			return 1
 		}
-		if pct < 0 || pct > 100 {
+		if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
 			fmt.Fprintf(os.Stderr, "clawmeter: warning_threshold must be 0-100\n")
+			return 1
+		}
+		if pct >= cfg.Settings.NotificationThresholds.Critical {
+			fmt.Fprintf(os.Stderr, "clawmeter: warning_threshold must be less than critical_threshold (%.0f)\n", cfg.Settings.NotificationThresholds.Critical)
 			return 1
 		}
 		cfg.Settings.NotificationThresholds.Warning = pct
@@ -476,7 +482,7 @@ func configSetCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
 			return 1
 		}
-		if pct < 0 || pct > 100 {
+		if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
 			fmt.Fprintf(os.Stderr, "clawmeter: critical_threshold must be 0-100\n")
 			return 1
 		}

@@ -655,6 +655,7 @@ func parseQuotaSummary(body []byte, now time.Time) ([]provider.UsageWindow, erro
 			label := poolLabel(id, group.DisplayName)
 			window := provider.UsageWindow{
 				Name:        "7d " + label,
+				Length:      7 * 24 * time.Hour,
 				DisplayName: "7 days (" + label + ")",
 				Utilization: (1 - *remaining) * 100,
 				ResetsAt:    resetAt,

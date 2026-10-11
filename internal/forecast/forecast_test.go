@@ -81,11 +81,11 @@ func TestProject(t *testing.T) {
 			wantRunsOutEarly:    true,
 		},
 		{
-			name:                "0% usage, 0h remaining — just reset edge case",
+			name:                "0% usage, 0h remaining — stale",
 			currentPct:          0,
 			resetsAt:            now,
 			windowLen:           FiveHourWindow,
-			wantOnTrack:         true,
+			wantOnTrack:         false,
 			wantWillLastToReset: true,
 			wantProjectedLo:     0,
 			wantProjectedHi:     0,
@@ -111,14 +111,14 @@ func TestProject(t *testing.T) {
 			wantProjectedHi:     80,
 		},
 		{
-			name:                "elapsed is negative (resetsAt beyond window) → early return",
+			name:                "elapsed is negative (resetsAt beyond window) → unknown",
 			currentPct:          50,
 			resetsAt:            now.Add(6 * time.Hour),
 			windowLen:           FiveHourWindow,
-			wantOnTrack:         true,
+			wantOnTrack:         false,
 			wantWillLastToReset: true,
-			wantProjectedLo:     50,
-			wantProjectedHi:     50,
+			wantProjectedLo:     0,
+			wantProjectedHi:     0,
 		},
 	}
 
@@ -163,9 +163,9 @@ func TestGuessWindowType(t *testing.T) {
 		{"7d Review", SevenDayWindow},
 		{"7d_oauth_apps", SevenDayWindow},
 		{"Monthly Credits", MonthlyWindow},
-		{"session", 24 * time.Hour}, // default
-		{"credits", 24 * time.Hour}, // default
-		{"", 24 * time.Hour},        // default
+		{"session", 0}, // unknown
+		{"credits", 0}, // unknown
+		{"", 0},        // unknown
 	}
 
 	for _, tt := range tests {

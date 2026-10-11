@@ -224,6 +224,7 @@ func (p *Provider) parseQuotas(raw json.RawMessage) (*provider.UsageData, error)
 			}
 			if w := parseQuotaEntry(slot); w != nil {
 				w.Name, w.DisplayName = names[i], displayNames[i]
+				w.Length = [...]time.Duration{5 * time.Hour, 7 * 24 * time.Hour, time.Hour}[i]
 				data.Windows = append(data.Windows, *w)
 			}
 		}
@@ -297,19 +298,12 @@ func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 	// Try direct percent first
 	usedPct, hasUsedPct := number(entry, []string{"percentUsed", "usedPercent", "usagePercent", "usage_percent", "used_percent", "percent_used", "percent"})
 
-	// If <= 1.0, assume it's a fraction
-	if usedPct > 0 && usedPct <= 1.0 {
-		usedPct *= 100
-	}
-
 	// Try inverse percent
 	if !hasUsedPct {
 		remaining, ok := number(entry, []string{"percentRemaining", "remainingPercent", "remaining_percent", "percent_remaining"})
 		if ok {
-			if remaining <= 1.0 {
-				remaining *= 100
-			}
 			usedPct = 100 - remaining
+			hasUsedPct = true
 		}
 	}
 
@@ -361,6 +355,7 @@ func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 
 	return &provider.UsageWindow{
 		Name:        label,
+		Length:      provider.WindowLengthFromName(label),
 		DisplayName: label,
 		Utilization: usedPct,
 		ResetsAt:    resetsAt,

@@ -12,7 +12,7 @@ import (
 var (
 	systrayReady, systrayExit func()
 	tappedLeft, tappedRight   func()
-	systrayExitCalled         bool
+	systrayExitCalled         atomic.Bool
 	menuItems                 = make(map[uint32]*MenuItem)
 	menuItemsLock             sync.RWMutex
 
@@ -27,8 +27,7 @@ var (
 // This helper function allows us to call systrayExit only once,
 // without accidentally calling it twice in the same lifetime.
 func runSystrayExit() {
-	if !systrayExitCalled {
-		systrayExitCalled = true
+	if systrayExitCalled.CompareAndSwap(false, true) {
 		systrayExit()
 	}
 }
@@ -69,7 +68,7 @@ func (item *MenuItem) String() string {
 // newMenuItem returns a populated MenuItem object
 func newMenuItem(title string, tooltip string, parent *MenuItem) *MenuItem {
 	return &MenuItem{
-		ClickedCh:   make(chan struct{}),
+		ClickedCh:   make(chan struct{}, 1), // buffered so a click during a busy loop is kept
 		id:          currentID.Add(1),
 		title:       title,
 		tooltip:     tooltip,
@@ -127,7 +126,7 @@ func Register(onReady func(), onExit func()) {
 		onExit = func() {}
 	}
 	systrayExit = onExit
-	systrayExitCalled = false
+	systrayExitCalled.Store(false)
 	registerSystray()
 }
 
@@ -296,9 +295,11 @@ func (item *MenuItem) update() {
 }
 
 func systrayMenuItemSelected(id uint32) {
+	// Hold the read lock across the send: Remove closes ClickedCh under the
+	// write lock, so the channel cannot be closed while we send.
 	menuItemsLock.RLock()
+	defer menuItemsLock.RUnlock()
 	item, ok := menuItems[id]
-	menuItemsLock.RUnlock()
 	if !ok {
 		log.Printf("systray error: no menu item with ID %d\n", id)
 		return

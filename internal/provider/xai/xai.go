@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -233,7 +234,7 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 		return nil, err
 	}
 	now := time.Now()
-	windowName, windowDisplayName := grokSubscriptionWindowLabels(snapshot.ResetsAt, now)
+	windowName, windowDisplayName := grokSubscriptionWindowLabels(snapshot.ResetsAt, now, snapshot.Period)
 	data := &provider.UsageData{
 		Provider:  p.Name(),
 		FetchedAt: now,
@@ -488,32 +489,55 @@ func (p *Provider) grokCredentials() (*grokCredentials, error) {
 		return nil, fmt.Errorf("%w: %v", errGrokCredentialsMalformed, err)
 	}
 
-	var root map[string]struct {
-		Key       string `json:"key"`
-		ExpiresAt string `json:"expires_at"`
-	}
+	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("%w: %v", errGrokCredentialsMalformed, err)
 	}
 
+	scopes := make([]string, 0, len(root))
+	for scope := range root {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
 	var fallback *grokCredentials
-	for scope, entry := range root {
+	var credentialErr error
+	for _, scope := range scopes {
+		preferred := strings.HasPrefix(scope, "https://auth.x.ai::")
+		if !preferred && !strings.Contains(scope, "/sign-in") {
+			continue
+		}
+		var entry struct {
+			Key       string `json:"key"`
+			ExpiresAt string `json:"expires_at"`
+		}
+		if err := json.Unmarshal(root[scope], &entry); err != nil {
+			if credentialErr == nil {
+				credentialErr = errGrokCredentialsMalformed
+			}
+			continue
+		}
 		if strings.TrimSpace(entry.Key) == "" {
 			continue
 		}
 		credentials, err := parseGrokCredentialEntry(entry.Key, entry.ExpiresAt)
 		if err != nil {
-			return nil, err
+			if credentialErr == nil {
+				credentialErr = err
+			}
+			continue
 		}
-		if strings.HasPrefix(scope, "https://auth.x.ai::") {
+		if preferred {
 			return credentials, nil
 		}
-		if scope == "https://accounts.x.ai/sign-in" || strings.Contains(scope, "/sign-in") {
+		if fallback == nil || scope == "https://accounts.x.ai/sign-in" {
 			fallback = credentials
 		}
 	}
 	if fallback != nil {
 		return fallback, nil
+	}
+	if credentialErr != nil {
+		return nil, credentialErr
 	}
 	return nil, errGrokCredentialsNotFound
 }
@@ -568,6 +592,7 @@ func parseGrokCredentialEntry(token, expiresAt string) (*grokCredentials, error)
 type grokBillingSnapshot struct {
 	UsedPercent float64
 	ResetsAt    time.Time
+	Period      time.Duration
 }
 
 var errGrokUsageUnavailable = errors.New("Grok billing omitted usage percentage")
@@ -707,7 +732,17 @@ func parseGrokBilling(data []byte, now time.Time) (*grokBillingSnapshot, error) 
 	if !hasReset {
 		return nil, fmt.Errorf("could not parse Grok billing reset time")
 	}
-	return &grokBillingSnapshot{UsedPercent: percent, ResetsAt: reset}, nil
+	var period time.Duration
+	for _, field := range scan.varints {
+		if samePath(field.path, []uint64{1, 4, 1}) && field.value >= 1_700_000_000 && field.value <= 2_100_000_000 {
+			start := time.Unix(int64(field.value), 0)
+			if start.Before(reset) {
+				period = reset.Sub(start)
+				break
+			}
+		}
+	}
+	return &grokBillingSnapshot{UsedPercent: percent, ResetsAt: reset, Period: period}, nil
 }
 
 func grpcWebDataFrames(data []byte) [][]byte {
@@ -902,16 +937,16 @@ func earliestTime(times []time.Time) time.Time {
 	return earliest
 }
 
-func grokSubscriptionWindowLabels(resetsAt, now time.Time) (string, string) {
-	if resetsAt.IsZero() {
-		return "usage", "Usage"
-	}
-	days := int(math.Round(resetsAt.Sub(now).Hours() / 24))
-	if days >= 4 && days <= 12 {
-		return "7d", "Weekly usage pool"
-	}
-	if days >= 20 && days <= 45 {
-		return "monthly", "Monthly usage"
+func grokSubscriptionWindowLabels(_, _ time.Time, periods ...time.Duration) (string, string) {
+	// A reset alone says nothing about the full billing period.
+	if len(periods) > 0 {
+		period := periods[0]
+		if period == 7*24*time.Hour {
+			return "7d", "Weekly usage pool"
+		}
+		if period >= 28*24*time.Hour && period <= 31*24*time.Hour {
+			return "monthly", "Monthly usage"
+		}
 	}
 	return "usage", "Usage"
 }

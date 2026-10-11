@@ -55,7 +55,7 @@ func setupTmuxIntegration(dryRun bool) integrationResult {
 	return integrationResult{Name: "tmux", Status: "installed", Detail: "prepended clawmeter statusline", Changed: true}
 }
 
-func setupClaudeStatuslineIntegration(dryRun bool) integrationResult {
+func setupClaudeStatuslineIntegration(dryRun, force bool) integrationResult {
 	path, err := claudeSettingsPath()
 	if err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
@@ -68,29 +68,44 @@ func setupClaudeStatuslineIntegration(dryRun bool) integrationResult {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
 
-	next, changed, err := mergeClaudeStatusLine(data)
+	detail := path
+	legacy := filepath.Join(filepath.Dir(path), "settings.local.json")
+	if old, err := os.ReadFile(legacy); err == nil {
+		var settings map[string]any
+		if json.Unmarshal(old, &settings) == nil {
+			if _, exists := settings["statusLine"]; exists {
+				detail += "; existing statusLine in " + legacy + " left unchanged"
+			}
+		}
+	}
+	next, changed, err := mergeClaudeStatusLine(data, force)
 	if err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
 	if !changed {
-		return integrationResult{Name: "Claude Code statusline", Status: "ok", Detail: path}
+		if hasCustomClaudeStatusLine(data) {
+			detail += "; custom statusLine preserved; use --force to replace it"
+		}
+		return integrationResult{Name: "Claude Code statusline", Status: "ok", Detail: detail}
 	}
 	if dryRun {
-		return integrationResult{Name: "Claude Code statusline", Status: "would change", Detail: path, Changed: true}
+		return integrationResult{Name: "Claude Code statusline", Status: "would change", Detail: detail, Changed: true}
 	}
 
 	if len(data) > 0 {
-		if backup, err := backupFile(path, "before-clawmeter-statusline"); err == nil {
-			fmt.Printf("Claude backup: %s\n", backup)
+		backup, err := backupFile(path, "before-clawmeter-statusline")
+		if err != nil {
+			return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: fmt.Sprintf("backup Claude settings: %v", err)}
 		}
+		fmt.Printf("Claude backup: %s\n", backup)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
-	if err := os.WriteFile(path, next, 0o644); err != nil {
+	if err := writeClaudeSettings(path, next); err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
-	return integrationResult{Name: "Claude Code statusline", Status: "installed", Detail: path, Changed: true}
+	return integrationResult{Name: "Claude Code statusline", Status: "installed", Detail: detail, Changed: true}
 }
 
 func tmuxStatusRightWithClawmeter(existing string) (string, bool) {
@@ -134,15 +149,19 @@ func claudeSettingsPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".claude", "settings.local.json"), nil
+	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
-func mergeClaudeStatusLine(data []byte) ([]byte, bool, error) {
+func mergeClaudeStatusLine(data []byte, force bool) ([]byte, bool, error) {
 	settings := map[string]any{}
 	if len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &settings); err != nil {
 			return nil, false, fmt.Errorf("parse Claude settings: %w", err)
 		}
+	}
+
+	if settings == nil {
+		settings = map[string]any{}
 	}
 
 	statusLine := map[string]any{
@@ -153,6 +172,10 @@ func mergeClaudeStatusLine(data []byte) ([]byte, bool, error) {
 		if existing["type"] == statusLine["type"] && existing["command"] == statusLine["command"] {
 			return appendTrailingNewline(data), false, nil
 		}
+	}
+
+	if _, exists := settings["statusLine"]; exists && !force {
+		return data, false, nil
 	}
 
 	settings["statusLine"] = statusLine
@@ -217,11 +240,11 @@ func claudeStatuslineStatus() integrationResult {
 	if err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
-	next, changed, err := mergeClaudeStatusLine(data)
+	_, changed, err := mergeClaudeStatusLine(data, true)
 	if err != nil {
 		return integrationResult{Name: "Claude Code statusline", Status: "error", Detail: err.Error()}
 	}
-	if !changed || bytes.Equal(next, appendTrailingNewline(data)) {
+	if !changed {
 		return integrationResult{Name: "Claude Code statusline", Status: "installed", Detail: path}
 	}
 	return integrationResult{Name: "Claude Code statusline", Status: "available", Detail: "run clawmeter setup --claude-statusline"}
@@ -233,4 +256,43 @@ func printIntegrationResult(result integrationResult) {
 		line += " - " + result.Detail
 	}
 	fmt.Println(line)
+}
+
+func hasCustomClaudeStatusLine(data []byte) bool {
+	var settings map[string]any
+	if json.Unmarshal(data, &settings) != nil {
+		return false
+	}
+	value, exists := settings["statusLine"]
+	if !exists {
+		return false
+	}
+	line, ok := value.(map[string]any)
+	return !ok || line["type"] != "command" || line["command"] != clawmeterStatuslineCommand
+}
+
+func writeClaudeSettings(path string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".clawmeter-settings-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err := file.Chmod(mode); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }

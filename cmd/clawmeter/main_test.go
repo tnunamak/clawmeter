@@ -11,6 +11,166 @@ import (
 	"testing"
 )
 
+func TestRedteamSourceAddWithNullProviders(t *testing.T) {
+	bin := buildBinary(t)
+	for _, body := range []string{"providers: null\n", "providers:\n  # no entries\n"} {
+		t.Run(strings.TrimSpace(body), func(t *testing.T) {
+			home := t.TempDir()
+			path := configPathForHome(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, code := runWithHome(t, bin, home, "providers", "source", "add", "claude", "default", "native")
+			if code != 0 {
+				t.Fatalf("source enrollment with empty providers must succeed without panic: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			stdout, stderr, code = runWithHome(t, bin, home, "providers", "source", "list", "claude")
+			if code != 0 || !strings.Contains(stdout, "claude\tdefault\t") {
+				t.Fatalf("enrollment was not persisted: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestRedteamZeroWarningPreservesThresholdOrderingAfterReload(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	// Reach a valid low critical threshold using only accepted CLI operations.
+	for _, setting := range [][2]string{{"warning_threshold", "10"}, {"critical_threshold", "50"}, {"warning_threshold", "0"}} {
+		stdout, stderr, code := runWithHome(t, bin, home, "config", "set", setting[0], setting[1])
+		if code != 0 {
+			t.Fatalf("set %s=%s: exit=%d stdout=%q stderr=%q", setting[0], setting[1], code, stdout, stderr)
+		}
+	}
+	stdout, stderr, code := runWithHome(t, bin, home, "config", "show")
+	if code != 0 {
+		t.Fatalf("reload: exit=%d stderr=%q", code, stderr)
+	}
+	if !strings.Contains(stdout, "Warning threshold: 0%") || !strings.Contains(stdout, "Critical threshold: 50%") {
+		t.Fatalf("accepted warning=0 must survive reload and remain below critical=50; got %q", stdout)
+	}
+}
+
+func TestConfigClaudeAPIDisableEnableReload(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	for _, action := range []string{"disable", "enable"} {
+		if _, stderr, code := runWithHome(t, bin, home, "config", action, "claude-api"); code != 0 {
+			t.Fatalf("%s claude-api: exit %d: %s", action, code, stderr)
+		}
+		stdout, stderr, code := runWithHome(t, bin, home, "config", "show")
+		if code != 0 {
+			t.Fatalf("reload after %s: exit %d: %s", action, code, stderr)
+		}
+		want := "claude_api: " + action + "d"
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("reload after %s missing %q: %s", action, want, stdout)
+		}
+	}
+}
+
+func TestConfigLegacyUnknownWithoutSources(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	path := configPathForHome(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("providers:\n  legacy_unknown:\n    enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runWithHome(t, bin, home, "config", "show")
+	if code != 0 {
+		t.Fatalf("legacy entry prevented loading: exit %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "unknown provider name") {
+		t.Fatalf("missing unknown-provider warning: %s", stdout)
+	}
+}
+
+func TestConfigRejectsMalformedEnrolledSources(t *testing.T) {
+	bin := buildBinary(t)
+	for _, family := range []string{"claude_api", "legacy_unknown", "claude"} {
+		t.Run(family, func(t *testing.T) {
+			home := t.TempDir()
+			path := configPathForHome(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "providers:\n  " + family + ":\n    sources:\n      - id: default\n        credential:\n          kind: invalid-fixture-kind\n"
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, stderr, code := runWithHome(t, bin, home, "config", "show"); code == 0 {
+				t.Fatalf("malformed %s source accepted: %s", family, stderr)
+			}
+		})
+	}
+}
+
+func TestConfigEnableNullProviders(t *testing.T) {
+	bin := buildBinary(t)
+	for _, body := range []string{"providers: null\n", "providers:\n  # no entries\n"} {
+		t.Run(strings.TrimSpace(body), func(t *testing.T) {
+			home := t.TempDir()
+			path := configPathForHome(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, stderr, code := runWithHome(t, bin, home, "config", "enable", "openai"); code != 0 {
+				t.Fatalf("enable with empty providers: exit %d: %s", code, stderr)
+			}
+			stdout, stderr, code := runWithHome(t, bin, home, "config", "show")
+			if code != 0 || !strings.Contains(stdout, "openai: enabled") {
+				t.Fatalf("reload lost enabled provider: exit %d: %s %s", code, stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestConfigSetThresholdOrderingAndFinite(t *testing.T) {
+	bin := buildBinary(t)
+	for _, key := range []string{"warning_threshold", "critical_threshold"} {
+		values := []string{"NaN", "+Inf", "-Inf"}
+		if key == "warning_threshold" {
+			values = append(values, "95", "96")
+		}
+		for _, value := range values {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				home := t.TempDir()
+				if _, stderr, code := runWithHome(t, bin, home, "config", "set", "critical_threshold", "95"); code != 0 {
+					t.Fatalf("set initial critical: %s", stderr)
+				}
+				path := configPathForHome(home)
+				before, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, stderr, code := runWithHome(t, bin, home, "config", "set", key, value); code == 0 {
+					t.Errorf("%s %s accepted: %s", key, value, stderr)
+				}
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(before, after) {
+					t.Error("rejected threshold changed config bytes")
+				}
+			})
+		}
+	}
+	home := t.TempDir()
+	if _, stderr, code := runWithHome(t, bin, home, "config", "set", "warning_threshold", "94"); code != 0 {
+		t.Fatalf("valid warning 94 rejected: %s", stderr)
+	}
+}
+
 // buildBinary compiles clawmeter into a temp dir and returns the path.
 // The binary is reused across subtests via t.Cleanup.
 func buildBinary(t *testing.T) string {
