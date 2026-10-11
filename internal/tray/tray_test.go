@@ -1461,3 +1461,68 @@ func (b trayTestRenderBarrier) Lock() {
 }
 
 func (b trayTestRenderBarrier) Unlock() {}
+
+func TestRedTeamThresholdHistoryRearmsForNewResetWindow(t *testing.T) {
+	oldCfg, oldSend := cfg, sendThresholdNotification
+	oldHistory := s.thresholdUtilization
+	cfg = config.DefaultConfig()
+	s.thresholdUtilization = nil
+	defer func() {
+		cfg, sendThresholdNotification = oldCfg, oldSend
+		s.thresholdUtilization = oldHistory
+	}()
+	var urgencies []string
+	sendThresholdNotification = func(_, _, urgency string) {
+		if !s.mu.TryLock() {
+			t.Fatal("notification sent with state lock held")
+		}
+		s.mu.Unlock()
+		urgencies = append(urgencies, urgency)
+	}
+	reset := time.Now().Add(time.Hour)
+	sample := func(pct float64, resetsAt time.Time) {
+		checkThresholds(map[string]*provider.UsageData{
+			"claude": {Provider: "claude", Windows: []provider.UsageWindow{
+				{Name: "5h", Utilization: pct, ResetsAt: resetsAt},
+			}},
+		}, nil)
+	}
+	sample(79, reset)
+	sample(95, reset)
+	// A sleeping machine can miss the low samples after reset. The first
+	// observed sample in the next quota period must not inherit the old
+	// period's already-critical notification history.
+	sample(80, reset.Add(5*time.Hour))
+	sample(80, reset.Add(5*time.Hour))
+	if len(urgencies) != 2 || urgencies[0] != "critical" || urgencies[1] != "normal" {
+		t.Fatalf("notifications across quota reset = %v, want [critical normal]", urgencies)
+	}
+}
+
+func TestRedTeamConfigRetryHonorsQuitReceivedDuringSuccessfulLoad(t *testing.T) {
+	ticks := make(chan time.Time, 1)
+	quit := make(chan struct{})
+	loading := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	ticks <- time.Now()
+	readyCalls, stopCalls := 0, 0
+	go func() {
+		defer close(done)
+		retryTrayConfig(ticks, quit, func() (*config.Config, error) {
+			close(loading)
+			<-release
+			return config.DefaultConfig(), nil
+		}, func(*config.Config) { readyCalls++ }, func() { stopCalls++ })
+	}()
+	<-loading
+	// Quit is delivered before recovery completes. The error-menu Quit
+	// item will be hidden on recovery, so its pending click cannot be
+	// consumed by the new menu's event loop.
+	close(quit)
+	close(release)
+	<-done
+	if readyCalls != 0 || stopCalls != 1 {
+		t.Fatalf("Quit during config load: ready=%d stop=%d, want ready=0 stop=1", readyCalls, stopCalls)
+	}
+}
