@@ -2,7 +2,8 @@ package forecast
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/tnunamak/clawmeter/internal/provider"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/format"
@@ -19,6 +20,9 @@ const (
 )
 
 type Projection struct {
+	// Unknown means the available window cannot support extrapolation.
+	Unknown bool
+	Stale   bool
 	// ProjectedPct is the estimated utilization at window reset (0-100+).
 	ProjectedPct float64
 	// OnTrack is true if projected usage stays under 100% at reset.
@@ -78,6 +82,8 @@ func CompareRisk(a, b Projection) int {
 
 func riskTier(p Projection) int {
 	switch {
+	case p.Unknown || p.Stale:
+		return 3
 	case p.ProjectedPct >= 100:
 		return 0
 	case p.ProjectedPct >= 90:
@@ -88,7 +94,7 @@ func riskTier(p Projection) int {
 }
 
 func runOutRank(p Projection) (time.Duration, bool) {
-	if p.WillLastToReset {
+	if p.Unknown || p.Stale || p.WillLastToReset {
 		return 0, false
 	}
 	if p.RunsOutIn > 0 {
@@ -102,7 +108,17 @@ func runOutRank(p Projection) (time.Duration, bool) {
 // windowLen is the total window duration (5h or 7d).
 func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Projection {
 	remaining := time.Until(resetsAt)
+	if !resetsAt.IsZero() && remaining <= 0 {
+		return Projection{Unknown: true, Stale: true, WillLastToReset: true}
+	}
 	elapsed := windowLen - remaining
+	minimum := windowLen / 10
+	if minimum > time.Hour {
+		minimum = time.Hour
+	}
+	if resetsAt.IsZero() || windowLen <= 0 || elapsed < minimum {
+		return Projection{Unknown: true, WillLastToReset: true}
+	}
 
 	if elapsed <= 0 || currentPct <= 0 {
 		return Projection{
@@ -142,11 +158,23 @@ func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Pr
 
 // Indicator returns a short status string for the projection.
 func (p Projection) Indicator() string {
+	if p.Stale {
+		return "stale"
+	}
+	if p.Unknown {
+		return "unknown"
+	}
 	return fmt.Sprintf("%.0f%%", p.ProjectedPct)
 }
 
 // PaceIndicator returns a human-readable usage estimate for the reset window.
 func (p Projection) PaceIndicator() string {
+	if p.Stale {
+		return "stale"
+	}
+	if p.Unknown {
+		return "projection unknown"
+	}
 	left := PaceLabel(p.ProjectedPct)
 	if note := p.RunOutNote(); note != "" {
 		return fmt.Sprintf("%-*s · %s", paceWidth, left, note)
@@ -156,6 +184,9 @@ func (p Projection) PaceIndicator() string {
 
 // RunOutNote states the projected blocking gap without recommending an action.
 func (p Projection) RunOutNote() string {
+	if p.Unknown || p.Stale {
+		return ""
+	}
 	if p.WillLastToReset {
 		return ""
 	}
@@ -180,6 +211,9 @@ func PaceLabel(projectedPct float64) string {
 // ColorIndicator returns an ANSI-colored indicator with pace info.
 func (p Projection) ColorIndicator() string {
 	pace := p.PaceIndicator()
+	if p.Unknown || p.Stale {
+		return pace
+	}
 	switch {
 	case p.ProjectedPct >= 100:
 		return fmt.Sprintf("\033[31m⚠ %s\033[0m", pace)
@@ -190,21 +224,15 @@ func (p Projection) ColorIndicator() string {
 	}
 }
 
-// GuessWindowType infers the window duration from a window name string.
-func GuessWindowType(name string) time.Duration {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	switch {
-	case normalized == "5h" || strings.HasPrefix(normalized, "5h "):
-		return FiveHourWindow
-	case strings.HasPrefix(normalized, "7d"):
-		return SevenDayWindow
-	case strings.HasPrefix(normalized, "24h"):
-		return 24 * time.Hour
-	case strings.Contains(normalized, "weekly"):
-		return SevenDayWindow
-	case strings.Contains(normalized, "monthly"):
-		return MonthlyWindow
-	default:
-		return 24 * time.Hour // default to daily
+// WindowLength prefers provider metadata, then legacy window names.
+func WindowLength(w provider.UsageWindow) time.Duration {
+	if w.Length > 0 {
+		return w.Length
 	}
+	return GuessWindowType(w.Name)
+}
+
+// GuessWindowType infers legacy names without assuming a default duration.
+func GuessWindowType(name string) time.Duration {
+	return provider.WindowLengthFromName(name)
 }

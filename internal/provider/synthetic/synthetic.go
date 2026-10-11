@@ -224,6 +224,7 @@ func (p *Provider) parseQuotas(raw json.RawMessage) (*provider.UsageData, error)
 			}
 			if w := parseQuotaEntry(slot); w != nil {
 				w.Name, w.DisplayName = names[i], displayNames[i]
+				w.Length = [...]time.Duration{5 * time.Hour, 7 * 24 * time.Hour, time.Hour}[i]
 				data.Windows = append(data.Windows, *w)
 			}
 		}
@@ -361,6 +362,7 @@ func parseQuotaEntry(entry map[string]json.RawMessage) *provider.UsageWindow {
 
 	return &provider.UsageWindow{
 		Name:        label,
+		Length:      provider.WindowLengthFromName(label),
 		DisplayName: label,
 		Utilization: usedPct,
 		ResetsAt:    resetsAt,

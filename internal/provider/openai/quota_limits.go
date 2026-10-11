@@ -83,7 +83,7 @@ func appendLimitWindows(dst []provider.UsageWindow, scope string, limit *codexLi
 		if hasWindowName(dst, name) {
 			continue
 		}
-		dst = append(dst, provider.UsageWindow{Name: name, DisplayName: display, Utilization: used, ResetsAt: resetAt})
+		dst = append(dst, provider.UsageWindow{Name: name, Length: provider.WindowDuration(duration, "minute"), DisplayName: display, Utilization: used, ResetsAt: resetAt})
 	}
 	return dst
 }

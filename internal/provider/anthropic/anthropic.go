@@ -373,6 +373,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		if ok {
 			data.Windows = append(data.Windows, provider.UsageWindow{
 				Name:        "extra",
+				Length:      30 * 24 * time.Hour,
 				DisplayName: "Extra usage",
 				Utilization: utilization,
 				Used:        cents(apiResp.ExtraUsage.UsedCredits),
@@ -405,6 +406,7 @@ func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
 		if nw.w != nil && validUtilization(nw.w.Utilization) && !nw.w.ResetsAt.IsZero() {
 			data.Windows = append(data.Windows, provider.UsageWindow{
 				Name:        nw.name,
+				Length:      provider.WindowLengthFromName(nw.name),
 				DisplayName: nw.display,
 				Utilization: *nw.w.Utilization,
 				ResetsAt:    nw.w.ResetsAt,
@@ -423,6 +425,7 @@ func addLimitWindows(data *provider.UsageData, limits []usageLimit, seen map[str
 		}
 		data.Windows = append(data.Windows, provider.UsageWindow{
 			Name:        name,
+			Length:      provider.WindowLengthFromName(name),
 			DisplayName: display,
 			Utilization: *limit.Percent,
 			ResetsAt:    limit.ResetsAt,
