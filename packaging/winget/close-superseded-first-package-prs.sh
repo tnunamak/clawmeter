@@ -44,7 +44,15 @@ have() {
 }
 
 package_exists_upstream() {
-  gh api "repos/${upstream_repo}/contents/${target_parent}" >/dev/null 2>&1
+  local response
+  if response="$(gh api --include "repos/${upstream_repo}/contents/${target_parent}" 2>/dev/null)"; then
+    return 0
+  fi
+  if [[ "$response" =~ ^HTTP/[^[:space:]]+[[:space:]]+404([[:space:]]|$) ]]; then
+    return 1
+  fi
+  echo "upstream package lookup failed" >&2
+  return 2
 }
 
 open_first_package_prs() {
@@ -67,12 +75,20 @@ if [[ "$dry_run" != "1" && -z "${GH_TOKEN:-}" ]]; then
   exit 1
 fi
 
-if ! package_exists_upstream; then
+if package_exists_upstream; then
+  :
+else
+  lookup_status=$?
+  [[ "$lookup_status" -eq 1 ]] || exit "$lookup_status"
   echo "Skipping superseded PR cleanup: ${package_id} is not accepted upstream yet."
   exit 0
 fi
 
-mapfile -t prs < <(open_first_package_prs)
+pr_output="$(open_first_package_prs)"
+prs=()
+if [[ -n "$pr_output" ]]; then
+  mapfile -t prs <<<"$pr_output"
+fi
 if [[ "${#prs[@]}" -eq 0 ]]; then
   echo "No open superseded first-package PRs found for ${package_id}."
   exit 0
