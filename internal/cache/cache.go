@@ -178,12 +178,25 @@ func writeEntry(entry Entry) error {
 		return err
 	}
 
-	// Atomic write
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(dir, ".usage-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	if err := tmp.Chmod(0600); err != nil {
+		return fmt.Errorf("protect temp: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
-	return os.Rename(tmp, path)
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func cacheDir() (string, error) {
