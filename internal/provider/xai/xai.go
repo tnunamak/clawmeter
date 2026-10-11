@@ -242,6 +242,7 @@ func (p *Provider) fetchGrokBuildUsage(ctx context.Context) (*provider.UsageData
 			Name:        windowName,
 			DisplayName: windowDisplayName,
 			Utilization: snapshot.UsedPercent,
+			Length:      snapshot.Period, // zero when Grok sends no period
 			ResetsAt:    snapshot.ResetsAt,
 		}},
 	}
