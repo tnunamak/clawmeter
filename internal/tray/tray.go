@@ -50,6 +50,14 @@ func pollIntervalForConfig(seconds int) time.Duration {
 	return interval
 }
 
+func resetPollIntervalIfChanged(currentSeconds, nextSeconds int, reset func(time.Duration)) int {
+	if currentSeconds == nextSeconds {
+		return currentSeconds
+	}
+	reset(pollIntervalForConfig(nextSeconds))
+	return nextSeconds
+}
+
 const (
 	claudeResetsTitle   = "Check Claude resets"
 	claudeResetsWaiting = "Waiting for Claude bookmark…"
@@ -226,7 +234,9 @@ func retryTrayConfig(ticks <-chan time.Time, quit <-chan struct{}, load func() (
 }
 
 func onReadyWithConfig(loaded *config.Config) {
+	s.mu.Lock()
 	cfg = loaded
+	s.mu.Unlock()
 	s.failureGate = provider.NewFailureGate()
 
 	// Build the initial native menu as one transaction. On Linux, each menu
@@ -329,6 +339,9 @@ func onReadyWithConfig(loaded *config.Config) {
 	// Guard against concurrent refreshes
 	var refreshing sync.Mutex
 
+	ticker := time.NewTicker(pollIntervalForConfig(loaded.Settings.PollInterval))
+	pollIntervalSeconds := loaded.Settings.PollInterval
+
 	// reloadConfig re-reads config.yaml from disk and propagates changes
 	// to the registry filter and per-provider menu state. This is what
 	// makes `clawmeter config enable <provider>` (or any other out-of-band
@@ -338,9 +351,12 @@ func onReadyWithConfig(loaded *config.Config) {
 		if err != nil {
 			return
 		}
+		s.mu.Lock()
 		cfg = newCfg
-		registry.SetEnabledFilter(cfg)
-		applyProviderEnablement(providerMenus, cfg)
+		s.mu.Unlock()
+		registry.SetEnabledFilter(newCfg)
+		applyProviderEnablement(providerMenus, newCfg)
+		pollIntervalSeconds = resetPollIntervalIfChanged(pollIntervalSeconds, newCfg.Settings.PollInterval, ticker.Reset)
 	}
 
 	// Refresh usage only (lightweight, runs every poll cycle)
@@ -457,7 +473,10 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	// Check update function
 	checkUpdate := func() {
-		if !cfg.ShouldCheckForUpdates() {
+		s.mu.Lock()
+		currentCfg := cfg
+		s.mu.Unlock()
+		if !currentCfg.ShouldCheckForUpdates() {
 			setPendingRelease(nil)
 			trayRenderMu.Lock()
 			mUpdate.Hide()
@@ -558,8 +577,6 @@ func onReadyWithConfig(loaded *config.Config) {
 	go checkUpdate()
 
 	// Setup tickers
-	pollInterval := pollIntervalForConfig(cfg.Settings.PollInterval)
-	ticker := time.NewTicker(pollInterval)
 	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
 	updateTicker := time.NewTicker(updateCheckInterval)
 	// startClaudeWebCheck runs one browser handoff: reset grants for every
@@ -647,11 +664,9 @@ func onReadyWithConfig(loaded *config.Config) {
 				setProviderConnectionItemLocked(menu, "", true)
 				trayRenderMu.Unlock()
 				go func(providerName string, menu *providerMenuItems) {
-					defer menu.connecting.Store(false)
-					if err := connectProviderFromTray(providerName); err != nil {
-						trayRenderMu.Lock()
-						setProviderConnectionItemLocked(menu, "Retry quota access", true)
-						trayRenderMu.Unlock()
+					err := connectProviderFromTray(providerName)
+					finishProviderConnection(menu, err)
+					if err != nil {
 						notify(menu.provider.DisplayName(), err.Error(), "normal")
 						return
 					}
@@ -674,6 +689,8 @@ func onReadyWithConfig(loaded *config.Config) {
 }
 
 func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Config) {
+	trayRenderMu.Lock()
+	defer trayRenderMu.Unlock()
 	for _, menu := range menus {
 		menu.explicitlyEnabled = cfg.IsProviderExplicitlyEnabled(provider.FamilyName(menu.provider))
 	}
@@ -942,6 +959,16 @@ func setProviderConnectionItemLocked(menu *providerMenuItems, action string, sho
 	setMenuItemVisible(menu.connectItem, &menu.connectState, true)
 }
 
+func finishProviderConnection(menu *providerMenuItems, err error) {
+	menu.connecting.Store(false)
+	if err == nil {
+		return
+	}
+	trayRenderMu.Lock()
+	setProviderConnectionItemLocked(menu, "Retry quota access", true)
+	trayRenderMu.Unlock()
+}
+
 func connectProviderFromTray(providerName string) error {
 	if providerName != tokenPlanProviderName {
 		return fmt.Errorf("quota connection is not available for %s", providerName)
@@ -1107,6 +1134,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		showProviderHeader(menu)
 		if data.Stale {
 			setMenuItemTitle(menu.statusItem, &menu.statusState, fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
+			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+		} else if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
+			setMenuItemTitle(menu.statusItem, &menu.statusState, providerStatus.Indicator.Label())
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 		} else {
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
