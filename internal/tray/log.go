@@ -41,10 +41,8 @@ func redirectLogToFile() {
 	if err != nil {
 		return
 	}
-	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
-		f.Close()
-		return
-	}
+	// Crash output is best effort; ordinary logging works without it.
+	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
 	log.SetOutput(f)
 	os.Stderr = f
 }
