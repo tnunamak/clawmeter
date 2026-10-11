@@ -1386,6 +1386,7 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 	}
 	type rankedTarget struct {
 		target        iconTarget
+		window        provider.UsageWindow
 		projection    forecast.Projection
 		hasProjection bool
 		score         float64
@@ -1418,6 +1419,7 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 			}
 			ranked = append(ranked, rankedTarget{
 				target:        target,
+				window:        window,
 				projection:    proj,
 				hasProjection: true,
 				score:         score,
@@ -1426,7 +1428,7 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		if mode == iconAutoRisk && ranked[i].hasProjection && ranked[j].hasProjection {
-			if cmp := forecast.CompareRisk(ranked[i].projection, ranked[j].projection); cmp != 0 {
+			if cmp := forecast.CompareWindowRisk(ranked[i].window, ranked[i].projection, ranked[j].window, ranked[j].projection); cmp != 0 {
 				return cmp < 0
 			}
 		}
@@ -1480,7 +1482,7 @@ func windowProjectedPct(window provider.UsageWindow) float64 {
 }
 
 func windowProjection(window provider.UsageWindow) forecast.Projection {
-	return forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+	return forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 }
 
 func targetInChoices(target iconTarget, choices []iconTarget) bool {
@@ -1622,14 +1624,23 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 	if !ok {
 		return icons.MeterState{}
 	}
-	windowLen := forecast.GuessWindowType(window.Name)
+	windowLen := forecast.WindowLength(window)
 	return icons.MeterState{
 		UsagePct:     window.Utilization,
 		ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
-		RiskPct:      proj.ProjectedPct,
+		RiskPct:      windowRiskPct(window, proj),
 		ShowExpected: true,
 		Label:        windowBadgeLabelForWindow(window),
 	}
+}
+
+// windowRiskPct keeps an exhausted current window at risk even when there
+// is not enough elapsed time to project its usage.
+func windowRiskPct(window provider.UsageWindow, proj forecast.Projection) float64 {
+	if !proj.Stale && window.Utilization >= 100 && window.Utilization > proj.ProjectedPct {
+		return window.Utilization
+	}
+	return proj.ProjectedPct
 }
 
 func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
@@ -1685,7 +1696,7 @@ func selectedIconWindow(data *provider.UsageData, windowName string) (provider.U
 			if window.Name != windowName {
 				continue
 			}
-			windowLen := forecast.GuessWindowType(window.Name)
+			windowLen := forecast.WindowLength(window)
 			return window, forecast.Project(window.Utilization, window.ResetsAt, windowLen), true
 		}
 		return selected, selectedProj, false
@@ -1693,7 +1704,7 @@ func selectedIconWindow(data *provider.UsageData, windowName string) (provider.U
 	hasSelected := false
 	for _, window := range data.UsableWindows() {
 		proj := windowProjection(window)
-		if !hasSelected || forecast.CompareRisk(proj, selectedProj) < 0 {
+		if !hasSelected || forecast.CompareWindowRisk(window, proj, selected, selectedProj) < 0 {
 			selected = window
 			selectedProj = proj
 			hasSelected = true
@@ -1828,6 +1839,8 @@ func compactIconTooltip(title string, window provider.UsageWindow, proj forecast
 		parts = append(parts, title)
 	}
 	switch {
+	case proj.Unknown || proj.Stale:
+		parts = append(parts, fmt.Sprintf("Current %.0f%%", window.Utilization))
 	case proj.RunOutNote() != "":
 		parts = append(parts, upperFirst(proj.RunOutNote()))
 	case !proj.WillLastToReset:
@@ -1918,7 +1931,7 @@ func trayWindowStatus(window provider.UsageWindow) string {
 	}
 	resetStr, indicator := "reset unknown", "reset unknown"
 	if !window.ResetsAt.IsZero() {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.GuessWindowType(window.Name))
+		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 		resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
 	} else if window.ResetPolicy != "" {
 		indicator = window.ResetPolicy
@@ -1927,6 +1940,9 @@ func trayWindowStatus(window provider.UsageWindow) string {
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {
+	if proj.Unknown || proj.Stale {
+		return proj.PaceIndicator()
+	}
 	estimate := forecast.PaceLabel(proj.ProjectedPct)
 	if strings.HasPrefix(estimate, "est.") {
 		return "Est." + strings.TrimPrefix(estimate, "est.")
@@ -1939,6 +1955,7 @@ var sendThresholdNotification = notify
 func checkThresholds(results map[string]*provider.UsageData, displayNames map[string]string) {
 	type notification struct{ title, body, urgency string }
 	var pending []notification
+	now := time.Now()
 	s.mu.Lock()
 	if s.thresholdUtilization == nil {
 		s.thresholdUtilization = make(map[iconTarget]thresholdSample)
@@ -1953,11 +1970,14 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 			continue
 		}
 		for _, window := range data.UsableWindows() {
+			if !window.ResetsAt.IsZero() && !window.ResetsAt.After(now) {
+				continue // A passed reset is stale data, not a new threshold crossing.
+			}
 			key := iconTarget{Provider: name, Window: window.Name}
 			previous := s.thresholdUtilization[key]
 			pct, oldPct := window.Utilization, previous.Utilization
 			// A new reset period rearms thresholds even if low samples were missed.
-			if newResetPeriod(previous.ResetsAt, window.ResetsAt, time.Now()) {
+			if newResetPeriod(previous.ResetsAt, window.ResetsAt, now) {
 				oldPct = 0
 			}
 			s.thresholdUtilization[key] = thresholdSample{Utilization: pct, ResetsAt: window.ResetsAt}
@@ -1965,7 +1985,7 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 			if display == "" {
 				display = name
 			}
-			proj := forecast.Project(pct, window.ResetsAt, forecast.GuessWindowType(window.Name))
+			proj := forecast.Project(pct, window.ResetsAt, forecast.WindowLength(window))
 			message := fmt.Sprintf("%s window at %.0f%% — %s", window.Name, pct, proj.PaceIndicator())
 			if pct >= criticalThreshold && oldPct < criticalThreshold {
 				pending = append(pending, notification{fmt.Sprintf("%s usage critical", display), message, "critical"})
@@ -2128,7 +2148,7 @@ func sortedKeys(m map[string]*provider.UsageData) []string {
 			return si.tier < sj.tier
 		}
 		if si.hasProjection && sj.hasProjection {
-			if cmp := forecast.CompareRisk(si.projection, sj.projection); cmp != 0 {
+			if cmp := forecast.CompareWindowRisk(si.window, si.projection, sj.window, sj.projection); cmp != 0 {
 				return cmp < 0
 			}
 		}
@@ -2139,6 +2159,7 @@ func sortedKeys(m map[string]*provider.UsageData) []string {
 
 type providerSeverityRank struct {
 	tier          int
+	window        provider.UsageWindow
 	projection    forecast.Projection
 	hasProjection bool
 }
@@ -2154,14 +2175,18 @@ func providerSeverity(data *provider.UsageData) providerSeverityRank {
 	if data.Error != "" && !data.HasPresentableUsage() {
 		return providerSeverityRank{tier: 1}
 	}
-	_, proj, ok := selectedIconWindow(data, "")
-	return providerSeverityRank{tier: 2, projection: proj, hasProjection: ok}
+	window, proj, ok := selectedIconWindow(data, "")
+	return providerSeverityRank{tier: 2, window: window, projection: proj, hasProjection: ok}
 }
 
 // newResetPeriod reports whether a window's reset time starts a new period.
 // Providers that derive the reset from time remaining move it by a few
-// seconds between polls, so only a passed reset or a large jump counts.
+// seconds between polls, so only a later reset after the previous one passed
+// or a large forward jump counts.
 func newResetPeriod(previous, current, now time.Time) bool {
+	if !current.After(previous) {
+		return false
+	}
 	if previous.IsZero() {
 		return true
 	}

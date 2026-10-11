@@ -38,7 +38,36 @@ function DoStep([string]$Message, [scriptblock]$Action) {
 
 function Get-LatestReleaseAsset {
     $uri = "https://api.github.com/repos/$Repo/releases?per_page=5"
-    $releases = Invoke-RestMethod -Uri $uri -Headers @{ "User-Agent" = "clawmeter-installer" }
+    $headers = @{ "User-Agent" = "clawmeter-installer" }
+    $token = if ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { $env:GH_TOKEN }
+    if ($token) { $headers.Authorization = "Bearer $token" }
+    try {
+        $releases = Invoke-RestMethod -Uri $uri -Headers $headers -MaximumRedirection 0
+    } catch {
+        Say "GitHub API unavailable; falling back to releases/latest."
+        $location = $null
+        try {
+            $response = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -Method Head -MaximumRedirection 0
+            $location = $response.Headers['Location']
+        } catch {
+            if ($_.Exception.Response) {
+                $location = $_.Exception.Response.Headers.Location
+                if (-not $location) {
+                    $location = $_.Exception.Response.Headers['Location']
+                }
+            }
+        }
+        $match = [regex]::Match([string]$location, '^https://github\.com/tnunamak/clawmeter/releases/tag/(v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$')
+        if (-not $match.Success) {
+            throw "Latest release redirect did not contain a valid version tag"
+        }
+        $tag = $match.Groups[1].Value
+        return [pscustomobject]@{
+            Version = $tag
+            Url = "https://github.com/$Repo/releases/download/$tag/$AssetName"
+            SumsUrl = "https://github.com/$Repo/releases/download/$tag/SHA256SUMS.txt"
+        }
+    }
     foreach ($release in $releases) {
         $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
         if ($asset) {

@@ -35,6 +35,20 @@ type Projection struct {
 	RunsOutEarlyBy time.Duration
 }
 
+// CompareWindowRisk orders windows from most quota-sensitive to least.
+// A window used up now outranks any projection, even if its length is unknown.
+// Stale samples do not establish current exhaustion.
+func CompareWindowRisk(a provider.UsageWindow, aProj Projection, b provider.UsageWindow, bProj Projection) int {
+	aExhausted, bExhausted := a.Utilization >= 100 && !aProj.Stale, b.Utilization >= 100 && !bProj.Stale
+	if aExhausted != bExhausted {
+		if aExhausted {
+			return -1
+		}
+		return 1
+	}
+	return CompareRisk(aProj, bProj)
+}
+
 // CompareRisk orders two projections from most quota-sensitive to least.
 // It keeps the math factual: critical beats tight, tight beats on-track; among
 // quotas that are projected to run out, the one that blocks sooner wins.

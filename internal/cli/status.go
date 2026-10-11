@@ -42,10 +42,11 @@ func color(projectedPct float64) string {
 const reset = "\033[0m"
 
 func bar(pct float64) string {
-	filled := int(math.Round(pct / 100 * barWidth))
-	if filled > barWidth {
-		filled = barWidth
+	if math.IsNaN(pct) || math.IsInf(pct, 0) {
+		pct = 0
 	}
+	pct = max(0, min(100, pct))
+	filled := int(math.Round(pct / 100 * barWidth))
 	return strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 }
 
@@ -373,6 +374,10 @@ func (m *MultiProviderOutput) StatusLineSummary() string {
 		return "CM no quota data"
 	}
 
+	if pf.Data.Stale {
+		return fmt.Sprintf("CM~ %s %s last %.0f%% stale", pf.Display, window.Name, window.Utilization)
+	}
+
 	prefix := "CM"
 	if proj.ProjectedPct >= 100 {
 		prefix = "CM!"
@@ -482,6 +487,9 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		tier := classifyProvider(pf).tier
 		for _, window := range pf.Data.PresentationWindows() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+			if pf.Data.Stale {
+				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
+			}
 			quotas = append(quotas, agentQuotaSummary{
 				Provider: pf.Display,
 				Window:   window,
@@ -498,7 +506,7 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		if a.Tier != b.Tier {
 			return a.Tier < b.Tier
 		}
-		if cmp := forecast.CompareRisk(a.Proj, b.Proj); cmp != 0 {
+		if cmp := forecast.CompareWindowRisk(a.Window, a.Proj, b.Window, b.Proj); cmp != 0 {
 			return cmp < 0
 		}
 		if a.Provider != b.Provider {
@@ -708,7 +716,10 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		tier := classifyProvider(pf).tier
 		for _, window := range pf.Data.PresentationWindows() {
 			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			if bestPF == nil || tier < bestTier || (tier == bestTier && compareWindowRisk(window, proj, bestWindow, bestProj) < 0) {
+			if pf.Data.Stale {
+				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
+			}
+			if bestPF == nil || tier < bestTier || (tier == bestTier && forecast.CompareWindowRisk(window, proj, bestWindow, bestProj) < 0) {
 				bestPF = pf
 				bestWindow = window
 				bestProj = proj
@@ -721,19 +732,6 @@ func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provide
 		return nil, provider.UsageWindow{}, forecast.Projection{}, false
 	}
 	return bestPF, bestWindow, bestProj, true
-}
-
-// compareWindowRisk orders windows like classifyProvider: a window used up
-// now outranks any projection, even when its length is unknown.
-func compareWindowRisk(a provider.UsageWindow, aProj forecast.Projection, b provider.UsageWindow, bProj forecast.Projection) int {
-	aExhausted, bExhausted := a.Utilization >= 100 && !aProj.Stale, b.Utilization >= 100 && !bProj.Stale
-	if aExhausted != bExhausted {
-		if aExhausted {
-			return -1
-		}
-		return 1
-	}
-	return forecast.CompareRisk(aProj, bProj)
 }
 
 func clampDuration(d time.Duration) time.Duration {
@@ -1215,6 +1213,10 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 			!cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
 		}
+		if data != nil && cacheEntry.IsProviderStale(key) && data.HasPresentableUsage() {
+			data = data.Clone()
+			data.MarkStale("cache expired")
+		}
 		sources[key] = data
 	}
 	presented := provider.PresentResetCreditSources(sources)
@@ -1339,6 +1341,7 @@ type providerUrgency struct {
 	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
 	maxProjectedPct float64
 	worstWindow     string
+	worstUsage      provider.UsageWindow
 	worstProjection forecast.Projection
 	runsOutIn       time.Duration
 	runsOutEarlyBy  time.Duration
@@ -1360,6 +1363,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 
 	var maxPct float64
 	var worstWindow string
+	var worstUsage provider.UsageWindow
 	var worstProjection forecast.Projection
 	var hasWorstProjection bool
 	var runsOutIn time.Duration
@@ -1377,8 +1381,9 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 		if proj.ProjectedPct > maxPct {
 			maxPct = proj.ProjectedPct
 		}
-		if !hasWorstProjection || forecast.CompareRisk(proj, worstProjection) < 0 {
+		if !hasWorstProjection || forecast.CompareWindowRisk(w, proj, worstUsage, worstProjection) < 0 {
 			worstWindow = w.Name
+			worstUsage = w
 			worstProjection = proj
 			hasWorstProjection = true
 			runsOutIn = proj.RunsOutIn
@@ -1398,6 +1403,7 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 		tier:            tier,
 		maxProjectedPct: maxPct,
 		worstWindow:     worstWindow,
+		worstUsage:      worstUsage,
 		worstProjection: worstProjection,
 		runsOutIn:       runsOutIn,
 		runsOutEarlyBy:  runsOutEarlyBy,
@@ -1412,7 +1418,7 @@ func sortProvidersByUrgency(providers []ProviderFormatter) {
 		if ui.tier != uj.tier {
 			return ui.tier < uj.tier
 		}
-		if cmp := forecast.CompareRisk(ui.worstProjection, uj.worstProjection); cmp != 0 {
+		if cmp := forecast.CompareWindowRisk(ui.worstUsage, ui.worstProjection, uj.worstUsage, uj.worstProjection); cmp != 0 {
 			return cmp < 0
 		}
 		return ui.maxProjectedPct > uj.maxProjectedPct
@@ -1445,7 +1451,7 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 		case 4:
 			healthy++
 		}
-		if u.tier < worstU.tier || (u.tier == worstU.tier && forecast.CompareRisk(u.worstProjection, worstU.worstProjection) < 0) {
+		if u.tier < worstU.tier || (u.tier == worstU.tier && forecast.CompareWindowRisk(u.worstUsage, u.worstProjection, worstU.worstUsage, worstU.worstProjection) < 0) {
 			worstIdx = i
 			worstU = u
 		}
@@ -1500,6 +1506,9 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 		}
 
 		paceWord := worstU.worstProjection.PaceIndicator()
+		if worstU.worstWindow != "" && worstU.worstProjection.Unknown {
+			paceWord = fmt.Sprintf("current %.0f%% %s", worstU.worstUsage.Utilization, paceWord)
+		}
 		if worstU.tier == 3 && worstU.worstWindow == "" {
 			paceWord = "stale"
 		}

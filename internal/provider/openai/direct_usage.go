@@ -62,8 +62,11 @@ func (p *Provider) fetchUsageDirect(ctx context.Context, auth *authFile) (*provi
 		return nil, fmt.Errorf("direct Codex quota request: %w", err)
 	}
 	defer resp.Body.Close()
+	if err := provider.RateLimitFromResponse(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("direct Codex quota request: http %d", resp.StatusCode)
+		return nil, fmt.Errorf("direct Codex quota request: %w", &provider.HTTPError{StatusCode: resp.StatusCode})
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

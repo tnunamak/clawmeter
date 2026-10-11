@@ -1548,3 +1548,109 @@ func TestNewResetPeriodIgnoresJitter(t *testing.T) {
 		}
 	}
 }
+
+func TestTrayTypedMonthlyPresentation(t *testing.T) {
+	window := provider.UsageWindow{Name: "premium", Length: 30 * 24 * time.Hour, Utilization: 60, ResetsAt: time.Now().Add(12 * time.Hour)}
+	data := &provider.UsageData{Windows: []provider.UsageWindow{window}}
+	_, proj, ok := selectedIconWindow(data, window.Name)
+	if !ok || proj.Unknown || proj.ProjectedPct < 60 || proj.ProjectedPct > 62 {
+		t.Fatalf("selected projection = %+v, ok=%t", proj, ok)
+	}
+	meter := iconMeterState(data, window.Name)
+	if meter.RiskPct < 60 || meter.RiskPct > 62 || meter.ExpectedPct < 98 || meter.ExpectedPct > 99 {
+		t.Fatalf("monthly meter = %+v", meter)
+	}
+	if got := trayWindowStatus(window); !strings.Contains(got, "est. 61% at reset") {
+		t.Fatalf("monthly menu = %q", got)
+	}
+}
+
+func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		proj forecast.Projection
+		want string
+	}{
+		{"unknown", forecast.Projection{Unknown: true, WillLastToReset: true}, "projection unknown"},
+		{"stale", forecast.Projection{Unknown: true, Stale: true, WillLastToReset: true}, "stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			window := provider.UsageWindow{Utilization: 100, ResetsAt: time.Now().Add(time.Hour)}
+			got := compactIconTooltip("Test", window, tc.proj)
+			if !strings.Contains(got, "Current 100%") || !strings.Contains(got, tc.want) || strings.Contains(got, "Won't run out") || strings.Contains(got, "Est. 0%") {
+				t.Fatalf("tooltip = %q", got)
+			}
+		})
+	}
+}
+
+func TestTrayRiskSelectionPrefersExhaustedUnknownWindow(t *testing.T) {
+	now := time.Now()
+	exhausted := provider.UsageWindow{Name: "5h", Utilization: 100, ResetsAt: now.Add(299 * time.Minute)}
+	projected := provider.UsageWindow{Name: "7d", Utilization: 50, ResetsAt: now.Add(6 * 24 * time.Hour)}
+	data := &provider.UsageData{Windows: []provider.UsageWindow{projected, exhausted}}
+	window, proj, ok := selectedIconWindow(data, "")
+	if !ok || window.Name != exhausted.Name || !proj.Unknown {
+		t.Fatalf("selected %q, projection=%+v, ok=%t", window.Name, proj, ok)
+	}
+	results := map[string]*provider.UsageData{
+		"projected": {Windows: []provider.UsageWindow{projected}},
+		"exhausted": data,
+	}
+	targets := activeIconTargets(results, iconAutoRisk)
+	if len(targets) != 3 || targets[0] != (iconTarget{Provider: "exhausted", Window: "5h"}) {
+		t.Fatalf("risk targets = %+v", targets)
+	}
+	if keys := sortedKeys(results); len(keys) != 2 || keys[0] != "exhausted" {
+		t.Fatalf("provider order = %v", keys)
+	}
+	if meter := iconMeterState(data, ""); meter.RiskPct < 100 || meter.UsagePct != 100 {
+		t.Fatalf("default exhausted meter = %+v", meter)
+	}
+}
+
+func TestNewResetPeriodRequiresForwardMovement(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-time.Minute)
+	for _, current := range []time.Time{past, past.Add(-time.Second), time.Time{}} {
+		if newResetPeriod(past, current, now) {
+			t.Fatalf("expired reset %v rearmed at %v", past, current)
+		}
+	}
+	if newResetPeriod(time.Time{}, time.Time{}, now) {
+		t.Fatal("unchanged missing reset rearmed")
+	}
+	if !newResetPeriod(past, past.Add(time.Second), now) {
+		t.Fatal("later reset after previous reset passed must rearm")
+	}
+}
+
+func TestThresholdsSkipExpiredSamplesWithoutLosingNewPeriod(t *testing.T) {
+	oldCfg, oldSend, oldHistory := cfg, sendThresholdNotification, s.thresholdUtilization
+	cfg = config.DefaultConfig()
+	s.thresholdUtilization = nil
+	t.Cleanup(func() { cfg, sendThresholdNotification, s.thresholdUtilization = oldCfg, oldSend, oldHistory })
+	count := 0
+	sendThresholdNotification = func(string, string, string) { count++ }
+	sample := func(reset time.Time) {
+		checkThresholds(map[string]*provider.UsageData{
+			"claude": {Windows: []provider.UsageWindow{{Name: "5h", Utilization: 96, ResetsAt: reset}}},
+		}, nil)
+	}
+	past, future := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)
+	sample(past)
+	sample(past)
+	if count != 0 || len(s.thresholdUtilization) != 0 {
+		t.Fatalf("expired samples notified=%d history=%+v", count, s.thresholdUtilization)
+	}
+	sample(future)
+	sample(past)
+	sample(future)
+	if count != 1 {
+		t.Fatalf("same live period notified %d times", count)
+	}
+	sample(future.Add(5 * time.Hour))
+	if count != 2 {
+		t.Fatalf("new live period did not rearm: notifications=%d", count)
+	}
+}

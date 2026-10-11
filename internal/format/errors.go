@@ -1,6 +1,11 @@
 package format
 
-import "strings"
+import (
+	"errors"
+	"strings"
+
+	"github.com/tnunamak/clawmeter/internal/provider"
+)
 
 // HumanizeError converts raw Go error strings into short, human-readable messages.
 // It strips URL noise, Go error wrapping chains, and maps common patterns to
@@ -20,6 +25,7 @@ func HumanizeError(errMsg string) string {
 	// Also check against the full original message for patterns that may
 	// appear in the wrapping prefix (e.g., "API returned 401: invalid token").
 	fullLowered := strings.ToLower(errMsg)
+	category := provider.ClassifyError(errors.New(errMsg))
 
 	switch {
 	case strings.Contains(fullLowered, "refresh_token_reused") ||
@@ -42,12 +48,10 @@ func HumanizeError(errMsg string) string {
 		return "TLS certificate error"
 	case strings.Contains(lowered, "rate limited (429), next try "):
 		return truncate(core, 80)
-	case strings.Contains(lowered, "rate limited") || strings.Contains(lowered, "429"):
+	case category == "rate_limited":
 		return "rate limited"
-	case strings.Contains(fullLowered, "unauthorized") || strings.Contains(fullLowered, "401"):
+	case category == "auth":
 		// Already actionable — keep the full message for context.
-		return truncate(errMsg, 80)
-	case strings.Contains(fullLowered, "forbidden") || strings.Contains(fullLowered, "403"):
 		return truncate(errMsg, 80)
 	}
 
