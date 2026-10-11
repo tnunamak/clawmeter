@@ -46,6 +46,11 @@ jobs:
       - name: Build smoke (tray)
         run: go build -tags tray ./cmd/clawmeter
 
+      - name: Run packaging Python regression tests
+        run: |
+          python3 -m unittest discover -s packaging/winget -p 'test_*.py'
+          python3 -m unittest discover -s packaging/windows -p 'test_*.py'
+
       - name: Validate PowerShell installer syntax
         shell: pwsh
         run: |
