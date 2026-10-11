@@ -47,6 +47,9 @@ func ClassifyError(err error) string {
 	case 429:
 		return "rate_limited"
 	}
+	if code != 0 {
+		return "api"
+	}
 	lower := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(lower, "rate limit"):

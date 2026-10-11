@@ -42,3 +42,15 @@ func TestSafeFetchErrorTypedNetworkWithPortAndTokenURL(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyErrorHTTPFailurePrecedesRefreshKeywords(t *testing.T) {
+	for _, err := range []error{
+		fmt.Errorf("token refresh: %w", &HTTPError{StatusCode: 500}),
+		errors.New("token refresh returned 503"),
+		errors.New("HTTP status 502: invalid token refresh response"),
+	} {
+		if got := ClassifyError(err); got != "api" {
+			t.Errorf("%v: got %q, want api", err, got)
+		}
+	}
+}
