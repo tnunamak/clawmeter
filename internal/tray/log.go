@@ -3,12 +3,16 @@
 package tray
 
 import (
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"golang.org/x/term"
 )
+
+const maxTrayLogSize = 5 << 20
 
 // redirectLogToFile sends the default logger and stderr to a log file under
 // the user's cache dir when stderr is not a terminal. This covers two cases
@@ -33,11 +37,28 @@ func redirectLogToFile() {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "tray.log"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := openRotatingLog(filepath.Join(dir, "tray.log"), maxTrayLogSize)
 	if err != nil {
 		return
 	}
+	// Crash output is best effort; ordinary logging works without it.
+	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
 	log.SetOutput(f)
 	os.Stderr = f
+}
+
+func openRotatingLog(path string, maxSize int64) (*os.File, error) {
+	info, err := os.Stat(path)
+	if err == nil && info.Size() > maxSize {
+		backup := path + ".1"
+		if err := os.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if err := os.Rename(path, backup); err != nil {
+			return nil, err
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 }

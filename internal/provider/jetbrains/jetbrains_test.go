@@ -22,6 +22,27 @@ func TestParseQuotaXMLRequiresExplicitLimitAndUsage(t *testing.T) {
 	}
 }
 
+func TestJetBrainsConfigDirUsesPlatformRoots(t *testing.T) {
+	home := t.TempDir()
+	appData := filepath.Join(home, "AppData", "Roaming")
+	xdgConfigHome := filepath.Join(home, "xdg")
+	tests := []struct {
+		goos string
+		env  map[string]string
+		want string
+	}{
+		{"darwin", nil, filepath.Join(home, "Library", "Application Support", "JetBrains")},
+		{"windows", map[string]string{"APPDATA": appData}, filepath.Join(appData, "JetBrains")},
+		{"linux", map[string]string{"XDG_CONFIG_HOME": xdgConfigHome}, filepath.Join(xdgConfigHome, "JetBrains")},
+		{"linux", nil, filepath.Join(home, ".config", "JetBrains")},
+	}
+	for _, test := range tests {
+		if got := jetBrainsConfigDir(test.goos, home, test.env); got != test.want {
+			t.Errorf("jetBrainsConfigDir(%q) = %q, want %q", test.goos, got, test.want)
+		}
+	}
+}
+
 func TestParseQuotaXMLPreservesExplicitZeroAndUnknownReset(t *testing.T) {
 	input := `<application><component><option name="monthlyCreditsLimit" value="100"/><option name="monthlyCreditsUsed" value="0"/></component></application>`
 	quota, err := parseQuotaXML([]byte(input))
