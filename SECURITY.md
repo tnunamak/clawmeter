@@ -19,7 +19,7 @@ Clawmeter does not operate a backend service and does not collect provider crede
 ## Release Integrity
 
 Release assets include `SHA256SUMS.txt` and its keyless Sigstore bundle, `SHA256SUMS.txt.sigstore.json`; with cosign v3, verify the downloaded checksum file using the command below, then check your downloaded binary against those authenticated checksums.
-The self-updater verifies the exact release-workflow identity, GitHub OIDC issuer, transparency-log evidence and an authenticated signing time against embedded Sigstore trust material, then checks the binary's SHA-256 before chmod, execution or replacement; missing or invalid bundles stop the update.
+The self-updater verifies the exact release-workflow identity, GitHub OIDC issuer, transparency-log evidence, certificate transparency timestamp and an authenticated signing time against embedded Sigstore trust material, then checks the binary's SHA-256 before chmod, execution or replacement; missing or invalid bundles stop the update.
 Older releases have no bundle, and an older client can bootstrap the first release containing this verifier only through its existing SHA-256 check; clients containing the verifier require bundles for every subsequent update.
 
 ```sh

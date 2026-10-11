@@ -42,6 +42,9 @@ func TestReleaseRequiresSignedChecksums(t *testing.T) {
 	}
 	signing := ""
 	for _, step := range workflow.Jobs["upload"].Steps {
+		if strings.Contains(step.Run, "go run") || strings.Contains(step.Run, "go build") {
+			t.Error("signing job builds or runs repository Go code with OIDC permission")
+		}
 		if strings.Contains(step.Run, "cosign sign-blob") {
 			signing = step.Run
 		}
@@ -63,6 +66,9 @@ func TestReleaseRequiresSignedChecksums(t *testing.T) {
 	if i, j := strings.Index(publish, guard), strings.Index(publish, "--draft=false"); i < 0 || j < 0 || i >= j {
 		t.Error("publication does not refuse a missing signature bundle")
 	}
+	if i, j := strings.Index(publish, "go run ./tools/verify-release uploaded/"+sumsName+" uploaded/"+bundleName), strings.Index(publish, "--draft=false"); i < 0 || j < 0 || i >= j {
+		t.Error("publication does not verify the uploaded signature without OIDC permission")
+	}
 }
 
 func TestPublishSignedChecksumGate(t *testing.T) {
@@ -83,7 +89,7 @@ func TestPublishSignedChecksumGate(t *testing.T) {
 	for _, step := range workflow.Jobs["publish"].Steps {
 		script += step.Run + "\n"
 	}
-	for _, scenario := range []string{"missing bundle", "tampered bundle", "valid bundle"} {
+	for _, scenario := range []string{"missing bundle", "tampered bundle", "invalid bundle", "valid bundle"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
 			if err := os.Mkdir(filepath.Join(dir, "artifacts"), 0700); err != nil {
@@ -98,7 +104,7 @@ func TestPublishSignedChecksumGate(t *testing.T) {
 			write("artifacts/binary", "fixture", 0600)
 			write("artifacts/"+sumsName, fmt.Sprintf("%x  binary\n", sha256.Sum256([]byte("fixture"))), 0600)
 			if scenario != "missing bundle" {
-				write("artifacts/"+bundleName, "fixture bundle verified by signing job", 0600)
+				write("artifacts/"+bundleName, "fixture bundle", 0600)
 			}
 			write("gh", `#!/bin/bash
 set -e
@@ -114,12 +120,22 @@ case "$1 $2" in
   *) exit 99 ;;
 esac
 `, 0700)
+			write("go", `#!/bin/bash
+set -e
+test "$*" = 'run ./tools/verify-release uploaded/SHA256SUMS.txt uploaded/SHA256SUMS.txt.sigstore.json'
+test -s "$3" && test -s "$4"
+test "$SCENARIO" != 'invalid bundle'
+touch verified
+`, 0700)
 			cmd := exec.Command("bash", "-e", "-c", script)
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TAG=v2.0.0", "SCENARIO="+scenario)
 			output, err := cmd.CombinedOutput()
 			_, publishedErr := os.Stat(filepath.Join(dir, "published"))
 			if scenario == "valid bundle" {
+				if _, err := os.Stat(filepath.Join(dir, "verified")); err != nil {
+					t.Error("publication did not invoke the signature verifier")
+				}
 				if err != nil || publishedErr != nil {
 					t.Fatalf("signed release blocked: %v %v\n%s", err, publishedErr, output)
 				}

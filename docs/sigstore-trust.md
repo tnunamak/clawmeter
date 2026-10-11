@@ -29,7 +29,8 @@ The workflow signs checksum bytes with cosign v3 and verifies the bundle using
 `go run ./tools/verify-release SHA256SUMS.txt SHA256SUMS.txt.sigstore.json`.
 This runs the updater's offline policy, so a service rotation unknown to the
 snapshot blocks publication as well as updating. Only the upload/signing job
-has `id-token: write`.
+has `id-token: write`; the publish job verifies downloaded assets without that
+permission before it publishes the draft.
 
 A frozen snapshot cannot learn new keys or revocations. Old clients can become
 unable to update after a rotation; refresh before that happens. A stranded client

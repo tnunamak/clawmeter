@@ -36,7 +36,7 @@ func verifyChecksumSignatureWithRoot(sums, signature []byte, trusted root.Truste
 	if err := signed.UnmarshalJSON(signature); err != nil {
 		return fmt.Errorf("parse Sigstore bundle: %w", err)
 	}
-	verifier, err := verify.NewVerifier(trusted, verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1))
+	verifier, err := verify.NewVerifier(trusted, verify.WithTransparencyLog(1), verify.WithObserverTimestamps(1), verify.WithSignedCertificateTimestamps(1))
 	if err != nil {
 		return err
 	}

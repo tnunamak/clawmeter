@@ -2,7 +2,10 @@ package update
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,11 +23,16 @@ import (
 
 func signedFixture(t *testing.T, sums []byte, identity, issuer string) ([]byte, root.TrustedMaterial) {
 	t.Helper()
-	trusted, err := ca.NewVirtualSigstore()
+	return signedFixtureWithSCT(t, sums, identity, issuer, true)
+}
+
+func signedFixtureWithSCT(t *testing.T, sums []byte, identity, issuer string, logged bool) ([]byte, root.TrustedMaterial) {
+	t.Helper()
+	virtual, err := ca.NewVirtualSigstore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	entity, err := trusted.Sign(identity, issuer, sums)
+	entity, err := virtual.Sign(identity, issuer, sums)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +40,7 @@ func signedFixture(t *testing.T, sums []byte, identity, issuer string) ([]byte, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	cert, trusted := loggedFixtureCertificate(t, content.Certificate(), virtual, logged)
 	signature, err := entity.SignatureContent()
 	if err != nil {
 		t.Fatal(err)
@@ -41,17 +50,27 @@ func signedFixture(t *testing.T, sums []byte, identity, issuer string) ([]byte, 
 		t.Fatal(err)
 	}
 	entry := entries[0].TransparencyLogEntry()
+	var body map[string]any
+	if err := json.Unmarshal(entry.CanonicalizedBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	key := body["spec"].(map[string]any)["signature"].(map[string]any)["publicKey"].(map[string]any)
+	key["content"] = base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
+	entry.CanonicalizedBody, err = json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	entry.LogIndex = 0
 	entry.KindVersion = &protorekor.KindVersion{Kind: "hashedrekord", Version: "0.0.1"}
-	set, err := trusted.RekorSignPayload(tlog.RekorPayload{
-		Body: entries[0].Body(), IntegratedTime: entry.IntegratedTime,
+	set, err := virtual.RekorSignPayload(tlog.RekorPayload{
+		Body: entry.CanonicalizedBody, IntegratedTime: entry.IntegratedTime,
 		LogIndex: entry.LogIndex, LogID: hex.EncodeToString(entry.LogId.KeyId),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	entry.InclusionPromise = &protorekor.InclusionPromise{SignedEntryTimestamp: set}
-	proof, err := trusted.GetInclusionProof(entry.CanonicalizedBody)
+	proof, err := virtual.GetInclusionProof(entry.CanonicalizedBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +87,7 @@ func signedFixture(t *testing.T, sums []byte, identity, issuer string) ([]byte, 
 	data, err := protojson.Marshal(&protobundle.Bundle{
 		MediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
 		VerificationMaterial: &protobundle.VerificationMaterial{
-			Content:     &protobundle.VerificationMaterial_Certificate{Certificate: &protocommon.X509Certificate{RawBytes: content.Certificate().Raw}},
+			Content:     &protobundle.VerificationMaterial_Certificate{Certificate: &protocommon.X509Certificate{RawBytes: cert.Raw}},
 			TlogEntries: []*protorekor.TransparencyLogEntry{entry},
 		},
 		Content: &protobundle.Bundle_MessageSignature{MessageSignature: &protocommon.MessageSignature{
@@ -82,7 +101,7 @@ func signedFixture(t *testing.T, sums []byte, identity, issuer string) ([]byte, 
 }
 
 func TestApplySigstorePolicy(t *testing.T) {
-	for _, scenario := range []string{"valid", "wrong identity", "wrong issuer", "tampered sums", "tampered signature", "no log", "bad proof", "no signing time", "untrusted root", "oversized bundle"} {
+	for _, scenario := range []string{"valid", "wrong identity", "wrong issuer", "tampered sums", "tampered signature", "no log", "bad proof", "no signing time", "no certificate timestamp", "untrusted root", "oversized bundle"} {
 		t.Run(scenario, func(t *testing.T) {
 			exe, runs, renames := stubUpdate(t, validFixtureSums())
 			identity, issuer := releaseIdentity, releaseIssuer
@@ -93,7 +112,7 @@ func TestApplySigstorePolicy(t *testing.T) {
 				issuer += "/other"
 			}
 			sums := []byte(validFixtureSums())
-			signature, trusted := signedFixture(t, sums, identity, issuer)
+			signature, trusted := signedFixtureWithSCT(t, sums, identity, issuer, scenario != "no certificate timestamp")
 			if scenario == "tampered sums" {
 				sums = append(sums, '\n')
 			}

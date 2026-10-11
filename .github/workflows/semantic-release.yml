@@ -299,17 +299,12 @@ jobs:
         with:
           cosign-release: v3.0.6
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-
-      - name: Sign checksums with GitHub OIDC and verify offline
+      - name: Sign checksums with GitHub OIDC
         run: |
           cosign sign-blob --yes \
             --bundle artifacts/SHA256SUMS.txt.sigstore.json \
             artifacts/SHA256SUMS.txt
           test -s artifacts/SHA256SUMS.txt.sigstore.json
-          go run ./tools/verify-release artifacts/SHA256SUMS.txt artifacts/SHA256SUMS.txt.sigstore.json
 
       - name: Save final release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -374,6 +369,15 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-artifacts
@@ -394,6 +398,7 @@ jobs:
           test -s artifacts/SHA256SUMS.txt.sigstore.json
           test -s uploaded/SHA256SUMS.txt.sigstore.json
           cmp artifacts/SHA256SUMS.txt.sigstore.json uploaded/SHA256SUMS.txt.sigstore.json
+          go run ./tools/verify-release uploaded/SHA256SUMS.txt uploaded/SHA256SUMS.txt.sigstore.json
           (cd uploaded && sha256sum --check ../artifacts/SHA256SUMS.txt)
           gh release edit "$TAG" --draft=false
 
