@@ -59,6 +59,10 @@ clawmeter doctor
 
 Setup installs the mainstream local surface Clawmeter can verify today: a Claude Code statusline. Every agent can also pull the same cheap quota summary with `clawmeter status --agent`.
 
+## Verify a download
+
+Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.github.io/minisign/), and the self-updater refuses unsigned updates. To check a download yourself, see [SECURITY.md](SECURITY.md#verify-a-download).
+
 ## Why Use It
 
 - See your riskiest quota without opening provider dashboards.

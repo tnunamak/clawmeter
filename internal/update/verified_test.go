@@ -118,12 +118,12 @@ func TestApplyRejectsRedirectBeforeTransport(t *testing.T) {
 				exe, runs, renames := stubUpdate(t, validFixtureSums())
 				base := http.DefaultTransport
 				forbiddenRequests := 0
-				http.DefaultTransport = updateTransport(func(r *http.Request) (*http.Response, error) {
+				http.DefaultTransport = rawTransport(func(r *http.Request) (*http.Response, error) {
 					if r.URL.String() == target {
 						forbiddenRequests++
 						return nil, errors.New("forbidden transport reached")
 					}
-					isSums := strings.HasSuffix(r.URL.Path, "/SHA256SUMS.txt")
+					isSums := strings.Contains(r.URL.Path, "/SHA256SUMS.txt")
 					if (resource == "sums") == isSums {
 						res := fixtureResponse(r, 302, "")
 						res.Header.Set("Location", target)
@@ -148,7 +148,7 @@ func TestApplyVerifiedNewerArtifact(t *testing.T) {
 		t.Run(host, func(t *testing.T) {
 			exe, runs, renames := stubUpdate(t, validFixtureSums())
 			base := http.DefaultTransport
-			http.DefaultTransport = updateTransport(func(r *http.Request) (*http.Response, error) {
+			http.DefaultTransport = rawTransport(func(r *http.Request) (*http.Response, error) {
 				if strings.Contains(r.URL.Path, "/releases/download/") {
 					res := fixtureResponse(r, 302, "")
 					res.Header.Set("Location", "https://"+host+"/fixture/"+filepath.Base(r.URL.Path))

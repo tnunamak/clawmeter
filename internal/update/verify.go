@@ -105,8 +105,8 @@ func downloadSums(ctx context.Context, raw string) ([]byte, error) {
 	return data, nil
 }
 
-// verifyArtifact is the integrity gate, before chmod, execution, or replacement.
-// A future release can add signature verification here.
+// verifyArtifact checks the artifact against sums, which ApplyTo has already
+// authenticated with VerifySums, before chmod, execution, or replacement.
 func verifyArtifact(filename, asset string, sums []byte) error {
 	var expected string
 	matches := 0

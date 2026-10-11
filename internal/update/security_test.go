@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,7 +13,37 @@ import (
 
 type updateTransport func(*http.Request) (*http.Response, error)
 
-func (f updateTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+// rawTransport serves exactly what its function returns.
+type rawTransport func(*http.Request) (*http.Response, error)
+
+func (f rawTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// updateTransport also answers SHA256SUMS.txt.minisig requests with a valid
+// signature over whatever the function serves for SHA256SUMS.txt, so tests
+// that are not about signatures need no signing code.
+func (f updateTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !strings.HasSuffix(r.URL.Path, "/"+sumsName+sigSuffix) {
+		return f(r)
+	}
+	sumsReq := r.Clone(r.Context())
+	u := *r.URL
+	u.Path = strings.TrimSuffix(u.Path, sigSuffix)
+	sumsReq.URL = &u
+	res, err := f(sumsReq)
+	if err != nil || res.StatusCode != http.StatusOK {
+		return res, err
+	}
+	sums, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	tag := "v2.0.0"
+	if parts := strings.Split(r.URL.Path, "/"); len(parts) >= 3 && strings.Contains(r.URL.Path, "/download/") {
+		tag = parts[len(parts)-2]
+	}
+	return fixtureResponse(r, http.StatusOK, string(signSums(testPrimary, sums, TrustedComment(tag)))), nil
+}
 
 func TestCheckStrictlyNewerSemver(t *testing.T) {
 	for _, tc := range []struct {
