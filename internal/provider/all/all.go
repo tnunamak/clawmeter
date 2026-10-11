@@ -121,6 +121,9 @@ func SourceValidator() config.SourceValidator {
 	return func(family string, sources []config.SourceConfig) error {
 		capability, ok := SourceCapability(family)
 		if !ok {
+			if _, known := canonicalRegistrationName(family); known && len(sources) == 0 {
+				return nil
+			}
 			return fmt.Errorf("provider %q does not support enrolled sources", family)
 		}
 		if err := provider.ValidateSourceConfigs(capability, sources); err != nil {
