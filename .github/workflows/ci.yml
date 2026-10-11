@@ -56,3 +56,8 @@ jobs:
 
       - name: Validate packaging shell scripts
         run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
+
+      - name: Verify Windows VM cleanup scope
+        run: |
+          bash -n scripts/windows-vm-smoke.sh scripts/test-windows-vm-smoke-scope.sh
+          bash scripts/test-windows-vm-smoke-scope.sh
