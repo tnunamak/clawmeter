@@ -3,6 +3,7 @@ module github.com/tnunamak/clawmeter
 go 1.26.0
 
 require (
+	aead.dev/minisign v0.3.0
 	github.com/gen2brain/beeep v0.11.2
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
@@ -22,5 +23,6 @@ require (
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
 	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
+	golang.org/x/crypto v0.13.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )

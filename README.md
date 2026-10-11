@@ -59,6 +59,19 @@ clawmeter doctor
 
 Setup installs the mainstream local surface Clawmeter can verify today: a Claude Code statusline. Every agent can also pull the same cheap quota summary with `clawmeter status --agent`.
 
+## Verify a download
+
+Releases from this version on are signed. `SHA256SUMS.txt` carries a [minisign](https://jedisct1.github.io/minisign/) signature in `SHA256SUMS.txt.minisig`. Download both files from the release, then run:
+
+```bash
+minisign -Vm SHA256SUMS.txt -P RWRW9JhIO6sI06w/ElmX9+E48kAw0MBjkIXrNX4TIJsiVG8SxAXvETXD
+sha256sum --check --ignore-missing SHA256SUMS.txt
+```
+
+The signed comment names the release, for example `clawmeter v0.40.0 SHA256SUMS.txt`.
+
+The self-updater checks this signature with keys built into the binary. It refuses unsigned updates. A backup key is kept offline for key rotation.
+
 ## Why Use It
 
 - See your riskiest quota without opening provider dashboards.

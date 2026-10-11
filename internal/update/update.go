@@ -188,6 +188,13 @@ func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	if err != nil {
 		return err
 	}
+	sig, err := downloadSig(ctx, sumsURL+sigSuffix)
+	if err != nil {
+		return err
+	}
+	if err := VerifySums(sums, sig, tag); err != nil {
+		return err
+	}
 
 	// Stage on the destination filesystem so Unix replacement is one rename.
 	pattern := ".clawmeter-update-*"

@@ -188,6 +188,10 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
       - name: Detect SignPath configuration
         id: signpath
         env:
@@ -294,6 +298,22 @@ jobs:
           cd artifacts
           sha256sum * > SHA256SUMS.txt
 
+      - name: Sign checksums
+        env:
+          CLAWMETER_MINISIGN_KEY: ${{ secrets.CLAWMETER_MINISIGN_KEY }}
+          CLAWMETER_MINISIGN_PASSWORD: ${{ secrets.CLAWMETER_MINISIGN_PASSWORD }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          # Missing secrets fail the release; an unsigned release is never published.
+          test -n "$TAG"
+          test -n "$CLAWMETER_MINISIGN_KEY"
+          test -n "$CLAWMETER_MINISIGN_PASSWORD"
+          go run ./tools/sign-release sign artifacts/SHA256SUMS.txt "$TAG"
+          go run ./tools/sign-release verify artifacts/SHA256SUMS.txt "$TAG"
+          test -s artifacts/SHA256SUMS.txt.minisig
+          # 11 release files, SHA256SUMS.txt and its signature.
+          test "$(find artifacts -maxdepth 1 -type f | wc -l)" -eq 13
+
       - name: Save final release artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -325,6 +345,7 @@ jobs:
             echo ""
             echo "Windows artifacts are built by GitHub Actions from public repository commit \`${{ github.sha }}\`."
             echo "Verify downloaded artifacts against \`SHA256SUMS.txt\` from this release."
+            echo "\`SHA256SUMS.txt\` is signed with minisign; the signature is \`SHA256SUMS.txt.minisig\`. See SECURITY.md."
             if [ "${{ steps.signpath.outputs.enabled }}" = "true" ]; then
               echo "Windows \`.exe\` artifacts were signed through SignPath before checksums and WinGet metadata were generated."
             else
@@ -357,6 +378,15 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-artifacts
@@ -373,8 +403,11 @@ jobs:
           find artifacts -maxdepth 1 -type f -printf '%f\n' | sort > local-assets.txt
           diff -u local-assets.txt remote-assets.txt
           gh release download "$TAG" --dir uploaded
+          test -s artifacts/SHA256SUMS.txt.minisig
           cmp artifacts/SHA256SUMS.txt uploaded/SHA256SUMS.txt
+          cmp artifacts/SHA256SUMS.txt.minisig uploaded/SHA256SUMS.txt.minisig
           (cd uploaded && sha256sum --check ../artifacts/SHA256SUMS.txt)
+          go run ./tools/sign-release verify uploaded/SHA256SUMS.txt "$TAG"
           gh release edit "$TAG" --draft=false
 
   submit-winget:
