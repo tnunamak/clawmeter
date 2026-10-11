@@ -53,7 +53,9 @@ func (p e2BlockingProvider) FetchUsage(context.Context) (*UsageData, error) {
 	close(p.started)
 	<-p.release
 	defer close(p.finished)
-	return &UsageData{Provider: p.Name()}, nil
+	// An error reading keeps FetchSource from clearing backoff state after the
+	// test returns, where it would race with tests that swap backoffDir.
+	return &UsageData{Provider: p.Name(), Error: "late reading"}, nil
 }
 func TestFetchProvidersParallelCancelsIgnoringWorker(t *testing.T) {
 	p := e2BlockingProvider{fakeSourceProvider: fakeSourceProvider{id: "blocked"}, started: make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{})}
@@ -160,7 +162,19 @@ func TestE2CancellationBoundsBlockedRevisionLookup(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer close(release)
+	defer func() {
+		close(release)
+		// The worker and the provenance check outlive cancellation. Wait for
+		// all three lookups so the worker's FetchSource ends before the test.
+		for range cap(finished) {
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Error("late revision lookups did not finish")
+				return
+			}
+		}
+	}()
 	returned := make(chan *MultiFetchResult, 1)
 	go func() { returned <- FetchProvidersParallel(ctx, []Provider{p}) }()
 	select {
