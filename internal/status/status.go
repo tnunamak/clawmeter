@@ -208,6 +208,7 @@ func fetchComponents(ctx context.Context, cfg statusPageConfig) *ProviderStatus 
 	}
 
 	// Find worst status among watched components
+	matched := false
 	var worstWeight int
 	var worstStatus string
 	var worstName string
@@ -217,7 +218,11 @@ func fetchComponents(ctx context.Context, cfg statusPageConfig) *ProviderStatus 
 		if !watched[c.Name] {
 			continue
 		}
-		w := componentStatusWeight[c.Status]
+		matched = true
+		w, known := componentStatusWeight[c.Status]
+		if !known {
+			return &ProviderStatus{Indicator: Unknown}
+		}
 		if w > worstWeight {
 			worstWeight = w
 			worstStatus = c.Status
@@ -232,6 +237,9 @@ func fetchComponents(ctx context.Context, cfg statusPageConfig) *ProviderStatus 
 		}
 	}
 
+	if !matched {
+		return &ProviderStatus{Indicator: Unknown}
+	}
 	if worstWeight == 0 {
 		return &ProviderStatus{Indicator: None}
 	}
