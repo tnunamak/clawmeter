@@ -1054,7 +1054,7 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	}
 	bmi.BmiHeader.BiSize = uint32(unsafe.Sizeof(bmi.BmiHeader))
 
-	var bits uintptr
+	var bits unsafe.Pointer // set by CreateDIBSection; OS-owned memory
 	hColorBmp, _, _ := pCreateDIBSection.Call(
 		hMemDC,
 		uintptr(unsafe.Pointer(&bmi)),
@@ -1070,7 +1070,7 @@ func pngToHIcon(pngBytes []byte) (windows.Handle, error) {
 	defer pDeleteObject.Call(hColorBmp)
 
 	// Write BGRA pixel data into the DIB.
-	pixelData := unsafe.Slice((*byte)(unsafe.Pointer(bits)), int(w)*int(h)*4)
+	pixelData := unsafe.Slice((*byte)(bits), int(w)*int(h)*4)
 	for y := int32(0); y < h; y++ {
 		for x := int32(0); x < w; x++ {
 			r, g, b, a := img.At(bounds.Min.X+int(x), bounds.Min.Y+int(y)).RGBA()
