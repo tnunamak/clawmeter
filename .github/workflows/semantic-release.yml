@@ -6,54 +6,50 @@ on:
       - main
 
 permissions:
-  actions: read
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/ci.yml
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Install Linux tray deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libayatana-appindicator3-dev
-
-      - run: go vet ./...
-      - run: go vet -tags tray ./...
-      - run: go test ./...
-      - run: go test -tags tray ./...
-
-      - name: Validate PowerShell installer syntax
-        shell: pwsh
-        run: |
-          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
-          Get-ChildItem packaging/windows -Filter *.ps1 | ForEach-Object {
-            [scriptblock]::Create((Get-Content -Raw $_.FullName)) | Out-Null
-          }
-
-      - name: Validate packaging shell scripts
-        run: bash -n packaging/winget/generate.sh packaging/winget/submit-pr.sh packaging/winget/close-superseded-first-package-prs.sh
+  platform-verify:
+    uses: ./.github/workflows/platform-verify.yml
 
   release:
-    needs: test
+    needs: [test, platform-verify]
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     outputs:
       new_release: ${{ steps.semantic.outputs.new_release_published }}
       tag: ${{ steps.semantic.outputs.new_release_git_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
-      - uses: cycjimmy/semantic-release-action@v4
+      - name: Configure draft release
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = '.releaserc.json';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const github = config.plugins.find(p => Array.isArray(p) && p[0] === '@semantic-release/github');
+          if (!github) throw new Error('Missing GitHub release plugin');
+          Object.assign(github[1], {draftRelease: true, releasedLabels: false});
+          fs.writeFileSync(path, JSON.stringify(config));
+          NODE
+
+      - uses: cycjimmy/semantic-release-action@16ca923e6ccbb50770c415a0ccd43709a8c5f7a4 # v4.2.2 (v4)
         id: semantic
+        with:
+          semantic_version: 24.2.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -85,11 +81,12 @@ jobs:
             cc: gcc
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          persist-credentials: false
+          ref: ${{ github.sha }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -142,14 +139,31 @@ jobs:
         run: |
           export VERSION="${VERSION#v}"
           cp "clawmeter-linux-${GOARCH}" clawmeter
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
           nfpm package -p deb -f nfpm.yaml
           nfpm package -p rpm -f nfpm.yaml
           rm clawmeter
 
-      - uses: actions/upload-artifact@v4
+      - name: Verify platform package set
+        shell: bash
+        run: |
+          test -s "clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}"
+          if [ "${{ matrix.goos }}" = windows ]; then
+            test -s ClawmeterSetup.exe
+          elif [ "${{ matrix.goos }}" = linux ]; then
+            shopt -s nullglob
+            debs=(*.deb)
+            rpms=(*.rpm)
+            test "${#debs[@]}" -eq 1
+            test "${#rpms[@]}" -eq 1
+            test -s "${debs[0]}"
+            test -s "${rpms[0]}"
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: build-clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
           path: |
             clawmeter-${{ matrix.goos }}-${{ matrix.goarch }}*
             ClawmeterSetup.exe
@@ -158,12 +172,19 @@ jobs:
 
   upload:
     needs: [release, build]
+    permissions:
+      actions: read
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: build-clawmeter-*
           path: artifacts
           merge-multiple: true
 
@@ -212,14 +233,14 @@ jobs:
       - name: Upload SignPath Windows artifact
         if: steps.signpath.outputs.enabled == 'true'
         id: upload-signpath-windows
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: clawmeter-windows-unsigned
           path: signpath-input/*
 
       - name: Submit SignPath signing request
         if: steps.signpath.outputs.enabled == 'true'
-        uses: SignPath/github-action-submit-signing-request@v2
+        uses: SignPath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -252,10 +273,33 @@ jobs:
           zip -r "artifacts/winget-manifest-${version}.zip" \
             "packaging/winget/out/manifests/t/tnunamak/Clawmeter/${version}"
 
+      - name: Verify complete final artifact set
+        run: |
+          cd artifacts
+          for file in clawmeter-linux-amd64 clawmeter-linux-arm64 clawmeter-darwin-amd64 clawmeter-darwin-arm64 clawmeter-windows-amd64.exe ClawmeterSetup.exe; do
+            test -s "$file"
+          done
+          shopt -s nullglob
+          debs=(*.deb)
+          rpms=(*.rpm)
+          manifests=(winget-manifest-*.zip)
+          test "${#debs[@]}" -eq 2
+          test "${#rpms[@]}" -eq 2
+          test "${#manifests[@]}" -eq 1
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 11
+          for file in *; do test -f "$file" && test -s "$file"; done
+
       - name: Generate checksums
         run: |
           cd artifacts
           sha256sum * > SHA256SUMS.txt
+
+      - name: Save final release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-artifacts
+          path: artifacts/*
+          if-no-files-found: error
 
       - name: Add Windows distribution release notes
         env:
@@ -306,18 +350,47 @@ jobs:
             sleep 15
           done
 
-  # Clean up empty release if build fails
+  publish:
+    needs: [release, upload]
+    if: needs.release.outputs.new_release == 'true'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-artifacts
+          path: artifacts
+
+      - name: Verify uploaded draft assets and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sort > remote-assets.txt
+          find artifacts -maxdepth 1 -type f -printf '%f\n' | sort > local-assets.txt
+          diff -u local-assets.txt remote-assets.txt
+          gh release download "$TAG" --dir uploaded
+          cmp artifacts/SHA256SUMS.txt uploaded/SHA256SUMS.txt
+          (cd uploaded && sha256sum --check ../artifacts/SHA256SUMS.txt)
+          gh release edit "$TAG" --draft=false
+
   submit-winget:
-    needs: [release, build, upload]
+    needs: [release, publish]
     if: needs.release.outputs.new_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-artifacts
           path: artifacts
-          merge-multiple: true
 
       - name: Verify public Windows installer asset
         run: |
@@ -347,11 +420,18 @@ jobs:
           packaging/winget/submit-pr.sh "${{ needs.release.outputs.tag }}"
 
   cleanup:
-    needs: [release, build]
-    if: always() && needs.release.outputs.new_release == 'true' && needs.build.result == 'failure'
+    needs: [release, build, upload, publish]
+    if: always() && needs.release.outputs.new_release == 'true' && (needs.build.result == 'failure' || needs.upload.result == 'failure' || needs.publish.result == 'failure')
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Delete empty release
+      - name: Delete failed draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "${{ needs.release.outputs.tag }}" --repo "${{ github.repository }}" --yes --cleanup-tag
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true ]; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
