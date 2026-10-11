@@ -14,6 +14,9 @@ import (
 
 const defaultTTL = 60 * time.Second
 
+// Allow one missed refresh before cached-only output is marked stale.
+const staleMargin = time.Minute
+
 // schemaVersion invalidates caches whose values changed meaning. Version 2:
 // Claude extra-usage Used/Limit were written 100x too large before; entries
 // without this version are dropped on read, including stale fallbacks.
@@ -65,6 +68,11 @@ func Read() (*Entry, error) {
 // IsValid returns true if the cache entry is fresh (within TTL).
 func (e *Entry) IsValid() bool {
 	return time.Since(e.FetchedAt) < defaultTTL
+}
+
+// IsStale reports when cached-only output must warn about its age.
+func (e *Entry) IsStale() bool {
+	return time.Since(e.FetchedAt) >= defaultTTL+staleMargin
 }
 
 // Covers reports whether the cache contains an entry — error or data — for
@@ -178,12 +186,25 @@ func writeEntry(entry Entry) error {
 		return err
 	}
 
-	// Atomic write
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	tmp, err := os.CreateTemp(dir, ".usage-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	if err := tmp.Chmod(0600); err != nil {
+		return fmt.Errorf("protect temp: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
-	return os.Rename(tmp, path)
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func cacheDir() (string, error) {
