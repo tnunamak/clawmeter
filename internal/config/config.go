@@ -170,7 +170,7 @@ type GlobalSettings struct {
 
 // NotificationConfig holds notification settings.
 type NotificationConfig struct {
-	Warning  float64 `yaml:"warning,omitempty"`  // Default: 80%
+	Warning  float64 `yaml:"warning"`            // Default: 80%; persist explicit zero.
 	Critical float64 `yaml:"critical,omitempty"` // Default: 95%
 }
 
@@ -277,6 +277,9 @@ func Load(validators ...SourceValidator) (*Config, error) {
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if cfg.Providers == nil {
+		cfg.Providers = make(map[string]ProviderConfig)
 	}
 	if err := cfg.ValidateSources(validators...); err != nil {
 		return nil, err
