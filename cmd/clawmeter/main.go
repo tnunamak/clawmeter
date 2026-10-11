@@ -205,7 +205,8 @@ func run() int {
 }
 
 func isStatusShortcutFlag(arg string) bool {
-	switch arg {
+	name, _, _ := strings.Cut(arg, "=")
+	switch name {
 	case "--json", "-json",
 		"--plain", "-plain",
 		"--agent", "-agent",
@@ -312,16 +313,23 @@ func setupCmd(args []string) int {
 	if *tmuxFlag || *claudeFlag {
 		fmt.Println("Clawmeter setup")
 		fmt.Println()
+		exitCode := 0
+		printResult := func(result integrationResult) {
+			printIntegrationResult(result)
+			if result.Status == "error" {
+				exitCode = 1
+			}
+		}
 		if *tmuxFlag {
-			printIntegrationResult(setupTmuxIntegration(*dryRun))
+			printResult(setupTmuxIntegration(*dryRun))
 		}
 		if *claudeFlag {
-			printIntegrationResult(setupClaudeStatuslineIntegration(*dryRun, *force))
+			printResult(setupClaudeStatuslineIntegration(*dryRun, *force))
 		}
 		fmt.Println()
 		fmt.Println("Agent pull command: clawmeter status --agent")
 		fmt.Println("Run `clawmeter doctor` to verify provider auth and integrations.")
-		return 0
+		return exitCode
 	}
 
 	fmt.Println("Clawmeter setup")
@@ -353,13 +361,17 @@ func doctorCmd(args []string) int {
 
 	fmt.Println("Clawmeter doctor")
 	fmt.Println()
-	providersCmd(nil)
+	exitCode := providersCmd(nil)
 	fmt.Println("Integrations:")
-	printIntegrationResult(tmuxIntegrationStatus())
-	printIntegrationResult(claudeStatuslineStatus())
+	for _, result := range []integrationResult{tmuxIntegrationStatus(), claudeStatuslineStatus()} {
+		printIntegrationResult(result)
+		if result.Status == "error" {
+			exitCode = 1
+		}
+	}
 	fmt.Println("  statusline command:      clawmeter statusline")
 	fmt.Println("  agent pull command:      clawmeter status --agent")
-	return 0
+	return exitCode
 }
 
 func configCmd(args []string) int {
