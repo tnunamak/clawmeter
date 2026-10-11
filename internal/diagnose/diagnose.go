@@ -3,6 +3,7 @@ package diagnose
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -204,7 +205,7 @@ func probe(ctx context.Context, p provider.Provider) (Probe, *UsageSummary) {
 	result := Probe{Attempted: true, DurationMS: time.Since(started).Milliseconds()}
 	if err != nil {
 		result.Outcome = "error"
-		result.ErrorCategory, result.Message = safeError(err.Error())
+		result.ErrorCategory, result.Message = safeTypedError(err)
 		return result, nil
 	}
 	if data == nil {
@@ -256,28 +257,11 @@ func summarizeUsage(data *provider.UsageData) *UsageSummary {
 }
 
 func safeError(raw string) (string, string) {
-	lowered := strings.ToLower(raw)
-	category := "unknown"
-	switch {
-	case strings.Contains(lowered, "rate limit"), strings.Contains(lowered, "429"):
-		category = "rate_limited"
-	case strings.Contains(lowered, "unauthor"), strings.Contains(lowered, "forbidden"),
-		strings.Contains(lowered, "expired"), strings.Contains(lowered, "token"),
-		strings.Contains(lowered, "credential"), strings.Contains(lowered, "401"),
-		strings.Contains(lowered, "403"):
-		category = "auth"
-	case strings.Contains(lowered, "timeout"), strings.Contains(lowered, "deadline"),
-		strings.Contains(lowered, "connection"), strings.Contains(lowered, "network"),
-		strings.Contains(lowered, "no response"), strings.Contains(lowered, "eof"):
-		category = "network"
-	case strings.Contains(lowered, "decode"), strings.Contains(lowered, "parse"),
-		strings.Contains(lowered, "malformed"), strings.Contains(lowered, "missing"):
-		category = "parse"
-	case strings.Contains(lowered, "api"), strings.Contains(lowered, "http"),
-		strings.Contains(lowered, "server"), strings.Contains(lowered, "500"),
-		strings.Contains(lowered, "502"), strings.Contains(lowered, "503"):
-		category = "api"
-	}
+	return safeTypedError(errors.New(raw))
+}
+
+func safeTypedError(err error) (string, string) {
+	category := provider.ClassifyError(err)
 	return category, safeMessage(category)
 }
 

@@ -1255,22 +1255,18 @@ func SafeFetchError(err error) string {
 	if err == nil {
 		return ""
 	}
-	lower := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(lower, "rate limit"), strings.Contains(lower, "429"):
+	switch ClassifyError(err) {
+	case "rate_limited":
 		return "rate limited"
-	case strings.Contains(lower, "unauthor"), strings.Contains(lower, "forbidden"),
-		strings.Contains(lower, "expired"), strings.Contains(lower, "credential"),
-		strings.Contains(lower, "token"), strings.Contains(lower, "401"), strings.Contains(lower, "403"):
+	case "auth":
 		return "authentication failed"
-	case strings.Contains(lower, "timeout"), strings.Contains(lower, "deadline"):
-		return "connection timed out"
-	case strings.Contains(lower, "connection"), strings.Contains(lower, "network"),
-		strings.Contains(lower, "no such host"), strings.Contains(lower, "dns"),
-		strings.Contains(lower, "no response"), strings.Contains(lower, "eof"):
+	case "network":
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline") {
+			return "connection timed out"
+		}
 		return "connection failed"
-	case strings.Contains(lower, "decode"), strings.Contains(lower, "parse"),
-		strings.Contains(lower, "malformed"), strings.Contains(lower, "invalid character"):
+	case "parse":
 		return "provider response unavailable"
 	default:
 		return "provider request failed"
