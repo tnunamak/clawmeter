@@ -44,6 +44,7 @@ cat >"$tmp_dir/bin/quickemu" <<'EOF'
 #!/usr/bin/env bash
 printf 'cwd=%s\n' "$PWD" >>"$QUICKEMU_LOG"
 printf 'arg=<%s>\n' "$@" >>"$QUICKEMU_LOG"
+printf '%s\n' "${QUICKEMU_STATUS:-0}" >"$QUICKEMU_LOG.status"
 exit "${QUICKEMU_STATUS:-0}"
 EOF
 cat >"$tmp_dir/bin/pkill" <<'EOF'
@@ -75,10 +76,11 @@ kill_vm_processes "$vm_dir"
 
 : >"$QUICKEMU_LOG"
 VM_CONF="$config_path"
-QUICKEMU_STATUS=1
+export QUICKEMU_STATUS=1
 kill_vm_processes "$vm_dir"
+[[ "$(cat "$QUICKEMU_LOG.status")" == 1 ]] || fail 'quickemu stub did not exit with the failure status'
 [[ -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'quickemu failure triggered a fallback'
-QUICKEMU_STATUS=0
+export QUICKEMU_STATUS=0
 
 : >"$QUICKEMU_LOG"
 saved_path="$PATH"
