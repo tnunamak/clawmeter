@@ -164,7 +164,9 @@ func extensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 				http.Error(w, msgUnreadable, http.StatusBadRequest)
 				return
 			}
-			credits, err := activeGrantExpiries(payload.Grants, observedAt)
+			// Which grants are usable is decided on this computer's clock; the
+			// browser's time only dates the reading.
+			credits, err := activeGrantExpiries(payload.Grants, now)
 			if err != nil {
 				http.Error(w, msgUnreadable, http.StatusBadRequest)
 				return
@@ -180,6 +182,12 @@ func extensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 				}
 			}
 			if len(matches) != 1 {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			// A delayed reading, for example from another browser profile,
+			// must not replace a newer one.
+			if saved, err := ReadSummaryFor(matches[0].Key); err == nil && saved.ObservedAt.After(observedAt) {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}

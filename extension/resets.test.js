@@ -81,3 +81,16 @@ test("a server error stops the poll", async () => {
   const { getJSON } = fixture({ "/api/organizations": [{ uuid: "org-max" }], "/api/organizations/org-max/usage?at_wall=1&skip_spend=1": 500 });
   await assert.rejects(readResets(getJSON, now), /request failed/);
 });
+
+test("each organization is dated by its own read", async () => {
+  const { getJSON } = fixture({
+    "/api/organizations": [{ uuid: "org-a" }, { uuid: "org-b" }],
+    "/api/organizations/org-a/usage?at_wall=1&skip_spend=1": { cedar_ember: { grants: [] } },
+    "/api/organizations/org-b/usage?at_wall=1&skip_spend=1": { cedar_ember: { grants: [] } },
+  });
+  let clock = now;
+  const slow = async url => { clock += 60000; return getJSON(url); };
+  const posts = [];
+  await readResets(slow, () => clock, async payload => posts.push(payload));
+  assert.deepEqual(posts.map(payload => payload.observed_at), ["2026-10-13T12:02:00.000Z", "2026-10-13T12:03:00.000Z"]);
+});

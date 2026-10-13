@@ -188,7 +188,7 @@ test("manifest key fixes the expected unpacked identity and minimal permissions"
   const digest = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32);
   assert.equal([...digest].map(c => String.fromCharCode(97 + parseInt(c, 16))).join(""), "hfpaojbfhfofabcaappnobhbfddeckjm");
   assert.deepEqual(manifest.permissions, ["alarms", "storage"]);
-  assert.deepEqual(manifest.host_permissions, ["https://platform.claude.com/*", "http://127.0.0.1/*"]);
+  assert.deepEqual(manifest.host_permissions, ["https://claude.ai/*", "https://platform.claude.com/*", "http://127.0.0.1/*"]);
 });
 
 test("multiple billing orgs have separate cached reports", async () => {

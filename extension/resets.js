@@ -53,7 +53,8 @@ async function readResets(getJSON, now, post = async () => {}) {
           (typeof grant.paused !== "boolean" || !timestamp(grant.starts_at) || !timestamp(grant.ends_at)))) changed();
       grants.push({ resets_left: grant.resets_left, starts_at: grant.starts_at, ends_at: grant.ends_at, paused: grant.paused });
     }
-    const payload = { observed_at: new Date(time).toISOString(), organization: id, grants };
+    // Date each organization by its own read; a slow poll must not age later ones.
+    const payload = { observed_at: new Date(clock()).toISOString(), organization: id, grants };
     await post(payload);
     payloads.push(payload);
   }

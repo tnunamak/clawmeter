@@ -235,6 +235,8 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 		"no grants":  `{"observed_at":"` + observed.Format(time.RFC3339Nano) + `","organization":"org-odl"}`,
 		"stale":      strings.Replace(body("org-odl"), observed.Format(time.RFC3339Nano), observed.Add(-time.Hour).Format(time.RFC3339Nano), 1),
 		"bad grant":  strings.Replace(body("org-odl"), `"paused":false`, `"paused":null`, 1),
+		"no count":   strings.Replace(body("org-odl"), `"resets_left":2`, `"resets_left":null`, 1),
+		"null grant": strings.Replace(body("org-odl"), `"grants":[`, `"grants":[null,`, 1),
 		"extra":      strings.Replace(body("org-odl"), `{"grants"`, `{"nonce":"x","grants"`, 1),
 		"no account": strings.Replace(body("org-odl"), `"organization":"org-odl"`, `"organization":""`, 1),
 	} {
@@ -244,5 +246,39 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 	}
 	if len(results) != 1 {
 		t.Fatalf("rejected readings were reported: %d", len(results))
+	}
+	if kept, err := ReadSummaryFor("claude:odl"); err != nil || kept.MatchSalt != summary.MatchSalt {
+		t.Fatalf("a rejected reading replaced the summary: %+v, %v", kept, err)
+	}
+
+	// A delayed reading older than the saved one is dropped.
+	observed = observed.Add(-30 * time.Second)
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-odl")); got.Code != 204 || len(results) != 1 {
+		t.Fatalf("older reading = %d, results %d", got.Code, len(results))
+	}
+	if kept, err := ReadSummaryFor("claude:odl"); err != nil || kept.MatchSalt != summary.MatchSalt {
+		t.Fatalf("an older reading replaced the summary: %+v, %v", kept, err)
+	}
+}
+
+func TestExtensionJudgesGrantsOnTheReceiverClock(t *testing.T) {
+	isolateUserCache(t)
+	handler := extensionHandler(func() []Account { return testAccounts }, nil)
+	// The reading is four minutes old; the grant started after it was read
+	// but before it arrived, so it is usable now.
+	now := time.Now()
+	raw, err := json.Marshal(map[string]any{
+		"observed_at": now.Add(-4 * time.Minute).UTC().Format(time.RFC3339Nano), "organization": "org-odl",
+		"grants": []map[string]any{{"resets_left": 1, "starts_at": now.Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+			"ends_at": now.Add(time.Hour).UTC().Format(time.RFC3339Nano), "paused": false}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], string(raw)); got.Code != 204 {
+		t.Fatalf("resets = %d: %s", got.Code, got.Body.String())
+	}
+	if summary, err := ReadSummaryFor("claude:odl"); err != nil || len(summary.Credits) != 1 {
+		t.Fatalf("summary = %+v, %v", summary, err)
 	}
 }

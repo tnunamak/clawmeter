@@ -85,7 +85,7 @@ type resultPayload struct {
 }
 
 type grantPayload struct {
-	ResetsLeft int    `json:"resets_left"`
+	ResetsLeft *int   `json:"resets_left"`
 	StartsAt   string `json:"starts_at"`
 	EndsAt     string `json:"ends_at"`
 	Paused     *bool  `json:"paused"`
@@ -454,10 +454,12 @@ func activeGrantExpiries(grants []grantPayload, now time.Time) ([]time.Time, err
 	}
 	credits := make([]time.Time, 0)
 	for _, grant := range grants {
-		if grant.ResetsLeft < 0 || grant.ResetsLeft > 100 {
+		// A missing count must not read as zero and erase saved resets.
+		if grant.ResetsLeft == nil || *grant.ResetsLeft < 0 || *grant.ResetsLeft > 100 {
 			return nil, fmt.Errorf("invalid remaining reset count")
 		}
-		if grant.ResetsLeft == 0 || (grant.Paused != nil && *grant.Paused) {
+		left := *grant.ResetsLeft
+		if left == 0 || (grant.Paused != nil && *grant.Paused) {
 			continue
 		}
 		if grant.Paused == nil {
@@ -474,10 +476,10 @@ func activeGrantExpiries(grants []grantPayload, now time.Time) ([]time.Time, err
 		if !expiresAt.After(now) || startsAt.After(now) {
 			continue
 		}
-		if len(credits)+grant.ResetsLeft > 100 {
+		if len(credits)+left > 100 {
 			return nil, fmt.Errorf("too many active grants")
 		}
-		for range grant.ResetsLeft {
+		for range left {
 			credits = append(credits, expiresAt)
 		}
 	}

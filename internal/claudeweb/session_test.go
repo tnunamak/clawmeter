@@ -43,7 +43,7 @@ func serve(t *testing.T, s *Session, method, path, origin, body string) *httptes
 
 func activeGrant(expires time.Time, resets int) grantPayload {
 	paused := false
-	return grantPayload{ResetsLeft: resets, StartsAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), EndsAt: expires.UTC().Format(time.RFC3339Nano), Paused: &paused}
+	return grantPayload{ResetsLeft: new(resets), StartsAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), EndsAt: expires.UTC().Format(time.RFC3339Nano), Paused: &paused}
 }
 
 func resultBody(t *testing.T, nonce, org string, grants ...grantPayload) string {
@@ -172,10 +172,10 @@ func TestGrantInventoryCountsOnlyStartedUnpausedUnexpiredCredits(t *testing.T) {
 	now := time.Now().UTC()
 	paused, active := true, false
 	credits, err := activeGrantExpiries([]grantPayload{
-		{ResetsLeft: 2, StartsAt: now.Add(-time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(24 * time.Hour).Format(time.RFC3339Nano), Paused: &active},
-		{ResetsLeft: 1, StartsAt: now.Add(time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(48 * time.Hour).Format(time.RFC3339Nano), Paused: &active},
-		{ResetsLeft: 3, StartsAt: now.Add(-time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(48 * time.Hour).Format(time.RFC3339Nano), Paused: &paused},
-		{ResetsLeft: 1, StartsAt: now.Add(-48 * time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(-time.Hour).Format(time.RFC3339Nano), Paused: &active},
+		{ResetsLeft: new(2), StartsAt: now.Add(-time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(24 * time.Hour).Format(time.RFC3339Nano), Paused: &active},
+		{ResetsLeft: new(1), StartsAt: now.Add(time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(48 * time.Hour).Format(time.RFC3339Nano), Paused: &active},
+		{ResetsLeft: new(3), StartsAt: now.Add(-time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(48 * time.Hour).Format(time.RFC3339Nano), Paused: &paused},
+		{ResetsLeft: new(1), StartsAt: now.Add(-48 * time.Hour).Format(time.RFC3339Nano), EndsAt: now.Add(-time.Hour).Format(time.RFC3339Nano), Paused: &active},
 	}, now)
 	if err != nil || len(credits) != 2 {
 		t.Fatalf("credits = %v, %v; want only the 2 active resets", credits, err)
@@ -184,11 +184,11 @@ func TestGrantInventoryCountsOnlyStartedUnpausedUnexpiredCredits(t *testing.T) {
 
 func TestGrantInventoryRejectsUnknownPauseOrSchedule(t *testing.T) {
 	now := time.Now().UTC()
-	if _, err := activeGrantExpiries([]grantPayload{{ResetsLeft: 1, StartsAt: now.Format(time.RFC3339Nano), EndsAt: now.Add(time.Hour).Format(time.RFC3339Nano)}}, now); err == nil {
+	if _, err := activeGrantExpiries([]grantPayload{{ResetsLeft: new(1), StartsAt: now.Format(time.RFC3339Nano), EndsAt: now.Add(time.Hour).Format(time.RFC3339Nano)}}, now); err == nil {
 		t.Fatal("missing paused state accepted")
 	}
 	paused := false
-	if _, err := activeGrantExpiries([]grantPayload{{ResetsLeft: 1, EndsAt: now.Add(time.Hour).Format(time.RFC3339Nano), Paused: &paused}}, now); err == nil {
+	if _, err := activeGrantExpiries([]grantPayload{{ResetsLeft: new(1), EndsAt: now.Add(time.Hour).Format(time.RFC3339Nano), Paused: &paused}}, now); err == nil {
 		t.Fatal("missing start time accepted")
 	}
 }
