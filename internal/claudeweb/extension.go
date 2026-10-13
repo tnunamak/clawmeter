@@ -70,8 +70,9 @@ func writeExtensionState(state ExtensionState) error {
 	return writePrivateFile(path, data)
 }
 
-// ServeExtension receives browser polls until ctx is cancelled.
-func ServeExtension(ctx context.Context, accounts func() []Account, saved func()) error {
+// ServeExtension receives browser polls until ctx is cancelled. saved reports
+// each stored reading; a Result without resets is an API credit reading.
+func ServeExtension(ctx context.Context, accounts func() []Account, saved func(Result)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -123,7 +124,13 @@ type extensionCreditsPayload struct {
 	Link          *extensionLink     `json:"link"`
 }
 
-func extensionHandler(accounts func() []Account, saved func()) http.Handler {
+type extensionResetsPayload struct {
+	ObservedAt   string         `json:"observed_at"`
+	Organization string         `json:"organization"`
+	Grants       []grantPayload `json:"grants"`
+}
+
+func extensionHandler(accounts func() []Account, saved func(Result)) http.Handler {
 	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != extensionAddress {
@@ -133,7 +140,7 @@ func extensionHandler(accounts func() []Account, saved func()) http.Handler {
 		if !admit(w, r, http.MethodPost, ExtensionOrigins...) {
 			return
 		}
-		if r.URL.Path != "/v1/api-credits" && r.URL.Path != "/v1/status" {
+		if r.URL.Path != "/v1/api-credits" && r.URL.Path != "/v1/resets" && r.URL.Path != "/v1/status" {
 			http.NotFound(w, r)
 			return
 		}
@@ -145,7 +152,49 @@ func extensionHandler(accounts func() []Account, saved func()) http.Handler {
 		mu.Lock()
 		defer mu.Unlock()
 		now := time.Now()
-		if r.URL.Path == "/v1/status" {
+		var result Result
+		if r.URL.Path == "/v1/resets" {
+			var payload extensionResetsPayload
+			if decoder.Decode(&payload) != nil || decoder.Decode(&trailing) != io.EOF || payload.Organization == "" || payload.Grants == nil {
+				http.Error(w, msgUnreadable, http.StatusBadRequest)
+				return
+			}
+			observedAt, err := extensionObservedAt(payload.ObservedAt, now)
+			if err != nil {
+				http.Error(w, msgUnreadable, http.StatusBadRequest)
+				return
+			}
+			credits, err := activeGrantExpiries(payload.Grants, observedAt)
+			if err != nil {
+				http.Error(w, msgUnreadable, http.StatusBadRequest)
+				return
+			}
+			// The browser may be signed in to organizations Clawmeter does
+			// not track; those readings are dropped.
+			var matches []Account
+			if accounts != nil {
+				for _, account := range accounts() {
+					if account.OrgUUID == payload.Organization && validResetCreditsTarget(account.Key) {
+						matches = append(matches, account)
+					}
+				}
+			}
+			if len(matches) != 1 {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			salt, err := randomHex()
+			if err != nil {
+				http.Error(w, msgSaveFailed, http.StatusInternalServerError)
+				return
+			}
+			summary := GrantSummary{Credits: credits, ObservedAt: observedAt, ResetCreditsTarget: matches[0].Key, MatchSalt: salt, MatchHash: AccountHash(salt, payload.Organization)}
+			if WriteSummary(summary) != nil {
+				http.Error(w, msgSaveFailed, http.StatusInternalServerError)
+				return
+			}
+			result.Resets = summary
+		} else if r.URL.Path == "/v1/status" {
 			var payload struct {
 				Status string `json:"status"`
 			}
@@ -208,7 +257,7 @@ func extensionHandler(accounts func() []Account, saved func()) http.Handler {
 			}
 		}
 		if saved != nil {
-			saved()
+			saved(result)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

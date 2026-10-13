@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Clawmeter",
   "version": "0.1.0",
-  "description": "Live Claude Console API credits in Clawmeter.",
+  "description": "Live Claude reset grants and Console API credits in Clawmeter.",
   "background": {
     "service_worker": "background.js"
   },
@@ -11,6 +11,7 @@
     "storage"
   ],
   "host_permissions": [
+    "https://claude.ai/*",
     "https://platform.claude.com/*",
     "http://127.0.0.1/*"
   ],

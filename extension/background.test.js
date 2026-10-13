@@ -6,13 +6,13 @@ const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function worker(readConsole, fetch = async () => ({ ok: true, status: 204 })) {
+function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [] })) {
   const listeners = {}, created = [], stored = [];
   const timers = new Map();
   let timerID = 0;
   const context = vm.createContext({
-    importScripts: name => assert.equal(name, "console.js"),
-    readConsole, fetch, AbortController, Date,
+    importScripts: (...names) => assert.deepEqual(names, ["console.js", "resets.js"]),
+    readConsole, readResets, fetch, AbortController, Date,
     setTimeout: (callback, delay) => { assert.equal(delay, 20000); timers.set(++timerID, callback); return timerID; },
     clearTimeout: id => timers.delete(id),
     chrome: {
@@ -123,4 +123,20 @@ test("an org is posted even if a later org fails", async () => {
   await vm.runInContext("poll()", w.context);
   assert.equal(posts.length, 1);
   assert.equal(posts[0].pool, "first");
+});
+
+test("resets post to their own route and a resets failure never blocks credits", async () => {
+  const posts = [];
+  let credits = 0;
+  const w = worker(async () => { credits++; return { status: "ok", payloads: [] }; },
+    async (url, options) => { posts.push([url, JSON.parse(options.body)]); return {}; },
+    async (getJSON, now, post) => {
+      assert.equal(typeof getJSON, "function");
+      assert.equal(typeof now, "function");
+      await post({ organization: "org-plan", grants: [] });
+      throw new Error("claude.ai changed format");
+    });
+  await vm.runInContext("poll()", w.context);
+  assert.deepEqual(posts, [["http://127.0.0.1:17344/v1/resets", { organization: "org-plan", grants: [] }]]);
+  assert.equal(credits, 1);
 });

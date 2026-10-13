@@ -572,7 +572,13 @@ func onReadyWithConfig(loaded *config.Config) {
 	go func() {
 		err := claudeweb.ServeExtension(extensionCtx, func() []claudeweb.Account {
 			return claudewebprovider.Accounts(registry.GetFamily("claude"))
-		}, publishAPICredits)
+		}, func(result claudeweb.Result) {
+			if result.IsResets() {
+				publishLocalResetSource(&refreshing, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+				return
+			}
+			publishAPICredits()
+		})
 		if err != nil {
 			log.Printf("claude extension listener: %v", err)
 		}

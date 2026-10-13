@@ -1,6 +1,6 @@
 "use strict";
 
-importScripts("console.js");
+importScripts("console.js", "resets.js");
 
 let inFlight = false;
 
@@ -34,15 +34,19 @@ async function poll() {
   if (inFlight) return;
   inFlight = true;
   let cache;
+  const getJSON = async url => request(url, {
+    method: "GET", credentials: "include", cache: "no-store",
+    headers: { Accept: "application/json" },
+  }, async response => ({ status: response.status, body: response.ok ? await response.json() : null }));
+  try {
+    await readResets(getJSON, Date.now, payload => post("/v1/resets", payload));
+  } catch {
+    // Resets and credits are independent; a failure in one never blocks the other.
+  }
   try {
     const stored = await chrome.storage.local.get("cache");
     cache = stored.cache && typeof stored.cache === "object" && !Array.isArray(stored.cache) ? stored.cache : {};
-    const result = await readConsole(async url => {
-      return request(url, {
-        method: "GET", credentials: "include", cache: "no-store",
-        headers: { Accept: "application/json" },
-      }, async response => ({ status: response.status, body: response.ok ? await response.json() : null }));
-    }, Date.now, cache, payload => post("/v1/api-credits", payload));
+    const result = await readConsole(getJSON, Date.now, cache, payload => post("/v1/api-credits", payload));
     if (result.status === "signed_out") {
       cache = {};
       await post("/v1/status", { status: "signed_out" });

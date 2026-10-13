@@ -80,7 +80,7 @@ func TestExtensionRejectsBadRequests(t *testing.T) {
 func TestExtensionSavesAndLinksPrivately(t *testing.T) {
 	isolateUserCache(t)
 	saves := 0
-	handler := extensionHandler(func() []Account { return testAccounts }, func() { saves++ })
+	handler := extensionHandler(func() []Account { return testAccounts }, func(Result) { saves++ })
 	body, _ := json.Marshal(extensionBody(t))
 	post := func() APICreditPool {
 		t.Helper()
@@ -130,7 +130,7 @@ func TestExtensionAmbiguousOrMissingLinkSavesUnlinked(t *testing.T) {
 func TestExtensionSignOutRoundTrip(t *testing.T) {
 	isolateUserCache(t)
 	saves := 0
-	handler := extensionHandler(nil, func() { saves++ })
+	handler := extensionHandler(nil, func(Result) { saves++ })
 	if state, err := ReadExtensionState(); err != nil || state.Status != "" {
 		t.Fatalf("missing state = %+v, %v", state, err)
 	}
@@ -191,5 +191,58 @@ func TestExtensionObservationTime(t *testing.T) {
 		if _, err := extensionObservedAt(now.Add(delta).Format(time.RFC3339Nano), now); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
+	isolateUserCache(t)
+	var results []Result
+	handler := extensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) })
+	observed := time.Now().Add(-time.Minute).UTC()
+	ends := observed.Add(10 * 24 * time.Hour).Format(time.RFC3339)
+	body := func(org string) string {
+		raw, err := json.Marshal(map[string]any{
+			"observed_at": observed.Format(time.RFC3339Nano), "organization": org,
+			"grants": []map[string]any{
+				{"resets_left": 2, "starts_at": "2026-01-01T00:00:00Z", "ends_at": ends, "paused": false},
+				{"resets_left": 1, "starts_at": "2026-01-01T00:00:00Z", "ends_at": ends, "paused": true},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-odl")); got.Code != 204 {
+		t.Fatalf("resets = %d: %s", got.Code, got.Body.String())
+	}
+	summary, err := ReadSummaryFor("claude:odl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Credits) != 2 || !summary.ObservedAt.Equal(observed) || summary.MatchHash != AccountHash(summary.MatchSalt, "org-odl") {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if len(results) != 1 || !results[0].IsResets() || results[0].Resets.ResetCreditsTarget != "claude:odl" {
+		t.Fatalf("results = %+v", results)
+	}
+
+	// An organization Clawmeter doesn't track is accepted and dropped.
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-other")); got.Code != 204 || len(results) != 1 {
+		t.Fatalf("untracked = %d, results %d", got.Code, len(results))
+	}
+	for name, bad := range map[string]string{
+		"no grants":  `{"observed_at":"` + observed.Format(time.RFC3339Nano) + `","organization":"org-odl"}`,
+		"stale":      strings.Replace(body("org-odl"), observed.Format(time.RFC3339Nano), observed.Add(-time.Hour).Format(time.RFC3339Nano), 1),
+		"bad grant":  strings.Replace(body("org-odl"), `"paused":false`, `"paused":null`, 1),
+		"extra":      strings.Replace(body("org-odl"), `{"grants"`, `{"nonce":"x","grants"`, 1),
+		"no account": strings.Replace(body("org-odl"), `"organization":"org-odl"`, `"organization":""`, 1),
+	} {
+		if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], bad); got.Code != 400 {
+			t.Errorf("%s = %d", name, got.Code)
+		}
+	}
+	if len(results) != 1 {
+		t.Fatalf("rejected readings were reported: %d", len(results))
 	}
 }

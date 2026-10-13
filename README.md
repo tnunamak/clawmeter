@@ -77,7 +77,13 @@ Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.
 ### Claude Web Reset Grants
 
 Claude's Usage page can show promotional reset grants that Claude Code's local
-usage data does not include. To read them, choose **Check Claude in browser**
+usage data does not include. The Clawmeter Chrome extension (see Claude API
+Credits below) reads them each minute while you are signed in to claude.ai.
+It sends each organization's ID and grants to Clawmeter on this computer, which
+keeps only the organization a Claude source is signed in to and stores a
+salted hash of its ID.
+
+Without the extension, choose **Check Claude in browser**
 in the tray. A local Clawmeter page opens with the steps: save the Clawmeter
 bookmark (first time only), open Claude Usage, and click the bookmark there.
 The page shows the result when it arrives. The same check also takes API
@@ -104,7 +110,8 @@ Claude Console through the Clawmeter Chrome extension:
 
 1. Open the browser's Extensions page and enable **Developer mode**.
 2. Choose **Load unpacked** and select this repository's `extension` folder.
-3. Sign in to the Claude Console and keep the browser and Clawmeter tray running.
+3. Sign in to the Claude Console and claude.ai, and keep the browser and
+   Clawmeter tray running.
 
 The extension checks each minute. A reading is live for up to five minutes;
 older readings keep their numbers with a browser reminder, and signing out
