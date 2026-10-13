@@ -57,10 +57,11 @@ func TestSourceCapabilityListsAndValidatesClaudeKinds(t *testing.T) {
 	}
 }
 
-func TestExplicitSourcesReadAndWriteOnlyTheirProfile(t *testing.T) {
+func TestExplicitSourcesReadOnlyTheirProfile(t *testing.T) {
 	one, two := t.TempDir(), t.TempDir()
 	writeTestCredentials(t, one, "one", "refresh-one")
 	writeTestCredentials(t, two, "two", "refresh-two")
+	before1, before2 := credentialBytes(t, one), credentialBytes(t, two)
 	cfg := config.ProviderConfig{}
 	p1 := NewSource(cfg, config.SourceConfig{ID: "one", Label: "One", Credential: config.CredentialRef{Kind: "config-dir", Ref: one}})
 	p2 := NewSource(cfg, config.SourceConfig{ID: "two", Label: "Two", Credential: config.CredentialRef{Kind: "config-dir", Ref: two}})
@@ -72,21 +73,11 @@ func TestExplicitSourcesReadAndWriteOnlyTheirProfile(t *testing.T) {
 	if err != nil || c2.AccessToken() != "two" {
 		t.Fatalf("profile two read = %v, %v", c2, err)
 	}
-	c1.ClaudeAiOauth.AccessToken = "one-updated"
-	if err := p1.writeCredentials(c1); err != nil {
-		t.Fatal(err)
-	}
-	read2, err := p2.readCredentials()
-	if err != nil || read2.AccessToken() != "two" {
-		t.Fatalf("profile two changed after profile one write: %v, %v", read2, err)
-	}
-	read1, _ := p1.readCredentials()
-	if read1.AccessToken() != "one-updated" {
-		t.Fatalf("profile one was not updated: %s", read1.AccessToken())
-	}
+	assertCredentialBytes(t, one, before1)
+	assertCredentialBytes(t, two, before2)
 }
 
-func TestSymlinkedCredentialsPreserveWriteProvenance(t *testing.T) {
+func TestSymlinkedCredentialsPreserveReadProvenance(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation commonly requires Windows developer mode")
 	}
@@ -102,17 +93,14 @@ func TestSymlinkedCredentialsPreserveWriteProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds.ClaudeAiOauth.AccessToken = "after"
-	if err := p.writeCredentials(creds); err != nil {
-		t.Fatal(err)
+	if creds.readPath != target || creds.readConfigDir != linkDir {
+		t.Fatalf("wrong read provenance: %q / %q", creds.readPath, creds.readConfigDir)
 	}
-	info, err := os.Lstat(link)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("credential symlink was replaced: info=%v err=%v", info, err)
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("credential symlink changed: info=%v err=%v", info, err)
 	}
-	updated, err := p.readCredentials()
-	if err != nil || updated.AccessToken() != "after" {
-		t.Fatalf("symlink target was not updated: creds=%v err=%v", updated, err)
+	if creds.AccessToken() != "before" {
+		t.Fatal("credential value changed")
 	}
 }
 
@@ -138,13 +126,6 @@ func TestNativeDefaultSourcePreservesLegacyCredentialResolution(t *testing.T) {
 	}
 	if p.SourceID() != "default" || p.SourceLabel() != "Default" || p.SourceRevision() != "" {
 		t.Fatalf("native default identity = %q/%q revision=%q", p.SourceID(), p.SourceLabel(), p.SourceRevision())
-	}
-}
-
-func TestCredentialsWithoutFileProvenanceCannotPersist(t *testing.T) {
-	p := New(config.ProviderConfig{})
-	if err := p.writeCredentials(&Credentials{}); err == nil || strings.Contains(err.Error(), string(filepath.Separator)) {
-		t.Fatalf("write error = %v, want safe non-persist error", err)
 	}
 }
 
@@ -436,6 +417,7 @@ func tokenOf(c *Credentials) string {
 // TestMain keeps every test off the developer's real macOS Keychain.
 func TestMain(m *testing.M) {
 	keychainRead = func() ([]byte, error) { return nil, errors.New("keychain disabled in tests") }
+	doctorRunner = func(context.Context, string, []string) error { return errors.New("doctor disabled in tests") }
 	os.Exit(m.Run())
 }
 
