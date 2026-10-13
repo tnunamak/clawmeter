@@ -88,13 +88,14 @@ func NewCreditPool(name, currency string, balance, monthSpend int64, monthResets
 			pool.Expiring += grant.Remaining
 		}
 	}
-	pool.Expiring = min(pool.Expiring, pool.Balance)
+	pool.Expiring = max(min(pool.Expiring, pool.Balance), 0)
 	pool.BurnPerDay, pool.BurnDays = burnRate(daily, observedAt)
 	if !pool.ExpiredSinceCheck.IsZero() {
 		pool.ExpiresAt, pool.Expiring = time.Time{}, 0
 		return pool
 	}
-	if pool.ExpiresAt.IsZero() {
+	// An empty or unpaid pool has nothing left to run out or expire.
+	if pool.ExpiresAt.IsZero() || pool.Balance <= 0 {
 		return pool
 	}
 	days := pool.ExpiresAt.Sub(observedAt).Hours() / 24
@@ -138,7 +139,7 @@ func (p UsageCreditPool) Summary(now time.Time) string {
 	if !p.ExpiredSinceCheck.IsZero() {
 		return p.expiredLine(now)
 	}
-	parts := []string{formatMinorUnits(int(p.Balance), p.Currency) + " left"}
+	parts := []string{p.balanceText()}
 	if p.MonthSpend != nil {
 		parts = append(parts, "spent "+formatMinorUnits(int(*p.MonthSpend), p.Currency)+" this month")
 	}
@@ -164,7 +165,7 @@ func (p UsageCreditPool) TrayLine(now time.Time) string {
 	if !p.ExpiredSinceCheck.IsZero() {
 		return p.expiredLine(now)
 	}
-	parts := []string{formatMinorUnits(int(p.Balance), p.Currency) + " left"}
+	parts := []string{p.balanceText()}
 	switch {
 	case !p.RunsOutAt.IsZero():
 		parts = append(parts, "runs out "+shortDate(p.RunsOutAt, now))
@@ -173,6 +174,15 @@ func (p UsageCreditPool) TrayLine(now time.Time) string {
 	}
 	parts = append(parts, "checked "+shortDate(p.ObservedAt, now))
 	return strings.Join(parts, " · ")
+}
+
+// balanceText is "$199.88 left", or "$4.50 unpaid · add funds" once spend
+// has passed the credits. The Console stops API access until it is paid.
+func (p UsageCreditPool) balanceText() string {
+	if p.Balance < 0 {
+		return formatMinorUnits(int(-p.Balance), p.Currency) + " unpaid · add funds"
+	}
+	return formatMinorUnits(int(p.Balance), p.Currency) + " left"
 }
 
 // expiryTime shows the local date and time. Consoles often show expiry as a

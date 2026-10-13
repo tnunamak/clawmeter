@@ -639,6 +639,9 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 				"currency=" + pool.Currency,
 				"balance=" + money(float64(pool.Balance)),
 			}
+			if pool.Balance < 0 {
+				fields = append(fields, "status=unpaid", "action=add_funds")
+			}
 			if pool.MonthSpend != nil {
 				fields = append(fields, "spent_this_month="+money(float64(*pool.MonthSpend)))
 			}

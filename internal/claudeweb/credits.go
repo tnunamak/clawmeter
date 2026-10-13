@@ -85,7 +85,8 @@ func (p APICreditPool) Validate() error {
 	if !currencyFormat.MatchString(p.Currency) {
 		return fmt.Errorf("invalid currency")
 	}
-	if p.Balance < 0 || p.Balance > maxMinor || p.MonthSpend < 0 || p.MonthSpend > maxMinor {
+	// A negative balance is spend past the credits, which the Console bills.
+	if p.Balance < -maxMinor || p.Balance > maxMinor || p.MonthSpend < 0 || p.MonthSpend > maxMinor {
 		return fmt.Errorf("invalid amount")
 	}
 	if p.ObservedAt.IsZero() || p.MonthResetsAt.IsZero() {
@@ -216,10 +217,6 @@ func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
 	if !admit(w, r, http.MethodPost, consoleOrigin) {
 		return
 	}
-	if s.kind != KindAPICredits {
-		s.reply(w, http.StatusConflict, msgWantUsage, true)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer r.Body.Close()
 	var payload creditsPayload
@@ -258,7 +255,7 @@ func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.save(w, Result{APICredits: pool}, func() error { return WriteAPICreditPool(pool) }, found)
+	s.save(w, partCredits, Result{APICredits: pool}, func() error { return WriteAPICreditPool(pool) }, found)
 }
 
 func (p creditsPayload) pool(now time.Time) (APICreditPool, error) {

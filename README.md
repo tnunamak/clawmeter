@@ -77,10 +77,11 @@ Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.
 ### Claude Web Reset Grants
 
 Claude's Usage page can show promotional reset grants that Claude Code's local
-usage data does not include. To read them, choose **Check Claude resets** in
-the tray. A local Clawmeter page opens with the steps: save the Clawmeter
+usage data does not include. To read them, choose **Check Claude in browser**
+in the tray. A local Clawmeter page opens with the steps: save the Clawmeter
 bookmark (first time only), open Claude Usage, and click the bookmark there.
-The page shows the result when it arrives.
+The page shows the result when it arrives. The same check also takes API
+credits (below).
 
 Clawmeter files the result under the Claude source signed in to the same
 organization as the browser, so there is nothing to confirm. The bookmark sends
@@ -99,8 +100,9 @@ it. `clawmeter claude-web-bookmarklet` prints the bookmark URL.
 Prepaid Claude API credits (for example the monthly API credit a Max plan
 grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
 Admin API is unavailable to individual accounts. Clawmeter reads them from the
-Claude Console with the same bookmark: choose **Check API credits** in the
-tray, open the Claude Console, and click the bookmark there.
+Claude Console with the same bookmark and the same check: choose **Check
+Claude in browser** in the tray, open the Claude Console, and click the
+bookmark there. One check takes resets and API credits, in either order.
 
 When a Claude plan funds the organization (the Console links it to that
 plan's claude.ai organization), the pool shows on the Claude source signed in

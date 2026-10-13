@@ -105,9 +105,9 @@ func TestConfigureNotificationIdentity(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeResetsIsOneGlobalActionThatAlwaysOpensTheCheckPage(t *testing.T) {
-	if claudeResetsTitle != "Check Claude resets" {
-		t.Fatalf("title = %q", claudeResetsTitle)
+func TestCheckClaudeInBrowserIsOneGlobalActionThatAlwaysOpensTheCheckPage(t *testing.T) {
+	if claudeCheckTitle != "Check Claude in browser" {
+		t.Fatalf("title = %q", claudeCheckTitle)
 	}
 	var checking atomic.Bool
 	var opened []string

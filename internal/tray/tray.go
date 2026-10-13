@@ -60,21 +60,17 @@ func resetPollIntervalIfChanged(currentSeconds, nextSeconds int, reset func(time
 }
 
 const (
-	claudeResetsTitle   = "Check Claude resets"
-	claudeResetsWaiting = "Waiting for Claude bookmark…"
-	apiCreditsTitle     = "Check API credits"
-	apiCreditsWaiting   = "Waiting for Console bookmark…"
+	claudeCheckTitle   = "Check Claude in browser"
+	claudeCheckWaiting = "Waiting for Claude bookmark…"
 )
 
-// Global Claude reset check: the only tray affordance for browser reset checks.
+// The one tray affordance for browser checks: Claude resets and API credits.
 var (
-	claudeResetsItem  *systray.MenuItem
-	claudeResetsState menuItemState
-	apiCreditsItem    *systray.MenuItem
-	apiCreditsState   menuItemState
+	claudeCheckItem  *systray.MenuItem
+	claudeCheckState menuItemState
 )
 
-// beginClaudeResetCheck is the whole behavior of "Check Claude resets": it
+// beginClaudeResetCheck is the whole behavior of "Check Claude in browser": it
 // always opens the local check page. If a check is already running, it only
 // reopens that page and returns a nil session.
 func beginClaudeResetCheck(checking *atomic.Bool, start func() (*claudeweb.Session, error), open func(string)) (*claudeweb.Session, error) {
@@ -304,12 +300,9 @@ func onReadyWithConfig(loaded *config.Config) {
 	s.iconTargetState = menuItemState{title: "Icon: Auto (click to cycle)", enabled: true, initialized: true}
 	mIconAutoMode := systray.AddMenuItem("Auto Mode: Risk", "")
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
-	claudeResetsItem = systray.AddMenuItem(claudeResetsTitle, "Read reset grants from Claude's Usage page in your browser")
-	claudeResetsItem.Hide()
-	claudeResetsState = menuItemState{title: claudeResetsTitle, visible: false, enabled: true, initialized: true}
-	apiCreditsItem = systray.AddMenuItem(apiCreditsTitle, "Read prepaid API credits from the Claude Console in your browser")
-	apiCreditsItem.Hide()
-	apiCreditsState = menuItemState{title: apiCreditsTitle, visible: false, enabled: true, initialized: true}
+	// API credits need no Claude Code login, so the check is always offered.
+	claudeCheckItem = systray.AddMenuItem(claudeCheckTitle, "Read Claude resets and prepaid API credits in your browser")
+	claudeCheckState = menuItemState{title: claudeCheckTitle, visible: true, enabled: true, initialized: true}
 	systray.AddSeparator()
 	iconActionCh := iconClickActions
 	if iconActionCh == nil {
@@ -580,18 +573,14 @@ func onReadyWithConfig(loaded *config.Config) {
 	// Setup tickers
 	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
 	updateTicker := time.NewTicker(updateCheckInterval)
-	// startClaudeWebCheck runs one browser handoff: reset grants for every
-	// Claude source, or prepaid API credits from the Claude Console. Both use
-	// the same loopback port, so one check runs at a time. It always opens the
-	// local check page, which shows the steps and live progress. A timeout is
-	// silent: the page already says so.
-	startClaudeWebCheck := func(kind claudeweb.Kind) {
-		item, state, title, waiting := claudeResetsItem, &claudeResetsState, claudeResetsTitle, claudeResetsWaiting
-		if kind == claudeweb.KindAPICredits {
-			item, state, title, waiting = apiCreditsItem, &apiCreditsState, apiCreditsTitle, apiCreditsWaiting
-		}
+	// startClaudeWebCheck runs one browser handoff. It takes reset grants for
+	// any Claude source and prepaid API credits from the Claude Console, and
+	// shows each as soon as it is saved. One check runs at a time on the
+	// loopback port. It always opens the local check page, which shows the
+	// steps and live progress. A timeout is silent: the page already says so.
+	startClaudeWebCheck := func() {
 		session, err := beginClaudeResetCheck(&claudeWebChecking, func() (*claudeweb.Session, error) {
-			return claudeweb.Start(kind, claudewebprovider.Accounts(registry.GetFamily("claude")))
+			return claudeweb.Start(claudewebprovider.Accounts(registry.GetFamily("claude")))
 		}, openURL)
 		if err != nil {
 			notify("Clawmeter", "Couldn't start the Claude check. Is another Clawmeter running?", "normal")
@@ -602,26 +591,33 @@ func onReadyWithConfig(loaded *config.Config) {
 			return // a check is already running; its page was reopened
 		}
 		trayRenderMu.Lock()
-		setMenuItemTitle(item, state, waiting)
+		setMenuItemTitle(claudeCheckItem, &claudeCheckState, claudeCheckWaiting)
 		trayRenderMu.Unlock()
 		go func() {
 			defer claudeWebChecking.Store(false)
 			defer session.Finish()
-			result, err := session.Wait(context.Background())
-			trayRenderMu.Lock()
-			setMenuItemTitle(item, state, title)
-			trayRenderMu.Unlock()
-			if err != nil {
-				return
+			waiting := true
+			for result := range session.Results() {
+				// The check stays open for the other part, but the first save
+				// already answered the click.
+				if waiting {
+					waiting = false
+					trayRenderMu.Lock()
+					setMenuItemTitle(claudeCheckItem, &claudeCheckState, claudeCheckTitle)
+					trayRenderMu.Unlock()
+				}
+				sourceKey := "claude_api"
+				if result.IsResets() {
+					sourceKey = claudeWebProviderKey(result.Resets.ResetCreditsTarget)
+				}
+				if !publishLocalResetSource(registry, sourceKey, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
+					notify("Clawmeter", "The check was saved but can't be shown yet. Choose Refresh Now.", "normal")
+				}
 			}
-			refreshing.Lock()
-			defer refreshing.Unlock()
-			sourceKey := "claude_api"
-			if kind == claudeweb.KindResets {
-				sourceKey = claudeWebProviderKey(result.Resets.ResetCreditsTarget)
-			}
-			if !publishLocalResetSource(registry, sourceKey, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup) {
-				notify("Clawmeter", "The check was saved but can't be shown yet. Choose Refresh Now.", "normal")
+			if waiting {
+				trayRenderMu.Lock()
+				setMenuItemTitle(claudeCheckItem, &claudeCheckState, claudeCheckTitle)
+				trayRenderMu.Unlock()
 			}
 		}()
 	}
@@ -639,10 +635,8 @@ func onReadyWithConfig(loaded *config.Config) {
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
 				go checkUpdate()
-			case <-claudeResetsItem.ClickedCh:
-				startClaudeWebCheck(claudeweb.KindResets)
-			case <-apiCreditsItem.ClickedCh:
-				startClaudeWebCheck(claudeweb.KindAPICredits)
+			case <-claudeCheckItem.ClickedCh:
+				startClaudeWebCheck()
 			case action := <-iconActionCh:
 				if action == iconClickResetAuto {
 					resetIconSelection(providerMenus, mIconProvider, mIconAutoMode)
@@ -1037,18 +1031,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
-	claudeVisible := false
-	defer func() {
-		// Reset checks are offered only while a Claude account is shown.
-		if claudeResetsItem != nil {
-			setMenuItemVisible(claudeResetsItem, &claudeResetsState, claudeVisible)
-		}
-		// API credits need no Claude Code login, so their check is always
-		// offered.
-		if apiCreditsItem != nil {
-			setMenuItemVisible(apiCreditsItem, &apiCreditsState, true)
-		}
-	}()
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
@@ -1071,9 +1053,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) && !detected {
 			hideProviderMenu(menu)
 			continue
-		}
-		if menu.provider.Name() == "claude" {
-			claudeVisible = true
 		}
 		updateResetCreditRow(menu, data, time.Now())
 		setupReady := setup.IsReady()

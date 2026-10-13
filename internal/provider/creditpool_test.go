@@ -119,3 +119,22 @@ func TestCreditPoolJSONOmitsUnknownTimes(t *testing.T) {
 		t.Fatalf("json = %s", got)
 	}
 }
+
+// The live Console state of 2026-10-13: the plan credit used up and $4.50
+// spent past it, which the Console bills and blocks API access until paid.
+func TestCreditPoolShowsAnUnpaidBalance(t *testing.T) {
+	utc(t)
+	observed := time.Date(2026, 10, 13, 16, 0, 0, 0, time.UTC)
+	pool := NewCreditPool("Family's Individual Organization", "USD", -450, 20450, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+		[]CreditGrant{{Remaining: 0, ExpiresAt: time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)}},
+		[]DailySpend{{Day: day("2026-10-13"), Amount: 4000}}, observed, observed)
+	if !pool.RunsOutAt.IsZero() || !pool.ExpiresAt.IsZero() || pool.Expiring != 0 || pool.ProjectedSpend != 0 {
+		t.Fatalf("pool = %+v, want no projection", pool)
+	}
+	if got, want := pool.Summary(observed), "$4.50 unpaid · add funds · spent $204.50 this month · $40.00/day · checked 16:00"; got != want {
+		t.Fatalf("Summary() = %q, want %q", got, want)
+	}
+	if got, want := pool.TrayLine(observed), "$4.50 unpaid · add funds · checked 16:00"; got != want {
+		t.Fatalf("TrayLine() = %q, want %q", got, want)
+	}
+}

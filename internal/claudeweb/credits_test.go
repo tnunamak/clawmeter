@@ -1,7 +1,6 @@
 package claudeweb
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,7 +35,7 @@ func creditsBody(t *testing.T, nonce string) string {
 
 func TestCreditsCheckSavesTheConsoleSnapshot(t *testing.T) {
 	isolateUserCache(t)
-	s := newSession(KindAPICredits, testNonce, testAccounts)
+	s := newSession(testNonce, testAccounts)
 	response := serve(t, s, http.MethodPost, "/credits", consoleOrigin, creditsBody(t, testNonce))
 	if response.Code != http.StatusOK || message(t, response) != "Saved API credits for Family's Individual Organization." {
 		t.Fatalf("credits = %d %q", response.Code, response.Body.String())
@@ -44,9 +43,8 @@ func TestCreditsCheckSavesTheConsoleSnapshot(t *testing.T) {
 	if got := response.Header().Get("Access-Control-Allow-Origin"); got != consoleOrigin {
 		t.Fatalf("Access-Control-Allow-Origin = %q", got)
 	}
-	result, err := s.Wait(context.Background())
-	if err != nil || result.APICredits.Balance != 19988 {
-		t.Fatalf("Wait() = %+v, %v", result, err)
+	if result := <-s.Results(); result.APICredits.Balance != 19988 {
+		t.Fatalf("Results() = %+v", result)
 	}
 	pools, err := ReadAPICreditPools()
 	if err != nil || len(pools) != 1 {
@@ -81,7 +79,7 @@ func TestCreditsCheckLinksThePoolToItsClaudePlan(t *testing.T) {
 		}
 		body["link"] = map[string]any{"account": AccountHash(testNonce, tc.planOrg), "plan": "max_20x", "monthly_credit": 20000}
 		raw, _ := json.Marshal(body)
-		s := newSession(KindAPICredits, testNonce, testAccounts)
+		s := newSession(testNonce, testAccounts)
 		response := serve(t, s, http.MethodPost, "/credits", consoleOrigin, string(raw))
 		if response.Code != http.StatusOK || message(t, response) != tc.wantMessage {
 			t.Fatalf("%s: credits = %d %q", tc.planOrg, response.Code, response.Body.String())
@@ -97,32 +95,68 @@ func TestCreditsCheckLinksThePoolToItsClaudePlan(t *testing.T) {
 	}
 }
 
-func TestEachCheckOnlyTakesItsOwnKind(t *testing.T) {
+// One check takes a reset result and a credit result, in either order, and
+// ends once it has both.
+func TestOneCheckTakesResetsAndCredits(t *testing.T) {
 	isolateUserCache(t)
-	resets := newSession(KindResets, testNonce, testAccounts)
-	if got := serve(t, resets, http.MethodPost, "/credits", consoleOrigin, creditsBody(t, testNonce)); got.Code != http.StatusConflict || message(t, got) != msgWantUsage {
-		t.Fatalf("credits during a reset check = %d %q", got.Code, got.Body.String())
-	}
-	credits := newSession(KindAPICredits, testNonce, testAccounts)
-	if got := serve(t, credits, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-odl")); got.Code != http.StatusConflict || message(t, got) != msgWantConsole {
-		t.Fatalf("resets during a credits check = %d %q", got.Code, got.Body.String())
-	}
-	if got := serve(t, credits, http.MethodPost, "/credits", claudeOrigin, creditsBody(t, testNonce)); got.Code != http.StatusForbidden {
+	s := newSession(testNonce, testAccounts)
+	if got := serve(t, s, http.MethodPost, "/credits", claudeOrigin, creditsBody(t, testNonce)); got.Code != http.StatusForbidden {
 		t.Fatalf("credits from claude.ai = %d, want 403", got.Code)
 	}
-	if got := serve(t, credits, http.MethodGet, "/challenge", consoleOrigin, ""); got.Code != http.StatusOK {
+	if got := serve(t, s, http.MethodPost, "/result", consoleOrigin, resultBody(t, testNonce, "org-odl")); got.Code != http.StatusForbidden {
+		t.Fatalf("resets from the Console = %d, want 403", got.Code)
+	}
+	if got := serve(t, s, http.MethodGet, "/challenge", consoleOrigin, ""); got.Code != http.StatusOK {
 		t.Fatalf("challenge from the Console = %d", got.Code)
 	}
-	if pools, _ := ReadAPICreditPools(); len(pools) != 0 {
-		t.Fatalf("saved %d pools", len(pools))
+	if got := serve(t, s, http.MethodPost, "/credits", consoleOrigin, creditsBody(t, testNonce)); got.Code != http.StatusOK {
+		t.Fatalf("credits = %d %q", got.Code, got.Body.String())
+	}
+	if got := <-s.Results(); got.IsResets() || got.APICredits.Pool == "" {
+		t.Fatalf("first result = %+v, want API credits", got)
+	}
+	if got := s.currentStatus(); got.State != stateSaved || !strings.HasSuffix(got.Message, msgAlsoResets) {
+		t.Fatalf("status after credits = %+v", got)
+	}
+	if got := serve(t, s, http.MethodPost, "/credits", consoleOrigin, creditsBody(t, testNonce)); got.Code != http.StatusConflict || message(t, got) != msgDone {
+		t.Fatalf("second credits = %d %q, want 409 already saved", got.Code, got.Body.String())
+	}
+	if got := serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-odl")); got.Code != http.StatusOK {
+		t.Fatalf("resets = %d %q", got.Code, got.Body.String())
+	}
+	if got := <-s.Results(); !got.IsResets() {
+		t.Fatalf("second result = %+v, want resets", got)
+	}
+	if _, open := <-s.Results(); open {
+		t.Fatal("Results() still open after both parts were saved")
+	}
+	if got := s.currentStatus(); got.State != stateDone || !strings.HasPrefix(got.Message, "No resets found for ODL. Saved API credits for ") ||
+		!strings.HasSuffix(got.Message, " You can close this tab.") {
+		t.Fatalf("final status = %+v", got)
+	}
+}
+
+// A check that saved one part and then timed out reports what it saved.
+func TestTimeoutAfterOnePartReportsIt(t *testing.T) {
+	isolateUserCache(t)
+	s := newSession(testNonce, testAccounts)
+	if got := serve(t, s, http.MethodPost, "/result", claudeOrigin, resultBody(t, testNonce, "org-odl")); got.Code != http.StatusOK {
+		t.Fatalf("resets = %d", got.Code)
+	}
+	s.timeOut()
+	if got := s.currentStatus(); got != (Status{State: stateDone, Message: "No resets found for ODL. You can close this tab."}) {
+		t.Fatalf("status = %+v", got)
+	}
+	if got := serve(t, s, http.MethodPost, "/credits", consoleOrigin, creditsBody(t, testNonce)); got.Code != http.StatusGone {
+		t.Fatalf("credits after timeout = %d, want 410", got.Code)
 	}
 }
 
 func TestCreditsCheckRejectsUnreadableData(t *testing.T) {
 	isolateUserCache(t)
 	for name, mutate := range map[string]func(map[string]any){
-		"negative balance": func(body map[string]any) { body["balance"] = -1 },
-		"bad currency":     func(body map[string]any) { body["currency"] = "dollars" },
+		"balance out of range": func(body map[string]any) { body["balance"] = -100000000001 },
+		"bad currency":         func(body map[string]any) { body["currency"] = "dollars" },
 		"remaining above granted": func(body map[string]any) {
 			body["grants"].([]any)[0].(map[string]any)["remaining"] = 30000
 		},
@@ -136,7 +170,7 @@ func TestCreditsCheckRejectsUnreadableData(t *testing.T) {
 		}
 		mutate(body)
 		raw, _ := json.Marshal(body)
-		s := newSession(KindAPICredits, testNonce, testAccounts)
+		s := newSession(testNonce, testAccounts)
 		if got := serve(t, s, http.MethodPost, "/credits", consoleOrigin, string(raw)); got.Code != http.StatusBadRequest {
 			t.Errorf("%s: credits = %d %q, want 400", name, got.Code, got.Body.String())
 		}
@@ -158,7 +192,7 @@ func TestBookmarkletReadsTheConsole(t *testing.T) {
 		t.Fatalf("bookmarklet posted a raw organization ID: %s", run.Posted[0])
 	}
 	isolateUserCache(t)
-	s := newSession(KindAPICredits, testNonce, testAccounts)
+	s := newSession(testNonce, testAccounts)
 	if response := serve(t, s, http.MethodPost, "/credits", consoleOrigin, run.Posted[0]); response.Code != http.StatusOK {
 		t.Fatalf("Go handler rejected the real bookmarklet payload: %d %q (%s)", response.Code, response.Body.String(), run.Posted[0])
 	}
@@ -175,10 +209,29 @@ func TestBookmarkletReadsTheConsole(t *testing.T) {
 	}
 }
 
+// Spend past the credits leaves a negative balance, as the Console reported
+// on 2026-10-13 ("You have an unpaid balance of $4.50"). It is sent and saved,
+// not refused as a format change.
+func TestBookmarkletSendsAnUnpaidBalance(t *testing.T) {
+	unpaid := `{ amount: -450, amount_without_scoped_credits: -450, currency: "USD", balance: { money: null, credits: { amount_minor: 0, exponent: 2 } }, balance_credits: 0, tranches: [], promo_tranches: [] }`
+	run := runConsoleBookmarkletWith(t, unpaid, `{ amount: 20450, resets_at: "2026-11-01T00:00:00Z" }`, `{ costs: { [today]: [row(20450)] } }`)
+	if len(run.Alerts) != 1 || run.Alerts[0] != "Clawmeter: Saved API credits for Family's Individual Organization." || len(run.Posted) != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	isolateUserCache(t)
+	s := newSession(testNonce, testAccounts)
+	if response := serve(t, s, http.MethodPost, "/credits", consoleOrigin, run.Posted[0]); response.Code != http.StatusOK {
+		t.Fatalf("Go handler rejected the unpaid balance: %d %q", response.Code, response.Body.String())
+	}
+	if pools, _ := ReadAPICreditPools(); len(pools) != 1 || pools[0].Balance != -450 {
+		t.Fatalf("pools = %+v", pools)
+	}
+}
+
 // A cost report without its costs map is not zero spend: nothing is sent.
 func TestBookmarkletRejectsACostReportWithoutCosts(t *testing.T) {
 	run := runConsoleBookmarklet(t, `{}`)
-	if len(run.Posted) != 0 || len(run.Alerts) != 1 || run.Alerts[0] != "Clawmeter: Claude Console's credit data changed format. Nothing was sent." {
+	if len(run.Posted) != 0 || len(run.Alerts) != 1 || run.Alerts[0] != "Clawmeter: Claude Console's credit data changed format (usage costs). Nothing was sent." {
 		t.Fatalf("run = %+v", run)
 	}
 }
@@ -188,7 +241,18 @@ type bookmarkletRun struct{ Posted, Alerts []string }
 // runConsoleBookmarklet runs the real bookmarklet against a fake Claude
 // Console shaped like the live 2026-10-08 responses. defaultCosts is the
 // default workspace's usage_cost body, as JavaScript.
+const (
+	testCredits = `{ amount: 19989, amount_without_scoped_credits: 0, currency: "USD", balance: { money: null, credits: { amount_minor: 19989, exponent: 2 } }, tranches: [], promo_tranches: [
+    { remaining_amount_minor_units: 19988, currency: "USD", expires_at: "2026-10-25T00:00:00Z", granted_amount_minor_units: 20000, granted_at: "2026-10-08T02:31:09.349000Z", name: "API credit (Max 20x)", id: "x", program_id: "subscription_api_credit" } ] }`
+	testSpend = `{ amount: 11, resets_at: "2026-11-01T00:00:00Z" }`
+)
+
 func runConsoleBookmarklet(t *testing.T, defaultCosts string) bookmarkletRun {
+	t.Helper()
+	return runConsoleBookmarkletWith(t, testCredits, testSpend, defaultCosts)
+}
+
+func runConsoleBookmarkletWith(t *testing.T, credits, spend, defaultCosts string) bookmarkletRun {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -205,9 +269,8 @@ const today = new Date().toISOString().slice(0, 10);
 const row = total => ({ workspace_id: "default", key_id: "apikey_x", key_name: "k", model_name: "Claude Sonnet 5.5", total, token_type: "output", usage_type: "message" });
 globalThis.fetch = async (url, options = {}) => {
   if (url === "/api/organizations") return json(200, [{ uuid: "org-chat", name: "Chat", capabilities: ["claude_max", "chat"] }, { uuid: "org-api", name: "Family's Individual Organization", capabilities: ["api", "api_individual"] }]);
-  if (url === "/api/organizations/org-api/prepaid/credits") return json(200, { amount: 19989, amount_without_scoped_credits: 0, currency: "USD", balance: { money: null, credits: { amount_minor: 19989, exponent: 2 } }, tranches: [], promo_tranches: [
-    { remaining_amount_minor_units: 19988, currency: "USD", expires_at: "2026-10-25T00:00:00Z", granted_amount_minor_units: 20000, granted_at: "2026-10-08T02:31:09.349000Z", name: "API credit (Max 20x)", id: "x", program_id: "subscription_api_credit" } ] });
-  if (url === "/api/organizations/org-api/current_spend") return json(200, { amount: 11, resets_at: "2026-11-01T00:00:00Z" });
+  if (url === "/api/organizations/org-api/prepaid/credits") return json(200, ` + credits + `);
+  if (url === "/api/organizations/org-api/current_spend") return json(200, ` + spend + `);
   if (url === "/api/console/organizations/org-api/workspaces") return json(200, [{ id: "wrkspc_cc", name: "Claude Code" }]);
   if (url.startsWith("/api/organizations/org-api/workspaces/default/usage_cost?")) return json(200, ` + defaultCosts + `);
   if (url.startsWith("/api/organizations/org-api/workspaces/wrkspc_cc/usage_cost?")) return json(200, { costs: { [today]: [] } });
