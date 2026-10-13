@@ -155,8 +155,8 @@ func TestTimeoutAfterOnePartReportsIt(t *testing.T) {
 func TestCreditsCheckRejectsUnreadableData(t *testing.T) {
 	isolateUserCache(t)
 	for name, mutate := range map[string]func(map[string]any){
-		"negative balance": func(body map[string]any) { body["balance"] = -1 },
-		"bad currency":     func(body map[string]any) { body["currency"] = "dollars" },
+		"balance out of range": func(body map[string]any) { body["balance"] = -100000000001 },
+		"bad currency":         func(body map[string]any) { body["currency"] = "dollars" },
 		"remaining above granted": func(body map[string]any) {
 			body["grants"].([]any)[0].(map[string]any)["remaining"] = 30000
 		},
@@ -209,6 +209,25 @@ func TestBookmarkletReadsTheConsole(t *testing.T) {
 	}
 }
 
+// Spend past the credits leaves a negative balance, as the Console reported
+// on 2026-10-13 ("You have an unpaid balance of $4.50"). It is sent and saved,
+// not refused as a format change.
+func TestBookmarkletSendsAnUnpaidBalance(t *testing.T) {
+	unpaid := `{ amount: -450, amount_without_scoped_credits: -450, currency: "USD", balance: { money: null, credits: { amount_minor: 0, exponent: 2 } }, balance_credits: 0, tranches: [], promo_tranches: [] }`
+	run := runConsoleBookmarkletWith(t, unpaid, `{ amount: 20450, resets_at: "2026-11-01T00:00:00Z" }`, `{ costs: { [today]: [row(20450)] } }`)
+	if len(run.Alerts) != 1 || run.Alerts[0] != "Clawmeter: Saved API credits for Family's Individual Organization." || len(run.Posted) != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	isolateUserCache(t)
+	s := newSession(testNonce, testAccounts)
+	if response := serve(t, s, http.MethodPost, "/credits", consoleOrigin, run.Posted[0]); response.Code != http.StatusOK {
+		t.Fatalf("Go handler rejected the unpaid balance: %d %q", response.Code, response.Body.String())
+	}
+	if pools, _ := ReadAPICreditPools(); len(pools) != 1 || pools[0].Balance != -450 {
+		t.Fatalf("pools = %+v", pools)
+	}
+}
+
 // A cost report without its costs map is not zero spend: nothing is sent.
 func TestBookmarkletRejectsACostReportWithoutCosts(t *testing.T) {
 	run := runConsoleBookmarklet(t, `{}`)
@@ -222,7 +241,18 @@ type bookmarkletRun struct{ Posted, Alerts []string }
 // runConsoleBookmarklet runs the real bookmarklet against a fake Claude
 // Console shaped like the live 2026-10-08 responses. defaultCosts is the
 // default workspace's usage_cost body, as JavaScript.
+const (
+	testCredits = `{ amount: 19989, amount_without_scoped_credits: 0, currency: "USD", balance: { money: null, credits: { amount_minor: 19989, exponent: 2 } }, tranches: [], promo_tranches: [
+    { remaining_amount_minor_units: 19988, currency: "USD", expires_at: "2026-10-25T00:00:00Z", granted_amount_minor_units: 20000, granted_at: "2026-10-08T02:31:09.349000Z", name: "API credit (Max 20x)", id: "x", program_id: "subscription_api_credit" } ] }`
+	testSpend = `{ amount: 11, resets_at: "2026-11-01T00:00:00Z" }`
+)
+
 func runConsoleBookmarklet(t *testing.T, defaultCosts string) bookmarkletRun {
+	t.Helper()
+	return runConsoleBookmarkletWith(t, testCredits, testSpend, defaultCosts)
+}
+
+func runConsoleBookmarkletWith(t *testing.T, credits, spend, defaultCosts string) bookmarkletRun {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -239,9 +269,8 @@ const today = new Date().toISOString().slice(0, 10);
 const row = total => ({ workspace_id: "default", key_id: "apikey_x", key_name: "k", model_name: "Claude Sonnet 5.5", total, token_type: "output", usage_type: "message" });
 globalThis.fetch = async (url, options = {}) => {
   if (url === "/api/organizations") return json(200, [{ uuid: "org-chat", name: "Chat", capabilities: ["claude_max", "chat"] }, { uuid: "org-api", name: "Family's Individual Organization", capabilities: ["api", "api_individual"] }]);
-  if (url === "/api/organizations/org-api/prepaid/credits") return json(200, { amount: 19989, amount_without_scoped_credits: 0, currency: "USD", balance: { money: null, credits: { amount_minor: 19989, exponent: 2 } }, tranches: [], promo_tranches: [
-    { remaining_amount_minor_units: 19988, currency: "USD", expires_at: "2026-10-25T00:00:00Z", granted_amount_minor_units: 20000, granted_at: "2026-10-08T02:31:09.349000Z", name: "API credit (Max 20x)", id: "x", program_id: "subscription_api_credit" } ] });
-  if (url === "/api/organizations/org-api/current_spend") return json(200, { amount: 11, resets_at: "2026-11-01T00:00:00Z" });
+  if (url === "/api/organizations/org-api/prepaid/credits") return json(200, ` + credits + `);
+  if (url === "/api/organizations/org-api/current_spend") return json(200, ` + spend + `);
   if (url === "/api/console/organizations/org-api/workspaces") return json(200, [{ id: "wrkspc_cc", name: "Claude Code" }]);
   if (url.startsWith("/api/organizations/org-api/workspaces/default/usage_cost?")) return json(200, ` + defaultCosts + `);
   if (url.startsWith("/api/organizations/org-api/workspaces/wrkspc_cc/usage_cost?")) return json(200, { costs: { [today]: [] } });

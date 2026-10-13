@@ -36,6 +36,7 @@
       };
       const changed = part => `Claude Console's credit data changed format (${part}). Nothing was sent.`;
       const isAmount = value => Number.isInteger(value) && value >= 0;
+      const isBalance = value => Number.isSafeInteger(value);
       const isTime = value => typeof value === "string" && !Number.isNaN(Date.parse(value));
       let credits, spend, workspaces;
       try {
@@ -46,9 +47,9 @@
       const tranches = [...(credits?.tranches || []), ...(credits?.promo_tranches || [])];
       const promotional = (credits?.promo_tranches || []).reduce((sum, tranche) => sum + tranche.remaining_amount_minor_units, 0);
       const balance = credits?.amount_without_scoped_credits + promotional;
-      if (!isAmount(credits?.amount) || !isAmount(credits.amount_without_scoped_credits) || typeof credits.currency !== "string" ||
+      if (!isBalance(credits?.amount) || !isBalance(credits.amount_without_scoped_credits) || typeof credits.currency !== "string" ||
           (credits.balance?.credits && credits.balance.credits.exponent !== 2)) return say(changed("balance"));
-      if (!isAmount(balance) || Math.abs(balance - credits.amount) > Math.max(5, credits.amount * 0.01)) return say(changed("balance total"));
+      if (!isBalance(balance) || Math.abs(balance - credits.amount) > Math.max(5, Math.abs(credits.amount) * 0.01)) return say(changed("balance total"));
       if (!isAmount(spend?.amount) || !isTime(spend.resets_at)) return say(changed("monthly spend"));
       if (!Array.isArray(workspaces)) return say(changed("workspaces"));
       if (tranches.length > 50) return say(changed("credit grants"));

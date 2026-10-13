@@ -85,7 +85,8 @@ func (p APICreditPool) Validate() error {
 	if !currencyFormat.MatchString(p.Currency) {
 		return fmt.Errorf("invalid currency")
 	}
-	if p.Balance < 0 || p.Balance > maxMinor || p.MonthSpend < 0 || p.MonthSpend > maxMinor {
+	// A negative balance is spend past the credits, which the Console bills.
+	if p.Balance < -maxMinor || p.Balance > maxMinor || p.MonthSpend < 0 || p.MonthSpend > maxMinor {
 		return fmt.Errorf("invalid amount")
 	}
 	if p.ObservedAt.IsZero() || p.MonthResetsAt.IsZero() {
