@@ -45,6 +45,20 @@ The usage cache stores derived quota/status data, recent provider errors, and op
 
 API credit pool snapshots are also stored in the user cache directory as `claude-api-credits-<first 16 hex characters of the pool hash>.json`. They include organization name, currency, balance, credit grants and expiry, month and daily spend, observation time, plan name, and monthly credit. The pool identity is an unsalted SHA-256 hash of `clawmeter-api-pool` plus the organization ID; a plan link uses a salted hash. Neither stores the raw organization ID or browser cookies.
 
+Claude reset grant snapshots are stored the same way as `claude-web-resets*.json`. They hold reset expiry times, the observation time, the Claude source they belong to, and a salted hash of the organization ID.
+
+## Browser Extension
+
+The optional Clawmeter browser extension reads Claude data that your signed-in browser can already see and sends it only to Clawmeter on the same computer.
+
+- **What it reads.** Once a minute, it reads your organizations and reset grants from claude.ai, and your organizations, prepaid credit balance, credit grants, and usage costs from the Claude Console (platform.claude.com). It reads claude.ai from inside an open claude.ai tab, because claude.ai refuses the extension's own requests.
+- **Where it sends it.** Only to `http://127.0.0.1:17344`, the Clawmeter app on your computer. The extension makes no other network requests. Nothing goes to Tim Nunamaker, Anthropic beyond the normal page requests above, or any other party.
+- **What it never touches.** It does not read or store cookies, passwords, chat content, prompts, or browsing history, and it does not change any page. Your browser attaches its own Claude session to the requests, as it does when you open those pages yourself.
+- **What it keeps.** The extension stores only a 30-minute cache of Console usage-cost reports, in the browser's extension storage, to avoid asking the Console every minute. Clawmeter stores the derived snapshots described under Local Files.
+- **Permissions.** `alarms` runs the once-a-minute check. `storage` holds the cost cache. `scripting` runs the claude.ai read inside an open claude.ai tab. Host access to claude.ai and platform.claude.com is for the reads above, and to `127.0.0.1` for sending to Clawmeter.
+
+Remove the extension from the browser's Extensions page to stop all of this. Clawmeter keeps showing the last saved readings, marked with their age.
+
 Uninstalling Clawmeter removes installed binaries and shortcuts according to the installer. Local config and cache files may remain unless you delete them manually.
 
 ## How To Disable Providers
