@@ -47,7 +47,7 @@ var aliases = map[string]string{
 }
 
 // localProviders name the providers that read only what Clawmeter itself
-// saved, such as a browser check of the Claude Console. They hold no
+// saved, such as Claude Console credits read by the browser extension. They hold no
 // credentials, so they have no enrolled sources, but users can select and
 // disable them by name. Register builds the live instances.
 var localProviders = []provider.Provider{claudeapi.New(nil)}

@@ -400,7 +400,7 @@ func TestClaudeResetSnapshotRemainsExplicitWhenUsageIsStale(t *testing.T) {
 	}
 	pf := ProviderFormatter{Display: "Claude · ODL", Data: data}
 	plain := pf.FormatPlain()
-	for _, want := range []string{"stale (updated ", "Resets: 1 · expires ", " · checked "} {
+	for _, want := range []string{"stale (updated ", "Resets: 1 · expires ", " · not updated since ", " · open claude.ai in your browser"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("plain output %q missing %q", plain, want)
 		}

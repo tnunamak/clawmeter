@@ -30,6 +30,32 @@ async function post(path, body) {
   } catch {}
 }
 
+// claude.ai answers a background worker's request with 403, so read it from
+// inside an open claude.ai tab, where the request carries the page's origin.
+// The script runs in an isolated world, so the page cannot change it.
+function readInPage(url) {
+  return fetch(url, {
+    credentials: "include", cache: "no-store", redirect: "error",
+    headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20000),
+  })
+    .then(async response => ({ status: response.status, body: response.ok ? await response.json() : null }));
+}
+
+async function readFromClaudeTab(url, fallback) {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false, status: "complete" });
+  } catch {}
+  for (const tab of tabs) {
+    try {
+      const [injection] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readInPage, args: [url] });
+      const result = injection?.result;
+      if (result && Number.isInteger(result.status)) return result;
+    } catch {}
+  }
+  return fallback(url);
+}
+
 async function poll() {
   if (inFlight) return;
   inFlight = true;
@@ -39,7 +65,7 @@ async function poll() {
     headers: { Accept: "application/json" },
   }, async response => ({ status: response.status, body: response.ok ? await response.json() : null }));
   try {
-    await readResets(getJSON, Date.now, payload => post("/v1/resets", payload));
+    await readResets(url => readFromClaudeTab(url, getJSON), Date.now, payload => post("/v1/resets", payload));
   } catch {
     // Resets and credits are independent; a failure in one never blocks the other.
   }

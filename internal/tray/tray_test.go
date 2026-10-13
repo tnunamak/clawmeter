@@ -7,14 +7,12 @@ import (
 	"errors"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gen2brain/beeep"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
-	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -105,39 +103,6 @@ func TestConfigureNotificationIdentity(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeInBrowserIsOneGlobalActionThatAlwaysOpensTheCheckPage(t *testing.T) {
-	if claudeCheckTitle != "Check Claude in browser" {
-		t.Fatalf("title = %q", claudeCheckTitle)
-	}
-	var checking atomic.Bool
-	var opened []string
-	starts := 0
-	open := func(url string) { opened = append(opened, url) }
-	start := func() (*claudeweb.Session, error) { starts++; return &claudeweb.Session{}, nil }
-
-	session, err := beginClaudeResetCheck(&checking, start, open)
-	if err != nil || session == nil || starts != 1 {
-		t.Fatalf("first click: session=%v err=%v starts=%d", session, err, starts)
-	}
-	// A second click while the check runs reopens the same page.
-	session, err = beginClaudeResetCheck(&checking, start, open)
-	if err != nil || session != nil || starts != 1 {
-		t.Fatalf("second click: session=%v err=%v starts=%d, want no new session", session, err, starts)
-	}
-	if len(opened) != 2 || opened[0] != "http://127.0.0.1:17343/check" || opened[1] != opened[0] {
-		t.Fatalf("opened = %v, want the local check page both times", opened)
-	}
-
-	var idle atomic.Bool
-	opened = nil
-	if _, err := beginClaudeResetCheck(&idle, func() (*claudeweb.Session, error) { return nil, errors.New("port in use") }, open); err == nil {
-		t.Fatal("start failure was not reported")
-	}
-	if idle.Load() || len(opened) != 0 {
-		t.Fatalf("after a failed start: checking=%v opened=%v, want idle and nothing opened", idle.Load(), opened)
-	}
-}
-
 func TestClaudeResetResultIsPublishedUnderTheMatchedSource(t *testing.T) {
 	for _, tc := range []struct{ target, want string }{
 		{"claude", "claude_web"},
@@ -180,7 +145,7 @@ func TestResetSnapshotRowIsCompactAndVisibleWhenUsageIsStale(t *testing.T) {
 		},
 	}
 	got := resetCreditTraySummary(data, observedAt.Add(time.Hour))
-	want := "Resets: 1 · expires " + observedAt.Add(28*24*time.Hour).Local().Format("Jan 2") + " · checked " + observedAt.Local().Format("15:04")
+	want := "Resets: 1 · expires " + observedAt.Add(28*24*time.Hour).Local().Format("Jan 2") + " · not updated since " + observedAt.Local().Format("15:04") + " · open claude.ai in your browser"
 	if got != want {
 		t.Errorf("reset snapshot row = %q, want %q", got, want)
 	}

@@ -498,8 +498,9 @@ func (r *UsageResetCredits) EarliestExpiry(now time.Time) (time.Time, bool) {
 }
 
 // Summary is the compact reset row shared by the CLI and tray, for example
-// "Resets: 2 · next expires Oct 22 · checked 11:30". Only browser snapshots
-// say when they were checked. It is empty when no reset is available.
+// "Resets: 2 · next expires Oct 22". A browser snapshot older than five
+// minutes says when it was read and how to refresh it, as API credits do. It
+// is empty when no reset is available.
 func (r *UsageResetCredits) Summary(now time.Time) string {
 	count := r.DisplayCount(now)
 	if count <= 0 {
@@ -513,8 +514,8 @@ func (r *UsageResetCredits) Summary(now time.Time) string {
 		}
 		parts = append(parts, verb+shortDate(expiresAt, now))
 	}
-	if r.Snapshot && !r.FetchedAt.IsZero() {
-		parts = append(parts, "checked "+shortDate(r.FetchedAt, now))
+	if r.Snapshot && !r.FetchedAt.IsZero() && now.Sub(r.FetchedAt) > 5*time.Minute {
+		parts = append(parts, "not updated since "+shortDate(r.FetchedAt, now), "open claude.ai in your browser")
 	}
 	return strings.Join(parts, " · ")
 }

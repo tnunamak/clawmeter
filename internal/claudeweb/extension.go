@@ -81,7 +81,7 @@ func ServeExtension(ctx context.Context, accounts func() []Account, saved func(R
 		return fmt.Errorf("start Claude extension: %w", err)
 	}
 	server := &http.Server{
-		Handler: extensionHandler(accounts, saved), ReadHeaderTimeout: 2 * time.Second,
+		Handler: ExtensionHandler(accounts, saved), ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second,
 	}
 	done := make(chan struct{})
@@ -104,33 +104,15 @@ func ServeExtension(ctx context.Context, accounts func() []Account, saved func(R
 	return err
 }
 
-type extensionLink struct {
-	Organization  string `json:"organization"`
-	Plan          string `json:"plan"`
-	MonthlyCredit int64  `json:"monthly_credit"`
-}
-
-// Shadow the bookmark's nonce and link; nonce is not accepted on this route.
-type extensionCreditsPayload struct {
-	ObservedAt    string             `json:"observed_at"`
-	Pool          string             `json:"pool"`
-	Name          string             `json:"name"`
-	Currency      string             `json:"currency"`
-	Balance       *int64             `json:"balance"`
-	Grants        []grantTranche     `json:"grants"`
-	MonthSpend    *int64             `json:"month_spend"`
-	MonthResetsAt string             `json:"month_resets_at"`
-	Daily         map[string]float64 `json:"daily"`
-	Link          *extensionLink     `json:"link"`
-}
-
 type extensionResetsPayload struct {
 	ObservedAt   string         `json:"observed_at"`
 	Organization string         `json:"organization"`
 	Grants       []grantPayload `json:"grants"`
 }
 
-func extensionHandler(accounts func() []Account, saved func(Result)) http.Handler {
+// ExtensionHandler serves the extension's readings. It admits only the
+// extension's origin on the loopback address; saved is as for ServeExtension.
+func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handler {
 	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != extensionAddress {
@@ -215,7 +197,7 @@ func extensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 				return
 			}
 		} else {
-			var payload extensionCreditsPayload
+			var payload creditsPayload
 			if decoder.Decode(&payload) != nil || decoder.Decode(&trailing) != io.EOF {
 				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
 				return
@@ -225,17 +207,11 @@ func extensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
 				return
 			}
-			shared := creditsPayload{
-				Pool: payload.Pool, Name: payload.Name, Currency: payload.Currency,
-				Balance: payload.Balance, Grants: payload.Grants, MonthSpend: payload.MonthSpend,
-				MonthResetsAt: payload.MonthResetsAt, Daily: payload.Daily,
-			}
-			pool, err := shared.pool(observedAt)
+			pool, err := payload.pool(observedAt)
 			if err != nil {
 				http.Error(w, msgConsoleUnreadable, http.StatusBadRequest)
 				return
 			}
-			pool.Source = "extension"
 			if link := payload.Link; link != nil {
 				pool.Plan, pool.MonthlyCredit = link.Plan, link.MonthlyCredit
 				var matches []Account

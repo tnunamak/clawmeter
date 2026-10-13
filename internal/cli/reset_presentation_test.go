@@ -66,10 +66,14 @@ func assertResetUnderClaude(t *testing.T, output *MultiProviderOutput, state str
 		t.Fatalf("%s: Claude row lacks the reset snapshot: %#v", state, row.Data)
 	}
 	plain := row.FormatPlain()
-	for _, want := range []string{"Claude:", "  Resets: 1 · expires ", " · checked "} {
+	for _, want := range []string{"Claude:", "  Resets: 1 · expires "} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("%s: plain output %q missing %q", state, plain, want)
 		}
+	}
+	// A reading taken just now needs no age or refresh hint.
+	if strings.Contains(plain, "not updated") {
+		t.Errorf("%s: live reading marked stale: %q", state, plain)
 	}
 	if strings.Contains(plain, "claude_web") || strings.Contains(plain, "Web") {
 		t.Errorf("%s: plain output leaks the supplemental source: %q", state, plain)

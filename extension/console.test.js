@@ -3,8 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
-const { createHash, webcrypto } = require("node:crypto");
-const vm = require("node:vm");
+const { createHash } = require("node:crypto");
 const { readConsole } = require("./console.js");
 
 const now = Date.parse("2026-10-08T12:00:00Z");
@@ -149,45 +148,11 @@ test("month start includes the last seven days and month end includes every mont
   }
 });
 
-test("payload matches the real bookmarklet except nonce and link proof", async () => {
-  const f = fixture(), posted = [], alerts = [];
-  class Clock extends Date {
-    constructor(...args) { super(...(args.length ? args : [now])); }
-    static now() { return now; }
-  }
-  const context = {
-    Date: Clock, crypto: webcrypto, TextEncoder,
-    location: { origin: "https://platform.claude.com" },
-    document: { cookie: "lastActiveOrg=org-api" }, window: {},
-    alert: message => alerts.push(message),
-    fetch: async (url, options = {}) => {
-      if (url.endsWith("/challenge")) return { ok: true, json: async () => ({ nonce: "test-nonce" }) };
-      if (url === "http://127.0.0.1:17343/credits") {
-        posted.push(JSON.parse(options.body));
-        return { ok: true, json: async () => ({ message: "Saved" }) };
-      }
-      const response = await f.getJSON(url);
-      return { ok: response.status === 200, status: response.status, json: async () => response.body };
-    },
-  };
-  await vm.runInNewContext(readFileSync(require.resolve("../internal/claudeweb/bookmarklet.js"), "utf8"), context);
-  assert.deepEqual(alerts, ["Clawmeter: Saved"]);
-  assert.equal(posted.length, 1);
-  const extension = (await readConsole(f.getJSON, now, {})).payloads[0];
-  const bookmark = posted[0];
-  const proof = createHash("sha256").update("clawmeter-claude-reset\u0000test-nonce\u0000org-plan").digest("hex");
-  assert.equal(bookmark.link.account, proof);
-  delete bookmark.nonce;
-  bookmark.link = { organization: "org-plan", plan: bookmark.link.plan, monthly_credit: bookmark.link.monthly_credit };
-  delete extension.observed_at;
-  assert.deepEqual(extension, bookmark);
-});
-
 test("manifest key fixes the expected unpacked identity and minimal permissions", () => {
   const manifest = JSON.parse(readFileSync(require.resolve("./manifest.json"), "utf8"));
   const digest = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32);
   assert.equal([...digest].map(c => String.fromCharCode(97 + parseInt(c, 16))).join(""), "hfpaojbfhfofabcaappnobhbfddeckjm");
-  assert.deepEqual(manifest.permissions, ["alarms", "storage"]);
+  assert.deepEqual(manifest.permissions, ["alarms", "scripting", "storage"]);
   assert.deepEqual(manifest.host_permissions, ["https://claude.ai/*", "https://platform.claude.com/*", "http://127.0.0.1/*"]);
 });
 

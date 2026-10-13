@@ -1,9 +1,9 @@
-// Package claudeapi shows prepaid Claude API credit pools saved by a browser
-// check of the Claude Console. Anthropic has no API for the prepaid balance
+// Package claudeapi shows prepaid Claude API credit pools saved by the
+// Clawmeter browser extension. Anthropic has no API for the prepaid balance
 // or its expiry, and its Admin API is unavailable to individual
 // organizations, so the Console is the only source. This provider never
 // reads browser credentials or calls the Console: it reads what the
-// Clawmeter extension or bookmark saved.
+// Clawmeter extension saved.
 package claudeapi
 
 import (
@@ -66,9 +66,9 @@ func (*Provider) IsConfigured() bool {
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
 	if p.IsConfigured() {
-		return provider.SetupStatus{State: provider.SetupReady, Detail: "API credits checked in the Claude Console"}
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "API credits read by the browser extension"}
 	}
-	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check Claude in browser in the tray"}
+	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "install the Clawmeter browser extension"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {

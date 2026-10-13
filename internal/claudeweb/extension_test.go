@@ -11,18 +11,6 @@ import (
 	"time"
 )
 
-func extensionBody(t *testing.T) map[string]any {
-	t.Helper()
-	var body map[string]any
-	if err := json.Unmarshal([]byte(creditsBody(t, testNonce)), &body); err != nil {
-		t.Fatal(err)
-	}
-	delete(body, "nonce")
-	body["observed_at"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
-	body["link"] = map[string]any{"organization": "org-odl", "plan": "max_20x", "monthly_credit": 20000}
-	return body
-}
-
 func extensionRequest(handler http.Handler, method, path, host, origin, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, "http://"+extensionAddress+path, strings.NewReader(body))
 	request.Host = host
@@ -34,7 +22,7 @@ func extensionRequest(handler http.Handler, method, path, host, origin, body str
 
 func TestExtensionRejectsBadRequests(t *testing.T) {
 	isolateUserCache(t)
-	handler := extensionHandler(func() []Account { return testAccounts }, nil)
+	handler := ExtensionHandler(func() []Account { return testAccounts }, nil)
 	valid := extensionBody(t)
 	encode := func(body map[string]any) string {
 		raw, err := json.Marshal(body)
@@ -47,6 +35,9 @@ func TestExtensionRejectsBadRequests(t *testing.T) {
 	valid["token"] = "x"
 	unknownJSON := encode(valid)
 	delete(valid, "token")
+	valid["nonce"] = "x"
+	nonceJSON := encode(valid)
+	delete(valid, "nonce")
 	// Organization is an optional matching hint with no length restriction.
 	valid["link"].(map[string]any)["organization"] = strings.Repeat("x", maxBodyBytes)
 	largeJSON := encode(valid)
@@ -57,12 +48,12 @@ func TestExtensionRejectsBadRequests(t *testing.T) {
 		name, method, host, origin, body string
 		want                             int
 	}{
-		{"origin", "POST", extensionAddress, consoleOrigin, "{}", 403},
+		{"origin", "POST", extensionAddress, "https://platform.claude.com", "{}", 403},
 		{"missing origin", "POST", extensionAddress, "", "{}", 403},
 		{"host", "POST", "localhost:17344", ExtensionOrigins[0], "{}", 403},
 		{"unknown", "POST", extensionAddress, ExtensionOrigins[0], unknownJSON, 400},
 		{"missing fields", "POST", extensionAddress, ExtensionOrigins[0], "{}", 400},
-		{"nonce", "POST", extensionAddress, ExtensionOrigins[0], creditsBody(t, testNonce), 400},
+		{"nonce", "POST", extensionAddress, ExtensionOrigins[0], nonceJSON, 400},
 		{"trailing", "POST", extensionAddress, ExtensionOrigins[0], validJSON + validJSON, 400},
 		{"large", "POST", extensionAddress, ExtensionOrigins[0], largeJSON, 400},
 		{"method", "GET", extensionAddress, ExtensionOrigins[0], "", 405},
@@ -80,7 +71,7 @@ func TestExtensionRejectsBadRequests(t *testing.T) {
 func TestExtensionSavesAndLinksPrivately(t *testing.T) {
 	isolateUserCache(t)
 	saves := 0
-	handler := extensionHandler(func() []Account { return testAccounts }, func(Result) { saves++ })
+	handler := ExtensionHandler(func() []Account { return testAccounts }, func(Result) { saves++ })
 	body, _ := json.Marshal(extensionBody(t))
 	post := func() APICreditPool {
 		t.Helper()
@@ -117,7 +108,7 @@ func TestExtensionAmbiguousOrMissingLinkSavesUnlinked(t *testing.T) {
 		{{Key: "invalid/key", OrgUUID: "org-odl"}},
 	} {
 		isolateUserCache(t)
-		handler := extensionHandler(func() []Account { return accounts }, nil)
+		handler := ExtensionHandler(func() []Account { return accounts }, nil)
 		raw, _ := json.Marshal(extensionBody(t))
 		got := extensionRequest(handler, "POST", "/v1/api-credits", extensionAddress, ExtensionOrigins[0], string(raw))
 		pools, _ := ReadAPICreditPools()
@@ -130,7 +121,7 @@ func TestExtensionAmbiguousOrMissingLinkSavesUnlinked(t *testing.T) {
 func TestExtensionSignOutRoundTrip(t *testing.T) {
 	isolateUserCache(t)
 	saves := 0
-	handler := extensionHandler(nil, func(Result) { saves++ })
+	handler := ExtensionHandler(nil, func(Result) { saves++ })
 	if state, err := ReadExtensionState(); err != nil || state.Status != "" {
 		t.Fatalf("missing state = %+v, %v", state, err)
 	}
@@ -154,7 +145,7 @@ func TestExtensionSignOutRoundTrip(t *testing.T) {
 
 func TestExtensionObservationTime(t *testing.T) {
 	isolateUserCache(t)
-	handler := extensionHandler(nil, nil)
+	handler := ExtensionHandler(nil, nil)
 	for _, tc := range []struct {
 		name     string
 		observed string
@@ -197,7 +188,7 @@ func TestExtensionObservationTime(t *testing.T) {
 func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 	isolateUserCache(t)
 	var results []Result
-	handler := extensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) })
+	handler := ExtensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) })
 	observed := time.Now().Add(-time.Minute).UTC()
 	ends := observed.Add(10 * 24 * time.Hour).Format(time.RFC3339)
 	body := func(org string) string {
@@ -225,6 +216,13 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 	}
 	if len(results) != 1 || !results[0].IsResets() || results[0].Resets.ResetCreditsTarget != "claude:odl" {
 		t.Fatalf("results = %+v", results)
+	}
+	path, err := summaryPathFor("claude:odl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || strings.Contains(string(raw), "org-odl") {
+		t.Fatalf("saved summary holds the raw organization ID: %s, %v", raw, err)
 	}
 
 	// An organization Clawmeter doesn't track is accepted and dropped.
@@ -263,7 +261,7 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 
 func TestExtensionJudgesGrantsOnTheReceiverClock(t *testing.T) {
 	isolateUserCache(t)
-	handler := extensionHandler(func() []Account { return testAccounts }, nil)
+	handler := ExtensionHandler(func() []Account { return testAccounts }, nil)
 	// The reading is four minutes old; the grant started after it was read
 	// but before it arrived, so it is usable now.
 	now := time.Now()

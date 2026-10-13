@@ -6,8 +6,9 @@ const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [] })) {
-  const listeners = {}, created = [], stored = [];
+function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [] }),
+  { tabs = [], executeScript = async () => [] } = {}) {
+  const listeners = {}, created = [], stored = [], queries = [], injections = [];
   const timers = new Map();
   let timerID = 0;
   const context = vm.createContext({
@@ -22,11 +23,13 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
         onInstalled: { addListener: fn => { listeners.install = fn; } },
         onStartup: { addListener: fn => { listeners.startup = fn; } },
       },
+      tabs: { query: async filter => { queries.push(filter); return tabs; } },
+      scripting: { executeScript: async injection => { injections.push(injection); return executeScript(injection); } },
       storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))) } },
     },
   });
   vm.runInContext(readFileSync(require.resolve("./background.js"), "utf8"), context);
-  return { context, listeners, created, stored, timers };
+  return { context, listeners, created, stored, timers, queries, injections };
 }
 
 test("alarm lifecycle and one poll at a time", async () => {
@@ -139,4 +142,56 @@ test("resets post to their own route and a resets failure never blocks credits",
   await vm.runInContext("poll()", w.context);
   assert.deepEqual(posts, [["http://127.0.0.1:17344/v1/resets", { organization: "org-plan", grants: [] }]]);
   assert.equal(credits, 1);
+});
+
+test("claude.ai is read inside an open claude.ai tab, falling back without one", async () => {
+  const url = "https://claude.ai/api/organizations";
+  const fetched = [];
+  const fetch = async (requested, options) => {
+    fetched.push([requested, options]);
+    return { ok: false, status: 403, json: async () => null };
+  };
+  const readThrough = (tabs, executeScript) => {
+    let answer;
+    const w = worker(async () => ({ status: "ok", payloads: [] }), fetch,
+      async getJSON => { answer = await getJSON(url); return { status: "ok", payloads: [] }; }, { tabs, executeScript });
+    return vm.runInContext("poll()", w.context).then(() => ({ w, answer: JSON.parse(JSON.stringify(answer)) }));
+  };
+
+  // The first tab that answers wins; a tab that cannot run the script is skipped.
+  let { w, answer } = await readThrough([{ id: 3 }, { id: 7 }], async ({ target }) => {
+    if (target.tabId === 3) throw new Error("Cannot access contents of the page");
+    return [{ result: { status: 200, body: [{ uuid: "org" }] } }];
+  });
+  assert.deepEqual(answer, { status: 200, body: [{ uuid: "org" }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(w.queries)), [{ url: "https://claude.ai/*", discarded: false, status: "complete" }]);
+  assert.deepEqual(w.injections.map(i => i.target.tabId), [3, 7]);
+  assert.equal(w.injections[1].func.name, "readInPage");
+  assert.deepEqual(JSON.parse(JSON.stringify(w.injections[1].args)), [url]);
+  assert.equal(w.injections[1].world, undefined, "the script runs in the isolated world, not the page's");
+  assert.equal(fetched.filter(([requested]) => requested === url).length, 0);
+
+  // No tab, or a tab whose script returns nothing usable, falls back to the worker.
+  for (const [tabs, executeScript] of [[[], undefined], [[{ id: 3 }], async () => [{ result: undefined }]]]) {
+    fetched.length = 0;
+    ({ answer } = await readThrough(tabs, executeScript));
+    assert.deepEqual(answer, { status: 403, body: null });
+    assert.equal(fetched[0][0], url);
+    assert.equal(fetched[0][1].credentials, "include");
+  }
+});
+
+test("the in-tab read is self-contained and asks for JSON with the page's session", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  const source = vm.runInContext("readInPage.toString()", w.context);
+  const calls = [];
+  // executeScript serializes the function, so it must run with no worker globals.
+  const page = vm.createContext({
+    AbortSignal: { timeout: ms => ({ timeout: ms }) },
+    fetch: async (url, options) => { calls.push([url, options]); return { ok: true, status: 200, json: async () => ({ grants: [] }) }; },
+  });
+  const result = await vm.runInContext(`(${source})("https://claude.ai/api/organizations")`, page);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { status: 200, body: { grants: [] } });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["https://claude.ai/api/organizations",
+    { credentials: "include", cache: "no-store", redirect: "error", headers: { Accept: "application/json" }, signal: { timeout: 20000 } }]]);
 });

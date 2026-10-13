@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,10 +60,10 @@ func writeProfile(t *testing.T, path, org string) {
 	}
 }
 
-// TestBrowserCheckRoutesByOrganizationAcrossRealProfiles runs a real
-// loopback check against two real Claude profiles and delivers the result
-// the way the bookmark does.
-func TestBrowserCheckRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
+// TestExtensionReadingRoutesByOrganizationAcrossRealProfiles delivers a
+// reset reading the way the browser extension does and checks it lands on the
+// Claude profile signed in to that organization.
+func TestExtensionReadingRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	isolateUserCache(t)
 	home, _ := os.UserHomeDir()
 	writeProfile(t, filepath.Join(home, ".claude.json"), "org-default")
@@ -73,49 +74,21 @@ func TestBrowserCheckRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	cfg := config.ProviderConfig{Sources: []config.SourceConfig{native, odl}}
 	sources := []provider.Provider{anthropic.NewSource(cfg, native), anthropic.NewSource(cfg, odl)}
 
-	session, err := claudeweb.Start(Accounts(sources))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-	client := &http.Client{Timeout: 5 * time.Second}
-	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:17343/challenge", nil)
-	req.Header.Set("Origin", "https://claude.ai")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var challenge struct{ Nonce string }
-	_ = json.NewDecoder(resp.Body).Decode(&challenge)
-	resp.Body.Close()
-	paused := false
+	var results []claudeweb.Result
+	handler := claudeweb.ExtensionHandler(func() []claudeweb.Account { return Accounts(sources) }, func(result claudeweb.Result) { results = append(results, result) })
 	body, _ := json.Marshal(map[string]any{
-		"nonce":   challenge.Nonce,
-		"account": claudeweb.AccountHash(challenge.Nonce, "org-odl"),
+		"observed_at": time.Now().UTC().Format(time.RFC3339Nano), "organization": "org-odl",
 		"grants": []map[string]any{{
-			"resets_left": 1, "paused": &paused,
+			"resets_left": 1, "paused": false,
 			"starts_at": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339), "ends_at": time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
 		}},
 	})
-	post, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:17343/result", bytes.NewReader(body))
-	post.Header.Set("Origin", "https://claude.ai")
-	resp, err = client.Do(post)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var reply struct{ Message string }
-	_ = json.NewDecoder(resp.Body).Decode(&reply)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || reply.Message != "Found 1 reset for ODL." {
-		t.Fatalf("result = %d %q", resp.StatusCode, reply.Message)
-	}
-	select {
-	case summary := <-session.Results():
-		if summary.Resets.ResetCreditsTarget != "claude:odl" {
-			t.Fatalf("Results() = %+v", summary)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no result")
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:17344/v1/resets", bytes.NewReader(body))
+	request.Header.Set("Origin", claudeweb.ExtensionOrigins[0])
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || len(results) != 1 || results[0].Resets.ResetCreditsTarget != "claude:odl" {
+		t.Fatalf("reading = %d %q, results %+v", response.Code, response.Body.String(), results)
 	}
 	if NewFor(sources[0]).IsConfigured() {
 		t.Fatal("the Default source received the ODL result")

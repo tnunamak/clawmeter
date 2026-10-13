@@ -7,8 +7,8 @@ the shared reset-credit model and presentation.
 
 Codex reset credits are fetched through a read-only endpoint. Claude's
 promotional reset grants are visible to the signed-in browser's usage page but
-not reliably to Claude Code OAuth. Clawmeter reads that page only when the user
-starts a check and clicks their saved bookmark. Clawmeter files the
+not reliably to Claude Code OAuth. The Clawmeter browser extension reads the
+same data each minute from an open claude.ai tab. Clawmeter files the
 observation under the local Claude source signed in to the same organization,
 matched by a salted hash, so there is nothing to confirm.
 
@@ -76,28 +76,19 @@ one shared presentation:
 6. Fail soft if auth is missing, the endpoint changes, the network is down, or
    the provider rejects the request.
 
-For Claude, the tray has one action, **Check Claude in browser**. It starts a
-10-minute loopback session and opens its page, `http://127.0.0.1:17343/check`.
-The page always shows the same three steps: save the bookmark if you don't
-have it, open **Claude Usage** (resets), **Claude Console** (API credits), or
-both, and click the bookmark on each. A browser cannot tell
-Clawmeter whether the bookmark still exists, so Clawmeter keeps no "set up"
-state that could go stale. If the bookmark has not answered 45 seconds after
-a Claude page opens, the page says so and points back to step 1.
-The page polls the session and shows the outcome: waiting, a retryable problem
-(for example, an account that is not in Clawmeter), the result, or a timeout.
-A timeout raises no tray notification.
+For Claude, the Clawmeter browser extension reads
+`/api/organizations/{id}/usage` for each organization the browser is signed in
+to, once a minute. claude.ai answers 403 to requests from the extension's
+background worker, so the extension runs the request inside an open claude.ai
+tab, in an isolated script world the page cannot change, and falls back to the
+background request only when no tab is open. It posts each organization's ID
+and grants to `http://127.0.0.1:17344/v1/resets`, which admits only the
+extension's fixed origin. Clawmeter files the reading under the one local
+Claude source signed in to that organization and drops readings for
+organizations it does not track or that match two sources. A reading older
+than the saved one, for example from a second browser profile, is dropped.
 
-The bookmark proves its account with
-`sha256("clawmeter-claude-reset\0" + nonce + "\0" + orgUuid)`. Clawmeter computes
-the same hash for every local Claude source and files the result under the one
-that matches. No match, or two sources with the same organization, is rejected
-with a short message and the session keeps waiting. The session accepts one
-reset result (only from `https://claude.ai`) and one API credit result (only
-from `https://platform.claude.com`), shows each as soon as it is saved, and
-ends when it has both or times out. It serves only the `127.0.0.1:17343` Host.
-
-Which grants count. The bookmark sends each grant's remaining count
+Which grants count. The extension sends each grant's remaining count
 (`resets_left`), start (`starts_at`), expiry (`ends_at`), and `paused` flag.
 Clawmeter counts a grant's remaining resets only while the grant is usable now:
 started (`starts_at` not in the future), not paused, not expired, and with at
@@ -106,11 +97,11 @@ though the Claude Usage page may list it. The evidence for these semantics is
 thin: `ai/research/claude-reset-surface-2026-09-23.md` does not describe the
 grant fields, and the field names come from the browser capture of the Usage
 response only. The rule is therefore the conservative reading of the field
-names. The bookmark and the local listener also refuse the whole result, and
-send nothing, when a grant that has resets left lacks a boolean `paused`, a
+names. The extension and the local receiver also refuse the whole result, and
+save nothing, when a grant that has resets left lacks a boolean `paused`, a
 parseable `starts_at`, or a parseable `ends_at`, because guessing would either
 overcount or silently hide a grant. If Claude changes these fields, the
-user sees "Claude's reset data changed format. Nothing was sent." instead of a wrong count.
+saved reading ages instead of showing a wrong count.
 
 Where it shows. A reset observation always appears under the Claude source it
 was recorded for, in the tray, `clawmeter status` (plain, `--json`, `--agent`,
@@ -124,8 +115,9 @@ inventory, that provider-native inventory is shown and the browser observation
 is dropped for display (Claude Code does not report one today).
 
 Presentation. CLI and tray share one row: `Resets: 1 · expires Oct 22`, or
-`Resets: 2 · next expires Oct 22` for several. Browser snapshots add
-` · checked Oct 7`, or ` · checked 11:30` when checked today. Nothing shows
+`Resets: 2 · next expires Oct 22` for several. A browser reading more than
+five minutes old adds ` · not updated since 11:30 · open claude.ai in your
+browser` (a date instead of a time when it is older than today). Nothing shows
 when no reset is available. JSON keeps the full fields; `--agent` prints
 `observed_count=N snapshot=true` with exact timestamps.
 
@@ -216,11 +208,11 @@ raw responses or credentials.
 - Multiple credits with the same expiry: sort deterministically and show the
   earliest expiry.
 - Claude browser observations are snapshots. Keep a separate observation per
-  local Claude source, show its full observation time, and never infer a match
+  local Claude source, keep its full observation time, and never infer a match
   from browser organization identifiers.
-- A browser observation can become outdated if the user redeems a grant in
-  Claude before the next check. Show its checked time and never imply it is a
-  live poll.
+- A browser observation can become outdated if the extension stops reading
+  claude.ai (browser closed, no claude.ai tab). After five minutes, show when it
+  was read and how to refresh it.
 - Windows, macOS, and Linux tray differences: use existing menu/tooltip surfaces,
   not platform-specific notification behavior.
 
@@ -234,7 +226,7 @@ raw responses or credentials.
 - Unit-test soft-fail behavior for missing auth and non-2xx responses.
 - Unit-test provider cloning/cache compatibility for reset-credit metadata.
 - Unit-test browser observation persistence, privacy allowlist, expiry filtering,
-  per-source association, shared bookmark setup state, and stale presentation.
+  per-source association, and stale presentation.
 - Unit-test CLI and agent formatting.
 - Unit-test tray tooltip/menu copy where possible without real tray APIs.
 - Run `go test ./...` and `go test -tags tray ./...`.
