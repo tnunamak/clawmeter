@@ -48,7 +48,14 @@ async function readFromClaudeTab(url, fallback) {
   } catch {}
   for (const tab of tabs) {
     try {
-      const [injection] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readInPage, args: [url] });
+      // A frozen tab never runs the page-side timeout, so the worker bounds
+      // the wait itself; otherwise one tab could stall every later poll.
+      let timer;
+      const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Timeout")), 20000); });
+      const [injection] = await Promise.race([
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readInPage, args: [url] }),
+        deadline,
+      ]).finally(() => clearTimeout(timer));
       const result = injection?.result;
       if (result && Number.isInteger(result.status)) return result;
     } catch {}

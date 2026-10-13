@@ -68,7 +68,7 @@ The images are rendered from the HTML files next to them; re-render with
 | Permission | Justification |
 | --- | --- |
 | `alarms` | Runs the once-a-minute check of claude.ai and the Claude Console. |
-| `storage` | Caches the Claude Console's usage-cost reports for 30 minutes so the extension does not request them every minute. |
+| `storage` | Keeps the latest daily Claude Console cost totals, refreshed every 30 minutes, so the extension does not request the cost report every minute. |
 | `scripting` | Runs the claude.ai read inside an open claude.ai tab. claude.ai refuses the same request from the extension's background worker. |
 | Host `https://claude.ai/*` | Reads the user's organizations and reset grants. |
 | Host `https://platform.claude.com/*` | Reads the user's Console organizations, prepaid credit balance, credit grants, and usage costs. |

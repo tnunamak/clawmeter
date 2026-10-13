@@ -195,3 +195,21 @@ test("the in-tab read is self-contained and asks for JSON with the page's sessio
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["https://claude.ai/api/organizations",
     { credentials: "include", cache: "no-store", redirect: "error", headers: { Accept: "application/json" }, signal: { timeout: 20000 } }]]);
 });
+
+test("a claude.ai tab that never answers is abandoned for the next one", async () => {
+  const url = "https://claude.ai/api/organizations";
+  let answer;
+  const w = worker(async () => ({ status: "ok", payloads: [] }), undefined,
+    async getJSON => { answer = await getJSON(url); return { status: "ok", payloads: [] }; },
+    { tabs: [{ id: 3 }, { id: 7 }], executeScript: ({ target }) => target.tabId === 3
+      ? new Promise(() => {}) : Promise.resolve([{ result: { status: 200, body: [] } }]) });
+  const pending = vm.runInContext("poll()", w.context);
+  await tick();
+  assert.equal(w.injections.length, 1);
+  assert.equal(w.timers.size, 1);
+  [...w.timers.values()][0]();
+  await pending;
+  assert.deepEqual(JSON.parse(JSON.stringify(answer)), { status: 200, body: [] });
+  assert.deepEqual(w.injections.map(i => i.target.tabId), [3, 7]);
+  assert.equal(w.timers.size, 0);
+});
