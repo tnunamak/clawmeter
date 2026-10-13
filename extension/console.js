@@ -14,6 +14,8 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
   const changed = () => { throw new Error("Claude Console credit data changed format"); };
   const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
   const amount = value => Number.isSafeInteger(value) && value >= 0;
+  // Spend past the credits leaves an unpaid, negative balance.
+  const signedAmount = value => Number.isSafeInteger(value);
   const timestamp = value => typeof value === "string" && Number.isFinite(Date.parse(value));
   const request = async path => {
     const result = await getJSON(consoleOrigin + path);
@@ -68,8 +70,8 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
     const tranches = [...(credits.tranches || []), ...(credits.promo_tranches || [])];
     const promotional = (credits.promo_tranches || []).reduce((sum, tranche) => sum + tranche.remaining_amount_minor_units, 0);
     const balance = credits.amount_without_scoped_credits + promotional;
-    if (!amount(credits.amount) || !amount(credits.amount_without_scoped_credits) || !amount(balance) ||
-        Math.abs(balance - credits.amount) > Math.max(5, credits.amount * 0.01) ||
+    if (!signedAmount(credits.amount) || !signedAmount(credits.amount_without_scoped_credits) || !signedAmount(balance) ||
+        Math.abs(balance - credits.amount) > Math.max(5, Math.abs(credits.amount) * 0.01) ||
         typeof credits.currency !== "string" || (credits.balance?.credits && credits.balance.credits.exponent !== 2) ||
         !amount(spend?.amount) || !timestamp(spend.resets_at) || tranches.length > 50) changed();
     const grants = tranches.map(tranche => {

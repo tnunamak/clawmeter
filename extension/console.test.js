@@ -60,6 +60,20 @@ test("healthy balance, all cost kinds, grants and plan link", async () => {
     url.includes("starting_on=2026-10-01&ending_before=2026-10-09")));
 });
 
+// The Console state of 2026-10-13: credits used up and $4.50 spent past them.
+test("unpaid negative balance is sent, not rejected as a format change", async () => {
+  const f = fixture(), cache = {};
+  f.data["/api/organizations/org-api/prepaid/credits"] = { amount: -450, amount_without_scoped_credits: -450, currency: "USD",
+    balance: { money: null, credits: { amount_minor: 0, exponent: 2 } }, balance_credits: 0, tranches: [], promo_tranches: [] };
+  f.data["/api/organizations/org-api/current_spend"] = { amount: 20450, resets_at: "2026-11-01T00:00:00Z" };
+  f.data["/api/organizations/org-api/workspaces/default/usage_cost"] = { costs: { [today]: [{ total: 20450 }] } };
+  f.data["/api/organizations/org-api/workspaces/other/usage_cost"] = { costs: {} };
+  const { payloads } = await readConsole(f.getJSON, now, cache);
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].balance, -450);
+  assert.deepEqual(payloads[0].grants, []);
+});
+
 test("billing-forbidden org is skipped and another org is returned", async () => {
   for (const endpoint of ["prepaid/credits", "current_spend"]) {
     const f = fixture();
