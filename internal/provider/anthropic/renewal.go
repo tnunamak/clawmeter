@@ -18,6 +18,7 @@ import (
 const (
 	renewalTimeout    = 30 * time.Second
 	renewalCooldown   = 5 * time.Minute
+	maxRenewalBackoff = 6 * time.Hour
 	expiredLoginError = "login expired · run `claude` to renew it"
 )
 
@@ -29,6 +30,24 @@ var (
 type renewalAttempt struct {
 	AttemptedAt time.Time `json:"attempted_at"`
 	Fingerprint string    `json:"fingerprint"`
+	Failures    int       `json:"failures"`
+}
+
+// backoff doubles the cooldown for each consecutive failure on the same login,
+// so a source that can never renew stops spawning doctor every few minutes.
+func (a renewalAttempt) backoff() time.Duration {
+	d := renewalCooldown
+	for i := 1; i < a.Failures && d < maxRenewalBackoff; i++ {
+		d *= 2
+	}
+	return min(d, maxRenewalBackoff)
+}
+
+// coolingDown ignores a timestamp in the future (clock moved back), which
+// would otherwise block renewal for as long as the clock was ahead.
+func (a renewalAttempt) coolingDown(fingerprint string, now time.Time) bool {
+	elapsed := now.Sub(a.AttemptedAt)
+	return a.Fingerprint == fingerprint && elapsed >= 0 && elapsed < a.backoff()
 }
 
 func (p *Provider) expiredUsage() *provider.UsageData {
@@ -54,14 +73,19 @@ func (p *Provider) renewLogin(ctx context.Context, old *Credentials) *Credential
 	fingerprint := loginFingerprint(old)
 	var attempt renewalAttempt
 	if data, err := os.ReadFile(path); err == nil {
+		// A damaged state file counts as no attempt; it is rewritten below.
 		if json.Unmarshal(data, &attempt) != nil {
-			return nil
+			attempt = renewalAttempt{}
 		}
-		if attempt.Fingerprint == fingerprint && renewalNow().Sub(attempt.AttemptedAt) < renewalCooldown {
+		if attempt.coolingDown(fingerprint, renewalNow()) {
 			return nil
 		}
 	} else if !os.IsNotExist(err) {
 		return nil
+	}
+	failures := 0
+	if attempt.Fingerprint == fingerprint {
+		failures = attempt.Failures
 	}
 
 	// Another fetch may have renewed this exact source while we waited.
@@ -75,7 +99,7 @@ func (p *Provider) renewLogin(ctx context.Context, old *Credentials) *Credential
 	defer os.RemoveAll(workDir)
 
 	// Reserve the attempt before launching, so other invocations see it too.
-	attempt = renewalAttempt{AttemptedAt: renewalNow(), Fingerprint: fingerprint}
+	attempt = renewalAttempt{AttemptedAt: renewalNow(), Fingerprint: fingerprint, Failures: failures + 1}
 	if writeRenewalAttempt(path, attempt) != nil {
 		return nil
 	}
@@ -87,8 +111,8 @@ func (p *Provider) renewLogin(ctx context.Context, old *Credentials) *Credential
 		_ = os.Remove(path)
 		return fresh
 	}
-	if err == nil {
-		attempt.Fingerprint = loginFingerprint(fresh)
+	if err == nil && loginFingerprint(fresh) != fingerprint {
+		attempt = renewalAttempt{AttemptedAt: attempt.AttemptedAt, Fingerprint: loginFingerprint(fresh), Failures: 1}
 		_ = writeRenewalAttempt(path, attempt)
 	}
 	return nil
@@ -166,7 +190,9 @@ func writeRenewalAttempt(path string, attempt renewalAttempt) error {
 
 func (p *Provider) doctorEnvironment(creds *Credentials) []string {
 	env := os.Environ()
-	if !p.explicitSource && !p.pinnedNative {
+	// The default Keychain item belongs to the profile without
+	// CLAUDE_CONFIG_DIR, so renew that profile, not an ambient one.
+	if !p.explicitSource && !p.pinnedNative && !creds.fromKeychain {
 		return env
 	}
 	filtered := make([]string, 0, len(env)+1)
@@ -198,5 +224,8 @@ func doctorCommand(ctx context.Context, path, dir string, env []string) *exec.Cm
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	cmd.WaitDelay = time.Second
+	// Shims (npm's claude.cmd, volta) start the real CLI as a child; a
+	// timeout must stop the whole tree, not just the shim.
+	killTreeOnCancel(cmd)
 	return cmd
 }
