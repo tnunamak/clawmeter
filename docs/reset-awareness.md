@@ -77,13 +77,14 @@ one shared presentation:
 6. Fail soft if auth is missing, the endpoint changes, the network is down, or
    the provider rejects the request.
 
-For Claude, the tray has one action, **Check Claude resets**. It starts a
+For Claude, the tray has one action, **Check Claude in browser**. It starts a
 10-minute loopback session and opens its page, `http://127.0.0.1:17343/check`.
 The page always shows the same three steps: save the bookmark if you don't
-have it, **Open Claude Usage**, click the bookmark there. A browser cannot tell
+have it, open **Claude Usage** (resets), **Claude Console** (API credits), or
+both, and click the bookmark on each. A browser cannot tell
 Clawmeter whether the bookmark still exists, so Clawmeter keeps no "set up"
 state that could go stale. If the bookmark has not answered 45 seconds after
-**Open Claude Usage**, the page says so and points back to step 1.
+a Claude page opens, the page says so and points back to step 1.
 The page polls the session and shows the outcome: waiting, a retryable problem
 (for example, an account that is not in Clawmeter), the result, or a timeout.
 A timeout raises no tray notification.
@@ -93,8 +94,9 @@ The bookmark proves its account with
 the same hash for every local Claude source and files the result under the one
 that matches. No match, or two sources with the same organization, is rejected
 with a short message and the session keeps waiting. The session accepts one
-result, answers only `https://claude.ai` for the handoff, and serves only the
-`127.0.0.1:17343` Host.
+reset result (only from `https://claude.ai`) and one API credit result (only
+from `https://platform.claude.com`), shows each as soon as it is saved, and
+ends when it has both or times out. It serves only the `127.0.0.1:17343` Host.
 
 Which grants count. The bookmark sends each grant's remaining count
 (`resets_left`), start (`starts_at`), expiry (`ends_at`), and `paused` flag.

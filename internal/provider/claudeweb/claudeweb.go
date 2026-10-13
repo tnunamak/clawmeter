@@ -60,7 +60,7 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 	if p.IsConfigured() {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "browser reset check available"}
 	}
-	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check Claude resets in the tray"}
+	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check Claude in browser in the tray"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {

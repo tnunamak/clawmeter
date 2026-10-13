@@ -34,7 +34,7 @@
         if (!response.ok) throw new Error(`Claude Console didn't load (${response.status}). Try again.`);
         return response.json();
       };
-      const changed = "Claude Console's credit data changed format. Nothing was sent.";
+      const changed = part => `Claude Console's credit data changed format (${part}). Nothing was sent.`;
       const isAmount = value => Number.isInteger(value) && value >= 0;
       const isTime = value => typeof value === "string" && !Number.isNaN(Date.parse(value));
       let credits, spend, workspaces;
@@ -46,13 +46,16 @@
       const tranches = [...(credits?.tranches || []), ...(credits?.promo_tranches || [])];
       const promotional = (credits?.promo_tranches || []).reduce((sum, tranche) => sum + tranche.remaining_amount_minor_units, 0);
       const balance = credits?.amount_without_scoped_credits + promotional;
-      if (!isAmount(credits?.amount) || !isAmount(credits.amount_without_scoped_credits) || !isAmount(balance) || Math.abs(balance - credits.amount) > Math.max(5, credits.amount * 0.01) ||
-          typeof credits.currency !== "string" || (credits.balance?.credits && credits.balance.credits.exponent !== 2) ||
-          !isAmount(spend?.amount) || !isTime(spend.resets_at) || !Array.isArray(workspaces) || tranches.length > 50) return say(changed);
+      if (!isAmount(credits?.amount) || !isAmount(credits.amount_without_scoped_credits) || typeof credits.currency !== "string" ||
+          (credits.balance?.credits && credits.balance.credits.exponent !== 2)) return say(changed("balance"));
+      if (!isAmount(balance) || Math.abs(balance - credits.amount) > Math.max(5, credits.amount * 0.01)) return say(changed("balance total"));
+      if (!isAmount(spend?.amount) || !isTime(spend.resets_at)) return say(changed("monthly spend"));
+      if (!Array.isArray(workspaces)) return say(changed("workspaces"));
+      if (tranches.length > 50) return say(changed("credit grants"));
       const grants = [];
       for (const tranche of tranches) {
         if (!isAmount(tranche.granted_amount_minor_units) || !isAmount(tranche.remaining_amount_minor_units) || !isTime(tranche.granted_at) ||
-            (tranche.expires_at != null && !isTime(tranche.expires_at))) return say(changed);
+            (tranche.expires_at != null && !isTime(tranche.expires_at))) return say(changed("credit grants"));
         grants.push({ name: String(tranche.name || "API credit").trim().slice(0, 120), granted: tranche.granted_amount_minor_units, remaining: tranche.remaining_amount_minor_units, granted_at: tranche.granted_at, expires_at: tranche.expires_at ?? null });
       }
       const day = offset => new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
@@ -65,12 +68,12 @@
         } catch (error) {
           return say(error.message);
         }
-        if (!costs?.costs || typeof costs.costs !== "object" || Array.isArray(costs.costs)) return say(changed);
+        if (!costs?.costs || typeof costs.costs !== "object" || Array.isArray(costs.costs)) return say(changed("usage costs"));
         for (const kind of ["costs", "web_search_costs", "code_execution_costs", "session_usage_costs"]) {
           for (const [date, rows] of Object.entries(costs?.[kind] || {})) {
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Array.isArray(rows)) return say(changed);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Array.isArray(rows)) return say(changed("usage costs"));
             for (const row of rows) {
-              if (typeof row.total !== "number" || !Number.isFinite(row.total) || row.total < 0) return say(changed);
+              if (typeof row.total !== "number" || !Number.isFinite(row.total) || row.total < 0) return say(changed("usage costs"));
               daily[date] = (daily[date] || 0) + row.total;
             }
           }
@@ -143,13 +146,12 @@
       try { access = (await navigator.permissions.query({ name })).state; break; } catch {}
     }
     const site = onConsole ? "platform.claude.com" : "claude.ai";
-    const action = onConsole ? "Check API credits" : "Check Claude resets";
     say(access === "denied"
       ? `Your browser is blocking ${site} from reaching Clawmeter. Open site settings (left of the address bar), allow local network access, then click the bookmark again.`
       : access === "prompt"
         ? `Your browser didn't let ${site} reach Clawmeter. Click the bookmark again and choose Allow when it asks about local network access.`
         : access === "granted"
-          ? `Clawmeter isn't waiting. Choose ${action} in the tray, then click the bookmark again.`
-          : `Couldn't reach Clawmeter. If your browser asks about local network access, allow it. Otherwise choose ${action} in the tray, then click the bookmark again.`);
+          ? `Clawmeter isn't waiting. Choose Check Claude in browser in the tray, then click the bookmark again.`
+          : `Couldn't reach Clawmeter. If your browser asks about local network access, allow it. Otherwise choose Check Claude in browser in the tray, then click the bookmark again.`);
   }
 })();

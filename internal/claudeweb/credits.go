@@ -216,10 +216,6 @@ func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
 	if !admit(w, r, http.MethodPost, consoleOrigin) {
 		return
 	}
-	if s.kind != KindAPICredits {
-		s.reply(w, http.StatusConflict, msgWantUsage, true)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer r.Body.Close()
 	var payload creditsPayload
@@ -258,7 +254,7 @@ func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.save(w, Result{APICredits: pool}, func() error { return WriteAPICreditPool(pool) }, found)
+	s.save(w, partCredits, Result{APICredits: pool}, func() error { return WriteAPICreditPool(pool) }, found)
 }
 
 func (p creditsPayload) pool(now time.Time) (APICreditPool, error) {

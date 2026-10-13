@@ -73,7 +73,7 @@ func TestBrowserCheckRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	cfg := config.ProviderConfig{Sources: []config.SourceConfig{native, odl}}
 	sources := []provider.Provider{anthropic.NewSource(cfg, native), anthropic.NewSource(cfg, odl)}
 
-	session, err := claudeweb.Start(claudeweb.KindResets, Accounts(sources))
+	session, err := claudeweb.Start(Accounts(sources))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +109,13 @@ func TestBrowserCheckRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || reply.Message != "Found 1 reset for ODL." {
 		t.Fatalf("result = %d %q", resp.StatusCode, reply.Message)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	summary, err := session.Wait(ctx)
-	if err != nil || summary.Resets.ResetCreditsTarget != "claude:odl" {
-		t.Fatalf("Wait() = %+v, %v", summary, err)
+	select {
+	case summary := <-session.Results():
+		if summary.Resets.ResetCreditsTarget != "claude:odl" {
+			t.Fatalf("Results() = %+v", summary)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no result")
 	}
 	if NewFor(sources[0]).IsConfigured() {
 		t.Fatal("the Default source received the ODL result")

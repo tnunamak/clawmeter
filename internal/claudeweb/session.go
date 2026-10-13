@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -35,17 +34,14 @@ const CheckURL = "http://" + listenAddress + "/check"
 // UsageURL is the Claude page where the bookmark runs.
 const UsageURL = claudeOrigin + "/settings/usage"
 
-// Kind is what a check reads: reset grants on Claude Usage, or prepaid API
-// credits in the Claude Console. The same bookmark does both.
-type Kind int
+// part is what one bookmark click reads: reset grants on Claude Usage, or
+// prepaid API credits in the Claude Console. One check takes one of each.
+type part int
 
 const (
-	KindResets Kind = iota
-	KindAPICredits
+	partResets part = iota
+	partCredits
 )
-
-// ErrTimedOut means the check window ended without a result.
-var ErrTimedOut = errors.New("claude reset check timed out")
 
 func validResetCreditsTarget(target string) bool {
 	if target == "claude" {
@@ -100,6 +96,7 @@ type grantPayload struct {
 const (
 	stateWaiting = "waiting"
 	stateRetry   = "retry"
+	stateSaved   = "saved"
 	stateDone    = "done"
 	stateEnded   = "ended"
 )
@@ -114,43 +111,45 @@ type Status struct {
 const (
 	msgWaiting     = "Waiting for the bookmark…"
 	msgOutdated    = "This bookmark is out of date. Save it again from the Clawmeter page."
-	msgEnded       = "This check ended. Choose Check Claude resets in the tray to start again."
-	msgTimedOut    = "Timed out. Choose Check Claude resets in the tray to start again."
+	msgEnded       = "This check ended. Choose Check Claude in browser in the tray to start again."
+	msgTimedOut    = "Timed out. Choose Check Claude in browser in the tray to start again."
 	msgUnreadable  = "Claude sent reset data Clawmeter can't read. Nothing was saved."
 	msgNotSetUp    = "This Claude account isn't in Clawmeter. Switch to the account you use with Claude Code, then click the bookmark again."
 	msgAmbiguous   = "Two Clawmeter Claude profiles use this account, so Clawmeter can't tell where to save it."
 	msgSaveFailed  = "Couldn't save the result. Click the bookmark again."
 	msgDone        = "Already saved. You can close the Clawmeter tab."
-	msgWantUsage   = "This check is for Claude resets. Open Claude Usage, then click the bookmark there."
-	msgWantConsole = "This check is for API credits. Open Claude Console billing, then click the bookmark there."
+	msgAlsoCredits = "To check API credits too, open the Claude Console and click the bookmark there. Otherwise you can close this tab."
+	msgAlsoResets  = "To check resets too, open Claude Usage and click the bookmark there. Otherwise you can close this tab."
 )
 
+// Session is one browser check. It takes at most one reset result and one API
+// credit result, and ends when it has both or Window passes.
 type Session struct {
 	server   *http.Server
-	kind     Kind
 	nonce    string
 	accounts []Account
 	timer    *time.Timer
 
 	mu        sync.Mutex
 	status    Status
-	result    Result
-	saved     bool
-	done      chan struct{}
+	found     map[part]string
+	results   chan Result
 	closeOnce sync.Once
 }
 
-// Result is what a check saved: Resets for KindResets, APICredits for
-// KindAPICredits.
+// Result is one saved part of a check: Resets or APICredits.
 type Result struct {
 	Resets     GrantSummary
 	APICredits APICreditPool
 }
 
+// IsResets reports whether the result holds reset grants.
+func (r Result) IsResets() bool { return r.Resets.ResetCreditsTarget != "" }
+
 // Start opens the loopback handoff for Window. A reset result is filed under
 // the single account whose organization matches the browser's; an API credit
 // result is filed under its Console organization.
-func Start(kind Kind, accounts []Account) (*Session, error) {
+func Start(accounts []Account) (*Session, error) {
 	listener, err := net.Listen("tcp4", listenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("start Claude reset check: %w", err)
@@ -160,15 +159,16 @@ func Start(kind Kind, accounts []Account) (*Session, error) {
 		_ = listener.Close()
 		return nil, err
 	}
-	s := newSession(kind, nonce, accounts)
+	s := newSession(nonce, accounts)
 	s.server = &http.Server{Handler: s.handler(), ReadHeaderTimeout: 2 * time.Second}
 	s.timer = time.AfterFunc(Window, s.timeOut)
 	go func() { _ = s.server.Serve(listener) }()
 	return s, nil
 }
 
-func newSession(kind Kind, nonce string, accounts []Account) *Session {
-	return &Session{kind: kind, nonce: nonce, accounts: accounts, status: Status{State: stateWaiting, Message: msgWaiting}, done: make(chan struct{})}
+func newSession(nonce string, accounts []Account) *Session {
+	return &Session{nonce: nonce, accounts: accounts, status: Status{State: stateWaiting, Message: msgWaiting},
+		found: make(map[part]string), results: make(chan Result, 2)}
 }
 
 func randomHex() (string, error) {
@@ -179,38 +179,32 @@ func randomHex() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// Wait returns the saved result, or ErrTimedOut when the window ends first.
-func (s *Session) Wait(ctx context.Context) (Result, error) {
-	select {
-	case <-s.done:
-	case <-ctx.Done():
-		return Result{}, ctx.Err()
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.saved {
-		return Result{}, ErrTimedOut
-	}
-	return s.result, nil
-}
+// Results delivers each saved part as it arrives. It is closed when the check
+// ends.
+func (s *Session) Results() <-chan Result { return s.results }
 
-// timeOut ends a check that got no result. If the bookmark never ran, it may
-// be missing, so the next check shows the setup steps again.
+// timeOut ends the check. If the bookmark never ran, it may be missing, so
+// the next check shows the setup steps again.
 func (s *Session) timeOut() {
 	s.mu.Lock()
-	if s.saved {
+	if s.status.State == stateDone || s.status.State == stateEnded {
 		s.mu.Unlock()
 		return
 	}
-	s.status = Status{State: stateEnded, Message: msgTimedOut}
+	if len(s.found) > 0 {
+		s.status = Status{State: stateDone, Message: s.foundMessage() + " You can close this tab."}
+	} else {
+		s.status = Status{State: stateEnded, Message: msgTimedOut}
+	}
 	s.mu.Unlock()
 	s.end()
 }
 
-// end releases Wait. The listener keeps serving until Finish or Close so the
-// page can still read the final state.
+// end closes Results. It runs only after the status is final, so no save can
+// send after it. The listener keeps serving until Finish or Close so the page
+// can still read the final state.
 func (s *Session) end() {
-	s.closeOnce.Do(func() { close(s.done) })
+	s.closeOnce.Do(func() { close(s.results) })
 }
 
 // Finish gives the page a few polls to show the final state, then closes.
@@ -259,11 +253,7 @@ func (s *Session) handleCheckPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	data := checkPageData{Bookmark: template.URL(Bookmarklet()), Title: "Check Claude resets", OpenURL: UsageURL, OpenLabel: "Open Claude Usage", Site: "claude.ai", Ended: msgEnded}
-	if s.kind == KindAPICredits {
-		data.Title, data.OpenURL, data.OpenLabel, data.Site = "Check API credits", ConsoleURL, "Open Claude Console", "platform.claude.com"
-	}
-	_ = checkPage.Execute(w, data)
+	_ = checkPage.Execute(w, checkPageData{Bookmark: template.URL(Bookmarklet()), UsageURL: UsageURL, ConsoleURL: ConsoleURL, Ended: msgEnded})
 }
 
 // handleStatus serves the page's poll. It has no CORS headers, so other
@@ -340,10 +330,6 @@ func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
 	if !admit(w, r, http.MethodPost, claudeOrigin) {
 		return
 	}
-	if s.kind != KindResets {
-		s.reply(w, http.StatusConflict, msgWantConsole, true)
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	defer r.Body.Close()
 	var payload resultPayload
@@ -375,19 +361,19 @@ func (s *Session) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary := GrantSummary{Credits: credits, ObservedAt: now, ResetCreditsTarget: account.Key, MatchSalt: salt, MatchHash: AccountHash(salt, account.OrgUUID)}
-	s.save(w, Result{Resets: summary}, func() error { return WriteSummary(summary) }, FoundMessage(len(credits), account.Label))
+	s.save(w, partResets, Result{Resets: summary}, func() error { return WriteSummary(summary) }, FoundMessage(len(credits), account.Label))
 }
 
-// save stores one result for the session, unless it already saved one or
+// save stores one part for the session, unless it already saved that part or
 // ended, and reports the outcome to the bookmark and the page.
-func (s *Session) save(w http.ResponseWriter, result Result, write func() error, found string) {
+func (s *Session) save(w http.ResponseWriter, kind part, result Result, write func() error, found string) {
 	s.mu.Lock()
-	if s.saved {
+	if s.found[kind] != "" {
 		s.mu.Unlock()
 		s.reply(w, http.StatusConflict, msgDone, false)
 		return
 	}
-	if s.status.State == stateEnded {
+	if s.status.State == stateDone || s.status.State == stateEnded {
 		// Timed out or closed before this result arrived; nothing is saved.
 		message := s.status.Message
 		s.mu.Unlock()
@@ -399,14 +385,36 @@ func (s *Session) save(w http.ResponseWriter, result Result, write func() error,
 		s.reply(w, http.StatusInternalServerError, msgSaveFailed, true)
 		return
 	}
-	s.result, s.saved = result, true
-	s.status = Status{State: stateDone, Message: found + " You can close this tab."}
-	s.mu.Unlock()
-	if s.timer != nil {
-		s.timer.Stop()
+	s.found[kind] = found
+	s.results <- result // buffered for one result per part
+	complete := len(s.found) == 2
+	switch {
+	case complete:
+		s.status = Status{State: stateDone, Message: s.foundMessage() + " You can close this tab."}
+	case kind == partResets:
+		s.status = Status{State: stateSaved, Message: found + " " + msgAlsoCredits}
+	default:
+		s.status = Status{State: stateSaved, Message: found + " " + msgAlsoResets}
 	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"message": found})
-	s.end()
+	if complete {
+		if s.timer != nil {
+			s.timer.Stop()
+		}
+		s.end()
+	}
+}
+
+// foundMessage joins the saved parts, resets first. The caller holds mu.
+func (s *Session) foundMessage() string {
+	var parts []string
+	for _, kind := range []part{partResets, partCredits} {
+		if found := s.found[kind]; found != "" {
+			parts = append(parts, found)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // matchAccount finds the single local account whose organization hashes to

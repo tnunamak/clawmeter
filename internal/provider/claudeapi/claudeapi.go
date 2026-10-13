@@ -64,7 +64,7 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 	if p.IsConfigured() {
 		return provider.SetupStatus{State: provider.SetupReady, Detail: "API credits checked in the Claude Console"}
 	}
-	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check API credits in the tray"}
+	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check Claude in browser in the tray"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
