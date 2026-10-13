@@ -110,6 +110,12 @@ func TestBaseWindowsTray(t *testing.T) {
 }
 
 func TestWindowsRun(t *testing.T) {
+	// Run creates the tray window and then reads that window's messages, which
+	// Windows delivers only to the creating thread. Production calls Run on
+	// the main goroutine, which init locks; a test runs on its own goroutine,
+	// so lock it too or a thread switch loses the quit message and Run hangs.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	onReady := func() {
 		b, err := ioutil.ReadFile(iconFilePath)
 		if err != nil {
