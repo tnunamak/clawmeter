@@ -8,10 +8,9 @@ the shared reset-credit model and presentation.
 Codex reset credits are fetched through a read-only endpoint. Claude's
 promotional reset grants are visible to the signed-in browser's usage page but
 not reliably to Claude Code OAuth. Clawmeter reads that page only when the user
-starts a check and clicks their saved bookmark. The user starts the check from
-one named Claude source, and Clawmeter stores the observation under that source.
-It cannot verify that the browser and local source are the same account, so the
-bookmark asks for confirmation before sending the result.
+starts a check and clicks their saved bookmark. Clawmeter files the
+observation under the local Claude source signed in to the same organization,
+matched by a salted hash, so there is nothing to confirm.
 
 OpenAI's Codex docs say referral-earned rate-limit resets are banked and usable
 for 30 days after grant, and the Codex changelog says `/usage` can show and
