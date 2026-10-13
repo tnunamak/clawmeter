@@ -1039,3 +1039,15 @@ func TestClassifyProviderTreatsFailedUsageWithResetSnapshotAsError(t *testing.T)
 		t.Fatalf("tier = %d, want 1 (error) despite attached reset snapshot", got)
 	}
 }
+
+func TestExpiredMessageDoesNotRepeatExpired(t *testing.T) {
+	for in, want := range map[string]string{
+		"": "expired",
+		"login expired · run `claude` to renew it": "login expired · run `claude` to renew it",
+		"unauthorized": "expired — unauthorized",
+	} {
+		if got := expiredMessage(in); got != want {
+			t.Errorf("expiredMessage(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

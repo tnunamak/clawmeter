@@ -91,10 +91,7 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 	}
 
 	if pf.Data.IsExpired {
-		expiredMsg := "expired"
-		if pf.Data.Error != "" {
-			expiredMsg += " — " + format.HumanizeError(pf.Data.Error)
-		}
+		expiredMsg := expiredMessage(pf.Data.Error)
 		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(100), reset, expiredMsg)
 		if statusLine != "" {
 			line += "  " + statusLine
@@ -187,10 +184,7 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	}
 
 	if pf.Data.IsExpired {
-		expiredMsg := "expired"
-		if pf.Data.Error != "" {
-			expiredMsg += " — " + format.HumanizeError(pf.Data.Error)
-		}
+		expiredMsg := expiredMessage(pf.Data.Error)
 		return appendSnapshotsPlain(fmt.Sprintf("%s: %s%s", pf.Display, expiredMsg, suffix), pf.Data)
 	}
 
@@ -1726,4 +1720,17 @@ func configuredSources(providers []provider.Provider) []provider.Provider {
 		}
 	}
 	return configured
+}
+
+// expiredMessage avoids "expired — login expired" when the provider's error
+// already says the login expired.
+func expiredMessage(providerErr string) string {
+	if providerErr == "" {
+		return "expired"
+	}
+	msg := format.HumanizeError(providerErr)
+	if strings.Contains(strings.ToLower(msg), "expired") {
+		return msg
+	}
+	return "expired — " + msg
 }

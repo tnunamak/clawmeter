@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,11 +22,9 @@ import (
 )
 
 const (
-	usageURL      = "https://api.anthropic.com/api/oauth/usage"
-	tokenURL      = "https://platform.claude.com/v1/oauth/token"
-	oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-	betaHeader    = "oauth-2025-04-20"
-	timeout       = 15 * time.Second
+	usageURL   = "https://api.anthropic.com/api/oauth/usage"
+	betaHeader = "oauth-2025-04-20"
+	timeout    = 15 * time.Second
 )
 
 // usageEndpoint is a variable so tests can point it at a local server.
@@ -289,25 +286,10 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 
 	if creds.IsExpired() {
-		// Try auto-refresh using refresh token
-		if creds.ClaudeAiOauth.RefreshToken != "" {
-			if refreshed, err := p.refreshToken(ctx, creds); err == nil {
-				creds = refreshed
-			} else {
-				return &provider.UsageData{
-					Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
-					FetchedAt: time.Now(),
-					IsExpired: true,
-					Error:     "token expired — run `claude` to reauth",
-				}, nil
-			}
+		if fresh := p.renewLogin(ctx, creds); fresh != nil {
+			creds = fresh
 		} else {
-			return &provider.UsageData{
-				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
-				FetchedAt: time.Now(),
-				IsExpired: true,
-				Error:     "token expired — run `claude` to reauth",
-			}, nil
+			return p.expiredUsage(), nil
 		}
 	}
 
@@ -333,12 +315,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusUnauthorized {
-			return &provider.UsageData{
-				Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
-				FetchedAt: time.Now(),
-				IsExpired: true,
-				Error:     "unauthorized — run `claude` to reauth",
-			}, nil
+			return p.expiredUsage(), nil
 		}
 		if err := provider.RateLimitFromResponse(resp); err != nil {
 			return nil, err
@@ -462,8 +439,10 @@ type Credentials struct {
 		RateLimitTier    string   `json:"rateLimitTier"`
 	} `json:"claudeAiOauth"`
 
-	tokenOnly   string // set when credentials come from env var or raw keychain value
-	persistPath string
+	tokenOnly     string // set when credentials come from env var or raw keychain value
+	readPath      string
+	readConfigDir string
+	fromKeychain  bool
 }
 
 // AccessToken returns the OAuth access token.
@@ -479,7 +458,7 @@ func (c *Credentials) IsExpired() bool {
 	if c.tokenOnly != "" {
 		return false // can't check expiry for raw tokens
 	}
-	return time.Now().UnixMilli() >= c.ClaudeAiOauth.ExpiresAt
+	return renewalNow().UnixMilli() >= c.ClaudeAiOauth.ExpiresAt
 }
 
 // usesTokenOverride reports whether readCredentials would use a bare OAuth
@@ -573,7 +552,7 @@ func (p *Provider) readKeychain() (*Credentials, error) {
 		// Might be a raw token string
 		return &Credentials{tokenOnly: data}, nil
 	}
-	// Keychain values are capabilities, not file ownership. They must never be persisted.
+	creds.fromKeychain = true
 	return &creds, nil
 }
 
@@ -582,6 +561,16 @@ func (p *Provider) readCredentialsFile(configDir string) (*Credentials, error) {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
 	}
+	if absolute, err := filepath.Abs(configDir); err == nil {
+		configDir = absolute
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	return readCredentialsPath(path, configDir)
+}
+
+func readCredentialsPath(path, configDir string) (*Credentials, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read credentials: credentials file unavailable")
@@ -590,7 +579,8 @@ func (p *Provider) readCredentialsFile(configDir string) (*Credentials, error) {
 	if err := json.Unmarshal(data, &creds); err != nil {
 		return nil, fmt.Errorf("parse credentials: credentials file invalid")
 	}
-	creds.persistPath = path
+	creds.readPath = path
+	creds.readConfigDir = configDir
 	return &creds, nil
 }
 
@@ -603,107 +593,6 @@ func legacyCredentialsDir() string {
 		return filepath.Join(".claude")
 	}
 	return filepath.Join(home, ".claude")
-}
-
-// refreshToken attempts to refresh the OAuth access token using the refresh token.
-func (p *Provider) refreshToken(ctx context.Context, creds *Credentials) (*Credentials, error) {
-	form := url.Values{
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {creds.ClaudeAiOauth.RefreshToken},
-		"client_id":     {oauthClientID},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("refresh request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read refresh response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("refresh failed: HTTP %d", resp.StatusCode)
-	}
-
-	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int64  `json:"expires_in"`
-	}
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse refresh response: %w", err)
-	}
-
-	if tokenResp.AccessToken == "" {
-		return nil, fmt.Errorf("empty access token in refresh response")
-	}
-
-	// Update credentials
-	creds.ClaudeAiOauth.AccessToken = tokenResp.AccessToken
-	if tokenResp.RefreshToken != "" {
-		creds.ClaudeAiOauth.RefreshToken = tokenResp.RefreshToken
-	}
-	creds.ClaudeAiOauth.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UnixMilli()
-
-	// Write back only through the credential source that supplied the token.
-	if creds.tokenOnly == "" && creds.persistPath != "" {
-		if err := p.writeCredentials(creds); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: warning: failed to save refreshed credentials: %v\n", err)
-		}
-	}
-
-	return creds, nil
-}
-
-// writeCredentials writes updated credentials back to the credentials file.
-func (p *Provider) writeCredentials(creds *Credentials) error {
-	if creds == nil || creds.tokenOnly != "" {
-		return fmt.Errorf("credential source cannot persist")
-	}
-	path := creds.persistPath
-	if path == "" {
-		return fmt.Errorf("credential source cannot persist")
-	}
-
-	// Read existing file to preserve other fields (e.g., mcpOAuth)
-	existing := make(map[string]json.RawMessage)
-	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &existing); err != nil {
-			return fmt.Errorf("credentials file is not writable")
-		}
-	}
-
-	// Update the claudeAiOauth section
-	oauthData, err := json.Marshal(creds.ClaudeAiOauth)
-	if err != nil {
-		return fmt.Errorf("marshal credentials: %w", err)
-	}
-	existing["claudeAiOauth"] = oauthData
-
-	data, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal credentials file: %w", err)
-	}
-
-	// Atomic write
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return fmt.Errorf("credentials file is not writable")
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("credentials file is not writable")
-	}
-	return nil
 }
 
 // Internal API response types.

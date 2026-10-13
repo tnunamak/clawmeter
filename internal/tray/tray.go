@@ -321,7 +321,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	// terminal" we can rely on, and the macOS/Linux versions of that flow
 	// saved at most one keystroke. A disabled menu item is the same
 	// outcome with zero platform-specific code.
-	mReauth := systray.AddMenuItem("Claude token expired — run `claude` to reauth", "")
+	mReauth := systray.AddMenuItem("Claude login expired — run `claude` to renew it", "")
 	mReauth.Disable()
 	mReauth.Hide()
 	s.reauthVisible = false
