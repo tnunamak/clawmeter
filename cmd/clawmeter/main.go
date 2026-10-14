@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
-	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/diagnose"
@@ -177,9 +176,6 @@ func run() int {
 		return setupCmd(os.Args[2:])
 	case "doctor":
 		return doctorCmd(os.Args[2:])
-	case "claude-web-bookmarklet":
-		fmt.Println(claudeweb.Bookmarklet())
-		return 0
 	case "tray":
 		return trayCmd(os.Args[2:])
 	case "config":
@@ -1234,7 +1230,6 @@ Commands:
   providers                 List, connect, or configure providers
   setup                     Install or show local integrations
   doctor                    Check provider and integration readiness
-  claude-web-bookmarklet    Print the Claude reset bookmark URL
   tray                      Run as system tray icon
   config                    Manage configuration
   update                    Self-update to the latest release

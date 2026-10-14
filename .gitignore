@@ -3,6 +3,8 @@
 .refs/
 .cleanup/
 *.png
+!extension/icons/*.png
+!assets/chrome-web-store/*.png
 llm-*.md
 
 # Generated WinGet manifests

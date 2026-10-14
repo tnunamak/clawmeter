@@ -192,7 +192,7 @@ func (p *Provider) SourceRevision() string {
 
 // ClaudeOrganizationUUID returns the organization Claude Code recorded for
 // this profile (oauthAccount.organizationUuid in its .claude.json), or "".
-// Browser reset checks use it to file results under the matching source.
+// Extension reset readings use it to file results under the matching source.
 func (p *Provider) ClaudeOrganizationUUID() string {
 	// A token override can belong to any account, and nothing local records
 	// its organization, so it can't receive browser reset results.

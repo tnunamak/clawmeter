@@ -944,9 +944,10 @@ func TestResetCreditsSummaryStrings(t *testing.T) {
 		{"codex one", &UsageResetCredits{AvailableCount: 1, Credits: available(oct22), FetchedAt: checkedToday}, "Resets: 1 · expires Oct 22"},
 		{"codex two", &UsageResetCredits{AvailableCount: 2, Credits: available(oct22, oct22.Add(48*time.Hour))}, "Resets: 2 · next expires Oct 22"},
 		{"count without expiry", &UsageResetCredits{AvailableCount: 3}, "Resets: 3"},
-		{"snapshot checked today", &UsageResetCredits{Snapshot: true, Credits: available(oct22), FetchedAt: checkedToday}, "Resets: 1 · expires Oct 22 · checked 11:30"},
-		{"snapshot checked earlier", &UsageResetCredits{Snapshot: true, Credits: available(oct22, oct22), FetchedAt: time.Date(2026, time.October, 5, 8, 0, 0, 0, time.Local)}, "Resets: 2 · next expires Oct 22 · checked Oct 5"},
-		{"expires today", &UsageResetCredits{Snapshot: true, Credits: available(time.Date(2026, time.October, 7, 18, 45, 0, 0, time.Local)), FetchedAt: checkedToday}, "Resets: 1 · expires 18:45 · checked 11:30"},
+		{"live snapshot", &UsageResetCredits{Snapshot: true, Credits: available(oct22), FetchedAt: now.Add(-time.Minute)}, "Resets: 1 · expires Oct 22"},
+		{"stale snapshot today", &UsageResetCredits{Snapshot: true, Credits: available(oct22), FetchedAt: checkedToday}, "Resets: 1 · expires Oct 22 · not updated since 11:30 · open claude.ai in your browser"},
+		{"stale snapshot earlier", &UsageResetCredits{Snapshot: true, Credits: available(oct22, oct22), FetchedAt: time.Date(2026, time.October, 5, 8, 0, 0, 0, time.Local)}, "Resets: 2 · next expires Oct 22 · not updated since Oct 5 · open claude.ai in your browser"},
+		{"expires today", &UsageResetCredits{Snapshot: true, Credits: available(time.Date(2026, time.October, 7, 18, 45, 0, 0, time.Local)), FetchedAt: checkedToday}, "Resets: 1 · expires 18:45 · not updated since 11:30 · open claude.ai in your browser"},
 		{"expires next year", &UsageResetCredits{AvailableCount: 1, Credits: available(time.Date(2027, time.January, 3, 9, 0, 0, 0, time.Local))}, "Resets: 1 · expires Jan 3, 2027"},
 		{"all expired", &UsageResetCredits{Snapshot: true, Credits: available(now.Add(-time.Minute)), FetchedAt: checkedToday}, ""},
 	} {

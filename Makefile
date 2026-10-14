@@ -4,7 +4,7 @@ PLATFORMS = linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS = -s -w -X main.Version=$(VERSION)
 
-.PHONY: build build-tray install install-tray release-build clean
+.PHONY: build build-tray install install-tray release-build extension-zip clean
 
 build:
 	go build -ldflags='$(LDFLAGS)' -o $(BINARY) ./cmd/clawmeter
@@ -24,6 +24,10 @@ release-build:
 		echo "Building $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags='$(LDFLAGS)' -o $(BINARY)-$$os-$$arch ./cmd/clawmeter; \
 	done
+
+# The Chrome Web Store upload: the extension without its unpacked-ID key.
+extension-zip:
+	python3 scripts/package-extension.py
 
 clean:
 	rm -f $(BINARY) $(BINARY)-*

@@ -77,44 +77,51 @@ Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.
 ### Claude Web Reset Grants
 
 Claude's Usage page can show promotional reset grants that Claude Code's local
-usage data does not include. To read them, choose **Check Claude in browser**
-in the tray. A local Clawmeter page opens with the steps: save the Clawmeter
-bookmark (first time only), open Claude Usage, and click the bookmark there.
-The page shows the result when it arrives. The same check also takes API
-credits (below).
+usage data does not include. The Clawmeter Chrome extension (see Claude API
+Credits below) reads them each minute from an open claude.ai tab. claude.ai
+refuses requests that do not come from its own pages, so keep a claude.ai tab
+open; the extension also tries without one, but claude.ai usually refuses that.
 
-Clawmeter files the result under the Claude source signed in to the same
-organization as the browser, so there is nothing to confirm. The bookmark sends
-a salted hash of the organization ID, never the ID itself, plus each grant's
-remaining count, start, expiry, and paused state. Only grants usable now count.
-Clawmeter stores no cookies, organization IDs, or raw responses. If you later
-sign that source in to a different organization, the saved result is dropped.
+The extension sends each organization's ID and grants (remaining count, start,
+expiry, and paused state) to Clawmeter on this computer. Clawmeter keeps only
+the organization a Claude source is signed in to, files the grants under that
+source, and stores a salted hash of the organization ID, never the ID itself.
+Only grants usable now count. Clawmeter stores no cookies or raw responses. If
+you later sign that source in to a different organization, the saved result is
+dropped.
 
-The result shows under its Claude source as `Resets: 1 · expires Oct 22 ·
-checked Oct 7`. It is a snapshot, not a live poll: check again after you use a
-reset. Your browser may ask to let claude.ai access your local network; allow
-it. `clawmeter claude-web-bookmarklet` prints the bookmark URL.
+The result shows under its Claude source as `Resets: 1 · expires Oct 22`. A
+reading more than five minutes old adds when it was read and
+`open claude.ai in your browser`.
 
 ### Claude API Credits
 
 Prepaid Claude API credits (for example the monthly API credit a Max plan
 grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
 Admin API is unavailable to individual accounts. Clawmeter reads them from the
-Claude Console with the same bookmark and the same check: choose **Check
-Claude in browser** in the tray, open the Claude Console, and click the
-bookmark there. One check takes resets and API credits, in either order.
+Claude Console through the Clawmeter Chrome extension:
+
+1. Open the browser's Extensions page and enable **Developer mode**.
+2. Choose **Load unpacked** and select this repository's `extension` folder.
+3. Sign in to the Claude Console and claude.ai, keep a claude.ai tab open, and
+   keep the browser and Clawmeter tray running.
+
+The extension checks each minute. A reading is live for up to five minutes;
+older readings keep their numbers with a browser reminder, and signing out
+shows a sign-in reminder. Usage-cost reports used for the pace are cached for
+30 minutes; readings that no longer reconcile with current spend are rejected.
 
 When a Claude plan funds the organization (the Console links it to that
 plan's claude.ai organization), the pool shows on the Claude source signed in
 to that plan:
 
 ```
-Claude · Default: 5h: 1% … · API credits: $199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 24 19:00 · checked 12:53
+Claude · Default: 5h: 1% … · API credits: $199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 24 19:00
 ```
 
-Other Console organizations show as their own pools under **Claude API**. The
-bookmark proves the plan link with a salted hash of the plan's organization ID,
-as reset checks do, and the pool moves back under Claude API if that source
+Other Console organizations show as their own pools under **Claude API**.
+Clawmeter stores the plan link as a salted hash of the plan's organization ID,
+as for reset grants, and the pool moves back under Claude API if that source
 signs in elsewhere.
 
 The balance is what the Console's billing page shows: purchased plus
@@ -122,13 +129,13 @@ promotional credit. Spend this month is the Console's own total. The pace is the
 average daily cost from the Console's cost report over up to 7 days (at least
 one day), and the projection extends it to the next credit expiry, or to when
 the balance runs out first. Expiry shows in local time; the Console shows UTC
-dates. The bookmark refuses to send data when the Console's daily costs and its
-month total disagree. `clawmeter status --agent` lists every pool under
+dates. The extension refuses to send data when the Console's daily costs and
+its month total disagree. `clawmeter status --agent` lists every pool under
 `api_credits=[...]` with exact amounts so agents can budget API spend.
 
-The bookmark sends a hash of the organization ID, never the ID, and Clawmeter
-stores no cookies. Like resets, a pool is a snapshot: check again after heavy
-API use.
+The extension sends a hash of the Console organization ID, never the ID. It
+sends the linked plan organization ID only to the local receiver, which hashes
+it before saving. Clawmeter stores no cookies or raw organization IDs.
 
 ## Read The Icon
 

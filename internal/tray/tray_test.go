@@ -7,14 +7,12 @@ import (
 	"errors"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gen2brain/beeep"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
-	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -105,39 +103,6 @@ func TestConfigureNotificationIdentity(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeInBrowserIsOneGlobalActionThatAlwaysOpensTheCheckPage(t *testing.T) {
-	if claudeCheckTitle != "Check Claude in browser" {
-		t.Fatalf("title = %q", claudeCheckTitle)
-	}
-	var checking atomic.Bool
-	var opened []string
-	starts := 0
-	open := func(url string) { opened = append(opened, url) }
-	start := func() (*claudeweb.Session, error) { starts++; return &claudeweb.Session{}, nil }
-
-	session, err := beginClaudeResetCheck(&checking, start, open)
-	if err != nil || session == nil || starts != 1 {
-		t.Fatalf("first click: session=%v err=%v starts=%d", session, err, starts)
-	}
-	// A second click while the check runs reopens the same page.
-	session, err = beginClaudeResetCheck(&checking, start, open)
-	if err != nil || session != nil || starts != 1 {
-		t.Fatalf("second click: session=%v err=%v starts=%d, want no new session", session, err, starts)
-	}
-	if len(opened) != 2 || opened[0] != "http://127.0.0.1:17343/check" || opened[1] != opened[0] {
-		t.Fatalf("opened = %v, want the local check page both times", opened)
-	}
-
-	var idle atomic.Bool
-	opened = nil
-	if _, err := beginClaudeResetCheck(&idle, func() (*claudeweb.Session, error) { return nil, errors.New("port in use") }, open); err == nil {
-		t.Fatal("start failure was not reported")
-	}
-	if idle.Load() || len(opened) != 0 {
-		t.Fatalf("after a failed start: checking=%v opened=%v, want idle and nothing opened", idle.Load(), opened)
-	}
-}
-
 func TestClaudeResetResultIsPublishedUnderTheMatchedSource(t *testing.T) {
 	for _, tc := range []struct{ target, want string }{
 		{"claude", "claude_web"},
@@ -180,7 +145,7 @@ func TestResetSnapshotRowIsCompactAndVisibleWhenUsageIsStale(t *testing.T) {
 		},
 	}
 	got := resetCreditTraySummary(data, observedAt.Add(time.Hour))
-	want := "Resets: 1 · expires " + observedAt.Add(28*24*time.Hour).Local().Format("Jan 2") + " · checked " + observedAt.Local().Format("15:04")
+	want := "Resets: 1 · expires " + observedAt.Add(28*24*time.Hour).Local().Format("Jan 2") + " · not updated since " + observedAt.Local().Format("15:04") + " · open claude.ai in your browser"
 	if got != want {
 		t.Errorf("reset snapshot row = %q, want %q", got, want)
 	}
@@ -1652,5 +1617,102 @@ func TestThresholdsSkipExpiredSamplesWithoutLosingNewPeriod(t *testing.T) {
 	sample(future.Add(5 * time.Hour))
 	if count != 2 {
 		t.Fatalf("new live period did not rearm: notifications=%d", count)
+	}
+}
+
+func TestNextAPICreditDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	early := provider.UsageCreditPool{ObservationSource: "extension", ObservedAt: now.Add(-4 * time.Minute), Live: true}
+	late := provider.UsageCreditPool{ObservationSource: "extension", ObservedAt: now, Live: true}
+	stale := early
+	stale.ObservedAt = now.Add(-6 * time.Minute)
+	out := early
+	out.SignedOut = true
+	bookmark := early
+	bookmark.ObservationSource = "bookmark"
+	results := map[string]*provider.UsageData{"claude_api": {CreditPools: []provider.UsageCreditPool{late, stale, out, bookmark, early}}, "empty": nil}
+	if got, want := nextAPICreditDeadline(results, now), now.Add(time.Minute+time.Second); !got.Equal(want) {
+		t.Fatalf("deadline = %v, want %v", got, want)
+	}
+	if got := nextAPICreditDeadline(results, now.Add(time.Minute+time.Second)); !got.Equal(now.Add(5*time.Minute + time.Second)) {
+		t.Fatalf("second deadline = %v", got)
+	}
+	if got := nextAPICreditDeadline(results, now.Add(6*time.Minute)); !got.IsZero() {
+		t.Fatalf("stale deadline = %v", got)
+	}
+}
+
+func TestAPICreditTimerUsesLatestPublishedState(t *testing.T) {
+	oldResults := s.lastResults
+	defer func() {
+		trayRenderMu.Lock()
+		defer trayRenderMu.Unlock()
+		apiCreditsTimerGeneration++
+		if apiCreditsTimer != nil {
+			apiCreditsTimer.Stop()
+		}
+		s.mu.Lock()
+		s.lastResults = oldResults
+		s.mu.Unlock()
+	}()
+	now := time.Now()
+	old := map[string]*provider.UsageData{"claude_api": {CreditPools: []provider.UsageCreditPool{{ObservationSource: "extension", ObservedAt: now.Add(-6 * time.Minute), Live: true}}}}
+	fresh := map[string]*provider.UsageData{"claude_api": {CreditPools: []provider.UsageCreditPool{{ObservationSource: "extension", ObservedAt: now, Live: true}}}}
+	trayRenderMu.Lock()
+	// Schedule an already-due timer, then publish while its render is blocked.
+	scheduleAPICreditRows(old, nil, now.Add(-2*time.Minute))
+	generation := apiCreditsTimerGeneration
+	s.mu.Lock()
+	s.lastResults = fresh
+	s.mu.Unlock()
+	trayRenderMu.Unlock()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("credit timer failed to finish; possible render/state lock deadlock")
+		case <-ticker.C:
+			trayRenderMu.Lock()
+			completed := apiCreditsTimerGeneration > generation
+			pending := false
+			if completed {
+				pending = apiCreditsTimer.Stop()
+			}
+			trayRenderMu.Unlock()
+			if completed {
+				if !pending {
+					t.Fatal("credit timer reused the old snapshot instead of scheduling the fresh reading's deadline")
+				}
+				return
+			}
+		}
+	}
+}
+
+func TestLocalPublicationWaitsForRefresh(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	barrier := trayTestRenderBarrier{started: started, release: release}
+	done := make(chan struct{})
+	go func() {
+		publishLocalResetSource(barrier, provider.NewRegistry(), "claude_api", nil, nil, nil, nil, nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("local publication bypassed the refresh lock; an in-flight refresh can overwrite extension data")
+	case <-started:
+	}
+	select {
+	case <-done:
+		t.Fatal("local publication crossed the locked refresh barrier")
+	default:
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("local publication did not release the refresh barrier")
 	}
 }

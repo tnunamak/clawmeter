@@ -58,9 +58,9 @@ func (p *Provider) IsConfigured() bool {
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
 	if p.IsConfigured() {
-		return provider.SetupStatus{State: provider.SetupReady, Detail: "browser reset check available"}
+		return provider.SetupStatus{State: provider.SetupReady, Detail: "reset grants read by the browser extension"}
 	}
-	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "choose Check Claude in browser in the tray"}
+	return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "install the Clawmeter browser extension"}
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
@@ -69,7 +69,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	}
 	summary, ok := p.snapshot()
 	if !ok {
-		return nil, fmt.Errorf("no Claude reset check for this account")
+		return nil, fmt.Errorf("no Claude reset reading for this account")
 	}
 	now := time.Now()
 	credits := make([]provider.UsageResetCredit, 0, len(summary.Credits))
@@ -115,7 +115,7 @@ func OrganizationUUID(source provider.Provider) string {
 	return ""
 }
 
-// Accounts lists the Claude sources a browser check can be filed under,
+// Accounts lists the Claude sources an extension reading can be filed under,
 // labelled as the tray names them.
 func Accounts(sources []provider.Provider) []claudeweb.Account {
 	accounts := make([]claudeweb.Account, 0, len(sources))

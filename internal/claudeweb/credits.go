@@ -3,9 +3,7 @@ package claudeweb
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,16 +13,15 @@ import (
 	"unicode"
 )
 
-// ConsoleURL is the Claude Console page where the bookmark reads API credits.
+// ConsoleURL is the Claude Console page that shows prepaid API credits.
 const ConsoleURL = "https://platform.claude.com/settings/billing"
-
-const consoleOrigin = "https://platform.claude.com"
 
 // APICreditPool is a saved Claude Console snapshot of one organization's
 // prepaid API credits. Pool is a hash of the organization ID; the raw ID is
 // never stored. Amounts are minor units of Currency; DailySpend values are
 // fractional minor units keyed by UTC date, as the Console reports them.
 type APICreditPool struct {
+	Source        string             `json:"source,omitempty"`
 	Pool          string             `json:"pool"`
 	Name          string             `json:"name"`
 	Currency      string             `json:"currency"`
@@ -76,6 +73,9 @@ const (
 // Validate rejects a snapshot Clawmeter can't trust, so a changed Console
 // format never shows as a wrong balance.
 func (p APICreditPool) Validate() error {
+	if p.Source != "" && p.Source != "bookmark" && p.Source != "extension" {
+		return fmt.Errorf("invalid source")
+	}
 	if !poolIDPattern.MatchString(p.Pool) {
 		return fmt.Errorf("invalid pool")
 	}
@@ -175,14 +175,18 @@ func ReadAPICreditPools() ([]APICreditPool, error) {
 		if json.Unmarshal(data, &pool) != nil || pool.Validate() != nil || filepath.Base(path) != apiCreditFilePrefix+pool.Pool[:16]+".json" {
 			continue
 		}
+		if pool.Source == "" {
+			pool.Source = "bookmark"
+		}
 		pools = append(pools, pool)
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].Name < pools[j].Name })
 	return pools, nil
 }
 
+// creditsPayload is one Console reading from the browser extension.
 type creditsPayload struct {
-	Nonce         string             `json:"nonce"`
+	ObservedAt    string             `json:"observed_at"`
 	Pool          string             `json:"pool"`
 	Name          string             `json:"name"`
 	Currency      string             `json:"currency"`
@@ -191,13 +195,12 @@ type creditsPayload struct {
 	MonthSpend    *int64             `json:"month_spend"`
 	MonthResetsAt string             `json:"month_resets_at"`
 	Daily         map[string]float64 `json:"daily"`
-	// Link is set when a Claude plan funds this organization: Account is
-	// AccountHash(nonce, plan organization), as for reset results.
+	// Link is set when a Claude plan funds this organization.
 	Link *creditsLink `json:"link"`
 }
 
 type creditsLink struct {
-	Account       string `json:"account"`
+	Organization  string `json:"organization"`
 	Plan          string `json:"plan"`
 	MonthlyCredit int64  `json:"monthly_credit"`
 }
@@ -212,59 +215,16 @@ type grantTranche struct {
 
 const msgConsoleUnreadable = "Claude Console sent credit data Clawmeter can't read. Nothing was saved."
 
-// handleCredits saves the Console's API credit snapshot for one organization.
-func (s *Session) handleCredits(w http.ResponseWriter, r *http.Request) {
-	if !admit(w, r, http.MethodPost, consoleOrigin) {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	defer r.Body.Close()
-	var payload creditsPayload
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var trailing any
-	if decoder.Decode(&payload) != nil || decoder.Decode(&trailing) != io.EOF || payload.Balance == nil || payload.MonthSpend == nil || payload.Grants == nil || payload.Daily == nil {
-		s.reply(w, http.StatusBadRequest, msgOutdated, true)
-		return
-	}
-	if payload.Nonce != s.nonce {
-		s.reply(w, http.StatusBadRequest, msgEnded, false)
-		return
-	}
-	pool, err := payload.pool(time.Now())
-	if err != nil {
-		s.reply(w, http.StatusBadRequest, msgConsoleUnreadable, true)
-		return
-	}
-	found := "Saved API credits for " + pool.Name + "."
-	if payload.Link != nil {
-		pool.Plan, pool.MonthlyCredit = payload.Link.Plan, payload.Link.MonthlyCredit
-		// A plan with no matching local Claude source still saves the pool,
-		// shown on its own.
-		if account, status, _ := s.matchAccount(payload.Link.Account); status == http.StatusOK {
-			salt, err := randomHex()
-			if err != nil {
-				s.reply(w, http.StatusInternalServerError, msgSaveFailed, true)
-				return
-			}
-			pool.LinkedTarget, pool.LinkSalt, pool.LinkHash = account.Key, salt, AccountHash(salt, account.OrgUUID)
-			found = "Saved API credits for " + account.Label + "."
-		}
-		if pool.Validate() != nil {
-			s.reply(w, http.StatusBadRequest, msgConsoleUnreadable, true)
-			return
-		}
-	}
-	s.save(w, partCredits, Result{APICredits: pool}, func() error { return WriteAPICreditPool(pool) }, found)
-}
-
 func (p creditsPayload) pool(now time.Time) (APICreditPool, error) {
+	if p.Balance == nil || p.MonthSpend == nil || p.Grants == nil || p.Daily == nil {
+		return APICreditPool{}, fmt.Errorf("missing credit data")
+	}
 	monthResetsAt, err := time.Parse(time.RFC3339Nano, p.MonthResetsAt)
 	if err != nil {
 		return APICreditPool{}, fmt.Errorf("invalid month reset")
 	}
 	pool := APICreditPool{
-		Pool: p.Pool, Name: p.Name, Currency: p.Currency, Balance: *p.Balance,
+		Source: "extension", Pool: p.Pool, Name: p.Name, Currency: p.Currency, Balance: *p.Balance,
 		MonthSpend: *p.MonthSpend, MonthResetsAt: monthResetsAt, DailySpend: p.Daily, ObservedAt: now,
 	}
 	if len(p.Grants) > maxGrants {

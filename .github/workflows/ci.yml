@@ -40,6 +40,9 @@ jobs:
       - name: go test (tray)
         run: go test -race -tags tray ./...
 
+      - name: extension tests
+        run: node --test extension/*.test.js
+
       - name: Build smoke (no tray)
         run: go build ./cmd/clawmeter
 
