@@ -34,3 +34,27 @@ func TestNativeEndWithoutDBusConnection(t *testing.T) {
 	instance.conn = nil
 	nativeEnd() // must not panic when session bus setup failed
 }
+
+func TestSeparatorItemHidesAndShows(t *testing.T) {
+	separator := AddSeparatorItem()
+	visible := func() any {
+		instance.menuLock.Lock()
+		defer instance.menuLock.Unlock()
+		layout, ok := findLayout(int32(separator.id))
+		if !ok {
+			t.Fatal("separator not in the menu layout")
+		}
+		if v, ok := layout.V1["visible"]; ok {
+			return v.Value()
+		}
+		return true
+	}
+	separator.Hide()
+	if visible() != false {
+		t.Fatal("hidden separator is still visible")
+	}
+	separator.Show()
+	if visible() != true {
+		t.Fatal("shown separator is still hidden")
+	}
+}

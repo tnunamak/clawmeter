@@ -1716,3 +1716,18 @@ func TestLocalPublicationWaitsForRefresh(t *testing.T) {
 		t.Fatal("local publication did not release the refresh barrier")
 	}
 }
+
+func TestTrayWindowRowsShareOneSeparatorStyle(t *testing.T) {
+	soon := provider.UsageWindow{Name: "five_hour", Length: 5 * time.Hour, Utilization: 7, ResetsAt: time.Now().Add(3*time.Hour + 30*time.Second)}
+	if got := trayWindowStatus(soon); !strings.Contains(got, ": 7% · resets in 3h00m · ") || strings.Contains(got, "—") {
+		t.Fatalf("row = %q", got)
+	}
+	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
+	if got := trayWindowStatus(policy); !strings.HasSuffix(got, ": 40% · resets daily") {
+		t.Fatalf("policy row = %q", got)
+	}
+	unknown := provider.UsageWindow{Name: "daily", Utilization: 40}
+	if got := trayWindowStatus(unknown); !strings.HasSuffix(got, ": 40% · reset not reported") {
+		t.Fatalf("unreported row = %q", got)
+	}
+}

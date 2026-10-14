@@ -58,6 +58,8 @@ type MenuItem struct {
 	isCheckable bool
 	// parent item, for sub menus
 	parent *MenuItem
+	// isSeparator marks an item made by AddSeparatorItem
+	isSeparator bool
 }
 
 func (item *MenuItem) String() string {
@@ -186,6 +188,15 @@ func AddMenuItemCheckbox(title string, tooltip string, checked bool) *MenuItem {
 // AddSeparator adds a separator bar to the menu
 func AddSeparator() {
 	addSeparator(currentID.Add(1), 0)
+}
+
+// AddSeparatorItem adds a separator bar that can be hidden and shown again,
+// for menus whose sections come and go.
+func AddSeparatorItem() *MenuItem {
+	item := newMenuItem("", "", nil)
+	item.isSeparator = true
+	addSeparator(item.id, 0)
+	return item
 }
 
 // AddSeparator adds a separator bar to the submenu

@@ -762,3 +762,20 @@ func itoa(n int) string {
 	}
 	return string(buf[i:])
 }
+
+func TestMenuLogoChipContrastsWithTheMark(t *testing.T) {
+	chipAt := func(logo []byte) uint32 {
+		img, err := png.Decode(bytes.NewReader(MenuLogo(logo, 32)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, _, _, _ := img.At(16, 2).RGBA()
+		return r >> 8
+	}
+	if c := chipAt(ProviderAntigravity); c > 100 {
+		t.Fatalf("white Antigravity mark sits on a light chip (red %d)", c)
+	}
+	if c := chipAt(ProviderOpenAI); c < 200 {
+		t.Fatalf("dark OpenAI mark sits on a dark chip (red %d)", c)
+	}
+}
