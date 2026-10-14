@@ -785,7 +785,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 // showBalanceRows fills the balance rows with balances, then API credit
 // pools, and hides the rest. Pools are browser-checked snapshots, so they
 // stay visible even when the row's usage reading failed.
-func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances []provider.UsageBalance) {
+func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances []provider.UsageBalance) int {
 	rows := 0
 	show := func(title string) {
 		if rows < len(menu.balanceItems) {
@@ -813,6 +813,7 @@ func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 	}
+	return rows
 }
 
 func hideProviderWindows(menu *providerMenuItems) {
@@ -825,7 +826,33 @@ func hideProviderWindows(menu *providerMenuItems) {
 }
 
 func showProviderHeader(menu *providerMenuItems) {
+	setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName)
 	setMenuItemVisible(menu.headerItem, &menu.headerState, true)
+}
+
+// showProviderProblem puts a provider's only message on its name row, so a
+// provider without readings takes one line.
+func showProviderProblem(menu *providerMenuItems, problem string) {
+	setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+problem)
+	setMenuItemVisible(menu.headerItem, &menu.headerState, true)
+	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
+}
+
+// menuWindows drops windows with nothing used and nothing projected, unless
+// that would leave no window to show.
+func menuWindows(windows []provider.UsageWindow) []provider.UsageWindow {
+	active := make([]provider.UsageWindow, 0, len(windows))
+	for _, window := range windows {
+		proj := windowProjection(window)
+		idle := window.Utilization == 0 && (proj.Unknown || proj.ProjectedPct < 0.5)
+		if !idle {
+			active = append(active, window)
+		}
+	}
+	if len(active) == 0 {
+		return windows
+	}
+	return active
 }
 
 func setMenuItemTitle(item *systray.MenuItem, state *menuItemState, title string) {
@@ -1021,7 +1048,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		if data == nil {
-			showProviderHeader(menu)
 			statusTitle := "No data"
 			if connectionStatus != "" {
 				statusTitle = connectionStatus
@@ -1031,8 +1057,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 					statusTitle = setup.Detail
 				}
 			}
-			setMenuItemTitle(menu.statusItem, &menu.statusState, statusTitle)
-			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			showProviderProblem(menu, statusTitle)
 			hideProviderWindows(menu)
 			setProviderSeparatorVisible(menu, true)
 			continue
@@ -1042,7 +1067,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			if menu.provider.Name() == "claude" {
 				hasExpiredClaude = true
 			}
-			showProviderHeader(menu)
 			hideProviderWindows(menu)
 			expiredMsg := "Token expired"
 			if connectionStatus != "" {
@@ -1053,18 +1077,15 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 					expiredMsg = format.HumanizeError(data.Error)
 				}
 			}
-			setMenuItemTitle(menu.statusItem, &menu.statusState, expiredMsg)
-			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			showProviderProblem(menu, expiredMsg)
 			showBalanceRows(menu, data, nil)
 			setProviderSeparatorVisible(menu, true)
 			continue
 		}
 
 		if data.Error != "" {
-			showProviderHeader(menu)
 			hideProviderWindows(menu)
-			setMenuItemTitle(menu.statusItem, &menu.statusState, format.HumanizeError(data.Error))
-			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
+			showProviderProblem(menu, format.HumanizeError(data.Error))
 			showBalanceRows(menu, data, nil)
 			setProviderSeparatorVisible(menu, true)
 			continue
@@ -1085,7 +1106,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
-		windows := data.PresentationWindows()
+		windows := menuWindows(data.PresentationWindows())
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
 				break
@@ -1099,7 +1120,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		for i := len(windows); i < len(menu.windowItems); i++ {
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
 		}
-		showBalanceRows(menu, data, data.Balances)
+		balanceRows := showBalanceRows(menu, data, data.Balances)
+		if len(windows) == 0 && balanceRows == 0 && len(statusParts) == 0 && !menu.resetState.visible {
+			showProviderProblem(menu, "no usage reported")
+		}
 		setProviderSeparatorVisible(menu, true)
 	}
 
@@ -1914,7 +1938,20 @@ func trayWindowStatus(window provider.UsageWindow) string {
 		return row + " · " + window.ResetPolicy
 	}
 	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	return row + " · resets in " + format.FormatDuration(time.Until(window.ResetsAt)) + " · " + proj.PaceIndicator()
+	row += " · resets in " + format.FormatDuration(time.Until(window.ResetsAt))
+	if proj.Unknown || proj.Stale {
+		return row + " · " + proj.PaceIndicator()
+	}
+	row += " · " + forecast.PaceLabel(proj.ProjectedPct)
+	if proj.WillLastToReset {
+		return row
+	}
+	if proj.RunsOutIn > 0 {
+		row += " · runs out in " + format.FormatDuration(proj.RunsOutIn)
+	} else {
+		row += " · out now"
+	}
+	return "⚠ " + row
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {

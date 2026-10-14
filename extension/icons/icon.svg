@@ -1,18 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22302b"/><stop offset="1" stop-color="#0e1513"/></linearGradient>
-    <linearGradient id="arc" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#22c06f"/><stop offset="1" stop-color="#9af5c2"/></linearGradient>
-    <mask id="gash">
-      <rect width="128" height="128" fill="white"/>
-      <g fill="black">
-        <path d="M 71 17 Q 78 35 63 53 Q 71 34 65 19 Z"/>
-        <path d="M 87 21 Q 94 41 77 59 Q 86 39 81 23 Z"/>
-        <path d="M 103 31 Q 108 51 89 67 Q 99 48 97 33 Z"/>
-      </g>
-    </mask>
-  </defs>
-  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
-  <path mask="url(#gash)" d="M 35.7 98.3 A 40 40 0 1 1 92.3 98.3" fill="none" stroke="url(#arc)" stroke-width="16" stroke-linecap="round"/>
-  <path d="M 64 70 L 86 48" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
-  <circle cx="64" cy="70" r="9.5" fill="#ffffff"/>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="#1d2126"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 30 98 L 30 54 A 24 24 0 0 1 54 30 L 74 30 A 24 24 0 0 1 98 54 L 98 98" stroke="#5e666f" stroke-width="7"/>
+    <path d="M 30 98 L 30 54 A 24 24 0 0 1 54 30 L 62 30" stroke="#ccd3da" stroke-width="8"/>
+    <path d="M 62 30 L 74 30 A 24 24 0 0 1 90.97 37.03" stroke="#34d35b" stroke-width="9"/>
+  </g>
+  <line x1="62" y1="26" x2="62" y2="41" stroke="#1d2126" stroke-width="7" stroke-linecap="round"/>
+  <line x1="62" y1="27" x2="62" y2="40" stroke="#fafcff" stroke-width="3.2" stroke-linecap="round"/>
+  <g stroke="#e8edf2" stroke-width="6" stroke-linecap="round" fill="none" transform="translate(0 -6)">
+    <path d="M 49 86 Q 53 72 62 61"/>
+    <path d="M 59 89 Q 63 75 72 64"/>
+    <path d="M 69 90 Q 72 80 79 71"/>
+  </g>
 </svg>
