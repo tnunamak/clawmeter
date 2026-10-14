@@ -75,6 +75,23 @@ func TestBaseWindowsTray(t *testing.T) {
 		t.Errorf("hideMenuItem failed: %s", err)
 	}
 
+	separator := &MenuItem{id: 3, isSeparator: true}
+	hideMenuItem(separator)
+	if wt.getVisibleItemIndex(0, 3) != -1 {
+		t.Error("hidden separator is still in the menu")
+	}
+	showMenuItem(separator)
+	showMenuItem(separator)
+	const MIIM_FTYPE, MFT_SEPARATOR = 0x00000100, 0x00000800
+	info := menuItemInfo{Mask: MIIM_FTYPE}
+	info.Size = uint32(unsafe.Sizeof(info))
+	getMenuItemInfo := windows.NewLazySystemDLL("user32.dll").NewProc("GetMenuItemInfoW")
+	if res, _, err := getMenuItemInfo.Call(uintptr(wt.menus[0]), 3, 0, uintptr(unsafe.Pointer(&info))); res == 0 {
+		t.Errorf("shown separator is not in the menu: %v", err)
+	} else if info.Type&MFT_SEPARATOR == 0 {
+		t.Errorf("shown separator came back as type %#x", info.Type)
+	}
+
 	err = wt.hideMenuItem(100, 0)
 	if err == nil {
 		t.Error("hideMenuItem failed: must return error on invalid item id")
