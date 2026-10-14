@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
 func TestConsoleSessionUsesActiveProfile(t *testing.T) {
@@ -155,5 +156,25 @@ func TestParseResetCardsFiltersExpiredAndNonAvailable(t *testing.T) {
 	if credits == nil || credits.AvailableCount != 1 || len(credits.Credits) != 1 {
 		encoded, _ := json.Marshal(credits)
 		t.Fatalf("credits = %s", encoded)
+	}
+}
+
+func TestParseUsageReadsTheMonthlyQuota(t *testing.T) {
+	// The October 2026 console shape, with values from a live response.
+	data, err := parseUsage(map[string]any{"data": map[string]any{"code": "SUCCESS", "data": map[string]any{
+		"per1MonthPercentage": 0.25, "per1MonthResetTime": float64(1793289600000)}}}, time.Now())
+	if err != nil || len(data.Windows) != 1 {
+		t.Fatalf("data = %+v, %v", data, err)
+	}
+	w := data.Windows[0]
+	if w.Name != "monthly" || w.Utilization != 25 || w.Length != 30*24*time.Hour || !w.ResetsAt.Equal(time.UnixMilli(1793289600000)) {
+		t.Fatalf("monthly window = %+v", w)
+	}
+}
+
+func TestMissingQuotaIsNotReportedAsALoginFailure(t *testing.T) {
+	_, err := parseUsage(map[string]any{"data": map[string]any{"unrelated": true}}, time.Now())
+	if err == nil || provider.ClassifyError(err) == "auth" {
+		t.Fatalf("err = %v, class %q", err, provider.ClassifyError(err))
 	}
 }
