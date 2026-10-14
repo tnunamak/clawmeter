@@ -383,19 +383,26 @@ func gateway(region, site string) (host, action string) {
 
 func parseUsage(raw any, now time.Time) (*provider.UsageData, error) {
 	result := &provider.UsageData{FetchedAt: now}
-	for _, spec := range []struct{ name, display, pct, reset string }{
-		{"session_5h", "5h", "per5HourPercentage", "per5HourResetTime"},
-		{"weekly", "7d", "per1WeekPercentage", "per1WeekResetTime"},
+	for _, spec := range []struct {
+		name, display, pct, reset string
+		length                    time.Duration
+	}{
+		{"session_5h", "5h", "per5HourPercentage", "per5HourResetTime", 0},
+		{"weekly", "7d", "per1WeekPercentage", "per1WeekResetTime", 0},
+		// Since October 2026 the plan reports one monthly quota instead.
+		{"monthly", "Monthly", "per1MonthPercentage", "per1MonthResetTime", 30 * 24 * time.Hour},
 	} {
 		utilization, ok := findNumber(raw, spec.pct)
 		if !ok {
 			continue
 		}
 		reset, _ := findValue(raw, spec.reset)
-		result.Windows = append(result.Windows, provider.UsageWindow{Name: spec.name, DisplayName: spec.display, Utilization: normalizeUtilization(utilization), ResetsAt: parseTime(reset)})
+		result.Windows = append(result.Windows, provider.UsageWindow{Name: spec.name, DisplayName: spec.display, Length: spec.length, Utilization: normalizeUtilization(utilization), ResetsAt: parseTime(reset)})
 	}
 	if len(result.Windows) == 0 {
-		return nil, fmt.Errorf("no Personal Token Plan quota data found")
+		// No "token" in this message: the error classifier would read it as a
+		// login failure and the menu would say "authentication failed".
+		return nil, fmt.Errorf("quota response is missing usage fields")
 	}
 	return result, nil
 }

@@ -40,8 +40,10 @@ func TestP2ProviderEnablementRace(t *testing.T) {
 func TestP2FailedProviderConnectionRestoresRetry(t *testing.T) {
 	defer systray.ResetMenu()
 	menu := &providerMenuItems{
-		connectItem:  systray.AddMenuItem("Connecting...", ""),
-		connectState: menuItemState{title: "Connecting...", visible: true, enabled: false, initialized: true},
+		displayName: "Alibaba Token Plan",
+		connectable: true,
+		headerItem:  systray.AddMenuItem("Alibaba Token Plan · Connecting...", ""),
+		headerState: menuItemState{title: "Alibaba Token Plan · Connecting...", visible: true, enabled: false, initialized: true},
 	}
 	menu.connecting.Store(true)
 
@@ -50,8 +52,8 @@ func TestP2FailedProviderConnectionRestoresRetry(t *testing.T) {
 	if menu.connecting.Load() {
 		t.Fatal("connection remains marked as active")
 	}
-	if !menu.connectState.enabled || !menu.connectState.visible || menu.connectState.title != retryConnectionAction {
-		t.Fatalf("retry action not restored: %+v", menu.connectState)
+	if !menu.headerState.enabled || !menu.headerConnects.Load() || menu.headerState.title != "Alibaba Token Plan · "+retryConnectionAction {
+		t.Fatalf("retry action not restored: %+v", menu.headerState)
 	}
 }
 
@@ -119,15 +121,15 @@ func TestP2FailedProviderConnectionSurvivesRender(t *testing.T) {
 	menu.connecting.Store(true)
 	finishProviderConnection(menu, errors.New("connection failed"))
 	render()
-	if menu.connectState.title != retryConnectionAction || !menu.connectState.visible {
-		t.Fatalf("retry action lost on the next render: %+v", menu.connectState)
+	if menu.headerAction != retryConnectionAction || !strings.HasSuffix(menu.headerState.title, " · "+retryConnectionAction) {
+		t.Fatalf("retry action lost on the next render: %+v", menu.headerState)
 	}
 
 	menu.connecting.Store(true)
 	finishProviderConnection(menu, nil)
 	render()
-	if menu.connectState.title != "Reconnect quota access" {
-		t.Fatalf("retry action kept after a successful connection: %+v", menu.connectState)
+	if menu.headerAction != "Reconnect quota access" || !menu.headerConnects.Load() {
+		t.Fatalf("retry action kept after a successful connection: %+v", menu.headerState)
 	}
 }
 

@@ -223,10 +223,6 @@ func onReadyWithConfig(loaded *config.Config) {
 	systray.SetTitle(trayTitleForPlatform(runtime.GOOS, false))
 	systray.SetTooltip("")
 
-	// Build header
-	mHeader := systray.AddMenuItem(fmt.Sprintf("Clawmeter %s", version), "")
-	mHeader.Disable()
-
 	// Create registry and register providers
 	registry := provider.NewRegistry()
 	all.Register(registry, cfg, shellpath.NewSessionEnvironmentResolver())
@@ -250,6 +246,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		explicit := cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p))
 		menu := createProviderMenuItems(p, explicit, providerConnectActions, familyCounts[p.Name()] > 1)
+		menu.order = len(providerMenus)
 		hideProviderMenu(menu)
 		providerMenus[provider.SourceKey(p)] = menu
 	}
@@ -294,6 +291,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	mIconAutoMode := mSettings.AddSubMenuItem("Auto Mode: Risk", "")
 	mAutostart := mSettings.AddSubMenuItem("", "")
 	updateAutostartLabel(mAutostart)
+	mSettings.AddSubMenuItem(fmt.Sprintf("Clawmeter %s", version), "").Disable()
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
 
@@ -588,7 +586,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				toggleIconAutoMode(providerMenus, mIconProvider, mIconAutoMode)
 			case providerName := <-providerConnectActions:
 				menu := providerMenus[providerName]
-				if menu == nil || menu.connectItem == nil {
+				if menu == nil || !menu.connectable {
 					continue
 				}
 				if !menu.connecting.CompareAndSwap(false, true) {
@@ -647,10 +645,13 @@ type providerMenuItems struct {
 	headerItem        *systray.MenuItem
 	statusItem        *systray.MenuItem
 	resetItem         *systray.MenuItem
-	connectItem       *systray.MenuItem
+	connectable       bool // the name row can run the quota connection
+	headerAction      string
+	headerConnects    atomic.Bool
 	windowItems       []*systray.MenuItem
 	balanceItems      []*systray.MenuItem
 	separator         *systray.MenuItem
+	order             int // position in the menu, top first
 	opensDashboard    bool
 	everHealthy       bool // true once we've seen useful quota data
 	explicitlyEnabled bool
@@ -659,7 +660,6 @@ type providerMenuItems struct {
 	headerState       menuItemState
 	statusState       menuItemState
 	resetState        menuItemState
-	connectState      menuItemState
 	windowStates      []menuItemState
 	windowAtRisk      []bool
 	balanceStates     []menuItemState
@@ -686,15 +686,10 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	separator := systray.AddSeparatorItem()
 	// The header names the provider and opens its dashboard when clicked.
 	opensDashboard := p.Name() != "claude_web" && p.DashboardURL() != ""
+	connectable := p.Name() == tokenPlanProviderName && connectActions != nil
 	header := systray.AddMenuItem(displayName, p.DashboardURL())
 	setMenuItemIcon(header, icons.MenuMark(p.Name(), resolveTrayPalette()))
-	if opensDashboard {
-		go func() {
-			for range header.ClickedCh {
-				openURL(p.DashboardURL())
-			}
-		}()
-	} else {
+	if !opensDashboard && !connectable {
 		header.Disable()
 	}
 
@@ -708,19 +703,6 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(resetItem, icons.MenuBlank())
 	resetItem.Hide()
 	resetState := menuItemState{visible: false, enabled: false, initialized: true}
-
-	var connectItem *systray.MenuItem
-	if p.Name() == tokenPlanProviderName && connectActions != nil {
-		connectItem = systray.AddMenuItem("Connect quota access", "")
-		go func() {
-			for range connectItem.ClickedCh {
-				select {
-				case connectActions <- p.Name():
-				default:
-				}
-			}
-		}()
-	}
 
 	// Pre-create window items (hidden until populated)
 	windowItems := make([]*systray.MenuItem, maxWindowItems)
@@ -748,27 +730,39 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		balanceStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
 	}
 
-	return &providerMenuItems{
+	menu := &providerMenuItems{
 		provider:          p,
 		displayName:       displayName,
 		headerItem:        header,
 		statusItem:        statusItem,
 		resetItem:         resetItem,
-		connectItem:       connectItem,
+		connectable:       connectable,
 		windowItems:       windowItems,
 		balanceItems:      balanceItems,
 		separator:         separator,
 		opensDashboard:    opensDashboard,
 		explicitlyEnabled: explicitlyEnabled,
-		headerState:       menuItemState{title: displayName, visible: true, enabled: opensDashboard, initialized: true},
+		headerState:       menuItemState{title: displayName, visible: true, enabled: opensDashboard || connectable, initialized: true},
 		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
 		resetState:        resetState,
-		connectState:      menuItemState{title: "Connect quota access", visible: true, enabled: true, initialized: connectItem != nil},
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
 		balanceStates:     balanceStates,
 		separatorState:    menuItemState{visible: true, initialized: true},
 	}
+	go func() {
+		for range header.ClickedCh {
+			if menu.headerConnects.Load() {
+				select {
+				case connectActions <- p.Name():
+				default:
+				}
+			} else if opensDashboard {
+				openURL(p.DashboardURL())
+			}
+		}
+	}()
+	return menu
 }
 
 func setProviderSeparatorVisible(menu *providerMenuItems, visible bool) {
@@ -779,9 +773,6 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setMenuItemVisible(menu.headerItem, &menu.headerState, false)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
-	if menu.connectItem != nil {
-		setMenuItemVisible(menu.connectItem, &menu.connectState, false)
-	}
 	hideProviderWindows(menu)
 	setProviderSeparatorVisible(menu, false)
 }
@@ -830,13 +821,21 @@ func hideProviderWindows(menu *providerMenuItems) {
 }
 
 func showProviderHeader(menu *providerMenuItems) {
-	setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName)
+	title := menu.displayName
+	if menu.headerAction != "" {
+		title += " · " + menu.headerAction
+	}
+	setMenuItemTitle(menu.headerItem, &menu.headerState, title)
 	setMenuItemVisible(menu.headerItem, &menu.headerState, true)
 }
 
 // showProviderProblem puts a provider's only message on its name row, so a
 // provider without readings takes one line.
 func showProviderProblem(menu *providerMenuItems, problem string) {
+	if menu.headerAction != "" {
+		// The action names the fix; it replaces the problem.
+		problem = menu.headerAction
+	}
 	setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+problem)
 	setMenuItemVisible(menu.headerItem, &menu.headerState, true)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
@@ -920,22 +919,23 @@ func providerConnectionMenuState(name string, data *provider.UsageData, explicit
 }
 
 func setProviderConnectionItemLocked(menu *providerMenuItems, action string, show bool) {
-	if menu.connectItem == nil {
+	if !menu.connectable {
 		return
 	}
 	if menu.connecting.Load() {
-		setMenuItemTitle(menu.connectItem, &menu.connectState, "Connecting...")
-		setMenuItemEnabled(menu.connectItem, &menu.connectState, false)
-		setMenuItemVisible(menu.connectItem, &menu.connectState, true)
+		menu.headerAction = "Connecting..."
+		menu.headerConnects.Store(false)
+		setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+menu.headerAction)
+		setMenuItemEnabled(menu.headerItem, &menu.headerState, false)
 		return
 	}
-	if !show {
-		setMenuItemVisible(menu.connectItem, &menu.connectState, false)
-		return
+	menu.headerAction = ""
+	if show {
+		menu.headerAction = action
+		setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+action)
 	}
-	setMenuItemTitle(menu.connectItem, &menu.connectState, action)
-	setMenuItemEnabled(menu.connectItem, &menu.connectState, true)
-	setMenuItemVisible(menu.connectItem, &menu.connectState, true)
+	menu.headerConnects.Store(show)
+	setMenuItemEnabled(menu.headerItem, &menu.headerState, true)
 }
 
 func finishProviderConnection(menu *providerMenuItems, err error) {
@@ -1029,10 +1029,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		setup := setups[name]
-		detected := data != nil
-		if name == tokenPlanProviderName {
-			detected = detected || setup.State != provider.SetupUnavailable
-		}
+		// Like the CLI, an auto-detected provider shows only with something
+		// to show. The Token Plan also shows when it can be connected.
+		detected := name == tokenPlanProviderName && setup.State != provider.SetupUnavailable
 		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) && !detected {
 			hideProviderMenu(menu)
 			continue
@@ -1137,6 +1136,19 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			showProviderProblem(menu, "no usage reported")
 		}
 		setProviderSeparatorVisible(menu, true)
+	}
+
+	// A line separates providers; none sits above the first one.
+	var first *providerMenuItems
+	for _, menu := range menus {
+		if menu.headerState.visible && (first == nil || menu.order < first.order) {
+			first = menu
+		}
+	}
+	for _, menu := range menus {
+		if menu.headerState.visible {
+			setProviderSeparatorVisible(menu, menu != first)
+		}
 	}
 
 	// Show/hide reauth button (only for Claude expired tokens)
