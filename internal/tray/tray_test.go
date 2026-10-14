@@ -1731,3 +1731,27 @@ func TestTrayWindowRowsShareOneSeparatorStyle(t *testing.T) {
 		t.Fatalf("unreported row = %q", got)
 	}
 }
+
+func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
+	window := provider.UsageWindow{Name: "seven_day", Length: 7 * 24 * time.Hour, Utilization: 86, ResetsAt: time.Now().Add(34 * time.Hour)}
+	got := trayWindowStatus(window)
+	if !strings.HasPrefix(got, "⚠ ") || !strings.Contains(got, " · runs out in ") || strings.Contains(got, "before reset") {
+		t.Fatalf("at-risk row = %q", got)
+	}
+	window.Utilization = 10
+	if got := trayWindowStatus(window); strings.HasPrefix(got, "⚠") || strings.Contains(got, "runs out") {
+		t.Fatalf("safe row = %q", got)
+	}
+}
+
+func TestMenuWindowsDropIdleWindowsButNeverAll(t *testing.T) {
+	soon := time.Now().Add(24 * time.Hour)
+	used := provider.UsageWindow{Name: "seven_day", Length: 7 * 24 * time.Hour, Utilization: 40, ResetsAt: soon}
+	idle := provider.UsageWindow{Name: "seven_day_fable", Length: 7 * 24 * time.Hour, Utilization: 0, ResetsAt: soon}
+	if got := menuWindows([]provider.UsageWindow{used, idle}); len(got) != 1 || got[0].Name != used.Name {
+		t.Fatalf("windows = %+v", got)
+	}
+	if got := menuWindows([]provider.UsageWindow{idle}); len(got) != 1 {
+		t.Fatalf("an all-idle provider lost its rows: %+v", got)
+	}
+}
