@@ -4,5 +4,5 @@ package tray
 
 import "github.com/tnunamak/clawmeter/internal/systray"
 
-// Windows menu icons need an .ico file; provider headers stay text-only there.
-func setMenuItemLogo(*systray.MenuItem, []byte) {}
+// Windows menu icons need an .ico file; menu rows stay text-only there.
+func setMenuItemIcon(*systray.MenuItem, []byte) {}

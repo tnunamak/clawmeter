@@ -489,3 +489,45 @@ func frameStroke(dst *image.RGBA, points []framePoint, scale float64, c color.NR
 func frameDisc(dst *image.RGBA, p framePoint, scale, radius float64, c color.NRGBA) {
 	drawFilledCircle(dst, p.x*scale, p.y*scale, radius*scale, c)
 }
+
+// MenuIconSize is the square size of every menu row icon.
+const MenuIconSize = 16
+
+// MenuMark returns a provider's hand-tuned 32px tray mark, centered on a
+// menu-row canvas, in the palette that matches the desktop.
+func MenuMark(providerName string, palette TrayPalette) []byte {
+	if providerName == "claude_api" {
+		providerName = "claude"
+	}
+	asset := frameProviderAsset[providerName]
+	data, err := v10Assets.ReadFile(fmt.Sprintf("provider-frame-v10/%s/32/provider-%s.png", frameThemeForPalette(palette), asset))
+	if asset == "" || err != nil {
+		return menuCanvas(resize(decodeProviderLogo(ProviderLogos[providerName]), MenuIconSize-2))
+	}
+	mark, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return MenuBlank()
+	}
+	return menuCanvas(mark)
+}
+
+// MenuRiskDot marks a row whose quota runs out before it resets, in the
+// tray's over-pace red.
+func MenuRiskDot() []byte {
+	dst := image.NewRGBA(image.Rect(0, 0, MenuIconSize, MenuIconSize))
+	drawCircle(dst, MenuIconSize/2, MenuIconSize/2, 3, frameRed)
+	return encodePNG(dst)
+}
+
+// MenuBlank keeps a row's text aligned with rows that carry an icon.
+func MenuBlank() []byte {
+	return encodePNG(image.NewRGBA(image.Rect(0, 0, MenuIconSize, MenuIconSize)))
+}
+
+func menuCanvas(mark image.Image) []byte {
+	dst := image.NewRGBA(image.Rect(0, 0, MenuIconSize, MenuIconSize))
+	b := mark.Bounds()
+	x, y := (MenuIconSize-b.Dx())/2, (MenuIconSize-b.Dy())/2
+	draw.Draw(dst, image.Rect(x, y, x+b.Dx(), y+b.Dy()), mark, b.Min, draw.Over)
+	return encodePNG(dst)
+}
