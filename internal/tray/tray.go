@@ -226,7 +226,6 @@ func onReadyWithConfig(loaded *config.Config) {
 	// Build header
 	mHeader := systray.AddMenuItem(fmt.Sprintf("Clawmeter %s", version), "")
 	mHeader.Disable()
-	systray.AddSeparator()
 
 	// Create registry and register providers
 	registry := provider.NewRegistry()
@@ -268,13 +267,6 @@ func onReadyWithConfig(loaded *config.Config) {
 	s.providerSetupVisibleKnown = true
 
 	systray.AddSeparator()
-
-	// Global menu items
-	mIconProvider := systray.AddMenuItem("Icon: Auto (click to cycle)", "")
-	s.iconTargetState = menuItemState{title: "Icon: Auto (click to cycle)", enabled: true, initialized: true}
-	mIconAutoMode := systray.AddMenuItem("Auto Mode: Risk", "")
-	mRefresh := systray.AddMenuItem("Refresh Now", "")
-	systray.AddSeparator()
 	iconActionCh := iconClickActions
 	if iconActionCh == nil {
 		iconActionCh = make(chan iconClickAction, 1)
@@ -295,9 +287,14 @@ func onReadyWithConfig(loaded *config.Config) {
 	mUpdate := systray.AddMenuItem("", "")
 	mUpdate.Hide()
 
-	systray.AddSeparator()
-	mAutostart := systray.AddMenuItem("", "")
+	mRefresh := systray.AddMenuItem("Refresh Now", "")
+	mSettings := systray.AddMenuItem("Settings", "")
+	mIconProvider := mSettings.AddSubMenuItem("Icon: Auto (click to cycle)", "")
+	s.iconTargetState = menuItemState{title: "Icon: Auto (click to cycle)", enabled: true, initialized: true}
+	mIconAutoMode := mSettings.AddSubMenuItem("Auto Mode: Risk", "")
+	mAutostart := mSettings.AddSubMenuItem("", "")
 	updateAutostartLabel(mAutostart)
+	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
 
 	// Guard against concurrent refreshes
@@ -645,27 +642,27 @@ func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Co
 
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
-	provider           provider.Provider
-	displayName        string
-	headerItem         *systray.MenuItem
-	statusItem         *systray.MenuItem
-	resetItem          *systray.MenuItem
-	connectItem        *systray.MenuItem
-	windowItems        []*systray.MenuItem
-	balanceItems       []*systray.MenuItem
-	dashboardItem      *systray.MenuItem
-	dashboardAvailable bool
-	everHealthy        bool // true once we've seen useful quota data
-	explicitlyEnabled  bool
-	connecting         atomic.Bool
-	connectFailed      atomic.Bool // last tray connection attempt failed
-	headerState        menuItemState
-	statusState        menuItemState
-	resetState         menuItemState
-	connectState       menuItemState
-	windowStates       []menuItemState
-	balanceStates      []menuItemState
-	dashboardState     menuItemState
+	provider          provider.Provider
+	displayName       string
+	headerItem        *systray.MenuItem
+	statusItem        *systray.MenuItem
+	resetItem         *systray.MenuItem
+	connectItem       *systray.MenuItem
+	windowItems       []*systray.MenuItem
+	balanceItems      []*systray.MenuItem
+	separator         *systray.MenuItem
+	opensDashboard    bool
+	everHealthy       bool // true once we've seen useful quota data
+	explicitlyEnabled bool
+	connecting        atomic.Bool
+	connectFailed     atomic.Bool // last tray connection attempt failed
+	headerState       menuItemState
+	statusState       menuItemState
+	resetState        menuItemState
+	connectState      menuItemState
+	windowStates      []menuItemState
+	balanceStates     []menuItemState
+	separatorState    menuItemState
 }
 
 type menuItemState struct {
@@ -684,9 +681,23 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		label = provider.SourceID(p)
 	}
 	displayName = trayProviderDisplayName(displayName, label, repeated)
-	// Provider header (disabled)
-	header := systray.AddMenuItem(displayName, "")
-	header.Disable()
+	// A line above each provider block, hidden with the block.
+	separator := systray.AddSeparatorItem()
+	// The header names the provider and opens its dashboard when clicked.
+	opensDashboard := p.Name() != "claude_web" && p.DashboardURL() != ""
+	header := systray.AddMenuItem(displayName, p.DashboardURL())
+	if logo := icons.ProviderLogos[p.Name()]; len(logo) > 0 {
+		setMenuItemLogo(header, logo)
+	}
+	if opensDashboard {
+		go func() {
+			for range header.ClickedCh {
+				openURL(p.DashboardURL())
+			}
+		}()
+	} else {
+		header.Disable()
+	}
 
 	// Status item (shows loading/error)
 	statusItem := systray.AddMenuItem("Loading...", "")
@@ -734,41 +745,30 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		balanceStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
 	}
 
-	// Dashboard item (clickable). The disabled-header of the next provider
-	// (or the global separator after the provider block) acts as the visual
-	// divider; we don't add a per-provider separator because there's no way
-	// to hide a separator and the provider block has variable membership.
-	dashboardItem := systray.AddMenuItem(fmt.Sprintf("Open %s Dashboard", p.DisplayName()), p.DashboardURL())
-	go func() {
-		for range dashboardItem.ClickedCh {
-			openURL(p.DashboardURL())
-		}
-	}()
-
 	return &providerMenuItems{
-		provider:           p,
-		displayName:        displayName,
-		headerItem:         header,
-		statusItem:         statusItem,
-		resetItem:          resetItem,
-		connectItem:        connectItem,
-		windowItems:        windowItems,
-		balanceItems:       balanceItems,
-		dashboardItem:      dashboardItem,
-		dashboardAvailable: p.Name() != "claude_web",
-		explicitlyEnabled:  explicitlyEnabled,
-		headerState:        menuItemState{title: displayName, visible: true, enabled: false, initialized: true},
-		statusState:        menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
-		resetState:         resetState,
-		connectState:       menuItemState{title: "Connect quota access", visible: true, enabled: true, initialized: connectItem != nil},
-		windowStates:       windowStates,
-		balanceStates:      balanceStates,
-		dashboardState:     menuItemState{title: fmt.Sprintf("Open %s Dashboard", p.DisplayName()), visible: true, enabled: true, initialized: true},
+		provider:          p,
+		displayName:       displayName,
+		headerItem:        header,
+		statusItem:        statusItem,
+		resetItem:         resetItem,
+		connectItem:       connectItem,
+		windowItems:       windowItems,
+		balanceItems:      balanceItems,
+		separator:         separator,
+		opensDashboard:    opensDashboard,
+		explicitlyEnabled: explicitlyEnabled,
+		headerState:       menuItemState{title: displayName, visible: true, enabled: opensDashboard, initialized: true},
+		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
+		resetState:        resetState,
+		connectState:      menuItemState{title: "Connect quota access", visible: true, enabled: true, initialized: connectItem != nil},
+		windowStates:      windowStates,
+		balanceStates:     balanceStates,
+		separatorState:    menuItemState{visible: true, initialized: true},
 	}
 }
 
-func setProviderDashboardVisible(menu *providerMenuItems, visible bool) {
-	setMenuItemVisible(menu.dashboardItem, &menu.dashboardState, visible && menu.dashboardAvailable)
+func setProviderSeparatorVisible(menu *providerMenuItems, visible bool) {
+	setMenuItemVisible(menu.separator, &menu.separatorState, visible)
 }
 
 func hideProviderMenu(menu *providerMenuItems) {
@@ -779,7 +779,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 		setMenuItemVisible(menu.connectItem, &menu.connectState, false)
 	}
 	hideProviderWindows(menu)
-	setProviderDashboardVisible(menu, false)
+	setProviderSeparatorVisible(menu, false)
 }
 
 // showBalanceRows fills the balance rows with balances, then API credit
@@ -1034,7 +1034,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemTitle(menu.statusItem, &menu.statusState, statusTitle)
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 			hideProviderWindows(menu)
-			setProviderDashboardVisible(menu, true)
+			setProviderSeparatorVisible(menu, true)
 			continue
 		}
 
@@ -1056,7 +1056,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemTitle(menu.statusItem, &menu.statusState, expiredMsg)
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 			showBalanceRows(menu, data, nil)
-			setProviderDashboardVisible(menu, true)
+			setProviderSeparatorVisible(menu, true)
 			continue
 		}
 
@@ -1066,7 +1066,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemTitle(menu.statusItem, &menu.statusState, format.HumanizeError(data.Error))
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 			showBalanceRows(menu, data, nil)
-			setProviderDashboardVisible(menu, true)
+			setProviderSeparatorVisible(menu, true)
 			continue
 		}
 
@@ -1100,7 +1100,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
 		}
 		showBalanceRows(menu, data, data.Balances)
-		setProviderDashboardVisible(menu, true)
+		setProviderSeparatorVisible(menu, true)
 	}
 
 	// Show/hide reauth button (only for Claude expired tokens)
@@ -1906,17 +1906,15 @@ func trayWindowStatus(window provider.UsageWindow) string {
 	if money != "" {
 		label += " (" + money + ")"
 	}
-	if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-		return fmt.Sprintf("%s: %.0f%% — reset not reported", label, window.Utilization)
+	row := fmt.Sprintf("%s: %.0f%%", label, window.Utilization)
+	if window.ResetsAt.IsZero() {
+		if window.ResetPolicy == "" {
+			return row + " · reset not reported"
+		}
+		return row + " · " + window.ResetPolicy
 	}
-	resetStr, indicator := "reset unknown", "reset unknown"
-	if !window.ResetsAt.IsZero() {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-		resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
-	} else if window.ResetPolicy != "" {
-		indicator = window.ResetPolicy
-	}
-	return fmt.Sprintf("%s: %.0f%% — %s — %s", label, window.Utilization, resetStr, indicator)
+	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+	return row + " · resets in " + format.FormatDuration(time.Until(window.ResetsAt)) + " · " + proj.PaceIndicator()
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {

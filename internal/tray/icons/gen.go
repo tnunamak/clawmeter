@@ -822,3 +822,38 @@ func encodePNG(img image.Image) []byte {
 	png.Encode(&buf, img)
 	return buf.Bytes()
 }
+
+// MenuLogo renders a provider logo for a menu row on a round chip, so every
+// mark reads on dark and light menus: light chip by default, dark chip for
+// white marks.
+func MenuLogo(providerLogo []byte, size int) []byte {
+	dst := image.NewRGBA(image.Rect(0, 0, size, size))
+	logo := decodeProviderLogo(providerLogo)
+	chip := color.NRGBA{R: 246, G: 248, B: 250, A: 255}
+	if isLightMark(logo) {
+		chip = color.NRGBA{R: 38, G: 42, B: 48, A: 255}
+	}
+	drawCircle(dst, size/2, size/2, size/2, chip)
+	inset := size * 3 / 16
+	xdraw.CatmullRom.Scale(dst, image.Rect(inset, inset, size-inset, size-inset), logo, logo.Bounds(), draw.Over, nil)
+	return encodePNG(dst)
+}
+
+// isLightMark reports whether a logo's opaque pixels are mostly near white.
+func isLightMark(img image.Image) bool {
+	var light, opaque int
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, g, bl, a := img.At(x, y).RGBA()
+			if a < 0x8000 {
+				continue
+			}
+			opaque++
+			if (299*(r>>8)+587*(g>>8)+114*(bl>>8))/1000 > 200 {
+				light++
+			}
+		}
+	}
+	return opaque > 0 && light*2 > opaque
+}

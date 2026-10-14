@@ -1386,6 +1386,12 @@ func removeMenuItem(item *MenuItem) {
 }
 
 func showMenuItem(item *MenuItem) {
+	if item.isSeparator {
+		if wt.getVisibleItemIndex(item.parentId(), uint32(item.id)) == -1 {
+			addSeparator(item.id, item.parentId())
+		}
+		return
+	}
 	addOrUpdateMenuItem(item)
 }
 

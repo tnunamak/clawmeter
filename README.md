@@ -146,11 +146,11 @@ The radial meter compares actual burn with expected pace. Gray shows the shared 
 - Left-click the tray icon to cycle through active provider/quota windows.
 - Double-click the tray icon to return to Auto.
 - Auto picks a quota window and is not part of the left-click cycle.
-- The tray menu can switch Auto between Risk, EST, and Runway:
+- The tray menu's Settings can switch Auto between Risk, EST, and Runway:
   - Risk: the quota projected to block you soonest.
   - EST: the highest projected-at-reset percentage.
   - Runway: the quota with the most projected room left.
-- Right-click for details, refresh, update, and launch-at-login.
+- Right-click for details, refresh, and update. Click a provider's name to open its dashboard. Settings holds the icon options and launch-at-login.
 - A small blue dot on the tray icon means an update is available.
 - Use `Refresh Now` when you want an immediate quota/update check.
 
