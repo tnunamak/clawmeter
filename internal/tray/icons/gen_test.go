@@ -763,19 +763,18 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-func TestMenuLogoChipContrastsWithTheMark(t *testing.T) {
-	chipAt := func(logo []byte) uint32 {
-		img, err := png.Decode(bytes.NewReader(MenuLogo(logo, 32)))
-		if err != nil {
-			t.Fatal(err)
+func TestMenuMarkUsesTheTrayMarkForEachPalette(t *testing.T) {
+	dark, light := MenuMark("openai", TrayPaletteDark), MenuMark("openai", TrayPaletteLight)
+	if bytes.Equal(dark, light) {
+		t.Fatal("dark and light menus get the same OpenAI mark")
+	}
+	for _, data := range [][]byte{dark, MenuMark("claude_api", TrayPaletteDark), MenuMark("deepseek", TrayPaletteLight)} {
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil || img.Bounds().Dx() != MenuIconSize || img.Bounds().Dy() != MenuIconSize {
+			t.Fatalf("menu mark = %v, %v", img.Bounds(), err)
 		}
-		r, _, _, _ := img.At(16, 2).RGBA()
-		return r >> 8
-	}
-	if c := chipAt(ProviderAntigravity); c > 100 {
-		t.Fatalf("white Antigravity mark sits on a light chip (red %d)", c)
-	}
-	if c := chipAt(ProviderOpenAI); c < 200 {
-		t.Fatalf("dark OpenAI mark sits on a dark chip (red %d)", c)
+		if bytes.Equal(data, MenuBlank()) {
+			t.Fatal("menu mark is blank")
+		}
 	}
 }

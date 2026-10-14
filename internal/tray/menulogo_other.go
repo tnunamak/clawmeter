@@ -2,11 +2,8 @@
 
 package tray
 
-import (
-	"github.com/tnunamak/clawmeter/internal/systray"
-	"github.com/tnunamak/clawmeter/internal/tray/icons"
-)
+import "github.com/tnunamak/clawmeter/internal/systray"
 
-func setMenuItemLogo(item *systray.MenuItem, logo []byte) {
-	item.SetIcon(icons.MenuLogo(logo, 32))
+func setMenuItemIcon(item *systray.MenuItem, icon []byte) {
+	item.SetIcon(icon)
 }

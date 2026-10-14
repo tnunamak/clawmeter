@@ -661,6 +661,7 @@ type providerMenuItems struct {
 	resetState        menuItemState
 	connectState      menuItemState
 	windowStates      []menuItemState
+	windowAtRisk      []bool
 	balanceStates     []menuItemState
 	separatorState    menuItemState
 }
@@ -686,9 +687,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	// The header names the provider and opens its dashboard when clicked.
 	opensDashboard := p.Name() != "claude_web" && p.DashboardURL() != ""
 	header := systray.AddMenuItem(displayName, p.DashboardURL())
-	if logo := icons.ProviderLogos[p.Name()]; len(logo) > 0 {
-		setMenuItemLogo(header, logo)
-	}
+	setMenuItemIcon(header, icons.MenuMark(p.Name(), resolveTrayPalette()))
 	if opensDashboard {
 		go func() {
 			for range header.ClickedCh {
@@ -702,9 +701,11 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	// Status item (shows loading/error)
 	statusItem := systray.AddMenuItem("Loading...", "")
 	statusItem.Disable()
+	setMenuItemIcon(statusItem, icons.MenuBlank())
 
 	resetItem := systray.AddMenuItem("", "")
 	resetItem.Disable()
+	setMenuItemIcon(resetItem, icons.MenuBlank())
 	resetItem.Hide()
 	resetState := menuItemState{visible: false, enabled: false, initialized: true}
 
@@ -727,6 +728,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		item := systray.AddMenuItem("", "")
 		item.Disable()
 		item.Hide()
+		setMenuItemIcon(item, icons.MenuBlank())
 		windowItems[i] = item
 	}
 	windowStates := make([]menuItemState, len(windowItems))
@@ -738,6 +740,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		item := systray.AddMenuItem("", "")
 		item.Disable()
 		item.Hide()
+		setMenuItemIcon(item, icons.MenuBlank())
 		balanceItems[i] = item
 	}
 	balanceStates := make([]menuItemState, len(balanceItems))
@@ -762,6 +765,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		resetState:        resetState,
 		connectState:      menuItemState{title: "Connect quota access", visible: true, enabled: true, initialized: connectItem != nil},
 		windowStates:      windowStates,
+		windowAtRisk:      make([]bool, len(windowItems)),
 		balanceStates:     balanceStates,
 		separatorState:    menuItemState{visible: true, initialized: true},
 	}
@@ -1113,6 +1117,14 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			}
 
 			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], trayWindowStatus(window))
+			if atRisk := windowRunsOutBeforeReset(window); atRisk != menu.windowAtRisk[i] {
+				menu.windowAtRisk[i] = atRisk
+				icon := icons.MenuBlank()
+				if atRisk {
+					icon = icons.MenuRiskDot()
+				}
+				setMenuItemIcon(menu.windowItems[i], icon)
+			}
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], true)
 
 		}
@@ -1947,11 +1959,19 @@ func trayWindowStatus(window provider.UsageWindow) string {
 		return row
 	}
 	if proj.RunsOutIn > 0 {
-		row += " · runs out in " + format.FormatDuration(proj.RunsOutIn)
-	} else {
-		row += " · out now"
+		return row + " · runs out in " + format.FormatDuration(proj.RunsOutIn)
 	}
-	return "⚠ " + row
+	return row + " · out now"
+}
+
+// windowRunsOutBeforeReset reports whether a window is projected to run out
+// before it resets; its row gets the red risk mark.
+func windowRunsOutBeforeReset(window provider.UsageWindow) bool {
+	if window.ResetsAt.IsZero() {
+		return false
+	}
+	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+	return !proj.Unknown && !proj.Stale && !proj.WillLastToReset
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {
