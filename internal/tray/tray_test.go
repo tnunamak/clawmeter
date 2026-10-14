@@ -1732,9 +1732,10 @@ func TestTrayWindowRowsShareOneSeparatorStyle(t *testing.T) {
 	}
 }
 
-func TestTrayWindowRowSaysWhenAWindowRunsOutBeforeReset(t *testing.T) {
+func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	window := provider.UsageWindow{Name: "seven_day", Length: 7 * 24 * time.Hour, Utilization: 86, ResetsAt: time.Now().Add(34 * time.Hour)}
-	if got := trayWindowStatus(window); !windowRunsOutBeforeReset(window) || !strings.Contains(got, " · runs out in ") || strings.Contains(got, "before reset") {
+	got := trayWindowStatus(window)
+	if !windowRunsOutBeforeReset(window) || strings.HasPrefix(got, "⚠") || !strings.Contains(got, " · runs out in ") || strings.Contains(got, "before reset") {
 		t.Fatalf("at-risk row = %q", got)
 	}
 	window.Utilization = 10
