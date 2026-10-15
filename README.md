@@ -364,7 +364,9 @@ DeepSeek is read-only balance semantics. Clawmeter calls only the documented
 `GET /user/balance` endpoint and reports the account balance per currency; it
 never exposes utilization percentage, spend, quota totals, or reset timing,
 because DeepSeek's balance API does not provide them. Clawmeter never tops up,
-spends, or rotates the key.
+spends, or rotates the key. OpenCode's temporary free DeepSeek route is a
+separate inference service; this balance provider does not measure its
+availability, usage fees, or limits.
 
 </details>
 
