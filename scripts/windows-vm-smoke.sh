@@ -26,7 +26,7 @@ Options:
   --ssh-port PORT              Host SSH forward port (default: 22220)
   --boot-wait SECONDS          Total VM probe time (default: 360)
   --probe-interval SECONDS     Probe interval (default: 15)
-  --out-dir PATH               Output dir (default: ~/.tmp/clawmeter-windows-smoke)
+  --out-dir PATH               Output parent; a unique run subdirectory is created
   --skip-wine                  Skip Wine smoke
   --skip-quota                 Skip clawmeter status --agent preflight
   --help                       Show this help
@@ -74,6 +74,7 @@ SSH_PORT=22220
 BOOT_WAIT=360
 PROBE_INTERVAL=15
 OUT_DIR="${HOME}/.tmp/clawmeter-windows-smoke"
+VM_OWNED=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -101,6 +102,7 @@ REPO="$(repo_root)"
 cd "$REPO"
 
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(mktemp -d "${OUT_DIR%/}/run.XXXXXXXX")"
 REPORT="${OUT_DIR}/report.txt"
 : >"$REPORT"
 
@@ -241,6 +243,38 @@ vm_paths() {
   VM_DIR="${VM_BASE}/${VM_NAME}"
 }
 
+# This is cooperative admission, not a VM sandbox. Use disposable workers.
+admit_vm() {
+  have flock || die "flock is required for VM admission"
+  [[ "$VM_CPU_CORES" =~ ^[1-4]$ ]] || die "VM CPU budget is 1..4 cores"
+  [[ "$VM_RAM" =~ ^[1-9][0-9]{0,3}[GgMm]$ ]] || die "invalid VM RAM"
+  local ram_mib
+  ram_mib="$(size_to_mib "$VM_RAM")"
+  (( ram_mib <= 8192 )) || die "VM RAM budget is at most 8192 MiB"
+  vm_paths
+  # Lock the canonical directory inode, not an unlinkable lock-file pathname.
+  exec {VM_LOCK_FD}<"$VM_BASE"
+  flock -n "$VM_LOCK_FD" || die "another smoke run owns this VM directory"
+  [[ ! -e "${VM_BASE}/${VM_NAME}-clawmeter-smoke.conf" ]] ||
+    die "old smoke config exists; inspect it on the disposable worker first"
+  if nc -z 127.0.0.1 "$SSH_PORT"; then
+    die "SSH port $SSH_PORT is already occupied"
+  fi
+}
+
+cleanup_run() {
+  local status=$?
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$VM_OWNED" -eq 1 ]]; then
+    kill_vm_processes "$VM_BASE"
+    cleanup_vm_runtime_files "$VM_DIR"
+  fi
+  cleanup_safe_vm_conf
+  # Keep report/logs on both success and failure.
+  exit "$status"
+}
+
 prepare_safe_vm_conf() {
   vm_paths
   local source_conf="$VM_CONF"
@@ -361,14 +395,15 @@ start_quickemu_vm() {
   have socat || die "socat is required for QEMU monitor screenshots"
   have nc || die "nc is required for SSH port probes"
 
+  admit_vm
   vm_memory_preflight
   prepare_safe_vm_conf
   copy_artifacts_to_vm_share
   maybe_set_ignore_msrs
 
-  log "Cleaning stale VM runtime files"
-  kill_vm_processes "$VM_BASE"
-  cleanup_vm_runtime_files "$VM_DIR"
+  # Never kill a pre-existing VM as a startup preflight.
+  [[ ! -e "${VM_DIR}/.lock" && ! -e "${VM_DIR}/${VM_NAME}.pid" ]] ||
+    die "VM runtime state already exists; inspect the disposable worker"
 
   local log_file="${OUT_DIR}/quickemu.log"
   log "Starting Quickemu VM: ${VM_CONF}"
@@ -381,6 +416,7 @@ start_quickemu_vm() {
       --ssh-port "$SSH_PORT"
   ) >"$log_file" 2>&1 &
   QUICKEMU_PID=$!
+  VM_OWNED=1
   record "quickemu_pid=${QUICKEMU_PID}"
   log "Quickemu launcher pid=${QUICKEMU_PID}; log=${log_file}"
 
@@ -470,6 +506,9 @@ main() {
 
   local exit_status=0
   if [[ "$RUN_VM" -eq 1 ]]; then
+    trap cleanup_run EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     set +e
     start_quickemu_vm
     vm_status=$?
@@ -481,10 +520,7 @@ main() {
         exit_status=0
       fi
     fi
-    vm_paths
-    kill_vm_processes "$VM_BASE"
-    cleanup_vm_runtime_files "$VM_DIR"
-    cleanup_safe_vm_conf
+    # EXIT trap owns cleanup, including failed or interrupted probes.
   fi
 
   log "Done. Report: ${REPORT}"
