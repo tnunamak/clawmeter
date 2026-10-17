@@ -266,7 +266,7 @@ cat > "$root/bin/quickemu" <<STUB
 #!/bin/sh
 echo \\$\\$ > "$root/launcher.pid"
 kill -TERM \\$PPID
-sleep 60
+exec sleep 60
 STUB
 chmod +x "$root/bin/quickemu"
 PATH="$root/bin:$PATH"
