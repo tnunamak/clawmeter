@@ -75,6 +75,7 @@ BOOT_WAIT=360
 PROBE_INTERVAL=15
 OUT_DIR="${HOME}/.tmp/clawmeter-windows-smoke"
 VM_OWNED=0
+TCG_PID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -276,11 +277,25 @@ stop_launcher() {
   wait "$pid" 2>/dev/null
 }
 
+# Stop a process group this run started with setsid (the TCG fallback).
+stop_group() {
+  local pid="${1:-}" tries
+  [[ -n "$pid" ]] || return 0
+  kill -TERM -- "-$pid" 2>/dev/null || return 0
+  for tries in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 -- "-$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL -- "-$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+}
+
 cleanup_run() {
   local status=$?
   trap - EXIT INT TERM
   set +e
   if [[ "$VM_OWNED" -eq 1 ]]; then
+    stop_group "${TCG_PID:-}"
     stop_launcher
     kill_vm_processes "$VM_BASE"
     cleanup_vm_runtime_files "$VM_DIR"
@@ -322,9 +337,12 @@ cleanup_safe_vm_conf() {
 copy_artifacts_to_vm_share() {
   vm_paths
   SHARE_DIR="${VM_BASE}/clawmeter-test"
-  mkdir -p "$SHARE_DIR"
-  cp "${OUT_DIR}/clawmeter-console.exe" "${SHARE_DIR}/clawmeter.exe"
-  cp "${OUT_DIR}/install.ps1" "${SHARE_DIR}/install.ps1"
+  mkdir -p "$SHARE_DIR" || return 1
+  # Remove any earlier copy first, so a failed copy cannot leave a stale
+  # executable that the guest would test in place of this build.
+  rm -f "${SHARE_DIR}/clawmeter.exe" "${SHARE_DIR}/install.ps1" || return 1
+  cp "${OUT_DIR}/clawmeter-console.exe" "${SHARE_DIR}/clawmeter.exe" || return 1
+  cp "${OUT_DIR}/install.ps1" "${SHARE_DIR}/install.ps1" || return 1
   log "Copied artifacts to ${SHARE_DIR}"
   record "Windows share path inside guest: \\\\10.0.2.4\\qemu\\clawmeter-test"
 }
@@ -411,9 +429,9 @@ start_quickemu_vm() {
   have nc || die "nc is required for SSH port probes"
 
   admit_vm
-  vm_memory_preflight
-  prepare_safe_vm_conf
-  copy_artifacts_to_vm_share
+  vm_memory_preflight || return 1
+  prepare_safe_vm_conf || return 1
+  copy_artifacts_to_vm_share || { warn "could not copy artifacts to the VM share"; return 1; }
   maybe_set_ignore_msrs
 
   # Never kill a pre-existing VM as a startup preflight.
@@ -472,6 +490,10 @@ start_quickemu_vm() {
   return 4
 }
 
+should_try_tcg() {
+  [[ "$TCG_FALLBACK" -eq 1 && ( "$1" -eq 2 || "$1" -eq 4 ) ]]
+}
+
 start_tcg_fallback() {
   [[ "$TCG_FALLBACK" -eq 1 ]] || return 0
   vm_paths
@@ -481,11 +503,20 @@ start_tcg_fallback() {
     return 1
   }
   log "Trying slow TCG fallback for ${BOOT_WAIT}s"
+  # The first (KVM) attempt must be fully stopped before its runtime state is
+  # removed, or a late KVM guest could answer the probes below.
+  stop_launcher
+  QUICKEMU_PID=""
+  kill_vm_processes "$VM_BASE"
   cleanup_vm_runtime_files "$VM_DIR"
+  local tcg_script="${OUT_DIR}/tcg-launch.sh"
   perl -0pe \
     's/accel=kvm/accel=tcg/g; s/-cpu host,[^\n]+\\\\\n/    -cpu max \\\n/s; s/-m 32G/-m 8G/g; s/-display egl-headless,[^\n]+\\\\\n/    -display none \\\n/s; s/ 2>\/dev\/null\s*$/ 2>windows-11\/tcg.err/s' \
-    "$generated" | (cd "$VM_BASE" && timeout "$BOOT_WAIT" bash) &
-  local tcg_launcher=$!
+    "$generated" >"$tcg_script" || { warn "could not write ${tcg_script}"; return 1; }
+  # Own session: cleanup_run can then stop timeout, bash and QEMU as one group.
+  (cd "$VM_BASE" && exec setsid timeout "$BOOT_WAIT" bash "$tcg_script") &
+  TCG_PID=$!
+  local tcg_launcher="$TCG_PID"
   record "tcg_launcher_pid=${tcg_launcher}"
   local deadline=$((SECONDS + BOOT_WAIT))
   local remaining delay
@@ -531,7 +562,9 @@ main() {
     if [[ "$vm_status" -ne 0 ]]; then
       warn "Quickemu VM smoke did not complete successfully (status ${vm_status})"
       exit_status="$vm_status"
-      if [[ "$TCG_FALLBACK" -eq 1 ]] && start_tcg_fallback; then
+      # Fall back only when the KVM guest never answered (QEMU gone or no SSH);
+      # an answering guest with failed auth or commands is a real failure.
+      if should_try_tcg "$vm_status" && start_tcg_fallback; then
         exit_status=0
       fi
     fi

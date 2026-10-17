@@ -95,6 +95,78 @@ exit 5
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
 
+    def test_failed_copy_aborts_before_launch_and_leaves_no_stale_exe(self):
+        result = self.run_shell("""
+vm_paths
+mkdir -p "$VM_BASE/clawmeter-test"
+echo stale > "$VM_BASE/clawmeter-test/clawmeter.exe"
+echo new > "$OUT_DIR/clawmeter-console.exe"; echo new > "$OUT_DIR/install.ps1"
+chmod 555 "$VM_BASE/clawmeter-test"
+if copy_artifacts_to_vm_share; then echo COPIED; else echo COPY_FAILED; fi
+chmod 755 "$VM_BASE/clawmeter-test"
+# Launch path: stub everything except the copy, and a quickemu that records a launch.
+mkdir -p "$root/bin"; printf '#!/bin/sh\ntouch "%s/launched"\n' "$root" > "$root/bin/quickemu"; chmod +x "$root/bin/quickemu"
+PATH="$root/bin:$PATH"
+have() { return 0; }; vm_memory_preflight() { :; }; prepare_safe_vm_conf() { :; }
+chmod 555 "$VM_BASE/clawmeter-test"
+start_quickemu_vm && echo "START_STATUS=0" || echo "START_STATUS=$?"
+chmod 755 "$VM_BASE/clawmeter-test"
+""")
+        self.assertIn("COPY_FAILED", result.stdout, result.stderr)
+        self.assertIn("START_STATUS=1", result.stdout, result.stderr)
+        self.assertFalse((self.root / "launched").exists())
+
+    def test_successful_copy_replaces_a_stale_exe(self):
+        result = self.run_shell("""
+vm_paths
+mkdir -p "$VM_BASE/clawmeter-test"; echo stale > "$VM_BASE/clawmeter-test/clawmeter.exe"
+echo new > "$OUT_DIR/clawmeter-console.exe"; echo new > "$OUT_DIR/install.ps1"
+copy_artifacts_to_vm_share && cat "$VM_BASE/clawmeter-test/clawmeter.exe"
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip().splitlines()[-1], "new")
+
+    def test_tcg_fallback_only_after_a_silent_guest(self):
+        result = self.run_shell("""
+TCG_FALLBACK=1
+for s in 2 3 4; do if should_try_tcg $s; then echo "$s yes"; else echo "$s no"; fi; done
+TCG_FALLBACK=0; if should_try_tcg 4; then echo off-yes; else echo off-no; fi
+""")
+        self.assertEqual(result.stdout.split("\n")[:4], ["2 yes", "3 no", "4 yes", "off-no"])
+
+    def test_tcg_fallback_stops_the_first_attempt_before_touching_state(self):
+        result = self.run_shell("""
+TCG_FALLBACK=1; BOOT_WAIT=1; PROBE_INTERVAL=1
+vm_paths; mkdir -p "$VM_DIR"; echo 'sleep 5' > "$VM_DIR/$VM_NAME.sh"
+stop_launcher() { echo stop_launcher >> "$root/events"; }
+kill_vm_processes() { echo kill >> "$root/events"; }
+cleanup_vm_runtime_files() { echo clean >> "$root/events"; }
+probe_ssh_ready() { return 1; }; capture_screen() { :; }
+start_tcg_fallback && echo "TCG_STATUS=0" || echo "TCG_STATUS=$?"
+""")
+        self.assertIn("TCG_STATUS=4", result.stdout, result.stderr)
+        self.assertEqual((self.root / "events").read_text(), "stop_launcher\nkill\nclean\n")
+
+    def test_interrupt_during_fallback_stops_its_whole_process_group(self):
+        result = self.run_shell("""
+VM_OWNED=1; VM_BASE="$root"; VM_DIR="$root"
+kill_vm_processes() { :; }; cleanup_vm_runtime_files() { :; }; cleanup_safe_vm_conf() { :; }
+(exec setsid sh -c 'sleep 60 & echo $! > "$0/child.pid"; wait' "$root") &
+TCG_PID=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$root/child.pid" ] && break; sleep 0.1; done
+cp "$root/child.pid" "$root/saved.pid"; echo "$TCG_PID" > "$root/leader.pid"
+trap cleanup_run EXIT
+exit 9
+""")
+        self.assertEqual(result.returncode, 9, result.stderr)
+        for name in ("child.pid", "leader.pid"):
+            pid = int((self.root / name).read_text())
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            except FileNotFoundError:
+                continue
+            self.assertEqual(state, "Z", f"{name} still running")
+
     def test_unowned_run_never_kills(self):
         result = self.run_shell("""
 VM_OWNED=0
