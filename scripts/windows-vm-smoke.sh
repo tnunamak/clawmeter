@@ -277,6 +277,22 @@ stop_launcher() {
   wait "$pid" 2>/dev/null
 }
 
+# A TERM or INT that lands between starting a child and recording its PID would
+# run cleanup before the child is owned, leaving it free to start QEMU later.
+# Hold such signals while launching, then act on one that arrived.
+SIGNAL_PENDING=0
+defer_signals() {
+  SIGNAL_PENDING=0
+  trap 'SIGNAL_PENDING=130' INT
+  trap 'SIGNAL_PENDING=143' TERM
+}
+
+release_signals() {
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  (( SIGNAL_PENDING == 0 )) || exit "$SIGNAL_PENDING"
+}
+
 # Stop a process this run started with setsid (the TCG fallback), and its group.
 # Signal the PID as well as the group: before setsid runs there is no group yet,
 # and the owned PID could still go on to launch QEMU after cleanup.
@@ -453,6 +469,7 @@ start_quickemu_vm() {
 
   local log_file="${OUT_DIR}/quickemu.log"
   log "Starting Quickemu VM: ${VM_CONF}"
+  defer_signals
   (
     cd "$VM_BASE"
     exec quickemu --vm "$(basename "$VM_CONF")" \
@@ -463,6 +480,7 @@ start_quickemu_vm() {
   ) >"$log_file" 2>&1 &
   QUICKEMU_PID=$!
   VM_OWNED=1
+  release_signals
   record "quickemu_pid=${QUICKEMU_PID}"
   log "Quickemu launcher pid=${QUICKEMU_PID}; log=${log_file}"
 
@@ -527,8 +545,10 @@ start_tcg_fallback() {
     's/accel=kvm/accel=tcg/g; s/-cpu host,[^\n]+\\\\\n/    -cpu max \\\n/s; s/-m 32G/-m 8G/g; s/-display egl-headless,[^\n]+\\\\\n/    -display none \\\n/s; s/ 2>\/dev\/null\s*$/ 2>windows-11\/tcg.err/s' \
     "$generated" >"$tcg_script" || { warn "could not write ${tcg_script}"; return 1; }
   # Own session: cleanup_run can then stop timeout, bash and QEMU as one group.
+  defer_signals
   (cd "$VM_BASE" && exec setsid timeout "$BOOT_WAIT" bash "$tcg_script") &
   TCG_PID=$!
+  release_signals
   local tcg_launcher="$TCG_PID"
   record "tcg_launcher_pid=${tcg_launcher}"
   local deadline=$((SECONDS + BOOT_WAIT))

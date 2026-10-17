@@ -223,6 +223,25 @@ exit 9
             with self.subTest(script=script):
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
+    def test_signal_during_launch_is_deferred_until_the_child_is_owned(self):
+        result = self.run_shell("""
+VM_OWNED=0; VM_BASE="$root"; VM_DIR="$root"
+kill_vm_processes() { :; }; cleanup_vm_runtime_files() { :; }; cleanup_safe_vm_conf() { :; }
+cleanup_safe_vm_conf() { echo "cleanup owned=$VM_OWNED" >> "$root/events"; }
+trap cleanup_run EXIT
+trap 'exit 143' TERM
+defer_signals
+kill -TERM $$
+echo STILL_LAUNCHING
+VM_OWNED=1
+release_signals
+echo NOT_REACHED
+""")
+        self.assertEqual(result.returncode, 143, result.stderr)
+        self.assertIn("STILL_LAUNCHING", result.stdout)
+        self.assertNotIn("NOT_REACHED", result.stdout)
+        self.assertEqual((self.root / "events").read_text(), "cleanup owned=1\n")
+
     def test_unowned_run_never_kills(self):
         result = self.run_shell("""
 VM_OWNED=0
