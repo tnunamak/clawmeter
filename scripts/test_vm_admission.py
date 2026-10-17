@@ -242,6 +242,51 @@ echo NOT_REACHED
         self.assertNotIn("NOT_REACHED", result.stdout)
         self.assertEqual((self.root / "events").read_text(), "cleanup owned=1\n")
 
+    def function_body(self, name):
+        text = SCRIPT.read_text()
+        start = text.index(f"\n{name}() {{") + 1
+        return text[start:text.index("\n}\n", start)]
+
+    def test_launch_functions_defer_signals_around_registration(self):
+        # Bash has no hook between `&` and `$!`, so a TERM cannot be injected
+        # there deterministically. Pin the order instead: defer, spawn, record
+        # the PID and ownership, release.
+        quick = self.function_body("start_quickemu_vm")
+        order = [quick.index(s) for s in ("defer_signals", "exec quickemu", "QUICKEMU_PID=$!",
+                                          "VM_OWNED=1", "release_signals")]
+        self.assertEqual(order, sorted(order))
+        tcg = self.function_body("start_tcg_fallback")
+        order = [tcg.index(s) for s in ("defer_signals", "exec setsid", "TCG_PID=$!", "release_signals")]
+        self.assertEqual(order, sorted(order))
+
+    def test_real_launch_with_a_term_sent_by_the_child_leaves_no_survivor(self):
+        result = self.run_shell("""
+mkdir -p "$root/bin"
+cat > "$root/bin/quickemu" <<STUB
+#!/bin/sh
+echo \\$\\$ > "$root/launcher.pid"
+kill -TERM \\$PPID
+sleep 60
+STUB
+chmod +x "$root/bin/quickemu"
+PATH="$root/bin:$PATH"
+have() { return 0; }; vm_memory_preflight() { :; }; prepare_safe_vm_conf() { :; }
+copy_artifacts_to_vm_share() { :; }; maybe_set_ignore_msrs() { :; }
+kill_vm_processes() { :; }; cleanup_vm_runtime_files() { :; }; cleanup_safe_vm_conf() { :; }
+PROBE_INTERVAL=1; BOOT_WAIT=3
+trap cleanup_run EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+start_quickemu_vm
+""")
+        self.assertEqual(result.returncode, 143, result.stderr)
+        pid = int((self.root / "launcher.pid").read_text())
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return
+        self.assertEqual(state, "Z", "launcher survived the TERM")
+
     def test_unowned_run_never_kills(self):
         result = self.run_shell("""
 VM_OWNED=0
