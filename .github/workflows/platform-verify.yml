@@ -3,9 +3,7 @@ name: Platform Verify
 on:
   workflow_call:
   pull_request:
-  push:
-    branches:
-      - main
+  # Main pushes are verified once by Release's same-SHA reusable calls.
 
 permissions:
   contents: read

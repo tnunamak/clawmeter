@@ -26,7 +26,7 @@ Options:
   --ssh-port PORT              Host SSH forward port (default: 22220)
   --boot-wait SECONDS          Total VM probe time (default: 360)
   --probe-interval SECONDS     Probe interval (default: 15)
-  --out-dir PATH               Output dir (default: ~/.tmp/clawmeter-windows-smoke)
+  --out-dir PATH               Output parent; a unique run subdirectory is created
   --skip-wine                  Skip Wine smoke
   --skip-quota                 Skip clawmeter status --agent preflight
   --help                       Show this help
@@ -74,6 +74,8 @@ SSH_PORT=22220
 BOOT_WAIT=360
 PROBE_INTERVAL=15
 OUT_DIR="${HOME}/.tmp/clawmeter-windows-smoke"
+VM_OWNED=0
+TCG_PID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -101,6 +103,7 @@ REPO="$(repo_root)"
 cd "$REPO"
 
 mkdir -p "$OUT_DIR"
+OUT_DIR="$(mktemp -d "${OUT_DIR%/}/run.XXXXXXXX")"
 REPORT="${OUT_DIR}/report.txt"
 : >"$REPORT"
 
@@ -241,6 +244,71 @@ vm_paths() {
   VM_DIR="${VM_BASE}/${VM_NAME}"
 }
 
+# This is cooperative admission, not a VM sandbox. Use disposable workers.
+admit_vm() {
+  have flock || die "flock is required for VM admission"
+  [[ "$VM_CPU_CORES" =~ ^[1-4]$ ]] || die "VM CPU budget is 1..4 cores"
+  [[ "$VM_RAM" =~ ^[1-9][0-9]{0,3}[GgMm]$ ]] || die "invalid VM RAM"
+  local ram_mib
+  ram_mib="$(size_to_mib "$VM_RAM")"
+  (( ram_mib <= 8192 )) || die "VM RAM budget is at most 8192 MiB"
+  vm_paths
+  # Lock the canonical directory inode, not an unlinkable lock-file pathname.
+  exec {VM_LOCK_FD}<"$VM_BASE"
+  flock -n "$VM_LOCK_FD" || die "another smoke run owns this VM directory"
+  [[ ! -e "${VM_BASE}/${VM_NAME}-clawmeter-smoke.conf" ]] ||
+    die "old smoke config exists; inspect it on the disposable worker first"
+  if nc -z 127.0.0.1 "$SSH_PORT"; then
+    die "SSH port $SSH_PORT is already occupied"
+  fi
+}
+
+# Stop the launcher this run started. A TERM during startup can arrive before
+# Quickemu writes its runtime PID file, so --kill alone would miss it.
+stop_launcher() {
+  local pid="${QUICKEMU_PID:-}" tries
+  [[ -n "$pid" ]] || return 0
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for tries in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+}
+
+# Stop a process this run started with setsid (the TCG fallback), and its group.
+# Signal the PID as well as the group: before setsid runs there is no group yet,
+# and the owned PID could still go on to launch QEMU after cleanup.
+stop_group() {
+  local pid="${1:-}" tries
+  [[ -n "$pid" ]] || return 0
+  kill -TERM -- "-$pid" 2>/dev/null
+  kill -TERM "$pid" 2>/dev/null
+  for tries in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || kill -0 -- "-$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL -- "-$pid" 2>/dev/null
+  kill -KILL "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+}
+
+cleanup_run() {
+  local status=$?
+  trap - EXIT INT TERM
+  set +e
+  if [[ "$VM_OWNED" -eq 1 ]]; then
+    stop_group "${TCG_PID:-}"
+    stop_launcher
+    kill_vm_processes "$VM_BASE"
+    cleanup_vm_runtime_files "$VM_DIR"
+  fi
+  cleanup_safe_vm_conf
+  # Keep report/logs on both success and failure.
+  exit "$status"
+}
+
 prepare_safe_vm_conf() {
   vm_paths
   local source_conf="$VM_CONF"
@@ -273,9 +341,12 @@ cleanup_safe_vm_conf() {
 copy_artifacts_to_vm_share() {
   vm_paths
   SHARE_DIR="${VM_BASE}/clawmeter-test"
-  mkdir -p "$SHARE_DIR"
-  cp "${OUT_DIR}/clawmeter-console.exe" "${SHARE_DIR}/clawmeter.exe"
-  cp "${OUT_DIR}/install.ps1" "${SHARE_DIR}/install.ps1"
+  mkdir -p "$SHARE_DIR" || return 1
+  # Remove any earlier copy first, so a failed copy cannot leave a stale
+  # executable that the guest would test in place of this build.
+  rm -f "${SHARE_DIR}/clawmeter.exe" "${SHARE_DIR}/install.ps1" || return 1
+  cp "${OUT_DIR}/clawmeter-console.exe" "${SHARE_DIR}/clawmeter.exe" || return 1
+  cp "${OUT_DIR}/install.ps1" "${SHARE_DIR}/install.ps1" || return 1
   log "Copied artifacts to ${SHARE_DIR}"
   record "Windows share path inside guest: \\\\10.0.2.4\\qemu\\clawmeter-test"
 }
@@ -349,8 +420,17 @@ probe_ssh_ready() {
   return 1
 }
 
+# PowerShell body for the guest smoke. It must fail when the share or the
+# executable is missing: if PowerShell cannot start the program, $LASTEXITCODE
+# stays unset and "exit $nativeExit" would exit 0 and report a false pass.
+guest_smoke_body() {
+  local exe="$1"
+  printf '%s' "\$ErrorActionPreference = 'Stop'; \$exe = '${exe}'; if (-not (Test-Path -LiteralPath \$exe)) { exit 44 }; \$global:LASTEXITCODE = \$null; Set-Content -LiteralPath \$env:TEMP\\clawmeter-smoke.txt -Value ''; & \$exe --all --plain | Tee-Object -FilePath \$env:TEMP\\clawmeter-smoke.txt; \$nativeExit = \$LASTEXITCODE; if (\$null -eq \$nativeExit) { exit 45 }; if (\$nativeExit -ne 0) { exit \$nativeExit }; if ((Get-Content -Raw \$env:TEMP\\clawmeter-smoke.txt).Trim().Length -eq 0) { exit 42 }"
+}
+
 run_guest_cli_smoke() {
-  local remote='powershell -NoProfile -ExecutionPolicy Bypass -Command "& \\10.0.2.4\qemu\clawmeter-test\clawmeter.exe --all --plain | Tee-Object -FilePath $env:TEMP\clawmeter-smoke.txt; $nativeExit = $LASTEXITCODE; if ($nativeExit -ne 0) { exit $nativeExit }; if ((Get-Content -Raw $env:TEMP\clawmeter-smoke.txt).Trim().Length -eq 0) { exit 42 }"'
+  local remote
+  remote="powershell -NoProfile -ExecutionPolicy Bypass -Command \"$(guest_smoke_body '\\10.0.2.4\qemu\clawmeter-test\clawmeter.exe')\""
   log "Running guest CLI smoke over SSH"
   run_ssh_command "$remote" | tee -a "$REPORT"
 }
@@ -361,14 +441,15 @@ start_quickemu_vm() {
   have socat || die "socat is required for QEMU monitor screenshots"
   have nc || die "nc is required for SSH port probes"
 
-  vm_memory_preflight
-  prepare_safe_vm_conf
-  copy_artifacts_to_vm_share
+  admit_vm
+  vm_memory_preflight || return 1
+  prepare_safe_vm_conf || return 1
+  copy_artifacts_to_vm_share || { warn "could not copy artifacts to the VM share"; return 1; }
   maybe_set_ignore_msrs
 
-  log "Cleaning stale VM runtime files"
-  kill_vm_processes "$VM_BASE"
-  cleanup_vm_runtime_files "$VM_DIR"
+  # Never kill a pre-existing VM as a startup preflight.
+  [[ ! -e "${VM_DIR}/.lock" && ! -e "${VM_DIR}/${VM_NAME}.pid" ]] ||
+    die "VM runtime state already exists; inspect the disposable worker"
 
   local log_file="${OUT_DIR}/quickemu.log"
   log "Starting Quickemu VM: ${VM_CONF}"
@@ -381,6 +462,7 @@ start_quickemu_vm() {
       --ssh-port "$SSH_PORT"
   ) >"$log_file" 2>&1 &
   QUICKEMU_PID=$!
+  VM_OWNED=1
   record "quickemu_pid=${QUICKEMU_PID}"
   log "Quickemu launcher pid=${QUICKEMU_PID}; log=${log_file}"
 
@@ -421,6 +503,10 @@ start_quickemu_vm() {
   return 4
 }
 
+should_try_tcg() {
+  [[ "$TCG_FALLBACK" -eq 1 && ( "$1" -eq 2 || "$1" -eq 4 ) ]]
+}
+
 start_tcg_fallback() {
   [[ "$TCG_FALLBACK" -eq 1 ]] || return 0
   vm_paths
@@ -430,11 +516,20 @@ start_tcg_fallback() {
     return 1
   }
   log "Trying slow TCG fallback for ${BOOT_WAIT}s"
+  # The first (KVM) attempt must be fully stopped before its runtime state is
+  # removed, or a late KVM guest could answer the probes below.
+  stop_launcher
+  QUICKEMU_PID=""
+  kill_vm_processes "$VM_BASE"
   cleanup_vm_runtime_files "$VM_DIR"
+  local tcg_script="${OUT_DIR}/tcg-launch.sh"
   perl -0pe \
     's/accel=kvm/accel=tcg/g; s/-cpu host,[^\n]+\\\\\n/    -cpu max \\\n/s; s/-m 32G/-m 8G/g; s/-display egl-headless,[^\n]+\\\\\n/    -display none \\\n/s; s/ 2>\/dev\/null\s*$/ 2>windows-11\/tcg.err/s' \
-    "$generated" | (cd "$VM_BASE" && timeout "$BOOT_WAIT" bash) &
-  local tcg_launcher=$!
+    "$generated" >"$tcg_script" || { warn "could not write ${tcg_script}"; return 1; }
+  # Own session: cleanup_run can then stop timeout, bash and QEMU as one group.
+  (cd "$VM_BASE" && exec setsid timeout "$BOOT_WAIT" bash "$tcg_script") &
+  TCG_PID=$!
+  local tcg_launcher="$TCG_PID"
   record "tcg_launcher_pid=${tcg_launcher}"
   local deadline=$((SECONDS + BOOT_WAIT))
   local remaining delay
@@ -470,6 +565,9 @@ main() {
 
   local exit_status=0
   if [[ "$RUN_VM" -eq 1 ]]; then
+    trap cleanup_run EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     set +e
     start_quickemu_vm
     vm_status=$?
@@ -477,14 +575,13 @@ main() {
     if [[ "$vm_status" -ne 0 ]]; then
       warn "Quickemu VM smoke did not complete successfully (status ${vm_status})"
       exit_status="$vm_status"
-      if [[ "$TCG_FALLBACK" -eq 1 ]] && start_tcg_fallback; then
+      # Fall back only when the KVM guest never answered (QEMU gone or no SSH);
+      # an answering guest with failed auth or commands is a real failure.
+      if should_try_tcg "$vm_status" && start_tcg_fallback; then
         exit_status=0
       fi
     fi
-    vm_paths
-    kill_vm_processes "$VM_BASE"
-    cleanup_vm_runtime_files "$VM_DIR"
-    cleanup_safe_vm_conf
+    # EXIT trap owns cleanup, including failed or interrupted probes.
   fi
 
   log "Done. Report: ${REPORT}"
