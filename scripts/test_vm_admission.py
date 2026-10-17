@@ -36,25 +36,35 @@ nc() { return 1; }
         self.assertEqual(b.returncode, 0, b.stderr)
         self.assertNotEqual(a.stdout, b.stdout)
 
+    def test_first_admission_succeeds(self):
+        result = self.run_shell('admit_vm; echo ADMITTED')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ADMITTED", result.stdout)
+
     def test_second_admission_is_rejected(self):
         result = self.run_shell("""
 admit_vm
+echo ADMITTED
 # A second independent open-file description must not acquire this inode.
-bash -c 'exec 9<"$1"; flock -n 9' child "$VM_BASE" && exit 99
+bash -c 'exec 9<"$1"; flock -n 9' child "$VM_BASE" || echo CONTENDER_REJECTED
 """)
-        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ADMITTED", result.stdout)
+        self.assertIn("CONTENDER_REJECTED", result.stdout)
 
     def test_budgets_and_occupied_port_fail_closed(self):
-        for body in (
-            "VM_CPU_CORES=5; admit_vm",
-            "VM_RAM=9G; admit_vm",
-            "VM_RAM=garbage; admit_vm",
-            "nc() { return 0; }; admit_vm",
-            'touch "$root/windows-clawmeter-smoke.conf"; admit_vm',
+        for body, reason in (
+            ("VM_CPU_CORES=5; admit_vm", "VM CPU budget"),
+            ("VM_RAM=9G; admit_vm", "VM RAM budget"),
+            ("VM_RAM=garbage; admit_vm", "invalid VM RAM"),
+            ("nc() { return 0; }; admit_vm", "already occupied"),
+            ('touch "$root/windows-clawmeter-smoke.conf"; admit_vm', "old smoke config"),
         ):
             with self.subTest(body=body):
-                result = self.run_shell(body)
+                result = self.run_shell(body + "; echo ADMITTED")
                 self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("ADMITTED", result.stdout)
+                self.assertIn(reason, result.stderr)
 
     def test_exit_cleanup_preserves_failure(self):
         result = self.run_shell("""
@@ -67,6 +77,23 @@ exit 42
 """)
         self.assertEqual(result.returncode, 42, result.stderr)
         self.assertEqual((self.root / "events").read_text(), "kill\nclean\nconfig\n")
+
+    def test_cleanup_stops_the_launcher_it_started(self):
+        result = self.run_shell("""
+VM_OWNED=1; VM_BASE="$root"; VM_DIR="$root"
+kill_vm_processes() { :; }
+cleanup_vm_runtime_files() { :; }
+cleanup_safe_vm_conf() { :; }
+sleep 60 &
+QUICKEMU_PID=$!
+echo "$QUICKEMU_PID" > "$root/launcher.pid"
+trap cleanup_run EXIT
+exit 5
+""")
+        self.assertEqual(result.returncode, 5, result.stderr)
+        pid = int((self.root / "launcher.pid").read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
 
     def test_unowned_run_never_kills(self):
         result = self.run_shell("""

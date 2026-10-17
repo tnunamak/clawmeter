@@ -262,11 +262,26 @@ admit_vm() {
   fi
 }
 
+# Stop the launcher this run started. A TERM during startup can arrive before
+# Quickemu writes its runtime PID file, so --kill alone would miss it.
+stop_launcher() {
+  local pid="${QUICKEMU_PID:-}" tries
+  [[ -n "$pid" ]] || return 0
+  kill -TERM "$pid" 2>/dev/null || return 0
+  for tries in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+}
+
 cleanup_run() {
   local status=$?
   trap - EXIT INT TERM
   set +e
   if [[ "$VM_OWNED" -eq 1 ]]; then
+    stop_launcher
     kill_vm_processes "$VM_BASE"
     cleanup_vm_runtime_files "$VM_DIR"
   fi
