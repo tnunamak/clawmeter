@@ -277,16 +277,20 @@ stop_launcher() {
   wait "$pid" 2>/dev/null
 }
 
-# Stop a process group this run started with setsid (the TCG fallback).
+# Stop a process this run started with setsid (the TCG fallback), and its group.
+# Signal the PID as well as the group: before setsid runs there is no group yet,
+# and the owned PID could still go on to launch QEMU after cleanup.
 stop_group() {
   local pid="${1:-}" tries
   [[ -n "$pid" ]] || return 0
-  kill -TERM -- "-$pid" 2>/dev/null || return 0
+  kill -TERM -- "-$pid" 2>/dev/null
+  kill -TERM "$pid" 2>/dev/null
   for tries in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 -- "-$pid" 2>/dev/null || break
+    kill -0 "$pid" 2>/dev/null || kill -0 -- "-$pid" 2>/dev/null || break
     sleep 0.5
   done
   kill -KILL -- "-$pid" 2>/dev/null
+  kill -KILL "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
 }
 
@@ -416,8 +420,17 @@ probe_ssh_ready() {
   return 1
 }
 
+# PowerShell body for the guest smoke. It must fail when the share or the
+# executable is missing: if PowerShell cannot start the program, $LASTEXITCODE
+# stays unset and "exit $nativeExit" would exit 0 and report a false pass.
+guest_smoke_body() {
+  local exe="$1"
+  printf '%s' "\$ErrorActionPreference = 'Stop'; \$exe = '${exe}'; if (-not (Test-Path -LiteralPath \$exe)) { exit 44 }; \$global:LASTEXITCODE = \$null; Set-Content -LiteralPath \$env:TEMP\\clawmeter-smoke.txt -Value ''; & \$exe --all --plain | Tee-Object -FilePath \$env:TEMP\\clawmeter-smoke.txt; \$nativeExit = \$LASTEXITCODE; if (\$null -eq \$nativeExit) { exit 45 }; if (\$nativeExit -ne 0) { exit \$nativeExit }; if ((Get-Content -Raw \$env:TEMP\\clawmeter-smoke.txt).Trim().Length -eq 0) { exit 42 }"
+}
+
 run_guest_cli_smoke() {
-  local remote='powershell -NoProfile -ExecutionPolicy Bypass -Command "& \\10.0.2.4\qemu\clawmeter-test\clawmeter.exe --all --plain | Tee-Object -FilePath $env:TEMP\clawmeter-smoke.txt; $nativeExit = $LASTEXITCODE; if ($nativeExit -ne 0) { exit $nativeExit }; if ((Get-Content -Raw $env:TEMP\clawmeter-smoke.txt).Trim().Length -eq 0) { exit 42 }"'
+  local remote
+  remote="powershell -NoProfile -ExecutionPolicy Bypass -Command \"$(guest_smoke_body '\\10.0.2.4\qemu\clawmeter-test\clawmeter.exe')\""
   log "Running guest CLI smoke over SSH"
   run_ssh_command "$remote" | tee -a "$REPORT"
 }

@@ -1,6 +1,7 @@
 """Cooperative admission tests. These never start a real VM."""
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -166,6 +167,61 @@ exit 9
             except FileNotFoundError:
                 continue
             self.assertEqual(state, "Z", f"{name} still running")
+
+    def test_interrupt_before_setsid_still_stops_the_owned_pid(self):
+        # The fallback child exists but has not become a group leader yet:
+        # `kill -- -PID` finds no group, so the PID itself must be signalled.
+        result = self.run_shell("""
+VM_OWNED=1; VM_BASE="$root"; VM_DIR="$root"
+kill_vm_processes() { :; }; cleanup_vm_runtime_files() { :; }; cleanup_safe_vm_conf() { :; }
+sleep 60 &
+TCG_PID=$!
+echo "$TCG_PID" > "$root/leader.pid"
+trap cleanup_run EXIT
+exit 9
+""")
+        self.assertEqual(result.returncode, 9, result.stderr)
+        pid = int((self.root / "leader.pid").read_text())
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return
+        self.assertEqual(state, "Z", "owned PID still running")
+
+    def test_guest_smoke_fails_when_the_executable_is_unavailable(self):
+        if not shutil.which("pwsh"):
+            self.skipTest("pwsh not installed")
+        body = self.run_shell("guest_smoke_body \"$root/missing.exe\"").stdout
+        env = {**os.environ, "TEMP": str(self.root)}
+        missing = subprocess.run(["pwsh", "-NoProfile", "-Command", body], env=env,
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(missing.returncode, 44, missing.stderr)
+
+    def test_guest_smoke_fails_when_powershell_cannot_start_the_program(self):
+        if not shutil.which("pwsh"):
+            self.skipTest("pwsh not installed")
+        not_executable = self.root / "clawmeter.exe"
+        not_executable.write_text("not a program")
+        body = self.run_shell(f"guest_smoke_body {not_executable}").stdout
+        env = {**os.environ, "TEMP": str(self.root)}
+        result = subprocess.run(["pwsh", "-NoProfile", "-Command", body], env=env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_guest_smoke_passes_a_working_program_and_rejects_empty_output(self):
+        if not shutil.which("pwsh"):
+            self.skipTest("pwsh not installed")
+        env = {**os.environ, "TEMP": str(self.root)}
+        for script, expected in (("#!/bin/sh\necho ok\n", 0), ("#!/bin/sh\nexit 0\n", 42),
+                                 ("#!/bin/sh\necho x\nexit 3\n", 3)):
+            exe = self.root / "clawmeter.exe"
+            exe.write_text(script)
+            exe.chmod(0o755)
+            body = self.run_shell(f"guest_smoke_body {exe}").stdout
+            result = subprocess.run(["pwsh", "-NoProfile", "-Command", body], env=env,
+                                    capture_output=True, text=True, timeout=30)
+            with self.subTest(script=script):
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
     def test_unowned_run_never_kills(self):
         result = self.run_shell("""
