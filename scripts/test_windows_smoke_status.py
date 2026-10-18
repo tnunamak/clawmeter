@@ -38,7 +38,7 @@ class SmokeStatusTest(unittest.TestCase):
         fake = self.root / 'fixture.exe'
         fake.write_text('#!/bin/bash\necho partial-banner\nexit 7\n')
         fake.chmod(0o755)
-        cmd = cmd.replace(r'\\10.0.2.4\qemu\clawmeter-test\clawmeter.exe', "'" + str(fake) + "'")
+        cmd = cmd.replace(r'\\10.0.2.4\qemu\clawmeter-test\clawmeter.exe', str(fake))
         r = subprocess.run(['pwsh', '-NoProfile', '-Command', cmd], env={**os.environ, 'TEMP': str(self.root)},
                            capture_output=True, text=True, timeout=15)
         self.assertEqual(r.returncode, 7, r.stdout + r.stderr)
