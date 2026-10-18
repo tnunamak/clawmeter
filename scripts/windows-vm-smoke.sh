@@ -112,16 +112,19 @@ record() {
 }
 
 cleanup_vm_runtime_files() {
-  local vm_dir="$1"
+  local vm_dir="$1" name
+  # Quickemu names its runtime files after the VM directory. The smoke run uses
+  # a copied config, so the name is not always windows-11.
+  name="$(basename "$vm_dir")"
   rm -f \
     "${vm_dir}/.lock" \
-    "${vm_dir}/windows-11.pid" \
-    "${vm_dir}/windows-11.ports" \
-    "${vm_dir}/windows-11.spice" \
-    "${vm_dir}/windows-11-monitor.socket" \
-    "${vm_dir}/windows-11.sock" \
-    "${vm_dir}/windows-11-agent.sock" \
-    "${vm_dir}/windows-11.swtpm-sock"
+    "${vm_dir}/${name}.pid" \
+    "${vm_dir}/${name}.ports" \
+    "${vm_dir}/${name}.spice" \
+    "${vm_dir}/${name}-monitor.socket" \
+    "${vm_dir}/${name}.sock" \
+    "${vm_dir}/${name}-agent.sock" \
+    "${vm_dir}/${name}.swtpm-sock"
 }
 
 kill_vm_processes() {

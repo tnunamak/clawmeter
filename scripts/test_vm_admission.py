@@ -287,6 +287,19 @@ start_quickemu_vm
             return
         self.assertEqual(state, "Z", "launcher survived the TERM")
 
+    def test_runtime_cleanup_uses_the_smoke_vm_name_and_spares_other_vms(self):
+        result = self.run_shell("""
+d="$root/windows-11-clawmeter-smoke"; mkdir -p "$d" "$root/windows-11"
+for f in .lock windows-11-clawmeter-smoke.pid windows-11-clawmeter-smoke.ports \
+         windows-11-clawmeter-smoke-monitor.socket windows-11-clawmeter-smoke.swtpm-sock; do : > "$d/$f"; done
+: > "$d/keep.txt"; : > "$root/windows-11/windows-11.pid"; : > "$d/windows-11.pid"
+cleanup_vm_runtime_files "$d"
+ls -A "$d" | sort
+test -e "$root/windows-11/windows-11.pid" && echo OTHER_VM_KEPT
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ["keep.txt", "windows-11.pid", "OTHER_VM_KEPT"])
+
     def test_unowned_run_never_kills(self):
         result = self.run_shell("""
 VM_OWNED=0
