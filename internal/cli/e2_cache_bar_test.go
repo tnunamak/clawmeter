@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -16,24 +14,6 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 )
 
-func TestBarHandlesInvalidUtilization(t *testing.T) {
-	for _, pct := range []float64{-100, -5, math.NaN(), math.Inf(1), math.Inf(-1), 0, 100, 150} {
-		t.Run(fmt.Sprint(pct), func(t *testing.T) {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("bar(%v) panicked: %v", pct, r)
-				}
-			}()
-			got := bar(pct)
-			if utf8.RuneCountInString(got) != barWidth {
-				t.Errorf("bar(%v) width = %d, want %d", pct, utf8.RuneCountInString(got), barWidth)
-			}
-			if (math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0) && got != strings.Repeat("░", barWidth) {
-				t.Errorf("bar(%v) = %q, want empty bar", pct, got)
-			}
-		})
-	}
-}
 func TestCachedStatusMarksOldReadingsStale(t *testing.T) {
 	for _, age := range []time.Duration{10 * time.Second, 75 * time.Second, 72 * time.Hour} {
 		registry := provider.NewRegistry()

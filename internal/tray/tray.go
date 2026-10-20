@@ -7,13 +7,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +26,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
@@ -828,23 +826,6 @@ func showProviderProblem(menu *providerMenuItems, problem string) {
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 }
 
-// menuWindows drops windows with nothing used and nothing projected, unless
-// that would leave no window to show.
-func menuWindows(windows []provider.UsageWindow) []provider.UsageWindow {
-	active := make([]provider.UsageWindow, 0, len(windows))
-	for _, window := range windows {
-		proj := windowProjection(window)
-		idle := window.Utilization == 0 && (proj.Unknown || proj.ProjectedPct < 0.5)
-		if !idle {
-			active = append(active, window)
-		}
-	}
-	if len(active) == 0 {
-		return windows
-	}
-	return active
-}
-
 func setMenuItemTitle(item *systray.MenuItem, state *menuItemState, title string) {
 	if !state.initialized || state.title != title {
 		item.SetTitle(title)
@@ -1097,7 +1078,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
-		windows := menuWindows(data.PresentationWindows())
+		windows := meter.Shown(data.PresentationWindows())
 		rows := windowRows[name]
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
@@ -1303,7 +1284,7 @@ func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[st
 func pickerTargetLabel(data *provider.UsageData, target iconTarget, displayNames map[string]string) string {
 	label := target.Window
 	if window, _, ok := selectedIconWindow(data, target.Window); ok {
-		label = trayWindowLabel(window)
+		label = meter.Label(window)
 	}
 	return providerDisplayName(target.Provider, displayNames) + ": " + label
 }
@@ -1616,7 +1597,7 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 	windowLen := forecast.WindowLength(window)
 	return icons.MeterState{
 		UsagePct:     window.Utilization,
-		ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
+		ExpectedPct:  meter.ExpectedPct(window.ResetsAt, windowLen),
 		RiskPct:      windowRiskPct(window, proj),
 		ShowExpected: true,
 		Label:        windowBadgeLabelForWindow(window),
@@ -1630,20 +1611,6 @@ func windowRiskPct(window provider.UsageWindow, proj forecast.Projection) float6
 		return window.Utilization
 	}
 	return proj.ProjectedPct
-}
-
-func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
-	if windowLen <= 0 {
-		return 0
-	}
-	elapsed := windowLen - time.Until(resetsAt)
-	if elapsed <= 0 {
-		return 0
-	}
-	if elapsed >= windowLen {
-		return 100
-	}
-	return elapsed.Seconds() / windowLen.Seconds() * 100
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
@@ -1897,216 +1864,60 @@ func humanWindowLabel(window provider.UsageWindow) string {
 	return label
 }
 
-// trayWindowLabel preserves provider-supplied compact labels such as "5h" and
-// "7d" for the constrained tray menu, falling back to the stable internal name.
-func trayWindowLabel(window provider.UsageWindow) string {
-	if label := strings.TrimSpace(window.DisplayName); label != "" {
-		return label
-	}
-	return strings.TrimSpace(window.Name)
-}
-
 // trayMenuRows formats the quota rows of every account in one pass over the
 // windows the menu shows. Each window is projected once, so the width of the
-// margin column and the rows agree: an early forecast such as "+3260%"
-// widens the column for every row instead of pushing its own row out of line.
+// margin column and the rows agree.
 func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) map[string][]string {
 	type account struct {
 		windows     []provider.UsageWindow
 		projections []forecast.Projection
 	}
 	accounts := make(map[string]account, len(menus))
-	width := defaultMarginWidth
+	var all []forecast.Projection
 	for name, menu := range menus {
 		data := results[name]
 		if data == nil || data.Error != "" || data.IsExpired {
 			continue
 		}
-		windows := menuWindows(data.PresentationWindows())
+		windows := meter.Shown(data.PresentationWindows())
 		windows = windows[:min(len(windows), len(menu.windowItems))]
 		projections := make([]forecast.Projection, len(windows))
 		for i, window := range windows {
-			if window.ResetsAt.IsZero() {
-				continue
-			}
-			projections[i] = windowProjection(window)
-			if proj := projections[i]; !proj.Unknown && !proj.Stale {
-				width = max(width, len([]rune(forecastMargin(proj.ProjectedPct))))
+			if !window.ResetsAt.IsZero() {
+				projections[i] = windowProjection(window)
 			}
 		}
+		all = append(all, projections...)
 		accounts[name] = account{windows, projections}
 	}
+	layout := meter.Layout{Space: figureSpace, MarginWidth: meter.MarginWidth(all)}
 	rows := make(map[string][]string, len(accounts))
 	for name, a := range accounts {
-		rows[name] = trayWindowRows(a.windows, a.projections, width)
+		for _, row := range meter.Rows(a.windows, a.projections, layout) {
+			rows[name] = append(rows[name], trayRowText(row))
+		}
 	}
 	return rows
 }
 
-// trayWindowRows formats an account's quota rows. A window's qualifier, such
-// as "all models", shows only when it is needed: "all models" on the only
-// seven-day row says nothing.
-func trayWindowRows(windows []provider.UsageWindow, projections []forecast.Projection, marginWidth int) []string {
-	codes := make(map[string]int, len(windows))
-	for _, window := range windows {
-		codes[trayWindowCode(window)]++
-	}
-	rows := make([]string, len(windows))
-	for i, window := range windows {
-		rows[i] = trayWindowStatus(window, projections[i], codes[trayWindowCode(window)] > 1, marginWidth)
-	}
-	return rows
-}
+// figureSpace is as wide as a digit, so padded numbers line up in the
+// menu's proportional font.
+const figureSpace = "\u2007"
 
-// trayWindowStatus lays a quota row out in columns that line up from row to
-// row: window, a ten-cell meter (█ used, ▒ projected by reset, ░ free, on a
-// fixed 0–100% scale, ┃ where an even pace would be by now), where the forecast ends relative to the limit, use
-// now, and the times. Figure spaces pad every number to a fixed width. The
-// fields that only some rows have come last so they cannot push the others.
-// Research: divan ai-quota-monitoring/fixed-quota-scale-text-bars-need-
-// explicit-numeric-forecast-overflow.md and glanceable-quota-severity-in-
-// native-tray-menus.md. If the ▒ shading confuses people, the fallback is a
-// used-only bar with the forecast in words.
-func trayWindowStatus(window provider.UsageWindow, proj forecast.Projection, codeShared bool, marginWidth int) string {
-	label := trayWindowLabel(window)
-	money := window.MoneyDetail()
-	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-		return label + ": " + money
+// trayRowText joins a row for a native menu, which has no color.
+func trayRowText(row meter.Row) string {
+	if row.Line != "" {
+		return row.Line
 	}
-	var tail []string
-	if qualifier := trayWindowQualifier(window); qualifier != "" && (codeShared || qualifier != "all models") {
-		tail = append(tail, qualifier)
+	bar := meter.BarText(row.Bar)
+	if len(row.Bar) == meter.BarCells {
+		bar += figureSpace // as wide as the pace mark, so the columns still line up
 	}
-	if money != "" {
-		tail = append(tail, money)
+	fields := make([]string, len(row.Fields))
+	for i, field := range row.Fields {
+		fields[i] = field.Text
 	}
-	now := padNumber(fmt.Sprintf("%.0f", window.Utilization), 3) + "% now"
-	if window.ResetsAt.IsZero() {
-		reset := window.ResetPolicy
-		if reset == "" {
-			reset = "reset not reported"
-		}
-		return trayRow(window, window.Utilization, append([]string{now, reset}, tail...))
-	}
-	resets := "resets in " + trayDuration(time.Until(window.ResetsAt))
-	if proj.Unknown || proj.Stale {
-		return trayRow(window, window.Utilization, append([]string{proj.PaceIndicator(), now, resets}, tail...))
-	}
-	fields := []string{padNumber(forecastMargin(proj.ProjectedPct), marginWidth) + " at reset", now, resets}
-	if !proj.WillLastToReset {
-		if proj.RunsOutIn > 0 {
-			fields = append(fields, "runs out in "+trayDuration(proj.RunsOutIn))
-		} else {
-			fields = append(fields, "out now")
-		}
-	}
-	return trayRow(window, proj.ProjectedPct, append(fields, tail...))
-}
-
-func trayRow(window provider.UsageWindow, projectedPct float64, fields []string) string {
-	bar := meterBar(window.Utilization, projectedPct)
-	if length := forecast.WindowLength(window); length > 0 && !window.ResetsAt.IsZero() {
-		bar = markPace(bar, expectedUsagePct(window.ResetsAt, length))
-	} else {
-		bar += "\u2007" // as wide as the mark, so the columns still line up
-	}
-	return trayWindowCode(window) + "   " + bar + "   " + strings.Join(fields, "  ·  ")
-}
-
-// trayWindowCode names a window by its length, such as "5H" or "7D", so the
-// meters start at the same place. A window with no known length keeps its
-// label.
-func trayWindowCode(window provider.UsageWindow) string {
-	length := forecast.WindowLength(window)
-	switch {
-	case length >= 24*time.Hour && length%(24*time.Hour) == 0:
-		return fmt.Sprintf("%dD", length/(24*time.Hour))
-	case length >= time.Hour && length%time.Hour == 0:
-		return fmt.Sprintf("%dH", length/time.Hour)
-	}
-	return trayWindowLabel(window)
-}
-
-// trayWindowQualifier is what the window code leaves out of the label: the
-// "all models" in "7 days (all models)", or a name such as "API key".
-func trayWindowQualifier(window provider.UsageWindow) string {
-	label := trayWindowLabel(window)
-	if trayWindowCode(window) == label {
-		return ""
-	}
-	if open := strings.Index(label, " ("); open >= 0 && strings.HasSuffix(label, ")") {
-		return label[open+2 : len(label)-1]
-	}
-	if genericWindowLabel.MatchString(strings.ToLower(label)) {
-		return ""
-	}
-	return label
-}
-
-// genericWindowLabel matches labels that only state a length, such as
-// "7 days", "5h" or "five_hour".
-var genericWindowLabel = regexp.MustCompile(`^(\d+|one|five|seven|thirty)?[\s_-]*(h|hours?|d|days?|hourly|daily|weekly|monthly)$`)
-
-// forecastMargin says where the forecast ends relative to the limit: "+87%"
-// over it or "−3%" under it. It decides on the raw forecast, so 100.4% is
-// "+<1%", not a rounded "+0%".
-func forecastMargin(projectedPct float64) string {
-	margin := projectedPct - 100
-	sign := "+"
-	if margin <= 0 {
-		sign, margin = "−", -margin
-	}
-	if margin < 0.5 {
-		return sign + "<1%"
-	}
-	return sign + fmt.Sprintf("%.0f", margin) + "%"
-}
-
-// defaultMarginWidth fits margins up to "+999%".
-const defaultMarginWidth = 5
-
-// trayDuration writes a duration as two units, " 3d18h" or "12h04m", padded
-// with figure spaces so the times line up from row to row.
-func trayDuration(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	d = d.Round(time.Minute)
-	hours := int(d / time.Hour)
-	if hours >= 24 {
-		return padNumber(strconv.Itoa(hours/24), 2) + "d" + padNumber(strconv.Itoa(hours%24), 2) + "h"
-	}
-	return padNumber(strconv.Itoa(hours), 2) + fmt.Sprintf("h%02dm", int(d/time.Minute)%60)
-}
-
-// padNumber left-pads to width with figure spaces, which are as wide as a
-// digit, so numbers line up in a proportional font.
-func padNumber(s string, width int) string {
-	return strings.Repeat("\u2007", max(0, width-len([]rune(s)))) + s
-}
-
-// meterBar draws ten cells on a 0–100% scale: used, then projected, then
-// free. Values past 100% fill the bar.
-func meterBar(usedPct, projectedPct float64) string {
-	used := meterCells(usedPct)
-	projected := max(used, meterCells(projectedPct))
-	return strings.Repeat("█", used) + strings.Repeat("▒", projected-used) + strings.Repeat("░", 10-projected)
-}
-
-// markPace puts ┃ in a meter where an even pace would have used by now, like
-// the comparative mark on a bullet graph. Fill past the mark is the tray
-// icon's red: used ahead of pace. Fill stopping short of it is its green.
-func markPace(bar string, expectedPct float64) string {
-	cells := []rune(bar)
-	at := meterCells(expectedPct)
-	return string(cells[:at]) + "┃" + string(cells[at:])
-}
-
-func meterCells(pct float64) int {
-	if math.IsNaN(pct) {
-		return 0
-	}
-	return int(math.Round(math.Max(0, math.Min(100, pct)) / 10))
+	return row.Code + "   " + bar + "   " + strings.Join(fields, "  ·  ")
 }
 
 // windowRunsOutBeforeReset reports whether a window is projected to run out

@@ -6,12 +6,15 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/forecast"
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
@@ -85,7 +88,7 @@ func TestFormatColorShowsBalanceOnlyProviderWithNameFallback(t *testing.T) {
 	pf := ProviderFormatter{Display: "Provider", Data: &provider.UsageData{
 		Balances: []provider.UsageBalance{{Name: "credits", Remaining: 3.5}},
 	}}
-	got := strings.Join(pf.FormatColorAligned(len(pf.Display), 7), "\n")
+	got := strings.Join(pf.FormatColorAligned(tableLayout{providerWidth: len(pf.Display)}), "\n")
 	if got := strings.Join(strings.Fields(got), " "); got != "Provider credits 3.50 remaining" {
 		t.Fatalf("FormatColorAligned() normalized = %q, want %q", got, "Provider credits 3.50 remaining")
 	}
@@ -1049,5 +1052,26 @@ func TestExpiredMessageDoesNotRepeatExpired(t *testing.T) {
 		if got := expiredMessage(in); got != want {
 			t.Errorf("expiredMessage(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestStatusRowUsesTheTrayIconColors(t *testing.T) {
+	// 72% used two days into a seven-day window: ahead of an even pace.
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
+	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+	got := colorRow(meter.NewRow(window, proj, false, meter.Layout{Space: " ", MarginWidth: meter.DefaultMarginWidth}), 2)
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(got, "")
+	if !strings.HasPrefix(plain, "7D  ███┃████▒▒▒  +152% at reset  ·   72% now  ·  resets in  5d 0h  ·  runs out in ") {
+		t.Fatalf("row = %q", plain)
+	}
+	if !strings.Contains(got, red+"█"+reset) || !strings.Contains(got, red+"+152% at reset"+reset) || !strings.Contains(got, bold+"┃"+reset) {
+		t.Fatalf("ahead-of-pace cells and the overshoot should be red: %q", got)
+	}
+	// 10% used at the same point: short of pace, so the gap is green.
+	window.Utilization = 10
+	proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+	got = colorRow(meter.NewRow(window, proj, false, meter.Layout{Space: " ", MarginWidth: meter.DefaultMarginWidth}), 2)
+	if strings.Contains(got, red) || !strings.Contains(got, green+"▒"+reset) || !strings.Contains(got, green+" −65% at reset"+reset) {
+		t.Fatalf("behind-pace row = %q", got)
 	}
 }

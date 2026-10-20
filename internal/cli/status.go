@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
@@ -17,38 +18,23 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	"github.com/tnunamak/clawmeter/internal/status"
 )
 
-const barWidth = 20
-
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-func color(projectedPct float64) string {
-	switch {
-	case projectedPct >= 100:
-		return "\033[31m" // red — projected to hit limit
-	case projectedPct >= 90:
-		return "\033[33m" // yellow — tight
-	default:
-		return "\033[32m" // green — on track
-	}
-}
-
-const reset = "\033[0m"
-
-func bar(pct float64) string {
-	if math.IsNaN(pct) || math.IsInf(pct, 0) {
-		pct = 0
-	}
-	pct = max(0, min(100, pct))
-	filled := int(math.Round(pct / 100 * barWidth))
-	return strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-}
+const (
+	reset = "\033[0m"
+	red   = "\033[31m"
+	green = "\033[32m"
+	bold  = "\033[1m"
+	dim   = "\033[2m"
+)
 
 // ProviderFormatter handles formatting for a single provider's output.
 type ProviderFormatter struct {
@@ -62,13 +48,33 @@ type ProviderFormatter struct {
 	ExplicitlyEnabled bool
 }
 
-// FormatColor returns colorized multi-line output for a provider (legacy, unaligned).
-func (pf *ProviderFormatter) FormatColor() []string {
-	return pf.FormatColorAligned(len(pf.Display), 2)
+// tableLayout holds the column widths shared by every provider in the
+// status table.
+type tableLayout struct {
+	providerWidth int
+	codeWidth     int
+	meter         meter.Layout
 }
 
-// FormatColorAligned returns colorized output with consistent column widths.
-func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) []string {
+// shownWindows are the windows the status table and the tray menu show.
+func (pf *ProviderFormatter) shownWindows() ([]provider.UsageWindow, []forecast.Projection) {
+	if pf.Data == nil || pf.Data.IsExpired || pf.Data.Error != "" {
+		return nil, nil
+	}
+	windows := meter.Shown(pf.Data.PresentationWindows())
+	projections := make([]forecast.Projection, len(windows))
+	for i, window := range windows {
+		if !window.ResetsAt.IsZero() {
+			projections[i] = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+		}
+	}
+	return windows, projections
+}
+
+// FormatColorAligned returns the provider's rows of the status table. The
+// rows read like the tray menu's, with the tray icon's colors: usage past an
+// even pace is red, the gap short of it green.
+func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
 	var statusLine string
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
 		statusLine = pf.Status.FormatCLI()
@@ -76,100 +82,111 @@ func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) 
 	if pf.Data != nil && pf.Data.Stale {
 		statusLine = staleSummary(pf.Data)
 	}
-
-	pad := fmt.Sprintf("%%-%ds", providerWidth)
-
-	winPad := fmt.Sprintf("%%-%ds", windowWidth)
-	blankWin := fmt.Sprintf(winPad, "")
-
-	if pf.Data == nil {
-		line := fmt.Sprintf(pad+" %s %s%s%s (no data)", pf.Display, blankWin, color(0), bar(0), reset)
+	indent := strings.Repeat(" ", layout.providerWidth)
+	label := fmt.Sprintf("%-*s", layout.providerWidth, pf.Display)
+	withStatus := func(line string) string {
 		if statusLine != "" {
-			line += "  " + statusLine
+			line += "  " + dim + statusLine + reset
 		}
-		return []string{line}
+		return line
 	}
 
-	if pf.Data.IsExpired {
-		expiredMsg := expiredMessage(pf.Data.Error)
-		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(100), reset, expiredMsg)
-		if statusLine != "" {
-			line += "  " + statusLine
-		}
-		return appendSnapshotLines([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
+	switch {
+	case pf.Data == nil:
+		return []string{withStatus(label + "  " + dim + "no data" + reset)}
+	case pf.Data.IsExpired:
+		return appendSnapshotLines([]string{withStatus(label + "  " + red + expiredMessage(pf.Data.Error) + reset)}, pf.Data, indent)
+	case pf.Data.Error != "":
+		return appendSnapshotLines([]string{withStatus(label + "  " + red + format.HumanizeError(pf.Data.Error) + reset)}, pf.Data, indent)
 	}
 
-	if pf.Data.Error != "" {
-		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(0), reset, format.HumanizeError(pf.Data.Error))
-		if statusLine != "" {
-			line += "  " + statusLine
-		}
-		return appendSnapshotLines([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
-	}
-
-	windows := pf.Data.PresentationWindows()
+	windows, projections := pf.shownWindows()
 	lines := make([]string, 0, len(windows)+2)
-	for i, window := range windows {
-		proj := forecast.Projection{}
-		resetStr := "unknown"
-		indicator := "reset unknown"
-		colorPct := window.Utilization
-		barColor := color(colorPct)
-		if !window.ResetsAt.IsZero() {
-			proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			resetStr = format.FormatDuration(time.Until(window.ResetsAt))
-			indicator = proj.ColorIndicator()
-			if !proj.Unknown && !proj.Stale {
-				colorPct = proj.ProjectedPct
-			}
-			barColor = color(colorPct)
-		} else if window.ResetPolicy != "" {
-			indicator = window.ResetPolicy
-		} else {
-			resetStr = "not reported"
-			indicator = ""
-			barColor = ""
+	next := func(text string) {
+		prefix := indent
+		if len(lines) == 0 {
+			prefix = label
 		}
-
-		label := pf.Display
-		if i > 0 {
-			label = ""
-		}
-		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-11s %s",
-			label, plainWindowLabel(window), barColor, bar(window.Utilization), reset,
-			window.Utilization, resetStr, indicator)
-		if money := window.MoneyDetail(); money != "" {
-			line += "  (" + money + ")"
-		}
-		if i == 0 && statusLine != "" {
-			line += "  " + statusLine
+		line := prefix + "  " + text
+		if len(lines) == 0 {
+			line = withStatus(line)
 		}
 		lines = append(lines, line)
 	}
+	for _, row := range meter.Rows(windows, projections, layout.meter) {
+		next(colorRow(row, layout.codeWidth))
+	}
 	for _, balance := range pf.Data.Balances {
-		label := balance.DisplayName
-		if label == "" {
-			label = balance.Name
+		name := balance.DisplayName
+		if name == "" {
+			name = balance.Name
 		}
-		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %.2f remaining",
-			pf.Display, label, balance.Remaining))
+		next(fmt.Sprintf("%s %.2f remaining", name, balance.Remaining))
 	}
 	for _, pool := range pf.Data.CreditPools {
-		label := ""
-		if len(lines) == 0 {
-			label = pf.Display
-		}
-		lines = append(lines, fmt.Sprintf(pad+" %s: %s", label, pool.Name, pool.Summary(time.Now())))
+		next(pool.Name + ": " + pool.Summary(time.Now()))
 	}
 	if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
-		label := ""
-		if len(lines) == 0 {
-			label = pf.Display
-		}
-		lines = append(lines, fmt.Sprintf(pad+" %s", label, summary))
+		next(summary)
 	}
-
+	if len(lines) == 0 && statusLine != "" {
+		lines = append(lines, withStatus(label))
+	}
 	return lines
+}
+
+// colorRow draws a row in a terminal. Glyphs and fields match the tray menu.
+func colorRow(row meter.Row, codeWidth int) string {
+	if row.Line != "" {
+		return row.Line
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-*s  ", codeWidth, row.Code)
+	for _, cell := range row.Bar {
+		style := ""
+		switch {
+		case cell.Kind == meter.Ahead:
+			style = red
+		case cell.Behind:
+			style = green
+		case cell.Kind == meter.Pace:
+			style = bold
+		case cell.Kind == meter.Projected || cell.Kind == meter.Free:
+			style = dim
+		}
+		if style == "" {
+			b.WriteString(cell.Glyph)
+		} else {
+			b.WriteString(style + cell.Glyph + reset)
+		}
+	}
+	if len(row.Bar) == meter.BarCells {
+		b.WriteString(" ") // as wide as the pace mark
+	}
+	b.WriteString("  ")
+	for i, field := range row.Fields {
+		if i > 0 {
+			b.WriteString(dim + "  ·  " + reset)
+		}
+		style := ""
+		switch field.Kind {
+		case meter.Margin:
+			style = green
+			if row.Over {
+				style = red
+			}
+		case meter.RunsOut:
+			style = red
+		case meter.Note, meter.Detail:
+			style = dim
+		}
+		if style == "" {
+			b.WriteString(field.Text)
+		} else {
+			b.WriteString(style + field.Text + reset)
+		}
+	}
+	return b.String()
 }
 
 // FormatPlain returns plain text output for a provider.
@@ -300,50 +317,22 @@ func (m *MultiProviderOutput) HideUnavailable() {
 	m.Providers = filtered
 }
 
-// PrintColor prints colorized output for all providers.
+// PrintColor prints the status table. Its rows read like the tray menu's.
 func (m *MultiProviderOutput) PrintColor() {
-	// Compute column widths for alignment
-	providerWidth := 0
-	windowWidth := 0
-	hasWindows := false
+	layout := tableLayout{meter: meter.Layout{Space: " "}}
+	var projections []forecast.Projection
 	for _, pf := range m.Providers {
-		if len(pf.Display) > providerWidth {
-			providerWidth = len(pf.Display)
+		layout.providerWidth = max(layout.providerWidth, utf8.RuneCountInString(pf.Display))
+		windows, projs := pf.shownWindows()
+		for _, window := range windows {
+			layout.codeWidth = max(layout.codeWidth, utf8.RuneCountInString(meter.Code(window)))
 		}
-		if pf.Data != nil {
-			for _, w := range pf.Data.UsableWindows() {
-				hasWindows = true
-				if len(w.Name) > windowWidth {
-					windowWidth = len(w.Name)
-				}
-			}
-		}
+		projections = append(projections, projs...)
 	}
-
-	// Ensure column widths fit header labels
-	if windowWidth < 6 {
-		windowWidth = 6 // "WINDOW"
-	}
-	if providerWidth < 8 {
-		providerWidth = 8 // "PROVIDER"
-	}
-
-	// Header row
-	if hasWindows {
-		dim := "\033[2m"
-		// Columns: provider(pad) window(winPad) bar(20) " "pct(4)"  resets "time(7)" " pace
-		hdr := fmt.Sprintf("%-*s %-*s %-*s %4s  resets %-7s %s",
-			providerWidth, "PROVIDER",
-			windowWidth, "WINDOW",
-			barWidth, "USAGE",
-			"PCT",
-			"IN",
-			"PACE")
-		fmt.Printf("%s%s%s\n", dim, hdr, reset)
-	}
+	layout.meter.MarginWidth = meter.MarginWidth(projections)
 
 	for i, pf := range m.Providers {
-		lines := pf.FormatColorAligned(providerWidth, windowWidth)
+		lines := pf.FormatColorAligned(layout)
 		for _, line := range lines {
 			fmt.Println(line)
 		}
