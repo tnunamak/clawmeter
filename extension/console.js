@@ -8,8 +8,9 @@ const usageRetry = 5 * 60 * 1000;
 const retainedCostAge = 60 * 60 * 1000;
 
 // readConsole reads every API organization in one session. A caller that
-// reads several sessions passes one shared set of pools seen and drops stale
-// cache entries itself.
+// reads several sessions passes shared = { seen, read }: pools found and pools
+// posted. A pool posted by one session is not read again; one that failed can
+// still be read by the next. That caller drops stale cache entries itself.
 async function readConsole(getJSON, now, cache, post = async () => {}, shared = null) {
   const clock = typeof now === "function" ? now : () => now;
   const time = new Date(clock()).getTime();
@@ -50,14 +51,17 @@ async function readConsole(getJSON, now, cache, post = async () => {}, shared = 
   const endingBefore = day(time + 86400000);
   const payloads = [];
   const failures = [];
-  const seen = shared || new Set();
+  const seen = shared?.seen || new Set();
+  const read = shared?.read || new Set();
+  const attempted = new Set();
   for (const organization of organizations) {
     if (!object(organization) || !Array.isArray(organization.capabilities)) changed();
     if (!organization.capabilities.includes("api")) continue;
     const id = String(organization.uuid || organization.id || "");
     if (!id) changed();
     const pool = await hash("clawmeter-api-pool\u0000" + id);
-    if (seen.has(pool)) continue;
+    if (attempted.has(pool) || read.has(pool)) continue;
+    attempted.add(pool);
     seen.add(pool);
     const name = String(organization.name || "Claude API").trim().slice(0, 120);
     // One organization's failure must not hide the others.
@@ -156,6 +160,7 @@ async function readConsole(getJSON, now, cache, post = async () => {}, shared = 
       month_resets_at: spend.resets_at, daily: entry.daily, link };
     await post(payload);
     payloads.push(payload);
+    read.add(pool);
     } catch (error) {
       failures.push({ name, error });
     }

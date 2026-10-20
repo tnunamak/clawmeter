@@ -281,3 +281,21 @@ test("each claude.ai tab is read as its own session, and an organization is read
   assert.deepEqual(w.sessions.at(-1).status.claude.accounts.map(account => account.name), ["A", "Team", "B"]);
   assert.equal(reads.filter(read => read.includes("org-team")).length, 1);
 });
+
+test("a Console tab that does not answer keeps its cache and blocks a global sign-out", async () => {
+  const cached = { at: 0, reconciledAt: 0, daily: {} };
+  const consoleRead = async () => ({ status: "signed_out", payloads: [] });
+  const w = worker(consoleRead, undefined, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/" }],
+    executeScript: async () => { throw new Error("frozen"); },
+  });
+  w.context.chrome.storage.local.get = async () => ({ cache: { kept: cached } });
+  // Tab 1 never answers; the reader in tab 2 reports a sign-out.
+  w.context.readConsole = async (read, now, cache) => {
+    await read("https://platform.claude.com/api/organizations");
+    return { status: "signed_out", payloads: [] };
+  };
+  await vm.runInContext("poll()", w.context);
+  assert.deepEqual(w.stored.at(-1).cache, { kept: cached });
+  assert.equal(w.sessions.at(-1).status.console.state, "error");
+});

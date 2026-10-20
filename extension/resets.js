@@ -5,7 +5,9 @@ const claudeOrigin = "https://claude.ai";
 // readResets reads promotional reset grants for each claude.ai organization in
 // the signed-in session and posts one payload per organization. The receiver
 // keeps only organizations that match a Claude source set up in Clawmeter.
-async function readResets(getJSON, now, post = async () => {}, seen = new Set()) {
+// A caller that reads several sessions passes one set of organizations
+// already read; one that failed in a session can still be read by the next.
+async function readResets(getJSON, now, post = async () => {}, read = new Set()) {
   const clock = typeof now === "function" ? now : () => now;
   const time = new Date(clock()).getTime();
   if (!Number.isFinite(time)) throw new Error("Invalid poll time");
@@ -33,10 +35,11 @@ async function readResets(getJSON, now, post = async () => {}, seen = new Set())
   // Each organization's name and what Clawmeter did with its reading, for
   // the popup.
   const accounts = [];
+  const seen = new Set();
   let failure = null;
   for (const organization of organizations) {
     const id = String(organization?.uuid || organization?.id || "");
-    if (!id || seen.has(id)) continue;
+    if (!id || seen.has(id) || read.has(id)) continue;
     seen.add(id);
     const name = String(organization?.name || "Claude").trim().slice(0, 120);
     // One organization's failure must not hide the others.
@@ -64,6 +67,7 @@ async function readResets(getJSON, now, post = async () => {}, seen = new Set())
       const payload = { observed_at: new Date(observed).toISOString(), organization: id, grants };
       const delivery = await post(payload);
       payloads.push(payload);
+      read.add(id);
       // Count only resets usable now; the receiver gets every grant.
       const usable = grants.filter(grant => grant.resets_left > 0 && !grant.paused &&
         Date.parse(grant.starts_at) <= observed && observed < Date.parse(grant.ends_at));

@@ -69,18 +69,21 @@ async function readInTab(tab, url) {
 // readEverySession runs read once in each open tab of a site, because tabs
 // in different browser containers can be signed in to different accounts.
 // Ordinary tabs share one session; readers skip organizations already read. When no tab answers, read runs once in the worker, which has the
-// browser's main session. Each result is read's result or { error }.
+// browser's main session. Each result is read's result or { error };
+// unavailable counts tabs that did not answer, whose sessions are unknown.
 async function readEverySession(pattern, fallback, read) {
   let tabs = [];
   try {
     tabs = await chrome.tabs.query({ url: pattern, discarded: false, status: "complete" });
   } catch {}
   const results = [];
+  let unavailable = 0;
   for (const tab of tabs) {
     try {
       results.push(await read(url => readInTab(tab, url)));
     } catch (error) {
-      if (!(error instanceof TabUnavailable)) results.push({ error });
+      if (error instanceof TabUnavailable) unavailable++;
+      else results.push({ error });
     }
   }
   if (!results.length) {
@@ -90,7 +93,7 @@ async function readEverySession(pattern, fallback, read) {
       results.push({ error });
     }
   }
-  return { tabs: tabs.length, results };
+  return { tabs: tabs.length, unavailable, results };
 }
 
 const message = error => String(error?.message || error);
@@ -135,15 +138,16 @@ async function check() {
   try {
     const stored = await chrome.storage.local.get("cache");
     cache = stored.cache && typeof stored.cache === "object" && !Array.isArray(stored.cache) ? stored.cache : {};
-    const pools = new Set();
+    const pools = { seen: new Set(), read: new Set() };
     const credits = await readEverySession("https://platform.claude.com/*", getJSON,
       read => readConsole(read, Date.now, cache, payload => send("/v1/api-credits", payload), pools));
+    // A session that could not be checked may still hold any pool.
+    const complete = !credits.unavailable && credits.results.every(result => !result.error);
     const read = credits.results.filter(result => result.status === "ok");
     if (read.length) {
-      // Saved costs outlive a pool only while some session cannot be read.
-      if (credits.results.every(result => !result.error)) {
+      if (complete) {
         for (const pool of Object.keys(cache)) {
-          if (!pools.has(pool)) delete cache[pool];
+          if (!pools.seen.has(pool)) delete cache[pool];
         }
       }
       status.console = { state: "ok",
@@ -151,12 +155,12 @@ async function check() {
           ...credits.results.filter(result => result.error).map(result => ({ name: "A Claude Console tab", error: message(result.error) }))],
         pools: read.flatMap(result => result.payloads)
           .map(payload => ({ name: payload.name, balance: payload.balance, currency: payload.currency })) };
-    } else if (credits.results.every(result => result.status === "signed_out")) {
+    } else if (complete && credits.results.every(result => result.status === "signed_out")) {
       cache = {};
       await send("/v1/status", { status: "signed_out" });
       status.console = { state: "signed_out" };
     } else {
-      throw credits.results.find(result => result.error).error;
+      throw credits.results.find(result => result.error)?.error || new Error("A Claude Console tab did not answer");
     }
   } catch (error) {
     // Failed polls never refresh the receiver's observation time.
