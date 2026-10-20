@@ -1919,8 +1919,11 @@ func trayWindowStatus(window provider.UsageWindow) string {
 		return meterBar(window.Utilization, window.Utilization) + "  " + used + " · " + label + " · " + resets + " · " + proj.PaceIndicator()
 	}
 	row := meterBar(window.Utilization, proj.ProjectedPct) + "  " + used + " → " + fmt.Sprintf("%.0f%%", proj.ProjectedPct)
-	if over := math.Round(proj.ProjectedPct) - 100; over > 0 {
+	// Decide on the raw forecast: 100.4% rounds to "100%" but is still over.
+	if over := proj.ProjectedPct - 100; over >= 0.5 {
 		row += fmt.Sprintf(" (+%.0f%% over)", over)
+	} else if over > 0 {
+		row += " (<1% over)"
 	}
 	row += " · " + label + " · " + resets
 	if proj.WillLastToReset {
@@ -1936,6 +1939,9 @@ func trayWindowStatus(window provider.UsageWindow) string {
 // free. Values past 100% fill the bar.
 func meterBar(usedPct, projectedPct float64) string {
 	cells := func(pct float64) int {
+		if math.IsNaN(pct) {
+			return 0
+		}
 		return int(math.Round(math.Max(0, math.Min(100, pct)) / 10))
 	}
 	used := cells(usedPct)

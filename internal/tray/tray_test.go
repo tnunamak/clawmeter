@@ -5,6 +5,7 @@ package tray
 import (
 	"context"
 	"errors"
+	"math"
 	"runtime"
 	"strings"
 	"testing"
@@ -1559,6 +1560,8 @@ func TestTrayWindowRowLeadsWithAFixedScaleMeterAndStatesOvershoot(t *testing.T) 
 		{0, 0, "░░░░░░░░░░"},
 		{120, 300, "██████████"},
 		{50, 40, "█████░░░░░"},
+		{math.NaN(), math.NaN(), "░░░░░░░░░░"},
+		{40, math.NaN(), "████░░░░░░"},
 	} {
 		if got := meterBar(tc.used, tc.projected); got != tc.bar {
 			t.Errorf("meterBar(%v, %v) = %q, want %q", tc.used, tc.projected, got, tc.bar)
@@ -1569,6 +1572,15 @@ func TestTrayWindowRowLeadsWithAFixedScaleMeterAndStatesOvershoot(t *testing.T) 
 	got := trayWindowStatus(window)
 	if !strings.HasPrefix(got, "███████▒▒▒  72% → 252% (+152% over) · 7 days · resets in ") || !strings.Contains(got, " · runs out in ") {
 		t.Fatalf("over-limit row = %q", got)
+	}
+	// Half a five-hour window gone at 50.2% projects 100.4%: still over.
+	nearly := provider.UsageWindow{Name: "five_hour", Length: 5 * time.Hour, Utilization: 50.2, ResetsAt: time.Now().Add(150 * time.Minute)}
+	if got := trayWindowStatus(nearly); !strings.Contains(got, "50% → 100% (<1% over)") {
+		t.Fatalf("barely-over row = %q", got)
+	}
+	nearly.Utilization = 49.8
+	if got := trayWindowStatus(nearly); strings.Contains(got, "over") {
+		t.Fatalf("barely-under row = %q", got)
 	}
 	window.Utilization = 10
 	if got := trayWindowStatus(window); strings.Contains(got, "over") || !strings.HasPrefix(got, "█▒▒") || !strings.Contains(got, "  10% → 35% · 7 days") {
