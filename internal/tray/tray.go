@@ -1001,7 +1001,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
-	marginWidth := trayMarginWidth(results)
+	windowRows := trayMenuRows(results, menus)
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
@@ -1098,7 +1098,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		windows := menuWindows(data.PresentationWindows())
-		rows := trayWindowRows(windows, marginWidth)
+		rows := windowRows[name]
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
 				break
@@ -1906,17 +1906,54 @@ func trayWindowLabel(window provider.UsageWindow) string {
 	return strings.TrimSpace(window.Name)
 }
 
+// trayMenuRows formats the quota rows of every account in one pass over the
+// windows the menu shows. Each window is projected once, so the width of the
+// margin column and the rows agree: an early forecast such as "+3260%"
+// widens the column for every row instead of pushing its own row out of line.
+func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) map[string][]string {
+	type account struct {
+		windows     []provider.UsageWindow
+		projections []forecast.Projection
+	}
+	accounts := make(map[string]account, len(menus))
+	width := defaultMarginWidth
+	for name, menu := range menus {
+		data := results[name]
+		if data == nil || data.Error != "" || data.IsExpired {
+			continue
+		}
+		windows := menuWindows(data.PresentationWindows())
+		windows = windows[:min(len(windows), len(menu.windowItems))]
+		projections := make([]forecast.Projection, len(windows))
+		for i, window := range windows {
+			if window.ResetsAt.IsZero() {
+				continue
+			}
+			projections[i] = windowProjection(window)
+			if proj := projections[i]; !proj.Unknown && !proj.Stale {
+				width = max(width, len([]rune(forecastMargin(proj.ProjectedPct))))
+			}
+		}
+		accounts[name] = account{windows, projections}
+	}
+	rows := make(map[string][]string, len(accounts))
+	for name, a := range accounts {
+		rows[name] = trayWindowRows(a.windows, a.projections, width)
+	}
+	return rows
+}
+
 // trayWindowRows formats an account's quota rows. A window's qualifier, such
 // as "all models", shows only when it is needed: "all models" on the only
 // seven-day row says nothing.
-func trayWindowRows(windows []provider.UsageWindow, marginWidth int) []string {
+func trayWindowRows(windows []provider.UsageWindow, projections []forecast.Projection, marginWidth int) []string {
 	codes := make(map[string]int, len(windows))
 	for _, window := range windows {
 		codes[trayWindowCode(window)]++
 	}
 	rows := make([]string, len(windows))
 	for i, window := range windows {
-		rows[i] = trayWindowStatus(window, codes[trayWindowCode(window)] > 1, marginWidth)
+		rows[i] = trayWindowStatus(window, projections[i], codes[trayWindowCode(window)] > 1, marginWidth)
 	}
 	return rows
 }
@@ -1930,7 +1967,7 @@ func trayWindowRows(windows []provider.UsageWindow, marginWidth int) []string {
 // explicit-numeric-forecast-overflow.md and glanceable-quota-severity-in-
 // native-tray-menus.md. If the ▒ shading confuses people, the fallback is a
 // used-only bar with the forecast in words.
-func trayWindowStatus(window provider.UsageWindow, codeShared bool, marginWidth int) string {
+func trayWindowStatus(window provider.UsageWindow, proj forecast.Projection, codeShared bool, marginWidth int) string {
 	label := trayWindowLabel(window)
 	money := window.MoneyDetail()
 	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
@@ -1951,7 +1988,6 @@ func trayWindowStatus(window provider.UsageWindow, codeShared bool, marginWidth 
 		}
 		return trayRow(window, window.Utilization, append([]string{now, reset}, tail...))
 	}
-	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 	resets := "resets in " + trayDuration(time.Until(window.ResetsAt))
 	if proj.Unknown || proj.Stale {
 		return trayRow(window, window.Utilization, append([]string{proj.PaceIndicator(), now, resets}, tail...))
@@ -2022,29 +2058,6 @@ func forecastMargin(projectedPct float64) string {
 
 // defaultMarginWidth fits margins up to "+999%".
 const defaultMarginWidth = 5
-
-// trayMarginWidth is the widest forecast margin in the menu, so an early
-// forecast such as "+3260%" widens the column for every row instead of
-// pushing its own row out of line. Use now and the times have fixed widths:
-// they pass them only past 999% used or 99 days.
-func trayMarginWidth(results map[string]*provider.UsageData) int {
-	width := defaultMarginWidth
-	for _, data := range results {
-		if data == nil || data.Error != "" || data.IsExpired {
-			continue
-		}
-		for _, window := range menuWindows(data.PresentationWindows()) {
-			if window.ResetsAt.IsZero() {
-				continue
-			}
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			if !proj.Unknown && !proj.Stale {
-				width = max(width, len([]rune(forecastMargin(proj.ProjectedPct))))
-			}
-		}
-	}
-	return width
-}
 
 // trayDuration writes a duration as two units, " 3d18h" or "12h04m", padded
 // with figure spaces so the times line up from row to row.
