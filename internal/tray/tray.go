@@ -1001,6 +1001,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
+	marginWidth := trayMarginWidth(results)
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
@@ -1097,7 +1098,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		windows := menuWindows(data.PresentationWindows())
-		rows := trayWindowRows(windows)
+		rows := trayWindowRows(windows, marginWidth)
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
 				break
@@ -1908,14 +1909,14 @@ func trayWindowLabel(window provider.UsageWindow) string {
 // trayWindowRows formats an account's quota rows. A window's qualifier, such
 // as "all models", shows only when it is needed: "all models" on the only
 // seven-day row says nothing.
-func trayWindowRows(windows []provider.UsageWindow) []string {
+func trayWindowRows(windows []provider.UsageWindow, marginWidth int) []string {
 	codes := make(map[string]int, len(windows))
 	for _, window := range windows {
 		codes[trayWindowCode(window)]++
 	}
 	rows := make([]string, len(windows))
 	for i, window := range windows {
-		rows[i] = trayWindowStatus(window, codes[trayWindowCode(window)] > 1)
+		rows[i] = trayWindowStatus(window, codes[trayWindowCode(window)] > 1, marginWidth)
 	}
 	return rows
 }
@@ -1929,7 +1930,7 @@ func trayWindowRows(windows []provider.UsageWindow) []string {
 // explicit-numeric-forecast-overflow.md and glanceable-quota-severity-in-
 // native-tray-menus.md. If the ▒ shading confuses people, the fallback is a
 // used-only bar with the forecast in words.
-func trayWindowStatus(window provider.UsageWindow, codeShared bool) string {
+func trayWindowStatus(window provider.UsageWindow, codeShared bool, marginWidth int) string {
 	label := trayWindowLabel(window)
 	money := window.MoneyDetail()
 	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
@@ -1955,7 +1956,7 @@ func trayWindowStatus(window provider.UsageWindow, codeShared bool) string {
 	if proj.Unknown || proj.Stale {
 		return trayRow(window, window.Utilization, append([]string{proj.PaceIndicator(), now, resets}, tail...))
 	}
-	fields := []string{forecastMargin(proj.ProjectedPct) + " at reset", now, resets}
+	fields := []string{padNumber(forecastMargin(proj.ProjectedPct), marginWidth) + " at reset", now, resets}
 	if !proj.WillLastToReset {
 		if proj.RunsOutIn > 0 {
 			fields = append(fields, "runs out in "+trayDuration(proj.RunsOutIn))
@@ -2014,9 +2015,35 @@ func forecastMargin(projectedPct float64) string {
 		sign, margin = "−", -margin
 	}
 	if margin < 0.5 {
-		return padNumber(sign+"<1", 4) + "%"
+		return sign + "<1%"
 	}
-	return padNumber(sign+fmt.Sprintf("%.0f", margin), 4) + "%"
+	return sign + fmt.Sprintf("%.0f", margin) + "%"
+}
+
+// defaultMarginWidth fits margins up to "+999%".
+const defaultMarginWidth = 5
+
+// trayMarginWidth is the widest forecast margin in the menu, so an early
+// forecast such as "+3260%" widens the column for every row instead of
+// pushing its own row out of line. Use now and the times have fixed widths:
+// they pass them only past 999% used or 99 days.
+func trayMarginWidth(results map[string]*provider.UsageData) int {
+	width := defaultMarginWidth
+	for _, data := range results {
+		if data == nil || data.Error != "" || data.IsExpired {
+			continue
+		}
+		for _, window := range menuWindows(data.PresentationWindows()) {
+			if window.ResetsAt.IsZero() {
+				continue
+			}
+			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+			if !proj.Unknown && !proj.Stale {
+				width = max(width, len([]rune(forecastMargin(proj.ProjectedPct))))
+			}
+		}
+	}
+	return width
 }
 
 // trayDuration writes a duration as two units, " 3d18h" or "12h04m", padded
