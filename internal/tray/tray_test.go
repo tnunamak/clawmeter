@@ -1317,7 +1317,7 @@ func TestTrayTypedMonthlyPresentation(t *testing.T) {
 	if meter.RiskPct < 60 || meter.RiskPct > 62 || meter.ExpectedPct < 98 || meter.ExpectedPct > 99 {
 		t.Fatalf("monthly meter = %+v", meter)
 	}
-	if got := trayWindowStatus(window); !strings.Contains(got, "est. 61% at reset") {
+	if got := trayWindowStatus(window); !strings.Contains(got, "60% → 61%") {
 		t.Fatalf("monthly menu = %q", got)
 	}
 }
@@ -1511,15 +1511,15 @@ func TestLocalPublicationWaitsForRefresh(t *testing.T) {
 
 func TestTrayWindowRowsShareOneSeparatorStyle(t *testing.T) {
 	soon := provider.UsageWindow{Name: "five_hour", Length: 5 * time.Hour, Utilization: 7, ResetsAt: time.Now().Add(3*time.Hour + 30*time.Second)}
-	if got := trayWindowStatus(soon); !strings.Contains(got, ": 7% · resets in 3h00m · ") || strings.Contains(got, "—") {
+	if got := trayWindowStatus(soon); !strings.Contains(got, "  7% → 18% · five_hour · resets in 3h00m") || strings.Contains(got, "—") {
 		t.Fatalf("row = %q", got)
 	}
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
-	if got := trayWindowStatus(policy); !strings.HasSuffix(got, ": 40% · resets daily") {
+	if got := trayWindowStatus(policy); !strings.HasSuffix(got, "  40% · daily · resets daily") {
 		t.Fatalf("policy row = %q", got)
 	}
 	unknown := provider.UsageWindow{Name: "daily", Utilization: 40}
-	if got := trayWindowStatus(unknown); !strings.HasSuffix(got, ": 40% · reset not reported") {
+	if got := trayWindowStatus(unknown); !strings.HasSuffix(got, "  40% · daily · reset not reported") {
 		t.Fatalf("unreported row = %q", got)
 	}
 }
@@ -1545,5 +1545,33 @@ func TestMenuWindowsDropIdleWindowsButNeverAll(t *testing.T) {
 	}
 	if got := menuWindows([]provider.UsageWindow{idle}); len(got) != 1 {
 		t.Fatalf("an all-idle provider lost its rows: %+v", got)
+	}
+}
+
+func TestTrayWindowRowLeadsWithAFixedScaleMeterAndStatesOvershoot(t *testing.T) {
+	for _, tc := range []struct {
+		used, projected float64
+		bar             string
+	}{
+		{42, 80, "████▒▒▒▒░░"},
+		{61, 104, "██████▒▒▒▒"},
+		{68, 213, "███████▒▒▒"},
+		{0, 0, "░░░░░░░░░░"},
+		{120, 300, "██████████"},
+		{50, 40, "█████░░░░░"},
+	} {
+		if got := meterBar(tc.used, tc.projected); got != tc.bar {
+			t.Errorf("meterBar(%v, %v) = %q, want %q", tc.used, tc.projected, got, tc.bar)
+		}
+	}
+	// 72% used two days into a seven-day window projects 252%.
+	window := provider.UsageWindow{Name: "seven_day", DisplayName: "7 days", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
+	got := trayWindowStatus(window)
+	if !strings.HasPrefix(got, "███████▒▒▒  72% → 252% (+152% over) · 7 days · resets in ") || !strings.Contains(got, " · runs out in ") {
+		t.Fatalf("over-limit row = %q", got)
+	}
+	window.Utilization = 10
+	if got := trayWindowStatus(window); strings.Contains(got, "over") || !strings.HasPrefix(got, "█▒▒") || !strings.Contains(got, "  10% → 35% · 7 days") {
+		t.Fatalf("under-limit row = %q", got)
 	}
 }

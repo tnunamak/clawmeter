@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -1889,6 +1890,12 @@ func trayWindowLabel(window provider.UsageWindow) string {
 	return strings.TrimSpace(window.Name)
 }
 
+// trayWindowStatus leads with a ten-cell meter so rows compare at a glance:
+// █ used, ▒ projected by reset, ░ free, on a fixed 0–100% scale. The bar
+// cannot show how far a forecast passes the limit, so the text says it.
+// Research: divan ai-quota-monitoring/fixed-quota-scale-text-bars-need-
+// explicit-numeric-forecast-overflow.md. Its fallback, if the ▒ shading
+// confuses people, is a used-only bar with the forecast in words.
 func trayWindowStatus(window provider.UsageWindow) string {
 	label := trayWindowLabel(window)
 	money := window.MoneyDetail()
@@ -1898,19 +1905,24 @@ func trayWindowStatus(window provider.UsageWindow) string {
 	if money != "" {
 		label += " (" + money + ")"
 	}
-	row := fmt.Sprintf("%s: %.0f%%", label, window.Utilization)
+	used := fmt.Sprintf("%.0f%%", window.Utilization)
 	if window.ResetsAt.IsZero() {
-		if window.ResetPolicy == "" {
-			return row + " · reset not reported"
+		reset := window.ResetPolicy
+		if reset == "" {
+			reset = "reset not reported"
 		}
-		return row + " · " + window.ResetPolicy
+		return meterBar(window.Utilization, window.Utilization) + "  " + used + " · " + label + " · " + reset
 	}
 	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	row += " · resets in " + format.FormatDuration(time.Until(window.ResetsAt))
+	resets := "resets in " + format.FormatDuration(time.Until(window.ResetsAt))
 	if proj.Unknown || proj.Stale {
-		return row + " · " + proj.PaceIndicator()
+		return meterBar(window.Utilization, window.Utilization) + "  " + used + " · " + label + " · " + resets + " · " + proj.PaceIndicator()
 	}
-	row += " · " + forecast.PaceLabel(proj.ProjectedPct)
+	row := meterBar(window.Utilization, proj.ProjectedPct) + "  " + used + " → " + fmt.Sprintf("%.0f%%", proj.ProjectedPct)
+	if over := math.Round(proj.ProjectedPct) - 100; over > 0 {
+		row += fmt.Sprintf(" (+%.0f%% over)", over)
+	}
+	row += " · " + label + " · " + resets
 	if proj.WillLastToReset {
 		return row
 	}
@@ -1918,6 +1930,17 @@ func trayWindowStatus(window provider.UsageWindow) string {
 		return row + " · runs out in " + format.FormatDuration(proj.RunsOutIn)
 	}
 	return row + " · out now"
+}
+
+// meterBar draws ten cells on a 0–100% scale: used, then projected, then
+// free. Values past 100% fill the bar.
+func meterBar(usedPct, projectedPct float64) string {
+	cells := func(pct float64) int {
+		return int(math.Round(math.Max(0, math.Min(100, pct)) / 10))
+	}
+	used := cells(usedPct)
+	projected := max(used, cells(projectedPct))
+	return strings.Repeat("█", used) + strings.Repeat("▒", projected-used) + strings.Repeat("░", 10-projected)
 }
 
 // windowRunsOutBeforeReset reports whether a window is projected to run out
