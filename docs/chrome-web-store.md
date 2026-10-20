@@ -7,7 +7,10 @@ extension. Copy each field as written.
 
 1. Register a developer account at
    <https://chrome.google.com/webstore/devconsole> and pay the one-time US$5
-   fee.
+   fee. Use a Google account made only for publishing, not a personal Gmail:
+   Google suggests this, the account's email cannot be changed later, and a
+   serious policy action can reach "related Google services" on the account.
+   Turn on 2-Step Verification, which the store requires.
 2. Run `make extension-zip`. It writes `clawmeter-extension-<version>.zip`
    without the manifest `key`, which the store rejects.
 3. In the developer console, choose **New item** and upload the zip.
