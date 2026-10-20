@@ -82,16 +82,17 @@ async function poll() {
   // The popup shows this. It lives in session storage, so organization names
   // never reach the disk.
   const status = { at: new Date().toISOString(), delivery: [], claude: null, console: null };
-  const send = async (path, payload) => { status.delivery.push(await post(path, payload)); };
+  const send = async (path, payload) => {
+    const delivery = await post(path, payload);
+    status.delivery.push(delivery);
+    return delivery;
+  };
   let tab = false;
   try {
     const result = await readResets(url => readFromClaudeTab(url, getJSON, () => { tab = true; }), Date.now,
       payload => send("/v1/resets", payload));
-    const grants = result.payloads.flatMap(payload => payload.grants).filter(grant => grant.resets_left > 0);
-    status.claude = result.status === "signed_out" ? { state: tab ? "signed_out" : "no_tab" } : {
-      state: "ok", resets: grants.reduce((sum, grant) => sum + grant.resets_left, 0),
-      expires: grants.map(grant => grant.ends_at).sort()[0] || null,
-    };
+    status.claude = result.status === "signed_out" ? { state: tab ? "signed_out" : "no_tab" } :
+      { state: "ok", accounts: result.accounts };
   } catch (error) {
     // Resets and credits are independent; a failure in one never blocks the other.
     status.claude = { state: tab ? "error" : "no_tab", error: String(error?.message || error) };

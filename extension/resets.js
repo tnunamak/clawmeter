@@ -30,6 +30,9 @@ async function readResets(getJSON, now, post = async () => {}) {
   const organizations = Array.isArray(data) ? data : data?.organizations;
   if (!Array.isArray(organizations)) changed();
   const payloads = [];
+  // Each organization's name and what Clawmeter did with its reading, for
+  // the popup.
+  const accounts = [];
   const seen = new Set();
   for (const organization of organizations) {
     const id = String(organization?.uuid || organization?.id || "");
@@ -55,10 +58,12 @@ async function readResets(getJSON, now, post = async () => {}) {
     }
     // Date each organization by its own read; a slow poll must not age later ones.
     const payload = { observed_at: new Date(clock()).toISOString(), organization: id, grants };
-    await post(payload);
+    const delivery = await post(payload);
     payloads.push(payload);
+    accounts.push({ name: String(organization?.name || "Claude").trim().slice(0, 120),
+      resets: grants.reduce((sum, grant) => sum + grant.resets_left, 0), delivery });
   }
-  return { status: "ok", payloads };
+  return { status: "ok", payloads, accounts };
 }
 
 if (typeof module !== "undefined") module.exports = { readResets };

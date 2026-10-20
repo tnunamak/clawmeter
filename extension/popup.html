@@ -22,6 +22,7 @@
   .links { display: flex; gap: 14px; margin-top: 6px; }
   a { color: #8cc8ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
+  .note { margin: 0; padding: 10px 16px; color: #9aa4ae; font-size: 12px; border-bottom: 1px solid #2a3037; }
   footer { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; color: #9aa4ae; }
   button { font: inherit; color: #e6eaee; background: #252a30; border: 1px solid #3a414a; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
   button:disabled { opacity: .6; cursor: default; }
@@ -45,6 +46,7 @@
   <div id="console"><p class="muted">Not read yet.</p></div>
   <div class="links"><a href="https://platform.claude.com/settings/billing" target="_blank">Open billing</a></div>
 </section>
+<p class="note">This browser profile reads only the Claude account it is signed in to. For another account, add the extension to a browser profile signed in to that account.</p>
 <footer>
   <span id="updated"></span>
   <button id="refresh" type="button">Refresh</button>

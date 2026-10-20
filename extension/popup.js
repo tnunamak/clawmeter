@@ -16,7 +16,6 @@ function row(name, value, className) {
   return div;
 }
 
-const day = iso => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const money = (minor, currency) => {
   try {
     return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(minor / 100);
@@ -37,10 +36,10 @@ function claude(status) {
   if (!status) return [paragraph("Not read yet.", "muted")];
   switch (status.state) {
     case "ok":
-      return [status.resets
-        ? paragraph(`${status.resets} reset${status.resets === 1 ? "" : "s"} available` +
-          (status.expires ? ` · first expires ${day(status.expires)}` : ""))
-        : paragraph("No resets available.", "muted")];
+      if (!status.accounts?.length) return [paragraph("No Claude plan in this browser.", "muted")];
+      return status.accounts.map(account => account.delivery === "ignored"
+        ? row(account.name, "not set up in Clawmeter", "muted")
+        : row(account.name, account.resets ? `${account.resets} reset${account.resets === 1 ? "" : "s"}` : "no resets"));
     case "no_tab":
       return [paragraph("Keep a claude.ai tab open. Clawmeter reads resets through it.", "warn")];
     case "signed_out":
