@@ -37,7 +37,7 @@ function claude(status) {
   switch (status.state) {
     case "ok":
       if (!status.accounts?.length) return [paragraph("No Claude plan in this browser.", "muted")];
-      return status.accounts.map(account => account.delivery === "ignored"
+      return status.accounts.map(account => account.error ? row(account.name, "couldn't read", "warn") : account.delivery === "ignored"
         ? row(account.name, "not set up in Clawmeter", "muted")
         : row(account.name, account.resets ? `${account.resets} reset${account.resets === 1 ? "" : "s"}` : "no resets"));
     case "no_tab":

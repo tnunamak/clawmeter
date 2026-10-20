@@ -107,3 +107,21 @@ test("names each organization and what Clawmeter did with its reading", async ()
     { name: "Other", resets: 0, delivery: "ignored" },
   ]);
 });
+
+test("the popup count holds only resets usable now, and one failing organization hides no other", async () => {
+  const paused = { ...grant, paused: true };
+  const expired = { ...grant, ends_at: "2026-10-12T00:00:00Z" };
+  const future = { ...grant, starts_at: "2026-10-20T00:00:00Z" };
+  const { getJSON } = fixture({
+    "/api/organizations": [{ uuid: "org-bad", name: "Bad" }, { uuid: "org-max", name: "Max" }],
+    "/api/organizations/org-bad/usage?at_wall=1&skip_spend=1": 500,
+    "/api/organizations/org-max/usage?at_wall=1&skip_spend=1": { cedar_ember: { eligible: true, grants: [grant, paused, expired, future] } },
+  });
+  const posts = [];
+  const result = await readResets(getJSON, now, async payload => { posts.push(payload); return "saved"; });
+  assert.deepEqual(posts.map(payload => payload.grants.length), [4]);
+  assert.deepEqual(result.accounts, [
+    { name: "Bad", error: "Claude request failed" },
+    { name: "Max", resets: 2, delivery: "saved" },
+  ]);
+});
