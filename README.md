@@ -68,7 +68,7 @@ Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.
 - See your riskiest quota without opening provider dashboards.
 - Compare current usage with expected pace for the reset window.
 - See reset credits and their earliest expiry under the matching provider source.
-- Cycle the tray icon between concrete provider/quota windows.
+- Pin the tray icon to one provider/quota window, or let it follow the most at-risk one.
 - Reuse existing credentials. When required, Clawmeter refreshes short-lived
   access tokens against the provider's own OAuth service. Claude file-backed
   profiles save refreshed tokens to the exact Claude Code credential file they
@@ -143,14 +143,8 @@ The provider logo stays in the circular center chip. The text names the quota wi
 
 The radial meter compares actual burn with expected pace. Gray shows the shared baseline; a solid green segment means you are under pace, and a solid red segment means you are over pace.
 
-- Left-click the tray icon to cycle through active provider/quota windows.
-- Double-click the tray icon to return to Auto.
-- Auto picks a quota window and is not part of the left-click cycle.
-- The tray menu's Settings can switch Auto between Risk, EST, and Runway:
-  - Risk: the quota projected to block you soonest.
-  - EST: the highest projected-at-reset percentage.
-  - Runway: the quota with the most projected room left.
-- Right-click for details, refresh, and update. Click a provider's name to open its dashboard. Settings holds the icon options and launch-at-login.
+- Click the tray icon for details, refresh, and update. Click a provider's name to open its dashboard.
+- By default the icon follows the quota projected to block you soonest. To pin one quota, choose it in Settings → Tray icon. Choose Automatic to go back.
 - A small blue dot on the tray icon means an update is available.
 - Use `Refresh Now` when you want an immediate quota/update check.
 

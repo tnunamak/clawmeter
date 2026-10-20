@@ -88,10 +88,7 @@ type state struct {
 	currentTitle              string
 	currentTooltip            string
 	lastRefreshAt             time.Time
-	iconAutoMode              iconAutoMode
 	iconTargetOverride        iconTarget
-	iconTargetChoices         []iconTarget
-	iconTargetState           menuItemState
 	iconStateKnown            bool
 	currentIconProvider       string
 	currentIconMeter          icons.MeterState
@@ -113,19 +110,10 @@ type thresholdSample struct {
 	ResetsAt    time.Time
 }
 
-type iconAutoMode string
-
-const (
-	iconAutoRisk      iconAutoMode = "risk"
-	iconAutoProjected iconAutoMode = "projected"
-	iconAutoRunway    iconAutoMode = "runway"
-)
-
 var (
-	s                state
-	version          string
-	cfg              *config.Config
-	iconClickActions chan iconClickAction
+	s       state
+	version string
+	cfg     *config.Config
 	// systray's Linux implementation performs a synchronous D-Bus refresh for
 	// every menu mutation. Keep background refreshes and click handlers from
 	// mutating the native menu concurrently.
@@ -138,8 +126,6 @@ func Run(ver string) int {
 	redirectLogToFile()
 	configureNotificationIdentity()
 	version = ver
-	iconClickActions = make(chan iconClickAction, 1)
-	installTrayClickHandlers(iconClickActions)
 	// Login-shell PATH capture can execute user startup files and take several
 	// seconds. Start it before provider refresh, but never make Plasma wait for
 	// it to register the tray menu. Providers that need the recovered PATH call
@@ -264,10 +250,6 @@ func onReadyWithConfig(loaded *config.Config) {
 	s.providerSetupVisibleKnown = true
 
 	systray.AddSeparator()
-	iconActionCh := iconClickActions
-	if iconActionCh == nil {
-		iconActionCh = make(chan iconClickAction, 1)
-	}
 
 	// Hint shown only when Claude's OAuth token has expired. We don't try
 	// to launch a terminal for the user — Windows has no obvious "default
@@ -286,10 +268,8 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	mSettings := systray.AddMenuItem("Settings", "")
-	mIconProvider := mSettings.AddSubMenuItem("Icon: Auto (click to cycle)", "")
-	s.iconTargetState = menuItemState{title: "Icon: Auto (click to cycle)", enabled: true, initialized: true}
-	mIconAutoMode := mSettings.AddSubMenuItem("Auto Mode: Risk", "")
-	mAutostart := mSettings.AddSubMenuItem("", "")
+	iconPick := newIconPicker(mSettings)
+	mAutostart := mSettings.AddSubMenuItemCheckbox("Launch at login", "", false)
 	updateAutostartLabel(mAutostart)
 	mSettings.AddSubMenuItem(fmt.Sprintf("Clawmeter %s", version), "").Disable()
 	systray.AddSeparator()
@@ -406,7 +386,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		statuses := s.statuses // reuse last known statuses
 		s.mu.Unlock()
 
-		updateUI(result.Results, statuses, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+		updateUI(result.Results, statuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 		trayRenderMu.Lock()
 		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
 		trayRenderMu.Unlock()
@@ -426,7 +406,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		s.mu.Unlock()
 
 		if lastResults != nil {
-			updateUI(lastResults, statuses, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+			updateUI(lastResults, statuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 		}
 	}
 
@@ -525,19 +505,19 @@ func onReadyWithConfig(loaded *config.Config) {
 		s.lastSourceRevisions = providerSourceRevisions(allProviders)
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
-		updateUI(filtered, nil, providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+		updateUI(filtered, nil, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 	}
 
 	extensionCtx, stopExtension := context.WithCancel(context.Background())
 	publishAPICredits := func() {
-		publishLocalResetSource(&refreshing, registry, "claude_api", providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+		publishLocalResetSource(&refreshing, registry, "claude_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 	}
 	go func() {
 		err := claudeweb.ServeExtension(extensionCtx, func() []claudeweb.Account {
 			return claudewebprovider.Accounts(registry.GetFamily("claude"))
 		}, func(result claudeweb.Result) {
 			if result.IsResets() {
-				publishLocalResetSource(&refreshing, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+				publishLocalResetSource(&refreshing, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 				return
 			}
 			publishAPICredits()
@@ -574,16 +554,8 @@ func onReadyWithConfig(loaded *config.Config) {
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
 				go checkUpdate()
-			case action := <-iconActionCh:
-				if action == iconClickResetAuto {
-					resetIconSelection(providerMenus, mIconProvider, mIconAutoMode)
-				} else {
-					cycleIconSelection(providerMenus, mIconProvider)
-				}
-			case <-mIconProvider.ClickedCh:
-				cycleIconSelection(providerMenus, mIconProvider)
-			case <-mIconAutoMode.ClickedCh:
-				toggleIconAutoMode(providerMenus, mIconProvider, mIconAutoMode)
+			case target := <-iconPick.picked:
+				selectIconTarget(providerMenus, iconPick, target)
 			case providerName := <-providerConnectActions:
 				menu := providerMenus[providerName]
 				if menu == nil || !menu.connectable {
@@ -988,7 +960,7 @@ func providerConnectFailureMessage(stdout, stderr string) string {
 	}
 }
 
-func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, mIconProvider *systray.MenuItem, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
+func updateUI(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, iconPick *iconPicker, mEmpty *systray.MenuItem, mProviderSetup *systray.MenuItem) {
 	setups := make(map[string]provider.SetupStatus, len(menus))
 	for name, menu := range menus {
 		// Only Alibaba has a setup-only menu path today. Other providers are
@@ -1166,7 +1138,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		setSharedMenuItemVisible(mProviderSetup, false, &s.providerSetupVisible, &s.providerSetupVisibleKnown)
 	}
 
-	updateIconTargetSelector(activeResults, displayNames, mIconProvider)
+	iconPick.update(activeResults, menus)
 
 	// Update icon and title based on worst usage (only active providers)
 	updateTrayIcon(activeResults)
@@ -1199,7 +1171,7 @@ func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now
 	setMenuItemVisible(menu.resetItem, &menu.resetState, true)
 }
 
-func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth, mIconProvider, mEmpty, mProviderSetup *systray.MenuItem) bool {
+func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, iconPick *iconPicker, mEmpty, mProviderSetup *systray.MenuItem) bool {
 	// Read and publish after any in-flight refresh has finished publishing.
 	refreshing.Lock()
 	defer refreshing.Unlock()
@@ -1231,84 +1203,150 @@ func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry
 	if err := cache.UpdateProvider(name, data, provider.SourceRevision(p)); err != nil {
 		log.Printf("local reset source cache update failed: provider=%s", p.Name())
 	}
-	updateUI(results, statuses, menus, mReauth, mIconProvider, mEmpty, mProviderSetup)
+	updateUI(results, statuses, menus, mReauth, iconPick, mEmpty, mProviderSetup)
 	return true
 }
 
-func cycleIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem) {
-	displayNames := providerDisplayNames(menus)
+// iconPicker is the Settings → Tray icon submenu. Native menus cannot insert
+// an item between existing ones, so each quota keeps the item it got when it
+// first appeared, and the item is hidden while that quota has no data.
+type iconPicker struct {
+	parent  *systray.MenuItem
+	auto    *systray.MenuItem
+	targets map[iconTarget]*systray.MenuItem
+	visible map[iconTarget]bool
+	picked  chan iconTarget
+}
 
-	trayRenderMu.Lock()
-	defer trayRenderMu.Unlock()
+func newIconPicker(settings *systray.MenuItem) *iconPicker {
+	parent := settings.AddSubMenuItem("Tray icon", "")
+	p := &iconPicker{
+		parent:  parent,
+		auto:    parent.AddSubMenuItemCheckbox("Automatic (most at risk)", "", true),
+		targets: map[iconTarget]*systray.MenuItem{},
+		visible: map[iconTarget]bool{},
+		picked:  make(chan iconTarget, 1),
+	}
+	go p.forward(p.auto, iconTarget{})
+	return p
+}
+
+func (p *iconPicker) forward(item *systray.MenuItem, target iconTarget) {
+	for range item.ClickedCh {
+		select {
+		case p.picked <- target:
+		default:
+		}
+	}
+}
+
+// update shows one checkable item per quota, in the provider menu's order, and
+// checks the quota the icon follows. A pinned quota that disappears falls back
+// to Automatic.
+func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) {
+	choices := pickerIconTargets(results, menus)
+
 	s.mu.Lock()
-	results := provider.PresentResetCreditSources(s.lastResults)
-	mode := normalizedIconAutoModeLocked()
-	choices := manualIconTargets(results, mode)
-	s.iconTargetChoices = choices
 	if !targetInChoices(s.iconTargetOverride, choices) {
 		s.iconTargetOverride = iconTarget{}
 	}
-	s.iconTargetOverride = nextIconTargetOverride(s.iconTargetOverride, choices, true)
+	override := s.iconTargetOverride
 	s.mu.Unlock()
 
-	systray.BeginMenuUpdate()
-	defer systray.EndMenuUpdate()
-	updateIconTargetSelector(results, displayNames, item)
-	updateTrayIcon(results)
-	updateTrayTitle(results)
-	updateTrayTooltip(results, displayNames)
+	if p == nil {
+		return
+	}
+	displayNames := providerDisplayNames(menus)
+	setMenuItemChecked(p.auto, override.Provider == "")
+	shown := make(map[iconTarget]bool, len(choices))
+	for _, target := range choices {
+		shown[target] = true
+		item := p.targets[target]
+		if item == nil {
+			item = p.parent.AddSubMenuItemCheckbox(pickerTargetLabel(results[target.Provider], target, displayNames), "", false)
+			p.targets[target] = item
+			go p.forward(item, target)
+		}
+		if !p.visible[target] {
+			item.Show()
+			p.visible[target] = true
+		}
+		setMenuItemChecked(item, target == override)
+	}
+	for target, item := range p.targets {
+		if p.visible[target] && !shown[target] {
+			item.Hide()
+			p.visible[target] = false
+		}
+	}
 }
 
-func resetIconSelection(menus map[string]*providerMenuItems, item *systray.MenuItem, modeItem *systray.MenuItem) {
+// pickerTargetLabel names a quota the way its menu row does, for example
+// "Codex: Weekly".
+func pickerTargetLabel(data *provider.UsageData, target iconTarget, displayNames map[string]string) string {
+	label := target.Window
+	if window, _, ok := selectedIconWindow(data, target.Window); ok {
+		label = trayWindowLabel(window)
+	}
+	return providerDisplayName(target.Provider, displayNames) + ": " + label
+}
+
+func setMenuItemChecked(item *systray.MenuItem, checked bool) {
+	if item.Checked() == checked {
+		return
+	}
+	if checked {
+		item.Check()
+	} else {
+		item.Uncheck()
+	}
+}
+
+// pickerIconTargets lists the quotas a user can pin, ordered like the menu:
+// providers in menu order, then each provider's windows in data order.
+func pickerIconTargets(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) []iconTarget {
+	choices := manualIconTargets(results)
+	rank := func(target iconTarget) (int, int) {
+		order := len(menus)
+		if menu := menus[target.Provider]; menu != nil {
+			order = menu.order
+		}
+		if data := results[target.Provider]; data != nil {
+			for i, window := range data.UsableWindows() {
+				if window.Name == target.Window {
+					return order, i
+				}
+			}
+		}
+		return order, 0
+	}
+	sort.SliceStable(choices, func(i, j int) bool {
+		oi, wi := rank(choices[i])
+		oj, wj := rank(choices[j])
+		if oi != oj {
+			return oi < oj
+		}
+		if choices[i].Provider != choices[j].Provider {
+			return choices[i].Provider < choices[j].Provider
+		}
+		return wi < wj
+	})
+	return choices
+}
+
+func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, target iconTarget) {
 	displayNames := providerDisplayNames(menus)
 
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
 	s.mu.Lock()
 	results := provider.PresentResetCreditSources(s.lastResults)
-	mode := normalizedIconAutoModeLocked()
-	choices := manualIconTargets(results, mode)
-	s.iconTargetChoices = choices
-	s.iconTargetOverride = iconTarget{}
+	s.iconTargetOverride = target
 	s.mu.Unlock()
 
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
-	updateIconTargetSelector(results, displayNames, item)
-	updateIconAutoModeLabel(modeItem)
-	updateTrayIcon(results)
-	updateTrayTitle(results)
-	updateTrayTooltip(results, displayNames)
-}
-
-func toggleIconAutoMode(menus map[string]*providerMenuItems, item *systray.MenuItem, modeItem *systray.MenuItem) {
-	displayNames := providerDisplayNames(menus)
-
-	trayRenderMu.Lock()
-	defer trayRenderMu.Unlock()
-	s.mu.Lock()
-	results := provider.PresentResetCreditSources(s.lastResults)
-	current := normalizedIconAutoModeLocked()
-	switch current {
-	case iconAutoRisk:
-		s.iconAutoMode = iconAutoProjected
-	case iconAutoProjected:
-		s.iconAutoMode = iconAutoRunway
-	default:
-		s.iconAutoMode = iconAutoRisk
-	}
-	mode := s.iconAutoMode
-	choices := manualIconTargets(results, mode)
-	s.iconTargetChoices = choices
-	if !targetInChoices(s.iconTargetOverride, choices) {
-		s.iconTargetOverride = iconTarget{}
-	}
-	s.mu.Unlock()
-
-	systray.BeginMenuUpdate()
-	defer systray.EndMenuUpdate()
-	updateIconTargetSelector(results, displayNames, item)
-	updateIconAutoModeLabel(modeItem)
+	picker.update(results, menus)
 	updateTrayIcon(results)
 	updateTrayTitle(results)
 	updateTrayTooltip(results, displayNames)
@@ -1322,93 +1360,19 @@ func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string
 	return displayNames
 }
 
-func updateIconTargetSelector(results map[string]*provider.UsageData, displayNames map[string]string, item *systray.MenuItem) {
-	mode := currentIconAutoMode()
-	choices := manualIconTargets(results, mode)
-
-	s.mu.Lock()
-	if !targetInChoices(s.iconTargetOverride, choices) {
-		s.iconTargetOverride = iconTarget{}
-	}
-	s.iconTargetChoices = choices
-	override := s.iconTargetOverride
-	s.mu.Unlock()
-
-	if len(choices) == 0 {
-		if item != nil {
-			setMenuItemTitle(item, &s.iconTargetState, "Icon: Auto")
-			setMenuItemEnabled(item, &s.iconTargetState, false)
-		}
-		return
-	}
-
-	if item != nil {
-		setMenuItemEnabled(item, &s.iconTargetState, true)
-		setMenuItemTitle(item, &s.iconTargetState, iconCycleMenuTitle(override, displayNames, mode))
-	}
-}
-
-func updateIconAutoModeLabel(item *systray.MenuItem) {
-	if item == nil {
-		return
-	}
-	mode := currentIconAutoMode()
-	if mode == iconAutoProjected {
-		item.SetTitle("Auto Mode: EST")
-		return
-	}
-	if mode == iconAutoRunway {
-		item.SetTitle("Auto Mode: Runway")
-		return
-	}
-	item.SetTitle("Auto Mode: Risk")
-}
-
-func iconCycleMenuTitle(target iconTarget, displayNames map[string]string, mode iconAutoMode) string {
-	if target.Provider == "" {
-		if mode == iconAutoProjected {
-			return "Icon: Auto EST (click to cycle)"
-		}
-		if mode == iconAutoRunway {
-			return "Icon: Auto Runway (click to cycle)"
-		}
-		return "Icon: Auto Risk (click to cycle)"
-	}
-	return "Icon: " + iconTargetDisplayName(target, displayNames) + " (click for next, double-click for Auto)"
-}
-
-func nextIconTargetOverride(current iconTarget, choices []iconTarget, _ bool) iconTarget {
-	if len(choices) == 0 {
-		return iconTarget{}
-	}
-	if current.Provider == "" {
-		return choices[0]
-	}
-	for i, choice := range choices {
-		if choice != current {
-			continue
-		}
-		if i == len(choices)-1 {
-			return iconTarget{}
-		}
-		return choices[i+1]
-	}
-	return choices[0]
-}
-
-func activeIconTargets(results map[string]*provider.UsageData, mode iconAutoMode) []iconTarget {
-	choices := activeIconTargetsAllowingStale(results, mode, false)
+func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
+	choices := activeIconTargetsAllowingStale(results, false)
 	if len(choices) > 0 {
 		return choices
 	}
-	return activeIconTargetsAllowingStale(results, mode, true)
+	return activeIconTargetsAllowingStale(results, true)
 }
 
-func manualIconTargets(results map[string]*provider.UsageData, mode iconAutoMode) []iconTarget {
-	return activeIconTargetsAllowingStale(results, mode, true)
+func manualIconTargets(results map[string]*provider.UsageData) []iconTarget {
+	return activeIconTargetsAllowingStale(results, true)
 }
 
-func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode iconAutoMode, allowStale bool) []iconTarget {
+func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, allowStale bool) []iconTarget {
 	if len(results) == 0 {
 		return nil
 	}
@@ -1442,9 +1406,6 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 			target := iconTarget{Provider: name, Window: window.Name}
 			proj := windowProjection(window)
 			score := proj.ProjectedPct
-			if mode == iconAutoRunway {
-				score = 100 - proj.ProjectedPct
-			}
 			ranked = append(ranked, rankedTarget{
 				target:        target,
 				window:        window,
@@ -1455,7 +1416,7 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
-		if mode == iconAutoRisk && ranked[i].hasProjection && ranked[j].hasProjection {
+		if ranked[i].hasProjection && ranked[j].hasProjection {
 			if cmp := forecast.CompareWindowRisk(ranked[i].window, ranked[i].projection, ranked[j].window, ranked[j].projection); cmp != 0 {
 				return cmp < 0
 			}
@@ -1468,22 +1429,6 @@ func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, mode
 		choices = append(choices, choice.target)
 	}
 	return choices
-}
-
-func currentIconAutoMode() iconAutoMode {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return normalizedIconAutoModeLocked()
-}
-
-func normalizedIconAutoModeLocked() iconAutoMode {
-	if s.iconAutoMode == iconAutoProjected {
-		return iconAutoProjected
-	}
-	if s.iconAutoMode == iconAutoRunway {
-		return iconAutoRunway
-	}
-	return iconAutoRisk
 }
 
 func iconTargetRisk(data *provider.UsageData, target iconTarget) float64 {
@@ -1546,12 +1491,11 @@ func providerDisplayName(name string, displayNames map[string]string) string {
 func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provider.UsageData, string, bool) {
 	s.mu.Lock()
 	override := s.iconTargetOverride
-	mode := normalizedIconAutoModeLocked()
 	s.mu.Unlock()
-	autoChoices := activeIconTargets(results, mode)
+	autoChoices := activeIconTargets(results)
 
 	if override.Provider != "" {
-		if targetInChoices(override, manualIconTargets(results, mode)) {
+		if targetInChoices(override, manualIconTargets(results)) {
 			if data := results[override.Provider]; data != nil {
 				return override.Provider, data, override.Window, true
 			}
@@ -2059,11 +2003,7 @@ func updateAutostartLabel(m *systray.MenuItem) {
 		m.Disable()
 		return
 	}
-	if autostart.IsInstalled() {
-		m.SetTitle("✓ Launch at login")
-	} else {
-		m.SetTitle("  Launch at login")
-	}
+	setMenuItemChecked(m, autostart.IsInstalled())
 }
 
 func toggleAutostart(m *systray.MenuItem) {
