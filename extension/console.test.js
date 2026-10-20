@@ -96,7 +96,7 @@ test("organization authorization failures signal signed out", async () => {
 test("costs that never matched spend skip the pool; shape changes are rejected", async () => {
   const f = fixture();
   f.data["/api/organizations/org-api/current_spend"].amount = 100;
-  assert.deepEqual(await readConsole(f.getJSON, now, {}), { status: "ok", payloads: [] });
+  assert.deepEqual(await readConsole(f.getJSON, now, {}), { status: "ok", payloads: [], failures: [] });
   for (const mutate of [
     f => { f.data["/api/organizations"] = {}; },
     f => { f.data["/api/organizations/org-api/workspaces/default/usage_cost"] = {}; },
@@ -206,4 +206,15 @@ test("each org is timestamped at its requests and posted before the next org", a
   });
   assert.equal(posts.length, 2);
   assert.equal(result.payloads[1].observed_at, new Date(now + 120000).toISOString());
+});
+
+test("a failing organization is reported and does not hide the others", async () => {
+  const f = fixture();
+  f.data["/api/organizations"].unshift({ uuid: "org-broken", name: "Broken", capabilities: ["api"] });
+  f.statuses["/api/organizations/org-broken/prepaid/credits"] = 500;
+  f.data["/api/organizations/org-broken/current_spend"] = { amount: 0, resets_at: "2026-11-01T00:00:00Z" };
+  const posted = [];
+  const result = await readConsole(f.getJSON, now, {}, async payload => posted.push(payload));
+  assert.deepEqual(posted.map(payload => payload.name), ["Example"]);
+  assert.deepEqual(result.failures, [{ name: "Broken", error: "Claude Console request failed" }]);
 });
