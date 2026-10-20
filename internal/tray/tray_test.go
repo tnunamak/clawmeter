@@ -415,31 +415,6 @@ func TestProviderSeverityUsesRiskUrgency(t *testing.T) {
 	}
 }
 
-func TestIconTargetOverrideCyclesOnlyThroughProviderQuotaWindows(t *testing.T) {
-	choices := []iconTarget{
-		{Provider: "claude", Window: "5h"},
-		{Provider: "claude", Window: "7d All"},
-		{Provider: "openai", Window: "5h"},
-		{Provider: "openai", Window: "7d"},
-	}
-
-	if got := nextIconTargetOverride(iconTarget{}, choices, false); got != (iconTarget{Provider: "claude", Window: "5h"}) {
-		t.Fatalf("next from auto without skip = %+v, want claude/5h", got)
-	}
-	if got := nextIconTargetOverride(iconTarget{}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
-		t.Fatalf("next from auto = %+v, want claude/5h", got)
-	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "claude", Window: "5h"}, choices, true); got != (iconTarget{Provider: "claude", Window: "7d All"}) {
-		t.Fatalf("next from claude 5h = %+v, want claude/7d All", got)
-	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "openai", Window: "7d"}, choices, true); got != (iconTarget{}) {
-		t.Fatalf("next from final target = %+v, want Auto", got)
-	}
-	if got := nextIconTargetOverride(iconTarget{Provider: "missing"}, choices, true); got != (iconTarget{Provider: "claude", Window: "5h"}) {
-		t.Fatalf("next from missing override = %+v, want claude/5h", got)
-	}
-}
-
 func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
@@ -457,7 +432,6 @@ func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T)
 
 	s.mu.Lock()
 	s.iconTargetOverride = iconTarget{}
-	s.iconAutoMode = iconAutoRisk
 	s.mu.Unlock()
 
 	name, _, windowName, ok := selectedTrayTarget(results)
@@ -473,52 +447,6 @@ func TestIconProviderNameUsesProviderFamilyNotSourceKey(t *testing.T) {
 	data := &provider.UsageData{Provider: "claude", SourceID: "odl"}
 	if got := iconProviderName(data); got != "claude" {
 		t.Fatalf("iconProviderName() = %q, want claude", got)
-	}
-}
-
-func TestIconCycleMenuTitleDescribesNextClick(t *testing.T) {
-	displayNames := map[string]string{"claude": "Claude"}
-	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRisk); got != "Icon: Auto Risk (click to cycle)" {
-		t.Fatalf("auto title = %q", got)
-	}
-	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoProjected); got != "Icon: Auto EST (click to cycle)" {
-		t.Fatalf("est auto title = %q", got)
-	}
-	if got := iconCycleMenuTitle(iconTarget{}, displayNames, iconAutoRunway); got != "Icon: Auto Runway (click to cycle)" {
-		t.Fatalf("runway auto title = %q", got)
-	}
-	got := iconCycleMenuTitle(iconTarget{Provider: "claude", Window: "7d All"}, displayNames, iconAutoRisk)
-	want := "Icon: Claude 7A (click for next, double-click for Auto)"
-	if got != want {
-		t.Fatalf("pinned title = %q, want %q", got, want)
-	}
-}
-
-func TestTrayClickDispatcherSingleClickCyclesAfterWindow(t *testing.T) {
-	ch := make(chan iconClickAction, 2)
-	dispatcher := newTrayClickDispatcher(ch, 5*time.Millisecond)
-
-	dispatcher.tapped()
-
-	if got := waitIconClickAction(t, ch, 100*time.Millisecond); got != iconClickCycle {
-		t.Fatalf("single click action = %v, want cycle", got)
-	}
-}
-
-func TestTrayClickDispatcherDoubleClickResetsAutoWithoutCycle(t *testing.T) {
-	ch := make(chan iconClickAction, 2)
-	dispatcher := newTrayClickDispatcher(ch, 50*time.Millisecond)
-
-	dispatcher.tapped()
-	dispatcher.tapped()
-
-	if got := waitIconClickAction(t, ch, 100*time.Millisecond); got != iconClickResetAuto {
-		t.Fatalf("double click action = %v, want reset auto", got)
-	}
-	select {
-	case got := <-ch:
-		t.Fatalf("double click emitted extra action %v", got)
-	case <-time.After(80 * time.Millisecond):
 	}
 }
 
@@ -542,7 +470,7 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
 		},
 	}
 
-	got := activeIconTargets(results, iconAutoRisk)
+	got := activeIconTargets(results)
 	want := []iconTarget{
 		{Provider: "claude", Window: "5h"},
 		{Provider: "claude", Window: "7d Sonnet"},
@@ -566,7 +494,7 @@ func TestActiveIconTargetsIncludesEveryWindowFromMultiSourceFamily(t *testing.T)
 		"claude:a": {Provider: "claude", SourceID: "a", Windows: []provider.UsageWindow{{Name: "low", Utilization: 10, ResetsAt: now.Add(12 * time.Hour)}, {Name: "high", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
 		"claude:b": {Provider: "claude", SourceID: "b", Windows: []provider.UsageWindow{{Name: "only", Utilization: 30, ResetsAt: now.Add(2 * time.Hour)}}},
 	}
-	got := activeIconTargets(results, iconAutoRisk)
+	got := activeIconTargets(results)
 	if len(got) != 3 {
 		t.Fatalf("targets = %+v, want every source window", got)
 	}
@@ -598,86 +526,10 @@ func TestActiveIconTargetsRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testi
 		},
 	}
 
-	got := activeIconTargets(results, iconAutoRisk)
+	got := activeIconTargets(results)
 	want := []iconTarget{
 		{Provider: "claude", Window: "7d"},
 		{Provider: "openai", Window: "7d"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
-		}
-	}
-}
-
-func TestActiveIconTargetsESTPrefersHigherProjectedPct(t *testing.T) {
-	now := time.Now()
-	results := map[string]*provider.UsageData{
-		"openai": {
-			Provider: "openai",
-			Windows: []provider.UsageWindow{
-				// Projected ~115%, but not blocked until about 3d12h from now.
-				{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
-			},
-		},
-		"claude": {
-			Provider: "claude",
-			Windows: []provider.UsageWindow{
-				// Projected ~106%, but blocked in about 1h35m from now.
-				{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
-			},
-		},
-	}
-
-	got := activeIconTargets(results, iconAutoProjected)
-	want := []iconTarget{
-		{Provider: "openai", Window: "7d"},
-		{Provider: "claude", Window: "7d"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
-		}
-	}
-}
-
-func TestActiveIconTargetsRunwayOrdersByMostRemainingProjectedRoom(t *testing.T) {
-	now := time.Now()
-	results := map[string]*provider.UsageData{
-		"openai": {
-			Provider: "openai",
-			Windows: []provider.UsageWindow{
-				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
-				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
-			},
-		},
-		"claude": {
-			Provider: "claude",
-			Windows: []provider.UsageWindow{
-				{Name: "5h", Utilization: 77, ResetsAt: now.Add(87 * time.Minute)},
-				{Name: "7d All", Utilization: 5, ResetsAt: now.Add(8 * time.Hour)},
-				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
-			},
-		},
-		"gemini": {
-			Provider: "gemini",
-			Error:    "usage unavailable",
-		},
-	}
-
-	got := activeIconTargets(results, iconAutoRunway)
-	want := []iconTarget{
-		{Provider: "claude", Window: "7d All"},
-		{Provider: "openai", Window: "5h"},
-		{Provider: "claude", Window: "5h"},
-		{Provider: "openai", Window: "7d"},
-		{Provider: "claude", Window: "7d Sonnet"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
@@ -709,7 +561,7 @@ func TestManualIconTargetsIncludesFreshAndStaleWindows(t *testing.T) {
 		},
 	}
 
-	got := manualIconTargets(results, iconAutoRisk)
+	got := manualIconTargets(results)
 	want := map[iconTarget]bool{
 		{Provider: "openai", Window: "7d"}: true,
 		{Provider: "claude", Window: "5h"}: true,
@@ -730,7 +582,7 @@ func TestActiveIconTargetsStillPrefersFreshForAutoSelection(t *testing.T) {
 		"claude": {Provider: "claude", Stale: true, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
 		"openai": {Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)}}},
 	}
-	got := activeIconTargets(results, iconAutoRisk)
+	got := activeIconTargets(results)
 	want := iconTarget{Provider: "openai", Window: "7d"}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("activeIconTargets = %+v, want only fresh auto target %+v", got, want)
@@ -742,7 +594,7 @@ func TestActiveIconTargetsExcludesNonForecastableFacts(t *testing.T) {
 		"balance-only":  {Balances: []provider.UsageBalance{{Name: "credits", Remaining: 1}}},
 		"unknown-reset": {Windows: []provider.UsageWindow{{Name: "daily", Utilization: 99}}},
 	}
-	if got := activeIconTargets(results, iconAutoRisk); len(got) != 0 {
+	if got := activeIconTargets(results); len(got) != 0 {
 		t.Fatalf("activeIconTargets() = %+v, want no non-forecastable targets", got)
 	}
 }
@@ -761,47 +613,10 @@ func TestActiveIconTargetsKeepsStaleFallbackWhenNoFreshWindows(t *testing.T) {
 		},
 	}
 
-	got := activeIconTargets(results, iconAutoRisk)
+	got := activeIconTargets(results)
 	want := []iconTarget{{Provider: "claude", Window: "5h"}}
 	if len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("activeIconTargets = %+v, want stale fallback target %+v", got, want)
-	}
-}
-
-func TestSelectedTrayTargetRunwayUsesMostAvailableUsableQuota(t *testing.T) {
-	now := time.Now()
-	results := map[string]*provider.UsageData{
-		"openai": {
-			Provider: "openai",
-			Windows: []provider.UsageWindow{
-				{Name: "7d", Utilization: 5, ResetsAt: now.Add(2 * 24 * time.Hour)},
-			},
-		},
-		"claude": {
-			Provider: "claude",
-			Windows: []provider.UsageWindow{
-				{Name: "5h", Utilization: 80, ResetsAt: now.Add(2 * time.Hour)},
-			},
-		},
-	}
-
-	s.mu.Lock()
-	s.iconTargetOverride = iconTarget{}
-	s.iconAutoMode = iconAutoRunway
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.iconAutoMode = iconAutoRisk
-		s.iconTargetOverride = iconTarget{}
-		s.mu.Unlock()
-	}()
-
-	name, _, windowName, ok := selectedTrayTarget(results)
-	if !ok {
-		t.Fatal("selectedTrayTarget returned no provider")
-	}
-	if name != "openai" || windowName != "7d" {
-		t.Fatalf("selected target = %s/%s, want openai/7d", name, windowName)
 	}
 }
 
@@ -826,12 +641,10 @@ func TestSelectedTrayTargetHonorsManualStaleOverride(t *testing.T) {
 
 	s.mu.Lock()
 	s.iconTargetOverride = iconTarget{Provider: "claude", Window: "5h"}
-	s.iconAutoMode = iconAutoRisk
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		s.iconTargetOverride = iconTarget{}
-		s.iconAutoMode = iconAutoRisk
 		s.mu.Unlock()
 	}()
 
@@ -1103,7 +916,6 @@ func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.
 	}
 	s.mu.Lock()
 	s.iconTargetOverride = iconTarget{}
-	s.iconAutoMode = iconAutoRisk
 	s.mu.Unlock()
 
 	got := trayTooltip(results, map[string]string{"claude": "Claude"})
@@ -1229,17 +1041,6 @@ func TestPollIntervalForConfigEnforcesFiveMinuteFloor(t *testing.T) {
 	}
 }
 
-func waitIconClickAction(t *testing.T, ch <-chan iconClickAction, timeout time.Duration) iconClickAction {
-	t.Helper()
-	select {
-	case action := <-ch:
-		return action
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for icon click action")
-	}
-	return iconClickCycle
-}
-
 func absFloat(n float64) float64 {
 	if n < 0 {
 		return -n
@@ -1287,15 +1088,6 @@ func TestThresholdCheckPreservesRawFoldedResults(t *testing.T) {
 	checkThresholds(map[string]*provider.UsageData{"claude": raw["claude"]}, nil)
 	if s.lastResults["claude_api"] != raw["claude_api"] {
 		t.Fatal("threshold rendering dropped raw claude_api fallback")
-	}
-}
-
-func TestAutoCycleCanPinFirstManualTarget(t *testing.T) {
-	// Auto can select a fresh provider while a stale provider ranks first
-	// in the manual choices. Every manual choice must remain reachable.
-	choices := []iconTarget{{Provider: "stale", Window: "5h"}, {Provider: "fresh", Window: "7d"}}
-	if got := nextIconTargetOverride(iconTarget{}, choices, true); got != choices[0] {
-		t.Fatalf("Auto cycle skipped first manual choice: got %+v, want %+v", got, choices[0])
 	}
 }
 
@@ -1562,7 +1354,7 @@ func TestTrayRiskSelectionPrefersExhaustedUnknownWindow(t *testing.T) {
 		"projected": {Windows: []provider.UsageWindow{projected}},
 		"exhausted": data,
 	}
-	targets := activeIconTargets(results, iconAutoRisk)
+	targets := activeIconTargets(results)
 	if len(targets) != 3 || targets[0] != (iconTarget{Provider: "exhausted", Window: "5h"}) {
 		t.Fatalf("risk targets = %+v", targets)
 	}
