@@ -151,30 +151,42 @@ async function check() {
     cache = stored.cache && typeof stored.cache === "object" && !Array.isArray(stored.cache) ? stored.cache : {};
     const pools = { seen: new Set(), read: new Set() };
     // The main session is always read, first, so a signed-out container tab
-    // cannot hide it. Pools it holds are recorded as the main session's.
+    // cannot hide it.
     let main = null;
+    const elsewhere = new Set();
     const credits = await readEverySession("https://platform.claude.com/*", getJSON, async read => {
       const result = await readConsole(read, Date.now, cache, payload => send("/v1/api-credits", payload), pools)
         .catch(error => ({ error }));
-      if (read === getJSON && !main) main = { result, pools: new Set(pools.seen) };
+      const listed = new Set(result.listed || []);
+      if (read === getJSON && !main) {
+        main = { result, listed };
+      } else if (!main || main.result.status !== "ok" || listed.size !== main.listed.size ||
+        [...listed].some(pool => !main.listed.has(pool))) {
+        // A tab that lists other organizations than the main session is
+        // another session, such as a container signed in to another account.
+        for (const pool of listed) elsewhere.add(pool);
+      }
       if (result.error) throw result.error;
       return result;
     }, true);
     const complete = !credits.unavailable && credits.results.every(result => !result.error);
     const read = credits.results.filter(result => result.status === "ok");
-    // A pool held only by a container is unknown while its tab is closed, so
-    // it is dropped after a week unseen. A main-session pool is dropped as
-    // soon as the main session answers without it.
+    // A pool held by another session is unknown while that session's tab is
+    // closed, so it is kept for a week after another session last listed
+    // it. A pool only the main session holds is dropped as soon as the main
+    // session answers without it.
     const mainAnswered = main && (main.result.status === "ok" || main.result.status === "signed_out");
     const now = Date.now();
+    const recent = at => Number.isFinite(at) && now - at <= unseenPoolAge;
     for (const [pool, entry] of Object.entries(cache)) {
-      if (pools.seen.has(pool)) {
+      if (elsewhere.has(pool)) entry.elsewhereAt = now;
+      if (main?.listed.has(pool) || elsewhere.has(pool)) {
         entry.seenAt = now;
-        entry.main = main?.pools.has(pool) ?? false;
-      } else if ((entry?.main && mainAnswered) ||
-        now - (Number.isFinite(entry?.seenAt) ? entry.seenAt : entry?.at ?? 0) > unseenPoolAge) {
-        delete cache[pool];
+        continue;
       }
+      const lastSeen = Number.isFinite(entry?.seenAt) ? entry.seenAt : entry?.at;
+      const onlyMain = Number.isFinite(entry?.seenAt) && !recent(entry.elsewhereAt);
+      if ((mainAnswered && onlyMain) || !recent(lastSeen)) delete cache[pool];
     }
     if (read.length) {
       status.console = { state: "ok", unchecked: credits.unavailable,

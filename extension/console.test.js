@@ -96,7 +96,10 @@ test("organization authorization failures signal signed out", async () => {
 test("costs that never matched spend skip the pool; shape changes are rejected", async () => {
   const f = fixture();
   f.data["/api/organizations/org-api/current_spend"].amount = 100;
-  assert.deepEqual(await readConsole(f.getJSON, now, {}), { status: "ok", payloads: [], failures: [] });
+  const skipped = await readConsole(f.getJSON, now, {});
+  assert.deepEqual({ ...skipped, listed: undefined }, { status: "ok", payloads: [], failures: [], listed: undefined });
+  // The pool is still listed: this session holds it even though it was skipped.
+  assert.equal(skipped.listed.length, 1);
   for (const mutate of [
     f => { f.data["/api/organizations"] = {}; },
     f => { f.data["/api/organizations/org-api/workspaces/default/usage_cost"] = {}; },
