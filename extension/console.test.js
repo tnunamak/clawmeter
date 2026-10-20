@@ -232,3 +232,25 @@ test("a cost report that fails to load keeps the fresh balance on retained costs
   await assert.rejects(readConsole(f.getJSON, now + 61 * 60000, {}), /request failed/);
   assert.deepEqual((await readConsole(f.getJSON, now + 61 * 60000, cache)).payloads, []);
 });
+
+test("a caller reading several sessions shares the pools seen and keeps other sessions' cache", async () => {
+  const f = fixture();
+  const cache = { [poolHash("other-session")]: { at: now, reconciledAt: now, daily: {} } };
+  const pools = { seen: new Set(), read: new Set() };
+  await readConsole(f.getJSON, now, cache, async () => {}, pools);
+  assert.deepEqual([...pools.read], [poolHash("org-api")]);
+  assert.ok(cache[poolHash("other-session")]);
+  // A pool already read in another session is skipped.
+  const again = await readConsole(f.getJSON, now, cache, async () => {}, pools);
+  assert.deepEqual(again.payloads, []);
+});
+
+test("a pool one session cannot read is read by the next", async () => {
+  const forbidden = fixture(), healthy = fixture();
+  forbidden.statuses["/api/organizations/org-api/prepaid/credits"] = 403;
+  const pools = { seen: new Set(), read: new Set() }, cache = {}, posted = [];
+  await readConsole(forbidden.getJSON, now, cache, async payload => posted.push(payload), pools);
+  await readConsole(healthy.getJSON, now, cache, async payload => posted.push(payload), pools);
+  assert.equal(posted.length, 1);
+  assert.deepEqual([...pools.seen], [poolHash("org-api")]);
+});

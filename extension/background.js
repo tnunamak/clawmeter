@@ -48,28 +48,60 @@ function readInPage(url) {
     .then(async response => ({ status: response.status, body: response.ok ? await response.json() : null }));
 }
 
-async function readFromClaudeTab(url, fallback, sawTab = () => {}) {
-  let tabs = [];
+class TabUnavailable extends Error {}
+
+async function readInTab(tab, url) {
   try {
-    tabs = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false, status: "complete" });
+    // A frozen tab never runs the page-side timeout, so the worker bounds
+    // the wait itself; otherwise one tab could stall every later poll.
+    let timer;
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Timeout")), 20000); });
+    const [injection] = await Promise.race([
+      chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readInPage, args: [url] }),
+      deadline,
+    ]).finally(() => clearTimeout(timer));
+    const result = injection?.result;
+    if (result && Number.isInteger(result.status)) return result;
   } catch {}
-  if (tabs.length) sawTab();
-  for (const tab of tabs) {
-    try {
-      // A frozen tab never runs the page-side timeout, so the worker bounds
-      // the wait itself; otherwise one tab could stall every later poll.
-      let timer;
-      const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Timeout")), 20000); });
-      const [injection] = await Promise.race([
-        chrome.scripting.executeScript({ target: { tabId: tab.id }, func: readInPage, args: [url] }),
-        deadline,
-      ]).finally(() => clearTimeout(timer));
-      const result = injection?.result;
-      if (result && Number.isInteger(result.status)) return result;
-    } catch {}
-  }
-  return fallback(url);
+  throw new TabUnavailable("Tab did not answer");
 }
+
+// readEverySession runs read once in each open tab of a site, because tabs
+// in different browser containers can be signed in to different accounts.
+// Ordinary tabs share one session; readers skip organizations already read. When no tab answers, read runs once in the worker, which has the
+// browser's main session. Each result is read's result or { error };
+// unavailable counts tabs that did not answer, whose sessions are unknown.
+async function readEverySession(pattern, fallback, read) {
+  let tabs = [];
+  let unavailable = 0;
+  try {
+    tabs = await chrome.tabs.query({ url: pattern });
+  } catch {
+    unavailable++;
+  }
+  // A discarded or loading tab is not woken; its session counts as unknown.
+  const ready = tabs.filter(tab => !tab.discarded && tab.status === "complete");
+  unavailable += tabs.length - ready.length;
+  const results = [];
+  for (const tab of ready) {
+    try {
+      results.push(await read(url => readInTab(tab, url)));
+    } catch (error) {
+      if (error instanceof TabUnavailable) unavailable++;
+      else results.push({ error });
+    }
+  }
+  if (!results.length) {
+    try {
+      results.push(await read(fallback));
+    } catch (error) {
+      results.push({ error });
+    }
+  }
+  return { tabs: tabs.length, unavailable, results };
+}
+
+const message = error => String(error?.message || error);
 
 // poll runs one check at a time; a caller that arrives during a check waits
 // for that check.
@@ -92,31 +124,52 @@ async function check() {
     status.delivery.push(delivery);
     return delivery;
   };
-  let tab = false;
-  try {
-    const result = await readResets(url => readFromClaudeTab(url, getJSON, () => { tab = true; }), Date.now,
-      payload => send("/v1/resets", payload));
-    status.claude = result.status === "signed_out" ? { state: tab ? "signed_out" : "no_tab" } :
-      { state: "ok", accounts: result.accounts };
-  } catch (error) {
-    // Resets and credits are independent; a failure in one never blocks the other.
-    status.claude = { state: tab ? "error" : "no_tab", error: String(error?.message || error) };
+  // An organization seen in one session is not read again in another.
+  const resetOrganizations = new Set();
+  const resets = await readEverySession("https://claude.ai/*", getJSON,
+    read => readResets(read, Date.now, payload => send("/v1/resets", payload), resetOrganizations));
+  const resetsRead = resets.results.filter(result => result.status === "ok");
+  // Resets and credits are independent; a failure in one never blocks the other.
+  if (resetsRead.length) {
+    status.claude = { state: "ok", accounts: [...resetsRead.flatMap(result => result.accounts),
+      ...resets.results.filter(result => result.error).map(result => ({ name: "A claude.ai tab", error: message(result.error) }))] };
+  } else if (!resets.tabs) {
+    status.claude = { state: "no_tab" };
+  } else if (resets.results.some(result => result.status === "signed_out")) {
+    status.claude = { state: "signed_out" };
+  } else {
+    status.claude = { state: "error", error: message(resets.results[0].error) };
   }
   try {
     const stored = await chrome.storage.local.get("cache");
     cache = stored.cache && typeof stored.cache === "object" && !Array.isArray(stored.cache) ? stored.cache : {};
-    const result = await readConsole(getJSON, Date.now, cache, payload => send("/v1/api-credits", payload));
-    if (result.status === "signed_out") {
+    const pools = { seen: new Set(), read: new Set() };
+    const credits = await readEverySession("https://platform.claude.com/*", getJSON,
+      read => readConsole(read, Date.now, cache, payload => send("/v1/api-credits", payload), pools));
+    // A session that could not be checked may still hold any pool.
+    const complete = !credits.unavailable && credits.results.every(result => !result.error);
+    const read = credits.results.filter(result => result.status === "ok");
+    if (read.length) {
+      if (complete) {
+        for (const pool of Object.keys(cache)) {
+          if (!pools.seen.has(pool)) delete cache[pool];
+        }
+      }
+      status.console = { state: "ok",
+        failures: [...read.flatMap(result => result.failures),
+          ...credits.results.filter(result => result.error).map(result => ({ name: "A Claude Console tab", error: message(result.error) }))],
+        pools: read.flatMap(result => result.payloads)
+          .map(payload => ({ name: payload.name, balance: payload.balance, currency: payload.currency })) };
+    } else if (complete && credits.results.every(result => result.status === "signed_out")) {
       cache = {};
       await send("/v1/status", { status: "signed_out" });
       status.console = { state: "signed_out" };
     } else {
-      status.console = { state: "ok", failures: result.failures,
-        pools: result.payloads.map(payload => ({ name: payload.name, balance: payload.balance, currency: payload.currency })) };
+      throw credits.results.find(result => result.error)?.error || new Error("A Claude Console tab did not answer");
     }
   } catch (error) {
     // Failed polls never refresh the receiver's observation time.
-    status.console = { state: "error", error: String(error?.message || error) };
+    status.console = { state: "error", error: message(error) };
   } finally {
     try {
       if (cache) await chrome.storage.local.set({ cache });

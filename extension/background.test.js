@@ -25,7 +25,12 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
         onInstalled: { addListener: fn => { listeners.install = fn; } },
         onStartup: { addListener: fn => { listeners.startup = fn; } },
       },
-      tabs: { query: async filter => { queries.push(filter); return tabs; } },
+      // A tab without a url is a claude.ai tab.
+      tabs: { query: async filter => {
+        queries.push(filter);
+        return tabs.filter(tab => (tab.url || "https://claude.ai/").startsWith(filter.url.slice(0, -1)))
+          .map(tab => ({ discarded: false, status: "complete", ...tab }));
+      } },
       scripting: { executeScript: async injection => { injections.push(injection); return executeScript(injection); } },
       storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))) },
         session: { set: async value => sessions.push(JSON.parse(JSON.stringify(value))) } },
@@ -161,13 +166,13 @@ test("claude.ai is read inside an open claude.ai tab, falling back without one",
     return vm.runInContext("poll()", w.context).then(() => ({ w, answer: JSON.parse(JSON.stringify(answer)) }));
   };
 
-  // The first tab that answers wins; a tab that cannot run the script is skipped.
+  // A tab that cannot run the script is skipped.
   let { w, answer } = await readThrough([{ id: 3 }, { id: 7 }], async ({ target }) => {
     if (target.tabId === 3) throw new Error("Cannot access contents of the page");
     return [{ result: { status: 200, body: [{ uuid: "org" }] } }];
   });
   assert.deepEqual(answer, { status: 200, body: [{ uuid: "org" }] });
-  assert.deepEqual(JSON.parse(JSON.stringify(w.queries)), [{ url: "https://claude.ai/*", discarded: false, status: "complete" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.queries)), [{ url: "https://claude.ai/*" }, { url: "https://platform.claude.com/*" }]);
   assert.deepEqual(w.injections.map(i => i.target.tabId), [3, 7]);
   assert.equal(w.injections[1].func.name, "readInPage");
   assert.deepEqual(JSON.parse(JSON.stringify(w.injections[1].args)), [url]);
@@ -253,4 +258,63 @@ test("a popup refresh during a running check waits for that check", async () => 
   release(); await tick(); await tick();
   assert.equal(replied, true);
   assert.equal(w.sessions.length, 1);
+});
+
+test("each claude.ai tab is read as its own session, and an organization is read once", async () => {
+  const { readResets } = require("./resets.js");
+  const grant = { resets_left: 1, starts_at: "2026-01-01T00:00:00Z", ends_at: "2099-01-01T00:00:00Z", paused: false };
+  // Tabs 1 and 2 are signed in to different accounts; both see the team.
+  const sessions = {
+    1: [{ uuid: "org-a", name: "A" }, { uuid: "org-team", name: "Team" }],
+    2: [{ uuid: "org-b", name: "B" }, { uuid: "org-team", name: "Team" }],
+  };
+  const reads = [];
+  const executeScript = async ({ target, args: [url] }) => {
+    const path = new URL(url).pathname;
+    reads.push(target.tabId + " " + path);
+    if (path === "/api/organizations") return [{ result: { status: 200, body: sessions[target.tabId] } }];
+    return [{ result: { status: 200, body: { cedar_ember: { eligible: true, grants: [grant] } } } }];
+  };
+  const w = worker(async () => ({ status: "ok", payloads: [], failures: [] }), undefined, readResets,
+    { tabs: [{ id: 1 }, { id: 2 }], executeScript });
+  await vm.runInContext("poll()", w.context);
+  assert.deepEqual(w.sessions.at(-1).status.claude.accounts.map(account => account.name), ["A", "Team", "B"]);
+  assert.equal(reads.filter(read => read.includes("org-team")).length, 1);
+});
+
+test("a Console tab that does not answer keeps its cache and blocks a global sign-out", async () => {
+  const cached = { at: 0, reconciledAt: 0, daily: {} };
+  const consoleRead = async () => ({ status: "signed_out", payloads: [] });
+  const w = worker(consoleRead, undefined, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/" }],
+    executeScript: async () => { throw new Error("frozen"); },
+  });
+  w.context.chrome.storage.local.get = async () => ({ cache: { kept: cached } });
+  // Tab 1 never answers; the reader in tab 2 reports a sign-out.
+  w.context.readConsole = async (read, now, cache) => {
+    await read("https://platform.claude.com/api/organizations");
+    return { status: "signed_out", payloads: [] };
+  };
+  await vm.runInContext("poll()", w.context);
+  assert.deepEqual(w.stored.at(-1).cache, { kept: cached });
+  assert.equal(w.sessions.at(-1).status.console.state, "error");
+});
+
+test("a discarded or loading Console tab, or a failed tab query, keeps saved costs and blocks a global sign-out", async () => {
+  const cached = { at: 0, reconciledAt: 0, daily: {} };
+  for (const [tabs, failQuery] of [
+    [[{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/", discarded: true }], false],
+    [[{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/", status: "loading" }], false],
+    [[], true],
+  ]) {
+    for (const outcome of ["ok", "signed_out"]) {
+      const w = worker(async () => ({ status: outcome, payloads: [], failures: [] }), undefined, undefined,
+        { tabs, executeScript: async () => [{ result: { status: 200, body: [] } }] });
+      w.context.chrome.storage.local.get = async () => ({ cache: { other: cached } });
+      if (failQuery) w.context.chrome.tabs.query = async () => { throw new Error("no tabs API"); };
+      await vm.runInContext("poll()", w.context);
+      assert.deepEqual(w.stored.at(-1).cache, { other: cached }, `${outcome} with ${JSON.stringify(tabs)}`);
+      assert.notEqual(w.sessions.at(-1).status.console.state, "signed_out");
+    }
+  }
 });

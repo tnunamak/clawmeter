@@ -125,3 +125,15 @@ test("the popup count holds only resets usable now, and one failing organization
     { name: "Max", resets: 2, delivery: "saved" },
   ]);
 });
+
+test("an organization one session cannot read is read by the next", async () => {
+  const broken = fixture({ "/api/organizations": [{ uuid: "org-max", name: "Max" }],
+    "/api/organizations/org-max/usage?at_wall=1&skip_spend=1": 500 });
+  const healthy = fixture({ "/api/organizations": [{ uuid: "org-max", name: "Max" }],
+    "/api/organizations/org-max/usage?at_wall=1&skip_spend=1": { cedar_ember: { eligible: true, grants: [grant] } } });
+  const read = new Set(), posts = [];
+  await assert.rejects(readResets(broken.getJSON, now, async payload => posts.push(payload), read));
+  await readResets(healthy.getJSON, now, async payload => posts.push(payload), read);
+  await readResets(healthy.getJSON, now, async payload => posts.push(payload), read);
+  assert.equal(posts.length, 1);
+});
