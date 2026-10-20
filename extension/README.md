@@ -2,7 +2,7 @@
 
 Reads Claude reset grants from claude.ai and API credits from the Claude Console with your browser session and sends them to Clawmeter on this computer, once a minute.
 
-claude.ai answers 403 to requests from the extension's background worker, so `background.js` runs the claude.ai read inside each open claude.ai tab, in an isolated script world, and falls back to the worker when no tab answers. Console reads work the same way with Console tabs. Tabs in different browser containers can hold different accounts' sessions, so every tab is read; ordinary tabs share one session, and an organization seen in one tab is not read again.
+claude.ai answers 403 to requests from the extension's background worker, so `background.js` runs the claude.ai read inside each open claude.ai tab, in an isolated script world, and falls back to the worker when no tab answers. Console reads run in each open Console tab and always once in the worker, which has the browser's main session, so a signed-out container tab cannot hide a signed-in main session. A Console organization that is not seen stays cached for a week, because its container tab may just be closed. The popup says when a tab did not answer, since accounts signed in only there are missing from that reading. Tabs in different browser containers can hold different accounts' sessions, so every tab is read; ordinary tabs share one session, and an organization seen in one tab is not read again.
 
 - `resets.js` reads reset grants and posts them to `/v1/resets`.
 - `console.js` reads prepaid API credits and posts them to `/v1/api-credits`.

@@ -237,7 +237,7 @@ test("each poll leaves a status for the popup, and the popup can ask for a poll"
   const { status } = w.sessions.at(-1);
   // No claude.ai tab: the worker's 403 means "open a tab", not "signed out".
   assert.deepEqual(status.claude, { state: "no_tab" });
-  assert.deepEqual(status.console, { state: "ok", pools: [{ name: "Team", balance: 1250, currency: "USD" }],
+  assert.deepEqual(status.console, { state: "ok", unchecked: 0, pools: [{ name: "Team", balance: 1250, currency: "USD" }],
     failures: [{ name: "Broken", error: "Claude Console request failed" }] });
   assert.deepEqual(status.delivery, ["unreachable"]);
   assert.equal(w.listeners.message("poll", { id: "other" }, () => {}), undefined);
@@ -283,7 +283,7 @@ test("each claude.ai tab is read as its own session, and an organization is read
 });
 
 test("a Console tab that does not answer keeps its cache and blocks a global sign-out", async () => {
-  const cached = { at: 0, reconciledAt: 0, daily: {} };
+  const cached = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
   const consoleRead = async () => ({ status: "signed_out", payloads: [] });
   const w = worker(consoleRead, undefined, undefined, {
     tabs: [{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/" }],
@@ -301,7 +301,7 @@ test("a Console tab that does not answer keeps its cache and blocks a global sig
 });
 
 test("a discarded or loading Console tab, or a failed tab query, keeps saved costs and blocks a global sign-out", async () => {
-  const cached = { at: 0, reconciledAt: 0, daily: {} };
+  const cached = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
   for (const [tabs, failQuery] of [
     [[{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/", discarded: true }], false],
     [[{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/", status: "loading" }], false],
@@ -317,4 +317,62 @@ test("a discarded or loading Console tab, or a failed tab query, keeps saved cos
       assert.notEqual(w.sessions.at(-1).status.console.state, "signed_out");
     }
   }
+});
+
+// A reader that reports what its session says: a 401 means signed out.
+const sessionReader = async (read, now, cache, post, pools) => {
+  const answer = await read("https://platform.claude.com/api/organizations");
+  if (answer.status === 401) return { status: "signed_out", payloads: [] };
+  pools.seen.add("main");
+  pools.read.add("main");
+  return { status: "ok", payloads: [{ name: "Main", balance: 100, currency: "USD" }], failures: [] };
+};
+const signedIn = async (url, options) => url.startsWith("http://127.0.0.1")
+  ? { ok: true, status: 204 } : { ok: true, status: 200, json: async () => [] };
+
+test("a signed-out container tab cannot hide the signed-in main session", async () => {
+  const posts = [];
+  const fetch = async (url, options) => { if (url.startsWith("http://127.0.0.1")) posts.push(url); return signedIn(url, options); };
+  const w = worker(sessionReader, fetch, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }],
+    executeScript: async () => [{ result: { status: 401, body: null } }],
+  });
+  const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
+  w.context.chrome.storage.local.get = async () => ({ cache: { main: { ...recent }, container: recent } });
+  await vm.runInContext("poll()", w.context);
+  assert.equal(w.sessions.at(-1).status.console.state, "ok");
+  assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out");
+  assert.deepEqual(Object.keys(w.stored.at(-1).cache).sort(), ["container", "main"]);
+  assert.equal(w.injections.length, 1);
+});
+
+test("a pool whose session is not open is kept for a week, then dropped", async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const w = worker(sessionReader, signedIn);
+  const entry = at => ({ at, reconciledAt: at, daily: {} });
+  w.context.chrome.storage.local.get = async () => ({ cache: {
+    main: entry(Date.now()), closedTab: { ...entry(Date.now() - 8 * day), seenAt: Date.now() - day }, gone: entry(Date.now() - 8 * day),
+  } });
+  await vm.runInContext("poll()", w.context);
+  const cache = w.stored.at(-1).cache;
+  assert.deepEqual(Object.keys(cache).sort(), ["closedTab", "main"]);
+  assert.ok(Date.now() - cache.main.seenAt < day);
+});
+
+test("a tab that does not answer beside one that signs out is reported, not hidden", async () => {
+  const posts = [];
+  const fetch = async (url, options) => { if (url.startsWith("http://127.0.0.1")) posts.push(url); return signedIn(url, options); };
+  const w = worker(sessionReader, fetch, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/" }],
+    executeScript: async ({ target }) => {
+      if (target.tabId === 1) throw new Error("frozen");
+      return [{ result: { status: 401, body: null } }];
+    },
+  });
+  await vm.runInContext("poll()", w.context);
+  const { console: credits } = w.sessions.at(-1).status;
+  assert.equal(credits.state, "ok");
+  assert.equal(credits.unchecked, 1);
+  assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out");
+  assert.deepEqual(w.injections.map(injection => injection.target.tabId), [1, 2]);
 });

@@ -32,14 +32,22 @@ function connection(delivery) {
   return { text: "Sending to Clawmeter", tone: "ok" };
 }
 
+// unchecked says that some tabs were asleep or did not answer, so accounts
+// signed in only there are missing from this reading.
+function unchecked(status) {
+  const count = status.unchecked || 0;
+  return count ? [paragraph(`${count} tab${count === 1 ? "" : "s"} didn't answer; accounts signed in only there aren't shown. Open ${count === 1 ? "it" : "them"} to include ${count === 1 ? "it" : "them"}.`, "warn")] : [];
+}
+
 function claude(status) {
   if (!status) return [paragraph("Not read yet.", "muted")];
   switch (status.state) {
     case "ok":
       if (!status.accounts?.length) return [paragraph("No Claude plan in this browser.", "muted")];
-      return status.accounts.map(account => account.error ? row(account.name, "couldn't read", "warn") : account.delivery === "ignored"
+      return [...status.accounts.map(account => account.error ? row(account.name, "couldn't read", "warn") : account.delivery === "ignored"
         ? row(account.name, "not set up in Clawmeter", "muted")
-        : row(account.name, account.resets ? `${account.resets} reset${account.resets === 1 ? "" : "s"}` : "no resets"));
+        : row(account.name, account.resets ? `${account.resets} reset${account.resets === 1 ? "" : "s"}` : "no resets")),
+        ...unchecked(status)];
     case "no_tab":
       return [paragraph("Keep a claude.ai tab open. Clawmeter reads resets through it.", "warn")];
     case "signed_out":
@@ -55,6 +63,7 @@ function credits(status) {
   if (status.state !== "ok") return [paragraph("Couldn't read the Claude Console: " + status.error, "warn")];
   const rows = status.pools.map(pool => row(pool.name, money(pool.balance, pool.currency)));
   for (const failure of status.failures || []) rows.push(row(failure.name, "couldn't read", "warn"));
+  rows.push(...unchecked(status));
   return rows.length ? rows : [paragraph("No API organizations.", "muted")];
 }
 
