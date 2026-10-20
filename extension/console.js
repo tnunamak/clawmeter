@@ -54,12 +54,17 @@ async function readConsole(getJSON, now, cache, post = async () => {}, shared = 
   const seen = shared?.seen || new Set();
   const read = shared?.read || new Set();
   const attempted = new Set();
+  // listed is every API organization this session can see, including ones
+  // another session already read, so the caller knows which sessions hold
+  // which pools.
+  const listed = new Set();
   for (const organization of organizations) {
     if (!object(organization) || !Array.isArray(organization.capabilities)) changed();
     if (!organization.capabilities.includes("api")) continue;
     const id = String(organization.uuid || organization.id || "");
     if (!id) changed();
     const pool = await hash("clawmeter-api-pool\u0000" + id);
+    listed.add(pool);
     if (attempted.has(pool) || read.has(pool)) continue;
     attempted.add(pool);
     seen.add(pool);
@@ -165,14 +170,19 @@ async function readConsole(getJSON, now, cache, post = async () => {}, shared = 
       failures.push({ name, error });
     }
   }
-  // With no organization read, the whole poll failed.
-  if (failures.length && !payloads.length) throw failures[0].error;
+  // With no organization read, the whole poll failed. The error still says
+  // which pools this session lists.
+  if (failures.length && !payloads.length) {
+    const error = failures[0].error instanceof Error ? failures[0].error : new Error(String(failures[0].error));
+    error.listed = [...listed];
+    throw error;
+  }
   if (!shared) {
     for (const pool of Object.keys(cache)) {
       if (!seen.has(pool)) delete cache[pool];
     }
   }
-  return { status: "ok", payloads, failures: failures.map(failure => ({ name: failure.name, error: String(failure.error?.message || failure.error) })) };
+  return { status: "ok", payloads, listed: [...listed], failures: failures.map(failure => ({ name: failure.name, error: String(failure.error?.message || failure.error) })) };
 }
 
 globalThis.readConsole = readConsole;
