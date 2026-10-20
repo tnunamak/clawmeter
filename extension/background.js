@@ -150,18 +150,31 @@ async function check() {
     const stored = await chrome.storage.local.get("cache");
     cache = stored.cache && typeof stored.cache === "object" && !Array.isArray(stored.cache) ? stored.cache : {};
     const pools = { seen: new Set(), read: new Set() };
-    // The main session is always read, so a signed-out container tab cannot
-    // hide it.
-    const credits = await readEverySession("https://platform.claude.com/*", getJSON,
-      read => readConsole(read, Date.now, cache, payload => send("/v1/api-credits", payload), pools), true);
+    // The main session is always read, first, so a signed-out container tab
+    // cannot hide it. Pools it holds are recorded as the main session's.
+    let main = null;
+    const credits = await readEverySession("https://platform.claude.com/*", getJSON, async read => {
+      const result = await readConsole(read, Date.now, cache, payload => send("/v1/api-credits", payload), pools)
+        .catch(error => ({ error }));
+      if (read === getJSON && !main) main = { result, pools: new Set(pools.seen) };
+      if (result.error) throw result.error;
+      return result;
+    }, true);
     const complete = !credits.unavailable && credits.results.every(result => !result.error);
     const read = credits.results.filter(result => result.status === "ok");
-    // A pool can belong to a container whose tab is closed, so an unseen
-    // pool is dropped only after a week unseen.
+    // A pool held only by a container is unknown while its tab is closed, so
+    // it is dropped after a week unseen. A main-session pool is dropped as
+    // soon as the main session answers without it.
+    const mainAnswered = main && (main.result.status === "ok" || main.result.status === "signed_out");
     const now = Date.now();
     for (const [pool, entry] of Object.entries(cache)) {
-      if (pools.seen.has(pool)) entry.seenAt = now;
-      else if (now - (Number.isFinite(entry?.seenAt) ? entry.seenAt : entry?.at ?? 0) > unseenPoolAge) delete cache[pool];
+      if (pools.seen.has(pool)) {
+        entry.seenAt = now;
+        entry.main = main?.pools.has(pool) ?? false;
+      } else if ((entry?.main && mainAnswered) ||
+        now - (Number.isFinite(entry?.seenAt) ? entry.seenAt : entry?.at ?? 0) > unseenPoolAge) {
+        delete cache[pool];
+      }
     }
     if (read.length) {
       status.console = { state: "ok", unchecked: credits.unavailable,
@@ -170,8 +183,9 @@ async function check() {
         pools: read.flatMap(result => result.payloads)
           .map(payload => ({ name: payload.name, balance: payload.balance, currency: payload.currency })) };
     } else if (complete && credits.results.every(result => result.status === "signed_out")) {
-      cache = {};
-      await send("/v1/status", { status: "signed_out" });
+      // A pool still cached belongs to a container whose tab is closed; its
+      // session may still be signed in, so Clawmeter is not told otherwise.
+      if (!Object.keys(cache).length) await send("/v1/status", { status: "signed_out" });
       status.console = { state: "signed_out" };
     } else {
       throw credits.results.find(result => result.error)?.error || new Error("A Claude Console tab did not answer");

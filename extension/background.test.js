@@ -376,3 +376,45 @@ test("a tab that does not answer beside one that signs out is reported, not hidd
   assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out");
   assert.deepEqual(w.injections.map(injection => injection.target.tabId), [1, 2]);
 });
+
+test("a signed-out main session does not sign out a container whose tab is closed", async () => {
+  const posts = [];
+  const signedOut = async (url, options) => {
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    return { ok: false, status: 401 };
+  };
+  const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {}, seenAt: Date.now() - 60000 };
+  // The container's pool was seen a minute ago; the main session's pool too.
+  let w = worker(sessionReader, signedOut);
+  w.context.chrome.storage.local.get = async () => ({ cache: { container: { ...recent, main: false }, main: { ...recent, main: true } } });
+  await vm.runInContext("poll()", w.context);
+  assert.equal(w.sessions.at(-1).status.console.state, "signed_out");
+  assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out while a container is unknown");
+  assert.deepEqual(Object.keys(w.stored.at(-1).cache), ["container"]);
+
+  // With only main-session pools, the sign-out is verified and sent.
+  posts.length = 0;
+  w = worker(sessionReader, signedOut);
+  w.context.chrome.storage.local.get = async () => ({ cache: { main: { ...recent, main: true } } });
+  await vm.runInContext("poll()", w.context);
+  assert.ok(posts.some(url => url.endsWith("/v1/status")));
+  assert.deepEqual(w.stored.at(-1).cache, {});
+});
+
+test("pools are recorded by the session that holds them", async () => {
+  const w = worker(async (read, now, cache, post, pools) => {
+    const answer = await read("https://platform.claude.com/api/organizations");
+    const pool = answer.status === 200 && answer.body?.length === 0 ? "main" : "container";
+    pools.seen.add(pool);
+    return { status: "ok", payloads: [], failures: [] };
+  }, signedIn, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }],
+    executeScript: async () => [{ result: { status: 200, body: [{}] } }],
+  });
+  const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
+  w.context.chrome.storage.local.get = async () => ({ cache: { main: { ...recent }, container: { ...recent } } });
+  await vm.runInContext("poll()", w.context);
+  const { cache } = w.stored.at(-1);
+  assert.equal(cache.main.main, true);
+  assert.equal(cache.container.main, false);
+});
