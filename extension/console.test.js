@@ -218,3 +218,17 @@ test("a failing organization is reported and does not hide the others", async ()
   assert.deepEqual(posted.map(payload => payload.name), ["Example"]);
   assert.deepEqual(result.failures, [{ name: "Broken", error: "Claude Console request failed" }]);
 });
+
+test("a cost report that fails to load keeps the fresh balance on retained costs", async () => {
+  const f = fixture(), cache = {};
+  await readConsole(f.getJSON, now, cache);
+  f.statuses["/api/organizations/org-api/workspaces/default/usage_cost"] = 500;
+  f.data["/api/organizations/org-api/prepaid/credits"].amount = 19000;
+  f.data["/api/organizations/org-api/prepaid/credits"].promo_tranches[0].remaining_amount_minor_units = 18900;
+  const { payloads } = await readConsole(f.getJSON, now + 30 * 60000, cache);
+  assert.equal(payloads[0].balance, 19000);
+  assert.deepEqual(payloads[0].daily, { [today]: 11.29645 });
+  // Past the retained age, there are no costs to show.
+  await assert.rejects(readConsole(f.getJSON, now + 61 * 60000, {}), /request failed/);
+  assert.deepEqual((await readConsole(f.getJSON, now + 61 * 60000, cache)).payloads, []);
+});

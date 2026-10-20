@@ -237,3 +237,20 @@ test("each poll leaves a status for the popup, and the popup can ask for a poll"
   assert.deepEqual(status.delivery, ["unreachable"]);
   assert.equal(w.listeners.message("poll", { id: "other" }, () => {}), undefined);
 });
+
+test("a popup refresh during a running check waits for that check", async () => {
+  let release;
+  const w = worker(async () => {
+    await new Promise(resolve => { release = resolve; });
+    return { status: "ok", payloads: [], failures: [] };
+  });
+  w.listeners.alarm({ name: "poll" });
+  await tick();
+  let replied = false;
+  w.listeners.message("poll", { id: "self" }, () => { replied = true; });
+  await tick();
+  assert.equal(replied, false);
+  release(); await tick(); await tick();
+  assert.equal(replied, true);
+  assert.equal(w.sessions.length, 1);
+});

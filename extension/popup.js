@@ -87,4 +87,9 @@ element("refresh").addEventListener("click", async () => {
   }
 });
 
+// A check that was already running when the popup opened lands here.
+chrome.storage.session.onChanged.addListener(changes => {
+  if (changes.status) render(changes.status.newValue);
+});
+
 void load();

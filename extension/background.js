@@ -2,7 +2,7 @@
 
 importScripts("console.js", "resets.js");
 
-let inFlight = false;
+let running = null;
 
 async function ensureAlarm() {
   if (!(await chrome.alarms.get("poll"))) {
@@ -71,9 +71,14 @@ async function readFromClaudeTab(url, fallback, sawTab = () => {}) {
   return fallback(url);
 }
 
-async function poll() {
-  if (inFlight) return;
-  inFlight = true;
+// poll runs one check at a time; a caller that arrives during a check waits
+// for that check.
+function poll() {
+  running ??= check().finally(() => { running = null; });
+  return running;
+}
+
+async function check() {
   let cache;
   const getJSON = async url => request(url, {
     method: "GET", credentials: "include", cache: "no-store",
@@ -117,7 +122,6 @@ async function poll() {
       if (cache) await chrome.storage.local.set({ cache });
       await chrome.storage.session.set({ status });
     } catch {}
-    inFlight = false;
   }
 }
 

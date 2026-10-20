@@ -125,7 +125,15 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
     let entry = cache[pool];
     const age = entry && Number.isFinite(entry.at) && entry.at <= observedTime ? observedTime - entry.at : Infinity;
     if (age >= usageInterval || ((!Number.isFinite(entry.reconciledAt) || !reconciles(entry.daily)) && age >= usageRetry)) {
-      const daily = await readCosts();
+      let daily = null;
+      try {
+        daily = await readCosts();
+      } catch (error) {
+        // A cost report that fails to load is treated like one that lags: a
+        // retained reconciled entry still carries the fresh balance. A
+        // format change is not transient, so it still fails the pool.
+        if (!entry || /changed format/.test(error?.message)) throw error;
+      }
       if (reconciles(daily)) {
         entry = { at: observedTime, reconciledAt: observedTime, daily };
       } else if (entry) {
