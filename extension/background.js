@@ -73,12 +73,17 @@ async function readInTab(tab, url) {
 // unavailable counts tabs that did not answer, whose sessions are unknown.
 async function readEverySession(pattern, fallback, read) {
   let tabs = [];
-  try {
-    tabs = await chrome.tabs.query({ url: pattern, discarded: false, status: "complete" });
-  } catch {}
-  const results = [];
   let unavailable = 0;
-  for (const tab of tabs) {
+  try {
+    tabs = await chrome.tabs.query({ url: pattern });
+  } catch {
+    unavailable++;
+  }
+  // A discarded or loading tab is not woken; its session counts as unknown.
+  const ready = tabs.filter(tab => !tab.discarded && tab.status === "complete");
+  unavailable += tabs.length - ready.length;
+  const results = [];
+  for (const tab of ready) {
     try {
       results.push(await read(url => readInTab(tab, url)));
     } catch (error) {

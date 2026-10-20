@@ -28,7 +28,8 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
       // A tab without a url is a claude.ai tab.
       tabs: { query: async filter => {
         queries.push(filter);
-        return tabs.filter(tab => (tab.url || "https://claude.ai/").startsWith(filter.url.slice(0, -1)));
+        return tabs.filter(tab => (tab.url || "https://claude.ai/").startsWith(filter.url.slice(0, -1)))
+          .map(tab => ({ discarded: false, status: "complete", ...tab }));
       } },
       scripting: { executeScript: async injection => { injections.push(injection); return executeScript(injection); } },
       storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))) },
@@ -171,8 +172,7 @@ test("claude.ai is read inside an open claude.ai tab, falling back without one",
     return [{ result: { status: 200, body: [{ uuid: "org" }] } }];
   });
   assert.deepEqual(answer, { status: 200, body: [{ uuid: "org" }] });
-  assert.deepEqual(JSON.parse(JSON.stringify(w.queries)), [{ url: "https://claude.ai/*", discarded: false, status: "complete" },
-    { url: "https://platform.claude.com/*", discarded: false, status: "complete" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.queries)), [{ url: "https://claude.ai/*" }, { url: "https://platform.claude.com/*" }]);
   assert.deepEqual(w.injections.map(i => i.target.tabId), [3, 7]);
   assert.equal(w.injections[1].func.name, "readInPage");
   assert.deepEqual(JSON.parse(JSON.stringify(w.injections[1].args)), [url]);
@@ -298,4 +298,23 @@ test("a Console tab that does not answer keeps its cache and blocks a global sig
   await vm.runInContext("poll()", w.context);
   assert.deepEqual(w.stored.at(-1).cache, { kept: cached });
   assert.equal(w.sessions.at(-1).status.console.state, "error");
+});
+
+test("a discarded or loading Console tab, or a failed tab query, keeps saved costs and blocks a global sign-out", async () => {
+  const cached = { at: 0, reconciledAt: 0, daily: {} };
+  for (const [tabs, failQuery] of [
+    [[{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/", discarded: true }], false],
+    [[{ id: 1, url: "https://platform.claude.com/" }, { id: 2, url: "https://platform.claude.com/", status: "loading" }], false],
+    [[], true],
+  ]) {
+    for (const outcome of ["ok", "signed_out"]) {
+      const w = worker(async () => ({ status: outcome, payloads: [], failures: [] }), undefined, undefined,
+        { tabs, executeScript: async () => [{ result: { status: 200, body: [] } }] });
+      w.context.chrome.storage.local.get = async () => ({ cache: { other: cached } });
+      if (failQuery) w.context.chrome.tabs.query = async () => { throw new Error("no tabs API"); };
+      await vm.runInContext("poll()", w.context);
+      assert.deepEqual(w.stored.at(-1).cache, { other: cached }, `${outcome} with ${JSON.stringify(tabs)}`);
+      assert.notEqual(w.sessions.at(-1).status.console.state, "signed_out");
+    }
+  }
 });
