@@ -1402,6 +1402,14 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	}
 }
 
+// sortProvidersByName sorts providers by the name they show, as the tray
+// menu does.
+func sortProvidersByName(providers []ProviderFormatter) {
+	sort.SliceStable(providers, func(i, j int) bool {
+		return strings.ToLower(providers[i].Display) < strings.ToLower(providers[j].Display)
+	})
+}
+
 // sortProvidersByUrgency sorts providers so the most urgent appear first.
 func sortProvidersByUrgency(providers []ProviderFormatter) {
 	sort.SliceStable(providers, func(i, j int) bool {
@@ -1559,12 +1567,15 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 		return
 	}
 
-	// Sort providers by urgency (most urgent first)
-	sortProvidersByUrgency(output.Providers)
-
+	// JSON keeps the most urgent provider first; people read the table in
+	// the same alphabetical order as the tray menu.
 	if jsonMode {
+		sortProvidersByUrgency(output.Providers)
 		output.PrintJSON(cacheEntry)
-	} else if plainMode || !isTTY() {
+		return
+	}
+	sortProvidersByName(output.Providers)
+	if plainMode || !isTTY() {
 		output.PrintPlain()
 	} else {
 		output.PrintColor()
