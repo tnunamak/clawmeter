@@ -1075,3 +1075,19 @@ func TestStatusRowUsesTheTrayIconColors(t *testing.T) {
 		t.Fatalf("behind-pace row = %q", got)
 	}
 }
+
+func TestStatusErrorRowAlignsItsSnapshotDetails(t *testing.T) {
+	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{
+		Error:       "boom",
+		CreditPools: []provider.UsageCreditPool{{Name: "API credits"}},
+	}}
+	lines := pf.FormatColorAligned(tableLayout{providerWidth: len(pf.Display)})
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q", lines)
+	}
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	first, detail := plain.ReplaceAllString(lines[0], ""), plain.ReplaceAllString(lines[1], "")
+	if strings.Index(detail, "API credits") != len("Claude  ") || !strings.HasPrefix(first, "Claude  ") {
+		t.Fatalf("error and detail start in different columns:\n%q\n%q", first, detail)
+	}
+}

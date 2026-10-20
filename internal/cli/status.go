@@ -279,10 +279,10 @@ func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 // pools) visible on a row whose usage reading failed or expired.
 func appendSnapshotLines(lines []string, data *provider.UsageData, indent string) []string {
 	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
-		lines = append(lines, indent+" "+summary)
+		lines = append(lines, indent+"  "+summary)
 	}
 	for _, pool := range data.CreditPools {
-		lines = append(lines, indent+" "+pool.Name+": "+pool.Summary(time.Now()))
+		lines = append(lines, indent+"  "+pool.Name+": "+pool.Summary(time.Now()))
 	}
 	return lines
 }
