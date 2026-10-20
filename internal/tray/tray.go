@@ -1960,7 +1960,7 @@ func trayWindowRows(windows []provider.UsageWindow, projections []forecast.Proje
 
 // trayWindowStatus lays a quota row out in columns that line up from row to
 // row: window, a ten-cell meter (█ used, ▒ projected by reset, ░ free, on a
-// fixed 0–100% scale), where the forecast ends relative to the limit, use
+// fixed 0–100% scale, ┃ where an even pace would be by now), where the forecast ends relative to the limit, use
 // now, and the times. Figure spaces pad every number to a fixed width. The
 // fields that only some rows have come last so they cannot push the others.
 // Research: divan ai-quota-monitoring/fixed-quota-scale-text-bars-need-
@@ -2004,7 +2004,13 @@ func trayWindowStatus(window provider.UsageWindow, proj forecast.Projection, cod
 }
 
 func trayRow(window provider.UsageWindow, projectedPct float64, fields []string) string {
-	return trayWindowCode(window) + "   " + meterBar(window.Utilization, projectedPct) + "   " + strings.Join(fields, "  ·  ")
+	bar := meterBar(window.Utilization, projectedPct)
+	if length := forecast.WindowLength(window); length > 0 && !window.ResetsAt.IsZero() {
+		bar = markPace(bar, expectedUsagePct(window.ResetsAt, length))
+	} else {
+		bar += "\u2007" // as wide as the mark, so the columns still line up
+	}
+	return trayWindowCode(window) + "   " + bar + "   " + strings.Join(fields, "  ·  ")
 }
 
 // trayWindowCode names a window by its length, such as "5H" or "7D", so the
@@ -2082,15 +2088,25 @@ func padNumber(s string, width int) string {
 // meterBar draws ten cells on a 0–100% scale: used, then projected, then
 // free. Values past 100% fill the bar.
 func meterBar(usedPct, projectedPct float64) string {
-	cells := func(pct float64) int {
-		if math.IsNaN(pct) {
-			return 0
-		}
-		return int(math.Round(math.Max(0, math.Min(100, pct)) / 10))
-	}
-	used := cells(usedPct)
-	projected := max(used, cells(projectedPct))
+	used := meterCells(usedPct)
+	projected := max(used, meterCells(projectedPct))
 	return strings.Repeat("█", used) + strings.Repeat("▒", projected-used) + strings.Repeat("░", 10-projected)
+}
+
+// markPace puts ┃ in a meter where an even pace would have used by now, like
+// the comparative mark on a bullet graph. Fill past the mark is the tray
+// icon's red: used ahead of pace. Fill stopping short of it is its green.
+func markPace(bar string, expectedPct float64) string {
+	cells := []rune(bar)
+	at := meterCells(expectedPct)
+	return string(cells[:at]) + "┃" + string(cells[at:])
+}
+
+func meterCells(pct float64) int {
+	if math.IsNaN(pct) {
+		return 0
+	}
+	return int(math.Round(math.Max(0, math.Min(100, pct)) / 10))
 }
 
 // windowRunsOutBeforeReset reports whether a window is projected to run out
