@@ -1535,6 +1535,10 @@ func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	window.Utilization = 10
 	if got := trayWindowText(window); windowRunsOutBeforeReset(window) || strings.Contains(got, "runs out") {
 		t.Fatalf("safe row = %q", got)
+	}	// Used up minutes into a window: no forecast yet, but already out.
+	spent := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(299 * time.Minute)}
+	if got := trayWindowText(spent); !windowRunsOutBeforeReset(spent) || !strings.Contains(got, "forecast unknown") || !strings.HasSuffix(got, "    out now") {
+		t.Fatalf("exhausted row without a forecast = %q", got)
 	}
 }
 

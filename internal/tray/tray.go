@@ -1977,7 +1977,11 @@ func windowRunsOutBeforeReset(window provider.UsageWindow) bool {
 		return false
 	}
 	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	return !proj.Unknown && !proj.Stale && !proj.WillLastToReset
+	if proj.Stale {
+		return false
+	}
+	// A window used up before its forecast warms up has already run out.
+	return window.Utilization >= 100 || !proj.Unknown && !proj.WillLastToReset
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {
