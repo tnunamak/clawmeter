@@ -69,7 +69,7 @@ The images are rendered from the HTML files next to them; re-render with
 | --- | --- |
 | `alarms` | Runs the once-a-minute check of claude.ai and the Claude Console. |
 | `storage` | Keeps the latest daily Claude Console cost totals, refreshed every 30 minutes, so the extension does not request the cost report every minute, and the latest check's result, in memory only, for the toolbar popup. |
-| `scripting` | Runs the reads inside open claude.ai and Claude Console tabs. claude.ai refuses the same request from the extension's background worker, and each tab can be signed in to a different account. |
+| `scripting` | Runs the reads inside open claude.ai and Claude Console tabs. claude.ai refuses the same request from the extension's background worker, and tabs in different containers can be signed in to different accounts. |
 | Host `https://claude.ai/*` | Reads the user's organizations and reset grants. |
 | Host `https://platform.claude.com/*` | Reads the user's Console organizations, prepaid credit balance, credit grants, and usage costs. |
 | Host `http://127.0.0.1/*` | Sends the readings to the Clawmeter app on the same computer. |

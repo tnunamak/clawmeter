@@ -66,9 +66,9 @@ async function readInTab(tab, url) {
   throw new TabUnavailable("Tab did not answer");
 }
 
-// readEverySession runs read once in each open tab of a site, because each
-// tab can be signed in to a different account, for example in a browser
-// container. When no tab answers, read runs once in the worker, which has the
+// readEverySession runs read once in each open tab of a site, because tabs
+// in different browser containers can be signed in to different accounts.
+// Ordinary tabs share one session; readers skip organizations already read. When no tab answers, read runs once in the worker, which has the
 // browser's main session. Each result is read's result or { error }.
 async function readEverySession(pattern, fallback, read) {
   let tabs = [];
