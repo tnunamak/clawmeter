@@ -5,7 +5,7 @@ const claudeOrigin = "https://claude.ai";
 // readResets reads promotional reset grants for each claude.ai organization in
 // the signed-in session and posts one payload per organization. The receiver
 // keeps only organizations that match a Claude source set up in Clawmeter.
-async function readResets(getJSON, now, post = async () => {}) {
+async function readResets(getJSON, now, post = async () => {}, seen = new Set()) {
   const clock = typeof now === "function" ? now : () => now;
   const time = new Date(clock()).getTime();
   if (!Number.isFinite(time)) throw new Error("Invalid poll time");
@@ -33,7 +33,6 @@ async function readResets(getJSON, now, post = async () => {}) {
   // Each organization's name and what Clawmeter did with its reading, for
   // the popup.
   const accounts = [];
-  const seen = new Set();
   let failure = null;
   for (const organization of organizations) {
     const id = String(organization?.uuid || organization?.id || "");

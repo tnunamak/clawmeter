@@ -7,7 +7,10 @@ const usageInterval = 30 * 60 * 1000;
 const usageRetry = 5 * 60 * 1000;
 const retainedCostAge = 60 * 60 * 1000;
 
-async function readConsole(getJSON, now, cache, post = async () => {}) {
+// readConsole reads every API organization in one session. A caller that
+// reads several sessions passes one shared set of pools seen and drops stale
+// cache entries itself.
+async function readConsole(getJSON, now, cache, post = async () => {}, shared = null) {
   const clock = typeof now === "function" ? now : () => now;
   const time = new Date(clock()).getTime();
   if (!Number.isFinite(time) || !cache || typeof cache !== "object") throw new Error("Invalid poll state");
@@ -47,7 +50,7 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
   const endingBefore = day(time + 86400000);
   const payloads = [];
   const failures = [];
-  const seen = new Set();
+  const seen = shared || new Set();
   for (const organization of organizations) {
     if (!object(organization) || !Array.isArray(organization.capabilities)) changed();
     if (!organization.capabilities.includes("api")) continue;
@@ -159,8 +162,10 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
   }
   // With no organization read, the whole poll failed.
   if (failures.length && !payloads.length) throw failures[0].error;
-  for (const pool of Object.keys(cache)) {
-    if (!seen.has(pool)) delete cache[pool];
+  if (!shared) {
+    for (const pool of Object.keys(cache)) {
+      if (!seen.has(pool)) delete cache[pool];
+    }
   }
   return { status: "ok", payloads, failures: failures.map(failure => ({ name: failure.name, error: String(failure.error?.message || failure.error) })) };
 }
