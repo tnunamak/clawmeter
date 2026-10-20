@@ -92,6 +92,9 @@ func TestDurationUsesAtMostTwoUnits(t *testing.T) {
 		{6*24*time.Hour + 16*time.Hour + 20*time.Minute, "6d 16h"},
 		{7 * 24 * time.Hour, "7d"},
 		{20 * time.Second, "<1m"},
+		{30 * time.Second, "<1m"},
+		{59 * time.Second, "<1m"},
+		{time.Minute, "1m"},
 		{-time.Minute, "<1m"},
 	} {
 		if got := Duration(tc.d); got != tc.want {
@@ -114,6 +117,11 @@ func TestNewRowStatesForecastUseAtReset(t *testing.T) {
 	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 1, ResetsAt: time.Now().Add(7*24*time.Hour - time.Minute)}
 	if row := NewRow(early, project(early), false); row.Forecast != "" || row.ForecastState != "unknown" {
 		t.Fatalf("no forecast yet = %+v", row)
+	}
+	// Used up minutes into a window: no forecast yet, but out now.
+	spent := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(299 * time.Minute)}
+	if row := NewRow(spent, project(spent), false); row.ForecastState != "unknown" || row.RunsOut != "now" {
+		t.Fatalf("exhausted without a forecast = %+v", row)
 	}
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
 	if row := NewRow(policy, forecast.Projection{}, false); !row.ResetPolicy || row.Resets != "resets daily" || row.Forecast != "" || row.ForecastState != "" || row.HasPace() {

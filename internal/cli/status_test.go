@@ -1102,3 +1102,26 @@ func TestStatusErrorRowAlignsItsSnapshotDetails(t *testing.T) {
 		t.Fatalf("error and detail start in different columns:\n%q\n%q", first, detail)
 	}
 }
+
+func TestStatusTableAlignsWideProviderNames(t *testing.T) {
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 40, ResetsAt: time.Now().Add(3 * 24 * time.Hour)}
+	providers := []ProviderFormatter{
+		{Display: "Claude · 仕事", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}},
+		{Display: "Codex", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}},
+	}
+	layout := newTableLayout()
+	for _, pf := range providers {
+		layout.provider = max(layout.provider, cellWidth(pf.Display))
+		for _, row := range pf.shownRows() {
+			layout.fit(rowCells(row))
+		}
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	windowAt := func(line string) int { return cellWidth(line[:strings.Index(line, "7d")]) }
+	wide := ansi.ReplaceAllString(providers[0].FormatColorAligned(layout)[0], "")
+	narrow := ansi.ReplaceAllString(providers[1].FormatColorAligned(layout)[0], "")
+	header := layout.line(tableHeader, cellWidth(tableHeader[2]), nil)
+	if windowAt(wide) != windowAt(narrow) || windowAt(wide) != cellWidth(header[:strings.Index(header, "WINDOW")]) {
+		t.Fatalf("WINDOW columns differ:\n%s\n%s\n%s", header, wide, narrow)
+	}
+}

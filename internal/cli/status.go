@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
@@ -54,6 +54,11 @@ type tableLayout struct {
 	provider, window, forecast, used, resets, runsOut int
 }
 
+// cellWidth is how many terminal cells s takes: CJK characters take two,
+// combining marks none. East Asian ambiguous characters such as the bar's
+// block glyphs count as one, as most terminals draw them.
+var cellWidth = (&runewidth.Condition{EastAsianWidth: false}).StringWidth
+
 // tableGutter separates the status table's columns.
 const tableGutter = "  "
 
@@ -67,27 +72,27 @@ type tableCells [7]string
 func newTableLayout() tableLayout {
 	h := tableHeader
 	return tableLayout{
-		provider: utf8.RuneCountInString(h[0]), window: utf8.RuneCountInString(h[1]),
-		used: utf8.RuneCountInString(h[3]), forecast: utf8.RuneCountInString(h[4]),
-		resets: utf8.RuneCountInString(h[5]), runsOut: utf8.RuneCountInString(h[6]),
+		provider: cellWidth(h[0]), window: cellWidth(h[1]),
+		used: cellWidth(h[3]), forecast: cellWidth(h[4]),
+		resets: cellWidth(h[5]), runsOut: cellWidth(h[6]),
 	}
 }
 
 func (l *tableLayout) fit(cells tableCells) {
-	l.provider = max(l.provider, utf8.RuneCountInString(cells[0]))
-	l.window = max(l.window, utf8.RuneCountInString(cells[1]))
-	l.used = max(l.used, utf8.RuneCountInString(cells[3]))
-	l.forecast = max(l.forecast, utf8.RuneCountInString(cells[4]))
-	l.resets = max(l.resets, utf8.RuneCountInString(cells[5]))
-	l.runsOut = max(l.runsOut, utf8.RuneCountInString(cells[6]))
+	l.provider = max(l.provider, cellWidth(cells[0]))
+	l.window = max(l.window, cellWidth(cells[1]))
+	l.used = max(l.used, cellWidth(cells[3]))
+	l.forecast = max(l.forecast, cellWidth(cells[4]))
+	l.resets = max(l.resets, cellWidth(cells[5]))
+	l.runsOut = max(l.runsOut, cellWidth(cells[6]))
 }
 
 // line pads cells to the layout, right-aligning the numeric columns, and
 // colors them with style (cell index to ANSI style). The bar arrives
 // already colored, so its width is passed separately.
 func (l tableLayout) line(cells tableCells, barWidth int, style map[int]string) string {
-	left := func(s string, w int) string { return s + strings.Repeat(" ", max(0, w-utf8.RuneCountInString(s))) }
-	right := func(s string, w int) string { return strings.Repeat(" ", max(0, w-utf8.RuneCountInString(s))) + s }
+	left := func(s string, w int) string { return s + strings.Repeat(" ", max(0, w-cellWidth(s))) }
+	right := func(s string, w int) string { return strings.Repeat(" ", max(0, w-cellWidth(s))) + s }
 	padded := []string{
 		left(cells[0], l.provider), left(cells[1], l.window),
 		cells[2] + strings.Repeat(" ", max(0, meter.BarCells+1-barWidth)),
@@ -104,7 +109,7 @@ func (l tableLayout) line(cells tableCells, barWidth int, style map[int]string) 
 // span starts free text, such as a credit balance or an error, at the
 // WINDOW column.
 func (l tableLayout) span(providerCell, text string) string {
-	return providerCell + strings.Repeat(" ", max(0, l.provider-utf8.RuneCountInString(providerCell))) + tableGutter + text
+	return providerCell + strings.Repeat(" ", max(0, l.provider-cellWidth(providerCell))) + tableGutter + text
 }
 
 // shownRows are the rows the status table and the tray menu show.
@@ -372,7 +377,7 @@ func (m *MultiProviderOutput) PrintColor() {
 	layout := newTableLayout()
 	hasRows := false
 	for _, pf := range m.Providers {
-		layout.provider = max(layout.provider, utf8.RuneCountInString(pf.Display))
+		layout.provider = max(layout.provider, cellWidth(pf.Display))
 		for _, row := range pf.shownRows() {
 			if row.Line == "" {
 				hasRows = true
@@ -381,7 +386,7 @@ func (m *MultiProviderOutput) PrintColor() {
 		}
 	}
 	if hasRows {
-		fmt.Println(dim + layout.line(tableHeader, utf8.RuneCountInString(tableHeader[2]), nil) + reset)
+		fmt.Println(dim + layout.line(tableHeader, cellWidth(tableHeader[2]), nil) + reset)
 	}
 	for i, pf := range m.Providers {
 		lines := pf.FormatColorAligned(layout)
@@ -1723,6 +1728,9 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}
 
+	if !jsonMode {
+		sortProvidersByName(output.Providers)
+	}
 	if jsonMode {
 		output.PrintJSON(nil)
 	} else if plainMode || !isTTY() {

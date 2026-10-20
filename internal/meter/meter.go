@@ -209,6 +209,9 @@ func NewRow(window provider.UsageWindow, proj forecast.Projection, codeShared bo
 		row.ForecastState = "unknown"
 		if proj.Stale {
 			row.ForecastState = "stale"
+		} else if window.Utilization >= 100 {
+			// A fresh window can be used up before its forecast warms up.
+			row.RunsOut = "now"
 		}
 		row.Bar = Bar(window.Utilization, window.Utilization, pace, hasPace)
 		return row
@@ -234,6 +237,9 @@ func Percent(pct float64) string {
 // them: "6d 16h", "2h 23m", "1h 1m", "59m". A zero second unit is left off
 // ("7d", "2h"), and a duration under a minute is "<1m".
 func Duration(d time.Duration) string {
+	if d < time.Minute {
+		return "<1m"
+	}
 	d = d.Round(time.Minute)
 	minutes := int(d / time.Minute)
 	days, hours, mins := minutes/(24*60), minutes/60%24, minutes%60
@@ -248,10 +254,8 @@ func Duration(d time.Duration) string {
 		return two(days, "d", hours, "h")
 	case hours > 0:
 		return two(hours, "h", mins, "m")
-	case mins > 0:
-		return strconv.Itoa(mins) + "m"
 	}
-	return "<1m"
+	return strconv.Itoa(mins) + "m"
 }
 
 // Pad left-pads s to width runes with space.
