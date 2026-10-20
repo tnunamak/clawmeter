@@ -11,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/browserext"
+	"github.com/tnunamak/clawmeter/internal/claudeweb"
 )
 
 const clawmeterStatuslineCommand = "clawmeter statusline"
@@ -316,4 +319,33 @@ func writeClaudeSettings(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(file.Name(), path)
+}
+
+// setupBrowserExtension installs the unpacked browser extension that reads
+// Claude resets and API credits, and prints how to load it.
+func setupBrowserExtension(dryRun bool) integrationResult {
+	const name = "Browser extension"
+	dir, err := browserext.Dir()
+	if err != nil {
+		return integrationResult{Name: name, Status: "error", Detail: err.Error()}
+	}
+	if dryRun {
+		return integrationResult{Name: name, Status: "would change", Detail: "write the extension to " + dir, Changed: true}
+	}
+	if _, err := browserext.Install(); err != nil {
+		return integrationResult{Name: name, Status: "error", Detail: err.Error()}
+	}
+	detail := "load it in your browser:"
+	for i, step := range browserext.Steps(dir) {
+		detail += fmt.Sprintf("\n    %d. %s", i+1, step)
+	}
+	return integrationResult{Name: name, Status: "installed", Detail: detail, Changed: true}
+}
+
+func browserExtensionStatus() integrationResult {
+	const name = "Browser extension"
+	if at := claudeweb.LastExtensionContact(); !at.IsZero() {
+		return integrationResult{Name: name, Status: "connected", Detail: "last reading " + at.Local().Format("Jan 2 15:04")}
+	}
+	return integrationResult{Name: name, Status: "available", Detail: "run clawmeter setup --browser-extension (reads Claude resets and API credits)"}
 }

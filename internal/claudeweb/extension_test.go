@@ -280,3 +280,21 @@ func TestExtensionJudgesGrantsOnTheReceiverClock(t *testing.T) {
 		t.Fatalf("summary = %+v, %v", summary, err)
 	}
 }
+
+func TestExtensionContactIsRecordedForAdmittedRequestsOnly(t *testing.T) {
+	isolateUserCache(t)
+	handler := ExtensionHandler(nil, nil)
+	if !LastExtensionContact().IsZero() {
+		t.Fatal("contact recorded before any request")
+	}
+	// A request from another origin is not the extension.
+	extensionRequest(handler, "POST", "/v1/status", extensionAddress, "https://example.com", `{"status":"signed_out"}`)
+	if !LastExtensionContact().IsZero() {
+		t.Fatal("contact recorded for another origin")
+	}
+	// Even a reading Clawmeter rejects shows the extension is installed.
+	extensionRequest(handler, "POST", "/v1/status", extensionAddress, ExtensionOrigins[0], `{"status":"other"}`)
+	if at := LastExtensionContact(); time.Since(at) > time.Minute {
+		t.Fatalf("contact = %v", at)
+	}
+}

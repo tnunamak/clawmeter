@@ -1535,7 +1535,8 @@ func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	window.Utilization = 10
 	if got := trayWindowText(window); windowRunsOutBeforeReset(window) || strings.Contains(got, "runs out") {
 		t.Fatalf("safe row = %q", got)
-	}	// Used up minutes into a window: no forecast yet, but already out.
+	}
+	// Used up minutes into a window: no forecast yet, but already out.
 	spent := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(299 * time.Minute)}
 	if got := trayWindowText(spent); !windowRunsOutBeforeReset(spent) || !strings.Contains(got, "forecast unknown") || !strings.HasSuffix(got, "    out now") {
 		t.Fatalf("exhausted row without a forecast = %q", got)
@@ -1599,5 +1600,21 @@ func TestTrayMeterMarksWhereAnEvenPaceWouldBe(t *testing.T) {
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
 	if got := trayWindowText(policy); !strings.Contains(got, "████░░░░░░\u2007    ") {
 		t.Fatalf("no-reset row = %q", got)
+	}
+}
+
+func TestTrayOffersTheBrowserExtensionUntilItHasConnectedThisWeek(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		contact time.Time
+		want    bool
+	}{
+		{time.Time{}, true},
+		{now.Add(-time.Hour), false},
+		{now.Add(-8 * 24 * time.Hour), true},
+	} {
+		if got := extensionMissing(tc.contact, now); got != tc.want {
+			t.Errorf("extensionMissing(%v) = %v, want %v", tc.contact, got, tc.want)
+		}
 	}
 }

@@ -70,6 +70,45 @@ func writeExtensionState(state ExtensionState) error {
 	return writePrivateFile(path, data)
 }
 
+func extensionContactPath() (string, error) {
+	dir, err := stateDir()
+	return filepath.Join(dir, "claude-extension-contact.json"), err
+}
+
+func recordExtensionContact(now time.Time) error {
+	path, err := extensionContactPath()
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(struct {
+		At time.Time `json:"at"`
+	}{now})
+	if err != nil {
+		return err
+	}
+	return writePrivateFile(path, data)
+}
+
+// LastExtensionContact is when the browser extension last reached Clawmeter,
+// or the zero time if it never has.
+func LastExtensionContact() time.Time {
+	path, err := extensionContactPath()
+	if err != nil {
+		return time.Time{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	var contact struct {
+		At time.Time `json:"at"`
+	}
+	if json.Unmarshal(data, &contact) != nil {
+		return time.Time{}
+	}
+	return contact.At
+}
+
 // ServeExtension receives browser polls until ctx is cancelled. saved reports
 // each stored reading; a Result without resets is an API credit reading.
 func ServeExtension(ctx context.Context, accounts func() []Account, saved func(Result)) error {
@@ -114,6 +153,7 @@ type extensionResetsPayload struct {
 // extension's origin on the loopback address; saved is as for ServeExtension.
 func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handler {
 	var mu sync.Mutex
+	var contactWritten time.Time
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != extensionAddress {
 			http.Error(w, "not allowed", http.StatusForbidden)
@@ -134,6 +174,12 @@ func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 		mu.Lock()
 		defer mu.Unlock()
 		now := time.Now()
+		// Any reading, even one Clawmeter drops, shows the extension is
+		// installed; the tray stops suggesting it. The time is written at
+		// most once a minute.
+		if now.Sub(contactWritten) >= time.Minute && recordExtensionContact(now) == nil {
+			contactWritten = now
+		}
 		var result Result
 		if r.URL.Path == "/v1/resets" {
 			var payload extensionResetsPayload
