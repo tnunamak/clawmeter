@@ -7,8 +7,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/systray"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
+	"github.com/tnunamak/clawmeter/internal/browserext"
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -95,6 +98,8 @@ type state struct {
 	currentIconMeter          icons.MeterState
 	reauthVisible             bool
 	reauthVisibleKnown        bool
+	extensionVisible          bool
+	extensionVisibleKnown     bool
 	emptyVisible              bool
 	emptyVisibleKnown         bool
 	providerSetupVisible      bool
@@ -268,6 +273,20 @@ func onReadyWithConfig(loaded *config.Config) {
 	mReauth.Hide()
 	s.reauthVisible = false
 	s.reauthVisibleKnown = true
+
+	// Offer the browser extension until it has reached Clawmeter. A copy
+	// installed earlier is refreshed to this version.
+	mExtension = systray.AddMenuItem(extensionMenuTitle, "Install the extension that reads Claude resets and API credits")
+	mExtension.Hide()
+	if dir, err := browserext.Dir(); err == nil {
+		if _, err := os.Stat(dir); err == nil {
+			go func() {
+				if _, err := browserext.Install(); err != nil {
+					log.Printf("refresh browser extension: %v", err)
+				}
+			}()
+		}
+	}
 
 	var updateChecking sync.Mutex
 	mUpdate := systray.AddMenuItem("", "")
@@ -585,6 +604,8 @@ func onReadyWithConfig(loaded *config.Config) {
 					go refresh(true)
 					go refreshStatus()
 				}(providerName, menu)
+			case <-mExtension.ClickedCh:
+				go openExtensionSetup()
 			case <-mUpdate.ClickedCh:
 				// Download, verify, replace, and restart can take seconds. Keep
 				// the tray event loop available while the update runs.
@@ -979,6 +1000,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	defer systray.EndMenuUpdate()
 
 	hasExpiredClaude := false
+	hasClaude := false
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
@@ -1006,6 +1028,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			continue
 		}
 		updateResetCreditRow(menu, data, time.Now())
+		if provider.FamilyName(menu.provider) == "claude" {
+			hasClaude = true
+		}
 		setupReady := setup.IsReady()
 		connectionStatus, connectionAction, showConnection := providerConnectionMenuState(name, data, menu.explicitlyEnabled, setupReady)
 		if !showConnection {
@@ -1123,6 +1148,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 	// Show/hide reauth button (only for Claude expired tokens)
 	setSharedMenuItemVisible(mReauth, hasExpiredClaude, &s.reauthVisible, &s.reauthVisibleKnown)
+	if mExtension != nil {
+		setSharedMenuItemVisible(mExtension, hasClaude && extensionMissing(claudeweb.LastExtensionContact(), time.Now()),
+			&s.extensionVisible, &s.extensionVisibleKnown)
+	}
 
 	// Show the "No active providers" placeholder only when no provider is
 	// visible. This keeps the tray useful for a fresh install (where it
@@ -2081,6 +2110,37 @@ func toggleAutostart(m *systray.MenuItem) {
 	trayRenderMu.Lock()
 	updateAutostartLabel(m)
 	trayRenderMu.Unlock()
+}
+
+// mExtension offers the browser extension that reads Claude resets and API
+// credits; updateUI shows it while the extension is missing.
+var mExtension *systray.MenuItem
+
+const extensionMenuTitle = "Connect your browser for Claude resets and API credits…"
+
+// extensionMissing reports whether the extension has not reached Clawmeter
+// in the past week, so the menu should offer it.
+func extensionMissing(lastContact, now time.Time) bool {
+	return lastContact.IsZero() || now.Sub(lastContact) > 7*24*time.Hour
+}
+
+// openExtensionSetup installs the extension folder and opens a page that
+// walks through loading it.
+func openExtensionSetup() {
+	dir, err := browserext.Install()
+	if err == nil {
+		var page string
+		if page, err = browserext.WriteGuide(dir); err == nil {
+			path := filepath.ToSlash(page)
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path // C:/Users/... on Windows
+			}
+			openURL((&url.URL{Scheme: "file", Path: path}).String())
+			return
+		}
+	}
+	log.Printf("browser extension setup: %v", err)
+	notify("Clawmeter", "Couldn't set up the browser extension: "+err.Error(), "normal")
 }
 
 func openURL(url string) {

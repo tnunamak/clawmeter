@@ -296,6 +296,7 @@ func setupCmd(args []string) int {
 	allFlag := fs.Bool("all", false, "install supported local integrations")
 	tmuxFlag := fs.Bool("tmux", false, "install tmux status-right integration")
 	claudeFlag := fs.Bool("claude-statusline", false, "install Claude Code statusline integration")
+	extensionFlag := fs.Bool("browser-extension", false, "install the browser extension that reads Claude resets and API credits")
 	dryRun := fs.Bool("dry-run", false, "show changes without writing files or tmux settings")
 	force := fs.Bool("force", false, "replace an existing custom Claude Code statusline")
 	fs.Parse(args)
@@ -307,7 +308,7 @@ func setupCmd(args []string) int {
 	if *allFlag {
 		*claudeFlag = true
 	}
-	if *tmuxFlag || *claudeFlag {
+	if *tmuxFlag || *claudeFlag || *extensionFlag {
 		fmt.Println("Clawmeter setup")
 		fmt.Println()
 		exitCode := 0
@@ -323,6 +324,9 @@ func setupCmd(args []string) int {
 		if *claudeFlag {
 			printResult(setupClaudeStatuslineIntegration(*dryRun, *force))
 		}
+		if *extensionFlag {
+			printResult(setupBrowserExtension(*dryRun))
+		}
 		fmt.Println()
 		fmt.Println("Agent pull command: clawmeter status --agent")
 		fmt.Println("Run `clawmeter doctor` to verify provider auth and integrations.")
@@ -337,6 +341,7 @@ func setupCmd(args []string) int {
 	fmt.Println("Install individual or advanced integrations:")
 	fmt.Println("  clawmeter setup --claude-statusline")
 	fmt.Println("  clawmeter setup --tmux")
+	fmt.Println("  clawmeter setup --browser-extension")
 	fmt.Println()
 	fmt.Println("Start surfaces:")
 	fmt.Println("  clawmeter tray --install")
@@ -360,7 +365,7 @@ func doctorCmd(args []string) int {
 	fmt.Println()
 	exitCode := providersCmd(nil)
 	fmt.Println("Integrations:")
-	for _, result := range []integrationResult{tmuxIntegrationStatus(), claudeStatuslineStatus()} {
+	for _, result := range []integrationResult{tmuxIntegrationStatus(), claudeStatuslineStatus(), browserExtensionStatus()} {
 		printIntegrationResult(result)
 		if result.Status == "error" {
 			exitCode = 1
@@ -1266,6 +1271,7 @@ Examples:
   clawmeter claude --json            # Show Claude usage as JSON
   clawmeter --check                  # Exit code for monitoring
   clawmeter setup --all              # Install mainstream local integrations
+  clawmeter setup --browser-extension # Install the extension for Claude resets and API credits
   clawmeter codex                    # Show Codex quota
   clawmeter grok                     # Show Grok quota after grok login
   clawmeter providers                # List available providers`)
