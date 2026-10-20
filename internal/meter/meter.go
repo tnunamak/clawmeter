@@ -1,11 +1,12 @@
 // Package meter lays out quota windows for display. The tray menu and the CLI
 // status table both draw its rows, so a quota reads the same in each: window
-// code, a ten-cell bar with a pace mark, where the forecast ends relative to
-// the limit, use now, and the times.
+// code, a ten-cell bar with a pace mark, the forecast use at reset, use now,
+// and the times.
 //
-// Research: divan ai-quota-monitoring/fixed-quota-scale-text-bars-need-
-// explicit-numeric-forecast-overflow.md and glanceable-quota-severity-in-
-// native-tray-menus.md. If the ▒ shading confuses people, the fallback is a
+// Research (divan ai-quota-monitoring/): fixed-quota-scale-text-bars-need-
+// explicit-numeric-forecast-overflow.md, glanceable-quota-severity-in-
+// native-tray-menus.md and compact-quota-row-typography-for-menus-and-
+// terminal-tables.md. If the ▒ shading confuses people, the fallback is a
 // used-only bar with the forecast in words.
 package meter
 
@@ -127,97 +128,67 @@ func Shown(windows []provider.UsageWindow) []provider.UsageWindow {
 	return active
 }
 
-// FieldKind says what a row field holds, so a renderer can color it.
-type FieldKind int
-
-const (
-	// Margin is "+87% at reset" or "−3% at reset".
-	Margin FieldKind = iota
-	// Note stands in for the margin when there is no forecast.
-	Note
-	// Now is current use.
-	Now
-	// Resets is when the window resets, or its reset policy.
-	Resets
-	// RunsOut is when the window runs out before its reset.
-	RunsOut
-	// Detail is a qualifier or money detail.
-	Detail
-)
-
-// Field is one column of a row.
-type Field struct {
-	Text string
-	Kind FieldKind
-}
-
-// Row is one quota window laid out for display. A row with Line set is a
-// money-only window and has no bar or fields.
+// Row is one quota window ready to display. Values are unpadded; each
+// renderer lays them out: the tray menu as labeled phrases, the CLI as a
+// table. A row with Line set is a money-only window and has nothing else.
 type Row struct {
-	Code   string
-	Bar    []Cell
-	Fields []Field
-	Line   string
+	Line string
+
+	Code string
+	// Qualifier is what the code leaves out of the label, such as "Fable",
+	// when it is needed to tell windows apart.
+	Qualifier string
+	// Money is a quota window's money detail.
+	Money string
+	Bar   []Cell
+	// Forecast is the forecast use at reset, such as "137%". When the
+	// window has a reset but no usable forecast, it is empty and
+	// ForecastState says why ("unknown" or "stale").
+	Forecast      string
+	ForecastState string
 	// Over is true when the forecast passes the limit.
 	Over bool
+	Used string
+	// Resets is the time to the reset, such as "2h 23m", or the reset
+	// policy when ResetPolicy is true.
+	Resets      string
+	ResetPolicy bool
+	// RunsOut is the time until the window runs out before its reset,
+	// "now" when it already has, or empty when it lasts to the reset.
+	RunsOut string
 }
 
-// Layout pads row fields so columns line up. Space is the padding
-// character: a figure space, as wide as a digit, for proportional fonts.
-type Layout struct {
-	Space       string
-	MarginWidth int
+// HasPace reports whether the bar carries a pace mark.
+func (r Row) HasPace() bool {
+	return len(r.Bar) > BarCells
 }
-
-// DefaultMarginWidth fits margins up to "+999%".
-const DefaultMarginWidth = 5
 
 // Rows lays out an account's windows, each with its projection. A window's
 // qualifier, such as "all models", shows only when it is needed: "all
 // models" on an account's only seven-day row says nothing.
-func Rows(windows []provider.UsageWindow, projections []forecast.Projection, layout Layout) []Row {
+func Rows(windows []provider.UsageWindow, projections []forecast.Projection) []Row {
 	codes := make(map[string]int, len(windows))
 	for _, window := range windows {
 		codes[Code(window)]++
 	}
 	rows := make([]Row, len(windows))
 	for i, window := range windows {
-		rows[i] = NewRow(window, projections[i], codes[Code(window)] > 1, layout)
+		rows[i] = NewRow(window, projections[i], codes[Code(window)] > 1)
 	}
 	return rows
 }
 
-// MarginWidth is the widest margin among the projections, at least
-// DefaultMarginWidth, so an early forecast such as "+3260%" widens the
-// column for every row instead of pushing its own row out of line. Use now
-// and the times keep fixed widths: they pass them only past 999% used or 99
-// days.
-func MarginWidth(projections []forecast.Projection) int {
-	width := DefaultMarginWidth
-	for _, proj := range projections {
-		// A window with no reset has a zero projection; its "−100%" fits the
-		// default width.
-		if !proj.Unknown && !proj.Stale {
-			width = max(width, len([]rune(MarginText(proj.ProjectedPct))))
-		}
-	}
-	return width
-}
-
 // NewRow lays out one window. proj must come from the window; it is ignored
 // when the window has no reset.
-func NewRow(window provider.UsageWindow, proj forecast.Projection, codeShared bool, layout Layout) Row {
+func NewRow(window provider.UsageWindow, proj forecast.Projection, codeShared bool) Row {
 	label := Label(window)
 	money := window.MoneyDetail()
 	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
 		return Row{Line: label + ": " + money}
 	}
-	var tail []Field
+	row := Row{Code: Code(window), Money: money, Used: Percent(window.Utilization)}
 	if qualifier := Qualifier(window); qualifier != "" && (codeShared || qualifier != "all models") {
-		tail = append(tail, Field{qualifier, Detail})
-	}
-	if money != "" {
-		tail = append(tail, Field{money, Detail})
+		row.Qualifier = qualifier
 	}
 	length := forecast.WindowLength(window)
 	hasPace := length > 0 && !window.ResetsAt.IsZero()
@@ -225,64 +196,62 @@ func NewRow(window provider.UsageWindow, proj forecast.Projection, codeShared bo
 	if hasPace {
 		pace = ExpectedPct(window.ResetsAt, length)
 	}
-	now := Field{Pad(fmt.Sprintf("%.0f", window.Utilization), 3, layout.Space) + "% now", Now}
-	row := Row{Code: Code(window)}
 	if window.ResetsAt.IsZero() {
-		reset := window.ResetPolicy
-		if reset == "" {
-			reset = "reset not reported"
+		row.Resets, row.ResetPolicy = window.ResetPolicy, true
+		if row.Resets == "" {
+			row.Resets = "reset not reported"
 		}
 		row.Bar = Bar(window.Utilization, window.Utilization, pace, hasPace)
-		row.Fields = append([]Field{now, {reset, Resets}}, tail...)
 		return row
 	}
-	resets := Field{"resets in " + Duration(time.Until(window.ResetsAt), layout.Space), Resets}
+	row.Resets = Duration(time.Until(window.ResetsAt))
 	if proj.Unknown || proj.Stale {
+		row.ForecastState = "unknown"
+		if proj.Stale {
+			row.ForecastState = "stale"
+		}
 		row.Bar = Bar(window.Utilization, window.Utilization, pace, hasPace)
-		row.Fields = append([]Field{{proj.PaceIndicator(), Note}, now, resets}, tail...)
 		return row
 	}
 	row.Bar = Bar(window.Utilization, proj.ProjectedPct, pace, hasPace)
+	row.Forecast = Percent(proj.ProjectedPct)
 	row.Over = proj.ProjectedPct > 100
-	row.Fields = []Field{{Pad(MarginText(proj.ProjectedPct), layout.MarginWidth, layout.Space) + " at reset", Margin}, now, resets}
 	if !proj.WillLastToReset {
+		row.RunsOut = "now"
 		if proj.RunsOutIn > 0 {
-			row.Fields = append(row.Fields, Field{"runs out in " + Duration(proj.RunsOutIn, layout.Space), RunsOut})
-		} else {
-			row.Fields = append(row.Fields, Field{"out now", RunsOut})
+			row.RunsOut = Duration(proj.RunsOutIn)
 		}
 	}
-	row.Fields = append(row.Fields, tail...)
 	return row
 }
 
-// MarginText says where the forecast ends relative to the limit: "+87%"
-// over it or "−3%" under it. It decides on the raw forecast, so 100.4% is
-// "+<1%", not a rounded "+0%".
-func MarginText(projectedPct float64) string {
-	margin := projectedPct - 100
-	sign := "+"
-	if margin <= 0 {
-		sign, margin = "−", -margin
-	}
-	if margin < 0.5 {
-		return sign + "<1%"
-	}
-	return sign + fmt.Sprintf("%.0f", margin) + "%"
+// Percent writes a whole percentage.
+func Percent(pct float64) string {
+	return strconv.FormatFloat(math.Round(pct), 'f', 0, 64) + "%"
 }
 
-// Duration writes a duration as two units, " 3d18h" or "12h04m", padded so
-// the times line up from row to row.
-func Duration(d time.Duration, space string) string {
-	if d < 0 {
-		d = 0
-	}
+// Duration writes a duration in at most two units with a space between
+// them: "6d 16h", "2h 23m", "1h 1m", "59m". A zero second unit is left off
+// ("7d", "2h"), and a duration under a minute is "<1m".
+func Duration(d time.Duration) string {
 	d = d.Round(time.Minute)
-	hours := int(d / time.Hour)
-	if hours >= 24 {
-		return Pad(strconv.Itoa(hours/24), 2, space) + "d" + Pad(strconv.Itoa(hours%24), 2, space) + "h"
+	minutes := int(d / time.Minute)
+	days, hours, mins := minutes/(24*60), minutes/60%24, minutes%60
+	two := func(n int, unit string, m int, sub string) string {
+		if m == 0 {
+			return strconv.Itoa(n) + unit
+		}
+		return strconv.Itoa(n) + unit + " " + strconv.Itoa(m) + sub
 	}
-	return Pad(strconv.Itoa(hours), 2, space) + fmt.Sprintf("h%02dm", int(d/time.Minute)%60)
+	switch {
+	case days > 0:
+		return two(days, "d", hours, "h")
+	case hours > 0:
+		return two(hours, "h", mins, "m")
+	case mins > 0:
+		return strconv.Itoa(mins) + "m"
+	}
+	return "<1m"
 }
 
 // Pad left-pads s to width runes with space.
@@ -298,15 +267,16 @@ func Label(window provider.UsageWindow) string {
 	return strings.TrimSpace(window.Name)
 }
 
-// Code names a window by its length, such as "5H" or "7D", so bars start
-// at the same place. A window with no known length keeps its label.
+// Code names a window by its length, such as "5h" or "7d" as on the tray
+// icon, so bars start at the same place. A window with no known length
+// keeps its label.
 func Code(window provider.UsageWindow) string {
 	length := forecast.WindowLength(window)
 	switch {
 	case length >= 24*time.Hour && length%(24*time.Hour) == 0:
-		return fmt.Sprintf("%dD", length/(24*time.Hour))
+		return fmt.Sprintf("%dd", length/(24*time.Hour))
 	case length >= time.Hour && length%time.Hour == 0:
-		return fmt.Sprintf("%dH", length/time.Hour)
+		return fmt.Sprintf("%dh", length/time.Hour)
 	}
 	return Label(window)
 }

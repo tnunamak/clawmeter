@@ -51,15 +51,66 @@ type ProviderFormatter struct {
 // tableLayout holds the column widths shared by every provider in the
 // status table.
 type tableLayout struct {
-	providerWidth int
-	codeWidth     int
-	meter         meter.Layout
+	provider, window, forecast, used, resets, runsOut int
 }
 
-// shownWindows are the windows the status table and the tray menu show.
-func (pf *ProviderFormatter) shownWindows() ([]provider.UsageWindow, []forecast.Projection) {
+// tableGutter separates the status table's columns.
+const tableGutter = "  "
+
+// tableHeader names the status table's columns. Numeric columns are
+// right-aligned, as their values are. Research: divan ai-quota-monitoring/
+// compact-quota-row-typography-for-menus-and-terminal-tables.md.
+var tableHeader = tableCells{"PROVIDER", "WINDOW", "USAGE", "USED", "AT RESET", "RESETS IN", "RUNS OUT IN"}
+
+type tableCells [7]string
+
+func newTableLayout() tableLayout {
+	h := tableHeader
+	return tableLayout{
+		provider: utf8.RuneCountInString(h[0]), window: utf8.RuneCountInString(h[1]),
+		used: utf8.RuneCountInString(h[3]), forecast: utf8.RuneCountInString(h[4]),
+		resets: utf8.RuneCountInString(h[5]), runsOut: utf8.RuneCountInString(h[6]),
+	}
+}
+
+func (l *tableLayout) fit(cells tableCells) {
+	l.provider = max(l.provider, utf8.RuneCountInString(cells[0]))
+	l.window = max(l.window, utf8.RuneCountInString(cells[1]))
+	l.used = max(l.used, utf8.RuneCountInString(cells[3]))
+	l.forecast = max(l.forecast, utf8.RuneCountInString(cells[4]))
+	l.resets = max(l.resets, utf8.RuneCountInString(cells[5]))
+	l.runsOut = max(l.runsOut, utf8.RuneCountInString(cells[6]))
+}
+
+// line pads cells to the layout, right-aligning the numeric columns, and
+// colors them with style (cell index to ANSI style). The bar arrives
+// already colored, so its width is passed separately.
+func (l tableLayout) line(cells tableCells, barWidth int, style map[int]string) string {
+	left := func(s string, w int) string { return s + strings.Repeat(" ", max(0, w-utf8.RuneCountInString(s))) }
+	right := func(s string, w int) string { return strings.Repeat(" ", max(0, w-utf8.RuneCountInString(s))) + s }
+	padded := []string{
+		left(cells[0], l.provider), left(cells[1], l.window),
+		cells[2] + strings.Repeat(" ", max(0, meter.BarCells+1-barWidth)),
+		right(cells[3], l.used), right(cells[4], l.forecast), right(cells[5], l.resets), right(cells[6], l.runsOut),
+	}
+	for i, st := range style {
+		if st != "" && strings.TrimSpace(padded[i]) != "" {
+			padded[i] = st + padded[i] + reset
+		}
+	}
+	return strings.TrimRight(strings.Join(padded, tableGutter), " ")
+}
+
+// span starts free text, such as a credit balance or an error, at the
+// WINDOW column.
+func (l tableLayout) span(providerCell, text string) string {
+	return providerCell + strings.Repeat(" ", max(0, l.provider-utf8.RuneCountInString(providerCell))) + tableGutter + text
+}
+
+// shownRows are the rows the status table and the tray menu show.
+func (pf *ProviderFormatter) shownRows() []meter.Row {
 	if pf.Data == nil || pf.Data.IsExpired || pf.Data.Error != "" {
-		return nil, nil
+		return nil
 	}
 	windows := meter.Shown(pf.Data.PresentationWindows())
 	projections := make([]forecast.Projection, len(windows))
@@ -68,81 +119,105 @@ func (pf *ProviderFormatter) shownWindows() ([]provider.UsageWindow, []forecast.
 			projections[i] = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 		}
 	}
-	return windows, projections
+	return meter.Rows(windows, projections)
 }
 
-// FormatColorAligned returns the provider's rows of the status table. The
-// rows read like the tray menu's, with the tray icon's colors: usage past an
-// even pace is red, the gap short of it green.
+// rowCells are a quota row's table cells, the bar left uncolored.
+func rowCells(row meter.Row) tableCells {
+	window := row.Code
+	if row.Qualifier != "" {
+		window += " " + row.Qualifier
+	}
+	forecast := row.Forecast
+	switch {
+	case forecast == "" && row.ForecastState != "":
+		forecast = row.ForecastState
+	case forecast == "":
+		forecast = "—"
+	}
+	resets := row.Resets
+	if row.ResetPolicy {
+		resets = strings.TrimPrefix(resets, "resets ")
+	}
+	return tableCells{"", window, meter.BarText(row.Bar), row.Used, forecast, resets, row.RunsOut}
+}
+
+// FormatColorAligned returns the provider's rows of the status table. Bars
+// take the tray icon's colors: usage past an even pace is red, the gap short
+// of it green.
 func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
-	var statusLine string
+	var note string
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
-		statusLine = pf.Status.FormatCLI()
+		note = pf.Status.FormatCLI()
 	}
 	if pf.Data != nil && pf.Data.Stale {
-		statusLine = staleSummary(pf.Data)
+		note = staleSummary(pf.Data)
 	}
-	indent := strings.Repeat(" ", layout.providerWidth)
-	label := fmt.Sprintf("%-*s", layout.providerWidth, pf.Display)
-	withStatus := func(line string) string {
-		if statusLine != "" {
-			line += "  " + dim + statusLine + reset
+	var lines []string
+	providerCell := func() string {
+		if len(lines) == 0 {
+			return pf.Display
 		}
-		return line
+		return ""
 	}
+	addSpan := func(text string) { lines = append(lines, layout.span(providerCell(), text)) }
 
 	switch {
 	case pf.Data == nil:
-		return []string{withStatus(label + "  " + dim + "no data" + reset)}
+		addSpan(dim + "no data" + reset)
 	case pf.Data.IsExpired:
-		return appendSnapshotLines([]string{withStatus(label + "  " + red + expiredMessage(pf.Data.Error) + reset)}, pf.Data, indent)
+		addSpan(red + expiredMessage(pf.Data.Error) + reset)
+		lines = appendSnapshotLines(lines, pf.Data, layout)
 	case pf.Data.Error != "":
-		return appendSnapshotLines([]string{withStatus(label + "  " + red + format.HumanizeError(pf.Data.Error) + reset)}, pf.Data, indent)
-	}
-
-	windows, projections := pf.shownWindows()
-	lines := make([]string, 0, len(windows)+2)
-	next := func(text string) {
-		prefix := indent
-		if len(lines) == 0 {
-			prefix = label
+		addSpan(red + format.HumanizeError(pf.Data.Error) + reset)
+		lines = appendSnapshotLines(lines, pf.Data, layout)
+	default:
+		for _, row := range pf.shownRows() {
+			if row.Line != "" {
+				addSpan(row.Line)
+				continue
+			}
+			cells := rowCells(row)
+			cells[0] = providerCell()
+			cells[2] = colorBar(row.Bar)
+			style := map[int]string{}
+			if row.Over {
+				style[4] = red
+			}
+			if row.Forecast == "" {
+				style[4] = dim
+			}
+			style[6] = red
+			line := layout.line(cells, len(row.Bar), style)
+			if row.Money != "" {
+				line += tableGutter + dim + row.Money + reset
+			}
+			lines = append(lines, line)
 		}
-		line := prefix + "  " + text
-		if len(lines) == 0 {
-			line = withStatus(line)
+		for _, balance := range pf.Data.Balances {
+			name := balance.DisplayName
+			if name == "" {
+				name = balance.Name
+			}
+			addSpan(fmt.Sprintf("%s %.2f remaining", name, balance.Remaining))
 		}
-		lines = append(lines, line)
-	}
-	for _, row := range meter.Rows(windows, projections, layout.meter) {
-		next(colorRow(row, layout.codeWidth))
-	}
-	for _, balance := range pf.Data.Balances {
-		name := balance.DisplayName
-		if name == "" {
-			name = balance.Name
+		for _, pool := range pf.Data.CreditPools {
+			addSpan(pool.Name + ": " + pool.Summary(time.Now()))
 		}
-		next(fmt.Sprintf("%s %.2f remaining", name, balance.Remaining))
+		if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
+			addSpan(summary)
+		}
 	}
-	for _, pool := range pf.Data.CreditPools {
-		next(pool.Name + ": " + pool.Summary(time.Now()))
-	}
-	if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
-		next(summary)
-	}
-	if len(lines) == 0 && statusLine != "" {
-		lines = append(lines, withStatus(label))
+	if note != "" {
+		addSpan(dim + note + reset)
 	}
 	return lines
 }
 
-// colorRow draws a row in a terminal. Glyphs and fields match the tray menu.
-func colorRow(row meter.Row, codeWidth int) string {
-	if row.Line != "" {
-		return row.Line
-	}
+// colorBar draws a bar in the tray icon's colors.
+func colorBar(bar []meter.Cell) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%-*s  ", codeWidth, row.Code)
-	for _, cell := range row.Bar {
+	for _, cell := range bar {
 		style := ""
 		switch {
 		case cell.Kind == meter.Ahead:
@@ -158,32 +233,6 @@ func colorRow(row meter.Row, codeWidth int) string {
 			b.WriteString(cell.Glyph)
 		} else {
 			b.WriteString(style + cell.Glyph + reset)
-		}
-	}
-	if len(row.Bar) == meter.BarCells {
-		b.WriteString(" ") // as wide as the pace mark
-	}
-	b.WriteString("  ")
-	for i, field := range row.Fields {
-		if i > 0 {
-			b.WriteString(dim + "  ·  " + reset)
-		}
-		style := ""
-		switch field.Kind {
-		case meter.Margin:
-			style = green
-			if row.Over {
-				style = red
-			}
-		case meter.RunsOut:
-			style = red
-		case meter.Note, meter.Detail:
-			style = dim
-		}
-		if style == "" {
-			b.WriteString(field.Text)
-		} else {
-			b.WriteString(style + field.Text + reset)
 		}
 	}
 	return b.String()
@@ -277,12 +326,12 @@ func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 
 // appendSnapshotLines keeps browser-checked facts (reset grants, API credit
 // pools) visible on a row whose usage reading failed or expired.
-func appendSnapshotLines(lines []string, data *provider.UsageData, indent string) []string {
+func appendSnapshotLines(lines []string, data *provider.UsageData, layout tableLayout) []string {
 	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
-		lines = append(lines, indent+"  "+summary)
+		lines = append(lines, layout.span("", summary))
 	}
 	for _, pool := range data.CreditPools {
-		lines = append(lines, indent+"  "+pool.Name+": "+pool.Summary(time.Now()))
+		lines = append(lines, layout.span("", pool.Name+": "+pool.Summary(time.Now())))
 	}
 	return lines
 }
@@ -317,20 +366,23 @@ func (m *MultiProviderOutput) HideUnavailable() {
 	m.Providers = filtered
 }
 
-// PrintColor prints the status table. Its rows read like the tray menu's.
+// PrintColor prints the status table. Its rows hold the same values as the
+// tray menu's.
 func (m *MultiProviderOutput) PrintColor() {
-	layout := tableLayout{meter: meter.Layout{Space: " "}}
-	var projections []forecast.Projection
+	layout := newTableLayout()
+	hasRows := false
 	for _, pf := range m.Providers {
-		layout.providerWidth = max(layout.providerWidth, utf8.RuneCountInString(pf.Display))
-		windows, projs := pf.shownWindows()
-		for _, window := range windows {
-			layout.codeWidth = max(layout.codeWidth, utf8.RuneCountInString(meter.Code(window)))
+		layout.provider = max(layout.provider, utf8.RuneCountInString(pf.Display))
+		for _, row := range pf.shownRows() {
+			if row.Line == "" {
+				hasRows = true
+				layout.fit(rowCells(row))
+			}
 		}
-		projections = append(projections, projs...)
 	}
-	layout.meter.MarginWidth = meter.MarginWidth(projections)
-
+	if hasRows {
+		fmt.Println(dim + layout.line(tableHeader, utf8.RuneCountInString(tableHeader[2]), nil) + reset)
+	}
 	for i, pf := range m.Providers {
 		lines := pf.FormatColorAligned(layout)
 		for _, line := range lines {

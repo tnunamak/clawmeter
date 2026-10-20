@@ -1890,11 +1890,17 @@ func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*prov
 		all = append(all, projections...)
 		accounts[name] = account{windows, projections}
 	}
-	layout := meter.Layout{Space: figureSpace, MarginWidth: meter.MarginWidth(all)}
-	rows := make(map[string][]string, len(accounts))
+	var shown []meter.Row
+	byAccount := make(map[string][]meter.Row, len(accounts))
 	for name, a := range accounts {
-		for _, row := range meter.Rows(a.windows, a.projections, layout) {
-			rows[name] = append(rows[name], trayRowText(row))
+		byAccount[name] = meter.Rows(a.windows, a.projections)
+		shown = append(shown, byAccount[name]...)
+	}
+	widths := trayColumnWidths(shown)
+	rows := make(map[string][]string, len(accounts))
+	for name, accountRows := range byAccount {
+		for _, row := range accountRows {
+			rows[name] = append(rows[name], trayRowText(row, widths))
 		}
 	}
 	return rows
@@ -1904,20 +1910,64 @@ func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*prov
 // menu's proportional font.
 const figureSpace = "\u2007"
 
-// trayRowText joins a row for a native menu, which has no color.
-func trayRowText(row meter.Row) string {
+// trayGutter separates a row's columns. Columns line up, so they need space
+// between them, not punctuation.
+const trayGutter = "    "
+
+// trayWidths are the widest values in the menu, in runes, so each column
+// starts at the same place on every row: an early forecast such as "3360%"
+// widens its column instead of pushing its own row out of line. Times are
+// not padded: their letters are not as wide as digits, and they come last.
+type trayWidths struct {
+	used, forecast int
+}
+
+func trayColumnWidths(rows []meter.Row) trayWidths {
+	widths := trayWidths{used: len("100%"), forecast: len("100%")}
+	for _, row := range rows {
+		widths.forecast = max(widths.forecast, len([]rune(row.Forecast)))
+		widths.used = max(widths.used, len([]rune(row.Used)))
+	}
+	return widths
+}
+
+// trayRowText writes a row for a native menu, which has no color and no
+// columns: labeled values padded with figure spaces and separated by
+// gutters. Research: divan ai-quota-monitoring/compact-quota-row-
+// typography-for-menus-and-terminal-tables.md.
+func trayRowText(row meter.Row, widths trayWidths) string {
 	if row.Line != "" {
 		return row.Line
 	}
 	bar := meter.BarText(row.Bar)
-	if len(row.Bar) == meter.BarCells {
+	if !row.HasPace() {
 		bar += figureSpace // as wide as the pace mark, so the columns still line up
 	}
-	fields := make([]string, len(row.Fields))
-	for i, field := range row.Fields {
-		fields[i] = field.Text
+	forecast := "no forecast"
+	switch {
+	case row.Forecast != "":
+		forecast = meter.Pad(row.Forecast, widths.forecast, figureSpace) + " at reset"
+	case row.ForecastState != "":
+		forecast = "forecast " + row.ForecastState
 	}
-	return row.Code + "   " + bar + "   " + strings.Join(fields, "  ·  ")
+	resets := row.Resets
+	if !row.ResetPolicy {
+		resets = "resets in " + row.Resets
+	}
+	columns := []string{row.Code, bar, meter.Pad(row.Used, widths.used, figureSpace) + " used", forecast, resets}
+	switch row.RunsOut {
+	case "":
+	case "now":
+		columns = append(columns, "out now")
+	default:
+		columns = append(columns, "runs out in "+row.RunsOut)
+	}
+	for _, detail := range []string{row.Qualifier, row.Money} {
+		if detail != "" {
+			columns = append(columns, detail)
+		}
+	}
+	return strings.Join(columns, trayGutter)
 }
 
 // windowRunsOutBeforeReset reports whether a window is projected to run out

@@ -155,11 +155,12 @@ clawmeter
 ```
 
 ```text
-Claude  5H  █▒┃▒▒▒▒░░░░   −45% at reset  ·   11% now  ·  resets in  4h00m
-        7D  ████████┃█▒   +12% at reset  ·   89% now  ·  resets in  1d10h  ·  runs out in 16h00m
+PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN
+Claude    5h      █▒┃▒▒▒▒░░░░   11%       55%         4h
+          7d      ████████┃█▒   89%      112%     1d 10h       16h 5m
 ```
 
-The status table and the tray menu draw the same rows. The bar runs from 0 to 100% of the limit: █ used, ▒ projected by the reset, ░ free. ┃ marks where an even pace would be by now, so fill past it means you are ahead of pace. "At reset" says where the forecast ends relative to the limit. In a terminal, usage ahead of pace and a forecast over the limit are red, matching the tray icon, and a gap short of the pace mark is green. Windows with nothing used and nothing forecast are hidden; `--json` still has them.
+The status table and the tray menu show the same values. The bar runs from 0 to 100% of the limit: █ used, ▒ projected by the reset, ░ free. ┃ marks where an even pace would be by now, so fill past it means you are ahead of pace. AT RESET is the forecast use when the window resets; over 100% means it runs out first. In a terminal, usage ahead of pace, a forecast over the limit and the run-out time are red, matching the tray icon, and a gap short of the pace mark is green. Windows with nothing used and nothing forecast are hidden; `--json` still has them. Providers are listed alphabetically, as in the tray menu.
 
 Useful commands:
 

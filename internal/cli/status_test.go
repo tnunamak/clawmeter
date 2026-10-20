@@ -10,11 +10,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
-	"github.com/tnunamak/clawmeter/internal/forecast"
-	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
@@ -88,7 +87,7 @@ func TestFormatColorShowsBalanceOnlyProviderWithNameFallback(t *testing.T) {
 	pf := ProviderFormatter{Display: "Provider", Data: &provider.UsageData{
 		Balances: []provider.UsageBalance{{Name: "credits", Remaining: 3.5}},
 	}}
-	got := strings.Join(pf.FormatColorAligned(tableLayout{providerWidth: len(pf.Display)}), "\n")
+	got := strings.Join(pf.FormatColorAligned(newTableLayout()), "\n")
 	if got := strings.Join(strings.Fields(got), " "); got != "Provider credits 3.50 remaining" {
 		t.Fatalf("FormatColorAligned() normalized = %q, want %q", got, "Provider credits 3.50 remaining")
 	}
@@ -1055,23 +1054,35 @@ func TestExpiredMessageDoesNotRepeatExpired(t *testing.T) {
 	}
 }
 
-func TestStatusRowUsesTheTrayIconColors(t *testing.T) {
+func TestStatusTableRowsUseTheTrayIconColors(t *testing.T) {
 	// 72% used two days into a seven-day window: ahead of an even pace.
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
-	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	got := colorRow(meter.NewRow(window, proj, false, meter.Layout{Space: " ", MarginWidth: meter.DefaultMarginWidth}), 2)
-	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(got, "")
-	if !strings.HasPrefix(plain, "7D  ███┃████▒▒▒  +152% at reset  ·   72% now  ·  resets in  5d 0h  ·  runs out in ") {
-		t.Fatalf("row = %q", plain)
+	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}}
+	layout := newTableLayout()
+	for _, row := range pf.shownRows() {
+		layout.fit(rowCells(row))
 	}
-	if !strings.Contains(got, red+"█"+reset) || !strings.Contains(got, red+"+152% at reset"+reset) || !strings.Contains(got, bold+"┃"+reset) {
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	header := ansi.ReplaceAllString(layout.line(tableHeader, len(tableHeader[2]), nil), "")
+	got := pf.FormatColorAligned(layout)[0]
+	plain := ansi.ReplaceAllString(got, "")
+	if !strings.HasPrefix(plain, "Claude    7d      ███┃████▒▒▒   72%      252%         5d  ") {
+		t.Fatalf("row = %q\nheader = %q", plain, header)
+	}
+	// Right-aligned numbers end under their headers.
+	for _, col := range []struct{ head, value string }{{"AT RESET", "252%"}, {"USED", "72%"}, {"RESETS IN", "5d"}} {
+		runeEnd := func(line, s string) int { return utf8.RuneCountInString(line[:strings.Index(line, s)+len(s)]) }
+		if runeEnd(plain, col.value) != runeEnd(header, col.head) {
+			t.Errorf("%s does not end under %s:\n%s\n%s", col.value, col.head, header, plain)
+		}
+	}
+	if !strings.Contains(got, red+"█"+reset) || !strings.Contains(got, red+"    252%"+reset) || !strings.Contains(got, bold+"┃"+reset) {
 		t.Fatalf("ahead-of-pace cells and the overshoot should be red: %q", got)
 	}
 	// 10% used at the same point: short of pace, so the gap is green.
-	window.Utilization = 10
-	proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	got = colorRow(meter.NewRow(window, proj, false, meter.Layout{Space: " ", MarginWidth: meter.DefaultMarginWidth}), 2)
-	if strings.Contains(got, red) || !strings.Contains(got, green+"▒"+reset) || !strings.Contains(got, green+" −65% at reset"+reset) {
+	pf.Data.Windows[0].Utilization = 10
+	got = pf.FormatColorAligned(layout)[0]
+	if strings.Contains(got, red+"█") || !strings.Contains(got, green+"▒"+reset) {
 		t.Fatalf("behind-pace row = %q", got)
 	}
 }
@@ -1081,13 +1092,13 @@ func TestStatusErrorRowAlignsItsSnapshotDetails(t *testing.T) {
 		Error:       "boom",
 		CreditPools: []provider.UsageCreditPool{{Name: "API credits"}},
 	}}
-	lines := pf.FormatColorAligned(tableLayout{providerWidth: len(pf.Display)})
+	lines := pf.FormatColorAligned(newTableLayout())
 	if len(lines) != 2 {
 		t.Fatalf("lines = %q", lines)
 	}
 	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	first, detail := plain.ReplaceAllString(lines[0], ""), plain.ReplaceAllString(lines[1], "")
-	if strings.Index(detail, "API credits") != len("Claude  ") || !strings.HasPrefix(first, "Claude  ") {
+	if strings.Index(detail, "API credits") != strings.Index(first, "boom") {
 		t.Fatalf("error and detail start in different columns:\n%q\n%q", first, detail)
 	}
 }

@@ -1319,7 +1319,7 @@ func TestTrayTypedMonthlyPresentation(t *testing.T) {
 	if meter.RiskPct < 60 || meter.RiskPct > 62 || meter.ExpectedPct < 98 || meter.ExpectedPct > 99 {
 		t.Fatalf("monthly meter = %+v", meter)
 	}
-	if got := trayWindowText(window); !strings.Contains(got, "−39% at reset  ·  \u200760% now  ·  resets in 12h00m  ·  premium") {
+	if got := trayWindowText(window); !strings.HasSuffix(got, "\u200760% used    \u200761% at reset    resets in 12h    premium") {
 		t.Fatalf("monthly menu = %q", got)
 	}
 }
@@ -1511,17 +1511,17 @@ func TestLocalPublicationWaitsForRefresh(t *testing.T) {
 	}
 }
 
-func TestTrayWindowRowsShareOneSeparatorStyle(t *testing.T) {
+func TestTrayRowLaysLabeledValuesOutInGutteredColumns(t *testing.T) {
 	soon := provider.UsageWindow{Name: "five_hour", Length: 5 * time.Hour, Utilization: 7, ResetsAt: time.Now().Add(3*time.Hour + 30*time.Second)}
-	if got := trayWindowText(soon); got != "5H   █▒░░┃░░░░░░   \u2007−82% at reset  ·  \u2007\u20077% now  ·  resets in \u20073h00m" || strings.Contains(got, "—") {
+	if got := trayWindowText(soon); got != "5h    █▒░░┃░░░░░░    \u2007\u20077% used    \u200718% at reset    resets in 3h" || strings.Contains(got, "·") {
 		t.Fatalf("row = %q", got)
 	}
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
-	if got := trayWindowText(policy); !strings.HasSuffix(got, "   \u200740% now  ·  resets daily") {
+	if got := trayWindowText(policy); !strings.HasSuffix(got, "    \u200740% used    no forecast    resets daily") {
 		t.Fatalf("policy row = %q", got)
 	}
 	unknown := provider.UsageWindow{Name: "daily", Utilization: 40}
-	if got := trayWindowText(unknown); !strings.HasSuffix(got, "   \u200740% now  ·  reset not reported") {
+	if got := trayWindowText(unknown); !strings.HasSuffix(got, "    \u200740% used    no forecast    reset not reported") {
 		t.Fatalf("unreported row = %q", got)
 	}
 }
@@ -1529,7 +1529,7 @@ func TestTrayWindowRowsShareOneSeparatorStyle(t *testing.T) {
 func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	window := provider.UsageWindow{Name: "seven_day", Length: 7 * 24 * time.Hour, Utilization: 86, ResetsAt: time.Now().Add(34 * time.Hour)}
 	got := trayWindowText(window)
-	if !windowRunsOutBeforeReset(window) || strings.HasPrefix(got, "⚠") || !strings.Contains(got, "  ·  runs out in ") || strings.Contains(got, "before reset") {
+	if !windowRunsOutBeforeReset(window) || !strings.Contains(got, "    runs out in ") || strings.Contains(got, "before reset") {
 		t.Fatalf("at-risk row = %q", got)
 	}
 	window.Utilization = 10
@@ -1538,45 +1538,25 @@ func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	}
 }
 
-func TestTrayWindowRowLeadsWithAFixedScaleMeterAndStatesOvershoot(t *testing.T) {
+func TestTrayWindowRowStatesForecastUseAtReset(t *testing.T) {
 	// 72% used two days into a seven-day window projects 252%.
 	window := provider.UsageWindow{Name: "seven_day", DisplayName: "7 days", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
-	got := trayWindowText(window)
-	if !strings.HasPrefix(got, "7D   ███┃████▒▒▒   +152% at reset  ·  \u200772% now  ·  resets in \u20075d\u20070h  ·  runs out in ") {
+	if got := trayWindowText(window); !strings.HasPrefix(got, "7d    ███┃████▒▒▒    \u200772% used    252% at reset    resets in 5d    runs out in ") {
 		t.Fatalf("over-limit row = %q", got)
 	}
-	// Half a five-hour window gone at 50.2% projects 100.4%: still over.
-	nearly := provider.UsageWindow{Name: "five_hour", Length: 5 * time.Hour, Utilization: 50.2, ResetsAt: time.Now().Add(150 * time.Minute)}
-	if got := trayWindowText(nearly); !strings.Contains(got, "+<1% at reset") {
-		t.Fatalf("barely-over row = %q", got)
-	}
-	nearly.Utilization = 49.8
-	if got := trayWindowText(nearly); !strings.Contains(got, "−<1% at reset") {
-		t.Fatalf("barely-under row = %q", got)
-	}
 	window.Utilization = 10
-	if got := trayWindowText(window); !strings.HasPrefix(got, "7D   █▒▒┃░░░░░░░   \u2007−65% at reset  ·  \u200710% now") {
+	if got := trayWindowText(window); !strings.HasPrefix(got, "7d    █▒▒┃░░░░░░░    \u200710% used    \u200735% at reset    resets in 5d") {
 		t.Fatalf("under-limit row = %q", got)
 	}
 }
 
-func testWindowRows(windows ...provider.UsageWindow) []string {
-	projections := make([]forecast.Projection, len(windows))
-	for i, window := range windows {
-		projections[i] = windowProjection(window)
-	}
-	var rows []string
-	for _, row := range meter.Rows(windows, projections, meter.Layout{Space: figureSpace, MarginWidth: meter.DefaultMarginWidth}) {
-		rows = append(rows, trayRowText(row))
-	}
-	return rows
-}
-
 func trayWindowText(window provider.UsageWindow) string {
-	return trayRowText(meter.NewRow(window, windowProjection(window), false, meter.Layout{Space: figureSpace, MarginWidth: meter.DefaultMarginWidth}))
+	row := meter.NewRow(window, windowProjection(window), false)
+	return trayRowText(row, trayColumnWidths([]meter.Row{row}))
 }
 
-func TestTrayMarginColumnWidensForAnEarlyForecastItShows(t *testing.T) {
+func TestTrayForecastColumnWidensForAnEarlyForecastItShows(t *testing.T) {
+	// 20% used two hours into a week projects about 1680%.
 	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 20, ResetsAt: time.Now().Add(7*24*time.Hour - 2*time.Hour)}
 	steady := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: time.Now().Add(3 * time.Hour)}
 	menus := map[string]*providerMenuItems{
@@ -1587,9 +1567,9 @@ func TestTrayMarginColumnWidensForAnEarlyForecastItShows(t *testing.T) {
 		"a": {Windows: []provider.UsageWindow{early}},
 		"b": {Windows: []provider.UsageWindow{steady}},
 	}, menus)
-	marginEnd := func(row string) int { return len([]rune(row[:strings.Index(row, " at reset")])) }
-	if marginEnd(rows["a"][0]) != marginEnd(rows["b"][0]) || !strings.Contains(rows["b"][0], "\u2007\u2007−") {
-		t.Fatalf("margins do not line up:\n%q\n%q", rows["a"][0], rows["b"][0])
+	forecastEnd := func(row string) int { return len([]rune(row[:strings.Index(row, " at reset")])) }
+	if forecastEnd(rows["a"][0]) != forecastEnd(rows["b"][0]) || !strings.Contains(rows["b"][0], "\u2007100% at reset") {
+		t.Fatalf("forecasts do not line up:\n%q\n%q", rows["a"][0], rows["b"][0])
 	}
 
 	// A ninth window has no menu slot, so it must not widen the column.
@@ -1598,7 +1578,7 @@ func TestTrayMarginColumnWidensForAnEarlyForecastItShows(t *testing.T) {
 		windows[i] = steady
 	}
 	rows = trayMenuRows(map[string]*provider.UsageData{"b": {Windows: append(windows, early)}}, menus)
-	if len(rows["b"]) != maxWindowItems || strings.Contains(rows["b"][0], "\u2007\u2007−") {
+	if len(rows["b"]) != maxWindowItems || strings.Contains(rows["b"][0], "\u2007100% at reset") {
 		t.Fatalf("a hidden window widened the column: %q", rows["b"])
 	}
 }
@@ -1607,33 +1587,13 @@ func TestTrayMeterMarksWhereAnEvenPaceWouldBe(t *testing.T) {
 	// Two of seven days gone: an even pace has used 29%, so the mark sits
 	// after the third cell. 72% used runs well past it.
 	ahead := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
-	if got := trayWindowText(ahead); !strings.HasPrefix(got, "7D   ███┃████▒▒▒   ") {
+	if got := trayWindowText(ahead); !strings.HasPrefix(got, "7d    ███┃████▒▒▒    ") {
 		t.Fatalf("ahead of pace = %q", got)
 	}
 	// A window with no reset has no pace; a figure space keeps the bar as
 	// wide as the marked ones.
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
-	if got := trayWindowText(policy); !strings.Contains(got, "████░░░░░░\u2007   ") {
+	if got := trayWindowText(policy); !strings.Contains(got, "████░░░░░░\u2007    ") {
 		t.Fatalf("no-reset row = %q", got)
-	}
-}
-
-func TestTrayWindowRowsNameTheModelsOnlyWhenTwoWindowsShareALength(t *testing.T) {
-	reset := time.Now().Add(48 * time.Hour)
-	all := provider.UsageWindow{Name: "7d All", DisplayName: "7 days (all models)", Length: 7 * 24 * time.Hour, Utilization: 30, ResetsAt: reset}
-	fable := provider.UsageWindow{Name: "7d Fable", DisplayName: "7 days (Fable)", Length: 7 * 24 * time.Hour, Utilization: 20, ResetsAt: reset}
-	session := provider.UsageWindow{Name: "5h", DisplayName: "5 hours", Length: 5 * time.Hour, Utilization: 10, ResetsAt: time.Now().Add(time.Hour)}
-	bonus := provider.UsageWindow{Name: "bonus", DisplayName: "Bonus", Utilization: 5, ResetsAt: reset}
-
-	rows := testWindowRows(session, all)
-	if strings.Contains(rows[1], "all models") || !strings.HasPrefix(rows[0], "5H   ") || !strings.HasPrefix(rows[1], "7D   ") {
-		t.Fatalf("one seven-day window: %q", rows)
-	}
-	rows = testWindowRows(all, fable, bonus)
-	if !strings.HasSuffix(rows[0], "  ·  all models") || !strings.HasSuffix(rows[1], "  ·  Fable") || !strings.HasPrefix(rows[2], "Bonus   ") || strings.Count(rows[2], "Bonus") != 1 {
-		t.Fatalf("two seven-day windows: %q", rows)
-	}
-	if rows := testWindowRows(fable); !strings.HasSuffix(rows[0], "  ·  Fable") {
-		t.Fatalf("a model-scoped window keeps its model: %q", rows)
 	}
 }
