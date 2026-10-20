@@ -492,3 +492,39 @@ test("a cost refresh and a failed container read still record the container's po
   assert.ok("team" in w.stored.at(-1).cache);
   assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out");
 });
+
+test("a pool a container lists but cannot read yet is remembered for a week", async () => {
+  const posts = [];
+  const fetch = async url => {
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    return { ok: false, status: 401 };
+  };
+  // The main session is signed out; the container lists a pool whose read fails.
+  const reader = async read => {
+    const answer = await read("https://platform.claude.com/api/organizations");
+    if (answer.status === 401) return { status: "signed_out", payloads: [] };
+    const error = new Error("Claude Console request failed");
+    error.listed = ["fresh"];
+    throw error;
+  };
+  let w = worker(reader, fetch, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }],
+    executeScript: async () => [{ result: { status: 200, body: [] } }],
+  });
+  await vm.runInContext("poll()", w.context);
+  let { cache, sessions } = w.stored.at(-1);
+  assert.ok(Number.isFinite(sessions.fresh?.elsewhereAt), "the listing is recorded without a cost entry");
+  // The container closes: no global sign-out while its pool is remembered.
+  w = worker(reader, fetch);
+  w.context.chrome.storage.local.get = async () => ({ cache, sessions });
+  await vm.runInContext("poll()", w.context);
+  assert.ok(!posts.some(url => url.endsWith("/v1/status")));
+  // A week later the record expires and the sign-out is sent.
+  const week = 8 * 24 * 60 * 60 * 1000;
+  sessions = { fresh: { seenAt: Date.now() - week, elsewhereAt: Date.now() - week } };
+  w = worker(reader, fetch);
+  w.context.chrome.storage.local.get = async () => ({ cache: {}, sessions });
+  await vm.runInContext("poll()", w.context);
+  assert.deepEqual(w.stored.at(-1).sessions, {});
+  assert.ok(posts.some(url => url.endsWith("/v1/status")));
+});

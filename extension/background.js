@@ -184,7 +184,8 @@ async function check() {
     const mainAnswered = main && (main.result.status === "ok" || main.result.status === "signed_out");
     const now = Date.now();
     const recent = at => Number.isFinite(at) && now - at <= unseenPoolAge;
-    for (const pool of new Set([...Object.keys(cache), ...Object.keys(sessions)])) {
+    const listed = [...(main?.listed || []), ...elsewhere];
+    for (const pool of new Set([...Object.keys(cache), ...Object.keys(sessions), ...listed])) {
       const record = object(sessions[pool]) ? sessions[pool] : {};
       if (main?.listed.has(pool) || elsewhere.has(pool)) {
         sessions[pool] = { seenAt: now, elsewhereAt: elsewhere.has(pool) ? now : record.elsewhereAt };
