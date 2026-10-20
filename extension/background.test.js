@@ -99,7 +99,7 @@ test("signed out posts status and removes saved cost cache", async () => {
     async (url, options) => { posts.push([url, JSON.parse(options.body)]); return {}; });
   await vm.runInContext("poll()", w.context);
   assert.deepEqual(posts, [["http://127.0.0.1:17344/v1/status", { status: "signed_out" }]]);
-  assert.deepEqual(w.stored, [{ cache: {} }]);
+  assert.deepEqual(w.stored, [{ cache: {}, sessions: {} }]);
 });
 
 test("timeout covers response JSON and a failed poll can run again", async () => {
@@ -350,14 +350,14 @@ test("a pool whose session is not open is kept for a week, then dropped", async 
   const day = 24 * 60 * 60 * 1000;
   const w = worker(sessionReader, signedIn);
   const entry = at => ({ at, reconciledAt: at, daily: {} });
-  w.context.chrome.storage.local.get = async () => ({ cache: {
-    main: entry(Date.now()), closedTab: { ...entry(Date.now() - 8 * day), seenAt: Date.now() - day, elsewhereAt: Date.now() - day },
-    gone: entry(Date.now() - 8 * day),
-  } });
+  w.context.chrome.storage.local.get = async () => ({
+    cache: { main: entry(Date.now()), closedTab: entry(Date.now() - 8 * day), gone: entry(Date.now() - 8 * day) },
+    sessions: { closedTab: { seenAt: Date.now() - day, elsewhereAt: Date.now() - day } },
+  });
   await vm.runInContext("poll()", w.context);
   const cache = w.stored.at(-1).cache;
   assert.deepEqual(Object.keys(cache).sort(), ["closedTab", "main"]);
-  assert.ok(Date.now() - cache.main.seenAt < day);
+  assert.ok(Date.now() - w.stored.at(-1).sessions.main.seenAt < day);
 });
 
 test("a tab that does not answer beside one that signs out is reported, not hidden", async () => {
@@ -384,10 +384,12 @@ test("a signed-out main session does not sign out a container whose tab is close
     if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
     return { ok: false, status: 401 };
   };
-  const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {}, seenAt: Date.now() - 60000 };
+  const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
+  const minuteAgo = Date.now() - 60000;
   // A container listed its pool a minute ago; the main session's pool is its own.
   let w = worker(sessionReader, signedOut);
-  w.context.chrome.storage.local.get = async () => ({ cache: { container: { ...recent, elsewhereAt: recent.seenAt }, main: { ...recent } } });
+  w.context.chrome.storage.local.get = async () => ({ cache: { container: { ...recent }, main: { ...recent } },
+    sessions: { container: { seenAt: minuteAgo, elsewhereAt: minuteAgo }, main: { seenAt: minuteAgo } } });
   await vm.runInContext("poll()", w.context);
   assert.equal(w.sessions.at(-1).status.console.state, "signed_out");
   assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out while a container is unknown");
@@ -396,7 +398,7 @@ test("a signed-out main session does not sign out a container whose tab is close
   // With only main-session pools, the sign-out is verified and sent.
   posts.length = 0;
   w = worker(sessionReader, signedOut);
-  w.context.chrome.storage.local.get = async () => ({ cache: { main: { ...recent } } });
+  w.context.chrome.storage.local.get = async () => ({ cache: { main: { ...recent } }, sessions: { main: { seenAt: minuteAgo } } });
   await vm.runInContext("poll()", w.context);
   assert.ok(posts.some(url => url.endsWith("/v1/status")));
   assert.deepEqual(w.stored.at(-1).cache, {});
@@ -425,22 +427,68 @@ test("a team pool shared with a container survives the container closing and the
   };
   const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
   let cache = { team: { ...recent }, personal: { ...recent }, container: { ...recent } };
+  let sessions = {};
   // Poll 1: main session and an open container tab, both reading the team.
   let w = worker(teamReader, fetch, undefined, {
     tabs: [{ id: 1, url: "https://platform.claude.com/" }],
     executeScript: async () => [{ result: { status: 200, body: { container: true } } }],
   });
-  w.context.chrome.storage.local.get = async () => ({ cache });
+  w.context.chrome.storage.local.get = async () => ({ cache, sessions });
   await vm.runInContext("poll()", w.context);
-  cache = w.stored.at(-1).cache;
-  assert.ok(Number.isFinite(cache.team.elsewhereAt), "the container's listing of the team is recorded");
-  assert.ok(!Number.isFinite(cache.personal.elsewhereAt));
+  ({ cache, sessions } = w.stored.at(-1));
+  assert.ok(Number.isFinite(sessions.team.elsewhereAt), "the container's listing of the team is recorded");
+  assert.ok(!Number.isFinite(sessions.personal.elsewhereAt));
 
   // Poll 2: the container tab is closed and the main session signs out.
   mainSignedIn = false;
   w = worker(teamReader, fetch);
-  w.context.chrome.storage.local.get = async () => ({ cache });
+  w.context.chrome.storage.local.get = async () => ({ cache, sessions });
   await vm.runInContext("poll()", w.context);
   assert.deepEqual(Object.keys(w.stored.at(-1).cache).sort(), ["container", "team"]);
+  assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out");
+});
+
+test("a cost refresh and a failed container read still record the container's pools", async () => {
+  const posts = [];
+  let mainSignedIn = true;
+  const fetch = async url => {
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    return mainSignedIn ? { ok: true, status: 200, json: async () => ({}) } : { ok: false, status: 401 };
+  };
+  // The main session lists the team and refreshes its costs, which rewrites
+  // the cache entry. The container lists the team and a pool whose read
+  // fails, so its reader throws.
+  const reader = async (read, now, cache, post, pools) => {
+    const answer = await read("https://platform.claude.com/api/organizations");
+    if (answer.status === 401) return { status: "signed_out", payloads: [] };
+    if (answer.body?.container) {
+      const error = new Error("Claude Console request failed");
+      error.listed = ["team", "broken"];
+      throw error;
+    }
+    cache.team = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
+    pools.seen.add("team");
+    pools.read.add("team");
+    return { status: "ok", payloads: [{ name: "Team", balance: 1, currency: "USD" }], listed: ["team", "personal"], failures: [] };
+  };
+  let w = worker(reader, fetch, undefined, {
+    tabs: [{ id: 1, url: "https://platform.claude.com/" }],
+    executeScript: async () => [{ result: { status: 200, body: { container: true } } }],
+  });
+  await vm.runInContext("poll()", w.context);
+  let { cache, sessions } = w.stored.at(-1);
+  assert.ok(Number.isFinite(sessions.team.elsewhereAt));
+  // A second poll refreshes the team's costs with the container closed.
+  w = worker(reader, fetch);
+  w.context.chrome.storage.local.get = async () => ({ cache, sessions });
+  await vm.runInContext("poll()", w.context);
+  ({ cache, sessions } = w.stored.at(-1));
+  assert.ok(Number.isFinite(sessions.team.elsewhereAt), "a cost refresh keeps the container's record");
+  // Then the main session signs out: the team stays, and no sign-out is sent.
+  mainSignedIn = false;
+  w = worker(reader, fetch);
+  w.context.chrome.storage.local.get = async () => ({ cache, sessions });
+  await vm.runInContext("poll()", w.context);
+  assert.ok("team" in w.stored.at(-1).cache);
   assert.ok(!posts.some(url => url.endsWith("/v1/status")), "no global sign-out");
 });

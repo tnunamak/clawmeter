@@ -118,6 +118,7 @@ function poll() {
 
 async function check() {
   let cache;
+  let sessions;
   const getJSON = async url => request(url, {
     method: "GET", credentials: "include", cache: "no-store",
     headers: { Accept: "application/json" },
@@ -147,8 +148,13 @@ async function check() {
     status.claude = { state: "error", error: message(resets.results[0].error) };
   }
   try {
-    const stored = await chrome.storage.local.get("cache");
-    cache = stored.cache && typeof stored.cache === "object" && !Array.isArray(stored.cache) ? stored.cache : {};
+    const stored = await chrome.storage.local.get(["cache", "sessions"]);
+    const object = value => value && typeof value === "object" && !Array.isArray(value);
+    cache = object(stored.cache) ? stored.cache : {};
+    // sessions records, per pool, when any session last listed it and when
+    // a session other than the main one did. It is kept apart from the cost
+    // cache, which readConsole rewrites.
+    sessions = object(stored.sessions) ? stored.sessions : {};
     const pools = { seen: new Set(), read: new Set() };
     // The main session is always read, first, so a signed-out container tab
     // cannot hide it.
@@ -156,7 +162,7 @@ async function check() {
     const elsewhere = new Set();
     const credits = await readEverySession("https://platform.claude.com/*", getJSON, async read => {
       const result = await readConsole(read, Date.now, cache, payload => send("/v1/api-credits", payload), pools)
-        .catch(error => ({ error }));
+        .catch(error => ({ error, listed: error?.listed }));
       const listed = new Set(result.listed || []);
       if (read === getJSON && !main) {
         main = { result, listed };
@@ -178,15 +184,18 @@ async function check() {
     const mainAnswered = main && (main.result.status === "ok" || main.result.status === "signed_out");
     const now = Date.now();
     const recent = at => Number.isFinite(at) && now - at <= unseenPoolAge;
-    for (const [pool, entry] of Object.entries(cache)) {
-      if (elsewhere.has(pool)) entry.elsewhereAt = now;
+    for (const pool of new Set([...Object.keys(cache), ...Object.keys(sessions)])) {
+      const record = object(sessions[pool]) ? sessions[pool] : {};
       if (main?.listed.has(pool) || elsewhere.has(pool)) {
-        entry.seenAt = now;
+        sessions[pool] = { seenAt: now, elsewhereAt: elsewhere.has(pool) ? now : record.elsewhereAt };
         continue;
       }
-      const lastSeen = Number.isFinite(entry?.seenAt) ? entry.seenAt : entry?.at;
-      const onlyMain = Number.isFinite(entry?.seenAt) && !recent(entry.elsewhereAt);
-      if ((mainAnswered && onlyMain) || !recent(lastSeen)) delete cache[pool];
+      const lastSeen = Number.isFinite(record.seenAt) ? record.seenAt : cache[pool]?.at;
+      const onlyMain = Number.isFinite(record.seenAt) && !recent(record.elsewhereAt);
+      if ((mainAnswered && onlyMain) || !recent(lastSeen)) {
+        delete cache[pool];
+        delete sessions[pool];
+      }
     }
     if (read.length) {
       status.console = { state: "ok", unchecked: credits.unavailable,
@@ -197,7 +206,7 @@ async function check() {
     } else if (complete && credits.results.every(result => result.status === "signed_out")) {
       // A pool still cached belongs to a container whose tab is closed; its
       // session may still be signed in, so Clawmeter is not told otherwise.
-      if (!Object.keys(cache).length) await send("/v1/status", { status: "signed_out" });
+      if (!Object.keys(cache).length && !Object.keys(sessions).length) await send("/v1/status", { status: "signed_out" });
       status.console = { state: "signed_out" };
     } else {
       throw credits.results.find(result => result.error)?.error || new Error("A Claude Console tab did not answer");
@@ -207,7 +216,7 @@ async function check() {
     status.console = { state: "error", error: message(error) };
   } finally {
     try {
-      if (cache) await chrome.storage.local.set({ cache });
+      if (cache) await chrome.storage.local.set({ cache, sessions });
       await chrome.storage.session.set({ status });
     } catch {}
   }

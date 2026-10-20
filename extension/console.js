@@ -170,8 +170,13 @@ async function readConsole(getJSON, now, cache, post = async () => {}, shared = 
       failures.push({ name, error });
     }
   }
-  // With no organization read, the whole poll failed.
-  if (failures.length && !payloads.length) throw failures[0].error;
+  // With no organization read, the whole poll failed. The error still says
+  // which pools this session lists.
+  if (failures.length && !payloads.length) {
+    const error = failures[0].error instanceof Error ? failures[0].error : new Error(String(failures[0].error));
+    error.listed = [...listed];
+    throw error;
+  }
   if (!shared) {
     for (const pool of Object.keys(cache)) {
       if (!seen.has(pool)) delete cache[pool];

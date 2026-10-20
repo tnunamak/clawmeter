@@ -257,3 +257,12 @@ test("a pool one session cannot read is read by the next", async () => {
   assert.equal(posted.length, 1);
   assert.deepEqual([...pools.seen], [poolHash("org-api")]);
 });
+
+test("a session whose every organization fails still says which pools it lists", async () => {
+  const f = fixture();
+  f.statuses["/api/organizations/org-api/prepaid/credits"] = 500;
+  await assert.rejects(readConsole(f.getJSON, now, {}), error => {
+    assert.equal(error.listed.length, 1);
+    return true;
+  });
+});
