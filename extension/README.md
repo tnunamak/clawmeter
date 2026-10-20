@@ -6,6 +6,7 @@ claude.ai answers 403 to requests from the extension's background worker, so `ba
 
 - `resets.js` reads reset grants and posts them to `/v1/resets`.
 - `console.js` reads prepaid API credits and posts them to `/v1/api-credits`.
+- `popup.html` shows the latest check: whether Clawmeter received it, what each source returned, and links to the pages that fix a problem. `background.js` keeps that check in session storage, so names never reach the disk.
 - The receiver is `internal/claudeweb/extension.go`. It admits only the extension IDs in `ExtensionOrigins`; the manifest `key` fixes the unpacked ID.
 
 Run the tests with `node --test extension/*.test.js`. `go test ./internal/claudeweb` also runs both readers in Node and posts their output to the Go receiver.

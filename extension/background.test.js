@@ -8,7 +8,7 @@ const vm = require("node:vm");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [] }),
   { tabs = [], executeScript = async () => [] } = {}) {
-  const listeners = {}, created = [], stored = [], queries = [], injections = [];
+  const listeners = {}, created = [], stored = [], sessions = [], queries = [], injections = [];
   const timers = new Map();
   let timerID = 0;
   const context = vm.createContext({
@@ -20,16 +20,19 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
       alarms: { get: async () => undefined, create: async (...args) => created.push(args),
         onAlarm: { addListener: fn => { listeners.alarm = fn; } } },
       runtime: {
+        id: "self",
+        onMessage: { addListener: fn => { listeners.message = fn; } },
         onInstalled: { addListener: fn => { listeners.install = fn; } },
         onStartup: { addListener: fn => { listeners.startup = fn; } },
       },
       tabs: { query: async filter => { queries.push(filter); return tabs; } },
       scripting: { executeScript: async injection => { injections.push(injection); return executeScript(injection); } },
-      storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))) } },
+      storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))) },
+        session: { set: async value => sessions.push(JSON.parse(JSON.stringify(value))) } },
     },
   });
   vm.runInContext(readFileSync(require.resolve("./background.js"), "utf8"), context);
-  return { context, listeners, created, stored, timers, queries, injections };
+  return { context, listeners, created, stored, sessions, timers, queries, injections };
 }
 
 test("alarm lifecycle and one poll at a time", async () => {
@@ -212,4 +215,42 @@ test("a claude.ai tab that never answers is abandoned for the next one", async (
   assert.deepEqual(JSON.parse(JSON.stringify(answer)), { status: 200, body: [] });
   assert.deepEqual(w.injections.map(i => i.target.tabId), [3, 7]);
   assert.equal(w.timers.size, 0);
+});
+
+test("each poll leaves a status for the popup, and the popup can ask for a poll", async () => {
+  const resetsSignedOut = async () => ({ status: "signed_out", payloads: [] });
+  const consoleRead = async (getJSON, now, cache, post) => {
+    await post({ pool: "hashed" });
+    return { status: "ok", payloads: [{ name: "Team", balance: 1250, currency: "USD" }],
+      failures: [{ name: "Broken", error: "Claude Console request failed" }] };
+  };
+  const w = worker(consoleRead, async () => { throw new Error("connection refused"); }, resetsSignedOut);
+  let replied;
+  assert.equal(w.listeners.message("poll", { id: "self" }, value => { replied = value; }), true);
+  await tick(); await tick();
+  assert.equal(replied, true);
+  const { status } = w.sessions.at(-1);
+  // No claude.ai tab: the worker's 403 means "open a tab", not "signed out".
+  assert.deepEqual(status.claude, { state: "no_tab" });
+  assert.deepEqual(status.console, { state: "ok", pools: [{ name: "Team", balance: 1250, currency: "USD" }],
+    failures: [{ name: "Broken", error: "Claude Console request failed" }] });
+  assert.deepEqual(status.delivery, ["unreachable"]);
+  assert.equal(w.listeners.message("poll", { id: "other" }, () => {}), undefined);
+});
+
+test("a popup refresh during a running check waits for that check", async () => {
+  let release;
+  const w = worker(async () => {
+    await new Promise(resolve => { release = resolve; });
+    return { status: "ok", payloads: [], failures: [] };
+  });
+  w.listeners.alarm({ name: "poll" });
+  await tick();
+  let replied = false;
+  w.listeners.message("poll", { id: "self" }, () => { replied = true; });
+  await tick();
+  assert.equal(replied, false);
+  release(); await tick(); await tick();
+  assert.equal(replied, true);
+  assert.equal(w.sessions.length, 1);
 });

@@ -96,7 +96,7 @@ test("organization authorization failures signal signed out", async () => {
 test("costs that never matched spend skip the pool; shape changes are rejected", async () => {
   const f = fixture();
   f.data["/api/organizations/org-api/current_spend"].amount = 100;
-  assert.deepEqual(await readConsole(f.getJSON, now, {}), { status: "ok", payloads: [] });
+  assert.deepEqual(await readConsole(f.getJSON, now, {}), { status: "ok", payloads: [], failures: [] });
   for (const mutate of [
     f => { f.data["/api/organizations"] = {}; },
     f => { f.data["/api/organizations/org-api/workspaces/default/usage_cost"] = {}; },
@@ -206,4 +206,29 @@ test("each org is timestamped at its requests and posted before the next org", a
   });
   assert.equal(posts.length, 2);
   assert.equal(result.payloads[1].observed_at, new Date(now + 120000).toISOString());
+});
+
+test("a failing organization is reported and does not hide the others", async () => {
+  const f = fixture();
+  f.data["/api/organizations"].unshift({ uuid: "org-broken", name: "Broken", capabilities: ["api"] });
+  f.statuses["/api/organizations/org-broken/prepaid/credits"] = 500;
+  f.data["/api/organizations/org-broken/current_spend"] = { amount: 0, resets_at: "2026-11-01T00:00:00Z" };
+  const posted = [];
+  const result = await readConsole(f.getJSON, now, {}, async payload => posted.push(payload));
+  assert.deepEqual(posted.map(payload => payload.name), ["Example"]);
+  assert.deepEqual(result.failures, [{ name: "Broken", error: "Claude Console request failed" }]);
+});
+
+test("a cost report that fails to load keeps the fresh balance on retained costs", async () => {
+  const f = fixture(), cache = {};
+  await readConsole(f.getJSON, now, cache);
+  f.statuses["/api/organizations/org-api/workspaces/default/usage_cost"] = 500;
+  f.data["/api/organizations/org-api/prepaid/credits"].amount = 19000;
+  f.data["/api/organizations/org-api/prepaid/credits"].promo_tranches[0].remaining_amount_minor_units = 18900;
+  const { payloads } = await readConsole(f.getJSON, now + 30 * 60000, cache);
+  assert.equal(payloads[0].balance, 19000);
+  assert.deepEqual(payloads[0].daily, { [today]: 11.29645 });
+  // Past the retained age, there are no costs to show.
+  await assert.rejects(readConsole(f.getJSON, now + 61 * 60000, {}), /request failed/);
+  assert.deepEqual((await readConsole(f.getJSON, now + 61 * 60000, cache)).payloads, []);
 });

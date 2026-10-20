@@ -30,35 +30,53 @@ async function readResets(getJSON, now, post = async () => {}) {
   const organizations = Array.isArray(data) ? data : data?.organizations;
   if (!Array.isArray(organizations)) changed();
   const payloads = [];
+  // Each organization's name and what Clawmeter did with its reading, for
+  // the popup.
+  const accounts = [];
   const seen = new Set();
+  let failure = null;
   for (const organization of organizations) {
     const id = String(organization?.uuid || organization?.id || "");
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    let usage;
+    const name = String(organization?.name || "Claude").trim().slice(0, 120);
+    // One organization's failure must not hide the others.
     try {
-      usage = await request(`/api/organizations/${encodeURIComponent(id)}/usage?at_wall=1&skip_spend=1`);
+      let usage;
+      try {
+        usage = await request(`/api/organizations/${encodeURIComponent(id)}/usage?at_wall=1&skip_spend=1`);
+      } catch (error) {
+        // Organizations without a chat plan, such as API-only ones, have no usage.
+        if (error.status === 403 || error.status === 404) continue;
+        throw error;
+      }
+      const resets = usage?.cedar_ember;
+      if (resets == null) continue;
+      const offered = resets.eligible === false ? [] : resets.grants;
+      if (!Array.isArray(offered) || offered.length > 100) changed();
+      const grants = [];
+      for (const grant of offered) {
+        if (!Number.isInteger(grant?.resets_left) || grant.resets_left < 0 || (grant.resets_left > 0 &&
+            (typeof grant.paused !== "boolean" || !timestamp(grant.starts_at) || !timestamp(grant.ends_at)))) changed();
+        grants.push({ resets_left: grant.resets_left, starts_at: grant.starts_at, ends_at: grant.ends_at, paused: grant.paused });
+      }
+      // Date each organization by its own read; a slow poll must not age later ones.
+      const observed = clock();
+      const payload = { observed_at: new Date(observed).toISOString(), organization: id, grants };
+      const delivery = await post(payload);
+      payloads.push(payload);
+      // Count only resets usable now; the receiver gets every grant.
+      const usable = grants.filter(grant => grant.resets_left > 0 && !grant.paused &&
+        Date.parse(grant.starts_at) <= observed && observed < Date.parse(grant.ends_at));
+      accounts.push({ name, resets: usable.reduce((sum, grant) => sum + grant.resets_left, 0), delivery });
     } catch (error) {
-      // Organizations without a chat plan, such as API-only ones, have no usage.
-      if (error.status === 403 || error.status === 404) continue;
-      throw error;
+      failure ??= error;
+      accounts.push({ name, error: String(error?.message || error) });
     }
-    const resets = usage?.cedar_ember;
-    if (resets == null) continue;
-    const offered = resets.eligible === false ? [] : resets.grants;
-    if (!Array.isArray(offered) || offered.length > 100) changed();
-    const grants = [];
-    for (const grant of offered) {
-      if (!Number.isInteger(grant?.resets_left) || grant.resets_left < 0 || (grant.resets_left > 0 &&
-          (typeof grant.paused !== "boolean" || !timestamp(grant.starts_at) || !timestamp(grant.ends_at)))) changed();
-      grants.push({ resets_left: grant.resets_left, starts_at: grant.starts_at, ends_at: grant.ends_at, paused: grant.paused });
-    }
-    // Date each organization by its own read; a slow poll must not age later ones.
-    const payload = { observed_at: new Date(clock()).toISOString(), organization: id, grants };
-    await post(payload);
-    payloads.push(payload);
   }
-  return { status: "ok", payloads };
+  // With no organization read, the whole poll failed.
+  if (failure && !payloads.length) throw failure;
+  return { status: "ok", payloads, accounts };
 }
 
 if (typeof module !== "undefined") module.exports = { readResets };

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clawmeter</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; width: 320px; font: 13px/1.4 system-ui, sans-serif; background: #14171b; color: #e6eaee; }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; border-bottom: 1px solid #2a3037; }
+  header img { width: 28px; height: 28px; }
+  h1 { margin: 0; font-size: 14px; font-weight: 600; }
+  #connection { display: flex; align-items: center; gap: 6px; color: #9aa4ae; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #5e666f; flex: none; }
+  .ok .dot { background: #34d35b; }
+  .bad .dot { background: #ff453a; }
+  section { padding: 12px 16px; border-bottom: 1px solid #2a3037; }
+  h2 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #9aa4ae; }
+  p { margin: 0 0 4px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; }
+  .muted { color: #9aa4ae; }
+  .warn { color: #ffb4ad; }
+  .links { display: flex; gap: 14px; margin-top: 6px; }
+  a { color: #8cc8ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .note { margin: 0; padding: 10px 16px; color: #9aa4ae; font-size: 12px; border-bottom: 1px solid #2a3037; }
+  footer { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; color: #9aa4ae; }
+  button { font: inherit; color: #e6eaee; background: #252a30; border: 1px solid #3a414a; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <img src="icons/icon-32.png" alt="">
+  <div>
+    <h1>Clawmeter</h1>
+    <div id="connection"><span class="dot"></span><span id="connection-text">Waiting for the first reading</span></div>
+  </div>
+</header>
+<section>
+  <h2>Claude resets · claude.ai</h2>
+  <div id="claude"><p class="muted">Not read yet.</p></div>
+  <div class="links"><a href="https://claude.ai/" target="_blank">Open claude.ai</a><a href="https://claude.ai/settings/usage" target="_blank">Usage</a></div>
+</section>
+<section>
+  <h2>API credits · Claude Console</h2>
+  <div id="console"><p class="muted">Not read yet.</p></div>
+  <div class="links"><a href="https://platform.claude.com/settings/billing" target="_blank">Open billing</a></div>
+</section>
+<p class="note">This browser profile reads only the Claude account it is signed in to. For another account, add the extension to a browser profile signed in to that account.</p>
+<footer>
+  <span id="updated"></span>
+  <button id="refresh" type="button">Refresh</button>
+</footer>
+<script src="popup.js"></script>
+</body>
+</html>

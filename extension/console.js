@@ -46,6 +46,7 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
   const startingOn = day(Math.min(monthStart, time - 6 * 86400000));
   const endingBefore = day(time + 86400000);
   const payloads = [];
+  const failures = [];
   const seen = new Set();
   for (const organization of organizations) {
     if (!object(organization) || !Array.isArray(organization.capabilities)) changed();
@@ -55,12 +56,15 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
     const pool = await hash("clawmeter-api-pool\u0000" + id);
     if (seen.has(pool)) continue;
     seen.add(pool);
-    const base = "/api/organizations/" + encodeURIComponent(id);
-    let credits, spend;
-    const observedAt = new Date(clock()).toISOString();
-    const observedTime = Date.parse(observedAt);
+    const name = String(organization.name || "Claude API").trim().slice(0, 120);
+    // One organization's failure must not hide the others.
     try {
-      [credits, spend] = await Promise.all([request(base + "/prepaid/credits"), request(base + "/current_spend")]);
+      const base = "/api/organizations/" + encodeURIComponent(id);
+      let credits, spend;
+      const observedAt = new Date(clock()).toISOString();
+      const observedTime = Date.parse(observedAt);
+      try {
+        [credits, spend] = await Promise.all([request(base + "/prepaid/credits"), request(base + "/current_spend")]);
     } catch (error) {
       if (error.status === 403) continue;
       throw error;
@@ -121,7 +125,15 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
     let entry = cache[pool];
     const age = entry && Number.isFinite(entry.at) && entry.at <= observedTime ? observedTime - entry.at : Infinity;
     if (age >= usageInterval || ((!Number.isFinite(entry.reconciledAt) || !reconciles(entry.daily)) && age >= usageRetry)) {
-      const daily = await readCosts();
+      let daily = null;
+      try {
+        daily = await readCosts();
+      } catch (error) {
+        // A cost report that fails to load is treated like one that lags: a
+        // retained reconciled entry still carries the fresh balance. A
+        // format change is not transient, so it still fails the pool.
+        if (!entry || /changed format/.test(error?.message)) throw error;
+      }
       if (reconciles(daily)) {
         entry = { at: observedTime, reconciledAt: observedTime, daily };
       } else if (entry) {
@@ -136,16 +148,21 @@ async function readConsole(getJSON, now, cache, post = async () => {}) {
     }
     if (!Number.isFinite(entry.reconciledAt) || entry.reconciledAt > observedTime ||
         observedTime - entry.reconciledAt > retainedCostAge) continue;
-    const payload = { pool, observed_at: observedAt, name: String(organization.name || "Claude API").trim().slice(0, 120),
+    const payload = { pool, observed_at: observedAt, name,
       currency: credits.currency.toUpperCase(), balance, grants, month_spend: spend.amount,
       month_resets_at: spend.resets_at, daily: entry.daily, link };
     await post(payload);
     payloads.push(payload);
+    } catch (error) {
+      failures.push({ name, error });
+    }
   }
+  // With no organization read, the whole poll failed.
+  if (failures.length && !payloads.length) throw failures[0].error;
   for (const pool of Object.keys(cache)) {
     if (!seen.has(pool)) delete cache[pool];
   }
-  return { status: "ok", payloads };
+  return { status: "ok", payloads, failures: failures.map(failure => ({ name: failure.name, error: String(failure.error?.message || failure.error) })) };
 }
 
 globalThis.readConsole = readConsole;
