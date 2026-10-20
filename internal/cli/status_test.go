@@ -6,9 +6,11 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
@@ -85,7 +87,7 @@ func TestFormatColorShowsBalanceOnlyProviderWithNameFallback(t *testing.T) {
 	pf := ProviderFormatter{Display: "Provider", Data: &provider.UsageData{
 		Balances: []provider.UsageBalance{{Name: "credits", Remaining: 3.5}},
 	}}
-	got := strings.Join(pf.FormatColorAligned(len(pf.Display), 7), "\n")
+	got := strings.Join(pf.FormatColorAligned(newTableLayout()), "\n")
 	if got := strings.Join(strings.Fields(got), " "); got != "Provider credits 3.50 remaining" {
 		t.Fatalf("FormatColorAligned() normalized = %q, want %q", got, "Provider credits 3.50 remaining")
 	}
@@ -1049,5 +1051,77 @@ func TestExpiredMessageDoesNotRepeatExpired(t *testing.T) {
 		if got := expiredMessage(in); got != want {
 			t.Errorf("expiredMessage(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestStatusTableRowsUseTheTrayIconColors(t *testing.T) {
+	// 72% used two days into a seven-day window: ahead of an even pace.
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
+	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}}
+	layout := newTableLayout()
+	for _, row := range pf.shownRows() {
+		layout.fit(rowCells(row))
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	header := ansi.ReplaceAllString(layout.line(tableHeader, len(tableHeader[2]), nil), "")
+	got := pf.FormatColorAligned(layout)[0]
+	plain := ansi.ReplaceAllString(got, "")
+	if !strings.HasPrefix(plain, "Claude    7d      ███┃████▒▒▒   72%      252%         5d  ") {
+		t.Fatalf("row = %q\nheader = %q", plain, header)
+	}
+	// Right-aligned numbers end under their headers.
+	for _, col := range []struct{ head, value string }{{"AT RESET", "252%"}, {"USED", "72%"}, {"RESETS IN", "5d"}} {
+		runeEnd := func(line, s string) int { return utf8.RuneCountInString(line[:strings.Index(line, s)+len(s)]) }
+		if runeEnd(plain, col.value) != runeEnd(header, col.head) {
+			t.Errorf("%s does not end under %s:\n%s\n%s", col.value, col.head, header, plain)
+		}
+	}
+	if !strings.Contains(got, red+"█"+reset) || !strings.Contains(got, red+"    252%"+reset) || !strings.Contains(got, bold+"┃"+reset) {
+		t.Fatalf("ahead-of-pace cells and the overshoot should be red: %q", got)
+	}
+	// 10% used at the same point: short of pace, so the gap is green.
+	pf.Data.Windows[0].Utilization = 10
+	got = pf.FormatColorAligned(layout)[0]
+	if strings.Contains(got, red+"█") || !strings.Contains(got, green+"▒"+reset) {
+		t.Fatalf("behind-pace row = %q", got)
+	}
+}
+
+func TestStatusErrorRowAlignsItsSnapshotDetails(t *testing.T) {
+	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{
+		Error:       "boom",
+		CreditPools: []provider.UsageCreditPool{{Name: "API credits"}},
+	}}
+	lines := pf.FormatColorAligned(newTableLayout())
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q", lines)
+	}
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	first, detail := plain.ReplaceAllString(lines[0], ""), plain.ReplaceAllString(lines[1], "")
+	if strings.Index(detail, "API credits") != strings.Index(first, "boom") {
+		t.Fatalf("error and detail start in different columns:\n%q\n%q", first, detail)
+	}
+}
+
+func TestStatusTableAlignsWideProviderNames(t *testing.T) {
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 40, ResetsAt: time.Now().Add(3 * 24 * time.Hour)}
+	providers := []ProviderFormatter{
+		{Display: "Claude · 仕事", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}},
+		{Display: "Codex", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}},
+	}
+	layout := newTableLayout()
+	for _, pf := range providers {
+		layout.provider = max(layout.provider, cellWidth(pf.Display))
+		for _, row := range pf.shownRows() {
+			layout.fit(rowCells(row))
+		}
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	windowAt := func(line string) int { return cellWidth(line[:strings.Index(line, "7d")]) }
+	wide := ansi.ReplaceAllString(providers[0].FormatColorAligned(layout)[0], "")
+	narrow := ansi.ReplaceAllString(providers[1].FormatColorAligned(layout)[0], "")
+	header := layout.line(tableHeader, cellWidth(tableHeader[2]), nil)
+	if windowAt(wide) != windowAt(narrow) || windowAt(wide) != cellWidth(header[:strings.Index(header, "WINDOW")]) {
+		t.Fatalf("WINDOW columns differ:\n%s\n%s\n%s", header, wide, narrow)
 	}
 }

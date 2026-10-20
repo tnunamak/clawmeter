@@ -11,44 +11,30 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	"github.com/tnunamak/clawmeter/internal/status"
 )
 
-const barWidth = 20
-
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-func color(projectedPct float64) string {
-	switch {
-	case projectedPct >= 100:
-		return "\033[31m" // red — projected to hit limit
-	case projectedPct >= 90:
-		return "\033[33m" // yellow — tight
-	default:
-		return "\033[32m" // green — on track
-	}
-}
-
-const reset = "\033[0m"
-
-func bar(pct float64) string {
-	if math.IsNaN(pct) || math.IsInf(pct, 0) {
-		pct = 0
-	}
-	pct = max(0, min(100, pct))
-	filled := int(math.Round(pct / 100 * barWidth))
-	return strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-}
+const (
+	reset = "\033[0m"
+	red   = "\033[31m"
+	green = "\033[32m"
+	bold  = "\033[1m"
+	dim   = "\033[2m"
+)
 
 // ProviderFormatter handles formatting for a single provider's output.
 type ProviderFormatter struct {
@@ -62,114 +48,199 @@ type ProviderFormatter struct {
 	ExplicitlyEnabled bool
 }
 
-// FormatColor returns colorized multi-line output for a provider (legacy, unaligned).
-func (pf *ProviderFormatter) FormatColor() []string {
-	return pf.FormatColorAligned(len(pf.Display), 2)
+// tableLayout holds the column widths shared by every provider in the
+// status table.
+type tableLayout struct {
+	provider, window, forecast, used, resets, runsOut int
 }
 
-// FormatColorAligned returns colorized output with consistent column widths.
-func (pf *ProviderFormatter) FormatColorAligned(providerWidth, windowWidth int) []string {
-	var statusLine string
+// cellWidth is how many terminal cells s takes: CJK characters take two,
+// combining marks none. East Asian ambiguous characters such as the bar's
+// block glyphs count as one, as most terminals draw them.
+var cellWidth = (&runewidth.Condition{EastAsianWidth: false}).StringWidth
+
+// tableGutter separates the status table's columns.
+const tableGutter = "  "
+
+// tableHeader names the status table's columns. Numeric columns are
+// right-aligned, as their values are. Research: divan ai-quota-monitoring/
+// compact-quota-row-typography-for-menus-and-terminal-tables.md.
+var tableHeader = tableCells{"PROVIDER", "WINDOW", "USAGE", "USED", "AT RESET", "RESETS IN", "RUNS OUT IN"}
+
+type tableCells [7]string
+
+func newTableLayout() tableLayout {
+	h := tableHeader
+	return tableLayout{
+		provider: cellWidth(h[0]), window: cellWidth(h[1]),
+		used: cellWidth(h[3]), forecast: cellWidth(h[4]),
+		resets: cellWidth(h[5]), runsOut: cellWidth(h[6]),
+	}
+}
+
+func (l *tableLayout) fit(cells tableCells) {
+	l.provider = max(l.provider, cellWidth(cells[0]))
+	l.window = max(l.window, cellWidth(cells[1]))
+	l.used = max(l.used, cellWidth(cells[3]))
+	l.forecast = max(l.forecast, cellWidth(cells[4]))
+	l.resets = max(l.resets, cellWidth(cells[5]))
+	l.runsOut = max(l.runsOut, cellWidth(cells[6]))
+}
+
+// line pads cells to the layout, right-aligning the numeric columns, and
+// colors them with style (cell index to ANSI style). The bar arrives
+// already colored, so its width is passed separately.
+func (l tableLayout) line(cells tableCells, barWidth int, style map[int]string) string {
+	left := func(s string, w int) string { return s + strings.Repeat(" ", max(0, w-cellWidth(s))) }
+	right := func(s string, w int) string { return strings.Repeat(" ", max(0, w-cellWidth(s))) + s }
+	padded := []string{
+		left(cells[0], l.provider), left(cells[1], l.window),
+		cells[2] + strings.Repeat(" ", max(0, meter.BarCells+1-barWidth)),
+		right(cells[3], l.used), right(cells[4], l.forecast), right(cells[5], l.resets), right(cells[6], l.runsOut),
+	}
+	for i, st := range style {
+		if st != "" && strings.TrimSpace(padded[i]) != "" {
+			padded[i] = st + padded[i] + reset
+		}
+	}
+	return strings.TrimRight(strings.Join(padded, tableGutter), " ")
+}
+
+// span starts free text, such as a credit balance or an error, at the
+// WINDOW column.
+func (l tableLayout) span(providerCell, text string) string {
+	return providerCell + strings.Repeat(" ", max(0, l.provider-cellWidth(providerCell))) + tableGutter + text
+}
+
+// shownRows are the rows the status table and the tray menu show.
+func (pf *ProviderFormatter) shownRows() []meter.Row {
+	if pf.Data == nil || pf.Data.IsExpired || pf.Data.Error != "" {
+		return nil
+	}
+	windows := meter.Shown(pf.Data.PresentationWindows())
+	projections := make([]forecast.Projection, len(windows))
+	for i, window := range windows {
+		if !window.ResetsAt.IsZero() {
+			projections[i] = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
+		}
+	}
+	return meter.Rows(windows, projections)
+}
+
+// rowCells are a quota row's table cells, the bar left uncolored.
+func rowCells(row meter.Row) tableCells {
+	window := row.Code
+	if row.Qualifier != "" {
+		window += " " + row.Qualifier
+	}
+	forecast := row.Forecast
+	switch {
+	case forecast == "" && row.ForecastState != "":
+		forecast = row.ForecastState
+	case forecast == "":
+		forecast = "—"
+	}
+	resets := row.Resets
+	if row.ResetPolicy {
+		resets = strings.TrimPrefix(resets, "resets ")
+	}
+	return tableCells{"", window, meter.BarText(row.Bar), row.Used, forecast, resets, row.RunsOut}
+}
+
+// FormatColorAligned returns the provider's rows of the status table. Bars
+// take the tray icon's colors: usage past an even pace is red, the gap short
+// of it green.
+func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
+	var note string
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
-		statusLine = pf.Status.FormatCLI()
+		note = pf.Status.FormatCLI()
 	}
 	if pf.Data != nil && pf.Data.Stale {
-		statusLine = staleSummary(pf.Data)
+		note = staleSummary(pf.Data)
 	}
-
-	pad := fmt.Sprintf("%%-%ds", providerWidth)
-
-	winPad := fmt.Sprintf("%%-%ds", windowWidth)
-	blankWin := fmt.Sprintf(winPad, "")
-
-	if pf.Data == nil {
-		line := fmt.Sprintf(pad+" %s %s%s%s (no data)", pf.Display, blankWin, color(0), bar(0), reset)
-		if statusLine != "" {
-			line += "  " + statusLine
+	var lines []string
+	providerCell := func() string {
+		if len(lines) == 0 {
+			return pf.Display
 		}
-		return []string{line}
+		return ""
 	}
+	addSpan := func(text string) { lines = append(lines, layout.span(providerCell(), text)) }
 
-	if pf.Data.IsExpired {
-		expiredMsg := expiredMessage(pf.Data.Error)
-		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(100), reset, expiredMsg)
-		if statusLine != "" {
-			line += "  " + statusLine
-		}
-		return appendSnapshotLines([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
-	}
-
-	if pf.Data.Error != "" {
-		line := fmt.Sprintf(pad+" %s %s%s%s  %s", pf.Display, blankWin, color(100), bar(0), reset, format.HumanizeError(pf.Data.Error))
-		if statusLine != "" {
-			line += "  " + statusLine
-		}
-		return appendSnapshotLines([]string{line}, pf.Data, fmt.Sprintf(pad, ""))
-	}
-
-	windows := pf.Data.PresentationWindows()
-	lines := make([]string, 0, len(windows)+2)
-	for i, window := range windows {
-		proj := forecast.Projection{}
-		resetStr := "unknown"
-		indicator := "reset unknown"
-		colorPct := window.Utilization
-		barColor := color(colorPct)
-		if !window.ResetsAt.IsZero() {
-			proj = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			resetStr = format.FormatDuration(time.Until(window.ResetsAt))
-			indicator = proj.ColorIndicator()
-			if !proj.Unknown && !proj.Stale {
-				colorPct = proj.ProjectedPct
+	switch {
+	case pf.Data == nil:
+		addSpan(dim + "no data" + reset)
+	case pf.Data.IsExpired:
+		addSpan(red + expiredMessage(pf.Data.Error) + reset)
+		lines = appendSnapshotLines(lines, pf.Data, layout)
+	case pf.Data.Error != "":
+		addSpan(red + format.HumanizeError(pf.Data.Error) + reset)
+		lines = appendSnapshotLines(lines, pf.Data, layout)
+	default:
+		for _, row := range pf.shownRows() {
+			if row.Line != "" {
+				addSpan(row.Line)
+				continue
 			}
-			barColor = color(colorPct)
-		} else if window.ResetPolicy != "" {
-			indicator = window.ResetPolicy
-		} else {
-			resetStr = "not reported"
-			indicator = ""
-			barColor = ""
+			cells := rowCells(row)
+			cells[0] = providerCell()
+			cells[2] = colorBar(row.Bar)
+			style := map[int]string{}
+			if row.Over {
+				style[4] = red
+			}
+			if row.Forecast == "" {
+				style[4] = dim
+			}
+			style[6] = red
+			line := layout.line(cells, len(row.Bar), style)
+			if row.Money != "" {
+				line += tableGutter + dim + row.Money + reset
+			}
+			lines = append(lines, line)
 		}
-
-		label := pf.Display
-		if i > 0 {
-			label = ""
+		for _, balance := range pf.Data.Balances {
+			name := balance.DisplayName
+			if name == "" {
+				name = balance.Name
+			}
+			addSpan(fmt.Sprintf("%s %.2f remaining", name, balance.Remaining))
 		}
-		line := fmt.Sprintf(pad+" "+winPad+" %s%s%s %3.0f%%  resets %-11s %s",
-			label, plainWindowLabel(window), barColor, bar(window.Utilization), reset,
-			window.Utilization, resetStr, indicator)
-		if money := window.MoneyDetail(); money != "" {
-			line += "  (" + money + ")"
+		for _, pool := range pf.Data.CreditPools {
+			addSpan(pool.Name + ": " + pool.Summary(time.Now()))
 		}
-		if i == 0 && statusLine != "" {
-			line += "  " + statusLine
+		if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
+			addSpan(summary)
 		}
-		lines = append(lines, line)
 	}
-	for _, balance := range pf.Data.Balances {
-		label := balance.DisplayName
-		if label == "" {
-			label = balance.Name
-		}
-		lines = append(lines, fmt.Sprintf(pad+" "+winPad+" %.2f remaining",
-			pf.Display, label, balance.Remaining))
+	if note != "" {
+		addSpan(dim + note + reset)
 	}
-	for _, pool := range pf.Data.CreditPools {
-		label := ""
-		if len(lines) == 0 {
-			label = pf.Display
-		}
-		lines = append(lines, fmt.Sprintf(pad+" %s: %s", label, pool.Name, pool.Summary(time.Now())))
-	}
-	if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
-		label := ""
-		if len(lines) == 0 {
-			label = pf.Display
-		}
-		lines = append(lines, fmt.Sprintf(pad+" %s", label, summary))
-	}
-
 	return lines
+}
+
+// colorBar draws a bar in the tray icon's colors.
+func colorBar(bar []meter.Cell) string {
+	var b strings.Builder
+	for _, cell := range bar {
+		style := ""
+		switch {
+		case cell.Kind == meter.Ahead:
+			style = red
+		case cell.Behind:
+			style = green
+		case cell.Kind == meter.Pace:
+			style = bold
+		case cell.Kind == meter.Projected || cell.Kind == meter.Free:
+			style = dim
+		}
+		if style == "" {
+			b.WriteString(cell.Glyph)
+		} else {
+			b.WriteString(style + cell.Glyph + reset)
+		}
+	}
+	return b.String()
 }
 
 // FormatPlain returns plain text output for a provider.
@@ -260,12 +331,12 @@ func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 
 // appendSnapshotLines keeps browser-checked facts (reset grants, API credit
 // pools) visible on a row whose usage reading failed or expired.
-func appendSnapshotLines(lines []string, data *provider.UsageData, indent string) []string {
+func appendSnapshotLines(lines []string, data *provider.UsageData, layout tableLayout) []string {
 	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
-		lines = append(lines, indent+" "+summary)
+		lines = append(lines, layout.span("", summary))
 	}
 	for _, pool := range data.CreditPools {
-		lines = append(lines, indent+" "+pool.Name+": "+pool.Summary(time.Now()))
+		lines = append(lines, layout.span("", pool.Name+": "+pool.Summary(time.Now())))
 	}
 	return lines
 }
@@ -300,50 +371,25 @@ func (m *MultiProviderOutput) HideUnavailable() {
 	m.Providers = filtered
 }
 
-// PrintColor prints colorized output for all providers.
+// PrintColor prints the status table. Its rows hold the same values as the
+// tray menu's.
 func (m *MultiProviderOutput) PrintColor() {
-	// Compute column widths for alignment
-	providerWidth := 0
-	windowWidth := 0
-	hasWindows := false
+	layout := newTableLayout()
+	hasRows := false
 	for _, pf := range m.Providers {
-		if len(pf.Display) > providerWidth {
-			providerWidth = len(pf.Display)
-		}
-		if pf.Data != nil {
-			for _, w := range pf.Data.UsableWindows() {
-				hasWindows = true
-				if len(w.Name) > windowWidth {
-					windowWidth = len(w.Name)
-				}
+		layout.provider = max(layout.provider, cellWidth(pf.Display))
+		for _, row := range pf.shownRows() {
+			if row.Line == "" {
+				hasRows = true
+				layout.fit(rowCells(row))
 			}
 		}
 	}
-
-	// Ensure column widths fit header labels
-	if windowWidth < 6 {
-		windowWidth = 6 // "WINDOW"
+	if hasRows {
+		fmt.Println(dim + layout.line(tableHeader, cellWidth(tableHeader[2]), nil) + reset)
 	}
-	if providerWidth < 8 {
-		providerWidth = 8 // "PROVIDER"
-	}
-
-	// Header row
-	if hasWindows {
-		dim := "\033[2m"
-		// Columns: provider(pad) window(winPad) bar(20) " "pct(4)"  resets "time(7)" " pace
-		hdr := fmt.Sprintf("%-*s %-*s %-*s %4s  resets %-7s %s",
-			providerWidth, "PROVIDER",
-			windowWidth, "WINDOW",
-			barWidth, "USAGE",
-			"PCT",
-			"IN",
-			"PACE")
-		fmt.Printf("%s%s%s\n", dim, hdr, reset)
-	}
-
 	for i, pf := range m.Providers {
-		lines := pf.FormatColorAligned(providerWidth, windowWidth)
+		lines := pf.FormatColorAligned(layout)
 		for _, line := range lines {
 			fmt.Println(line)
 		}
@@ -1413,6 +1459,14 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	}
 }
 
+// sortProvidersByName sorts providers by the name they show, as the tray
+// menu does.
+func sortProvidersByName(providers []ProviderFormatter) {
+	sort.SliceStable(providers, func(i, j int) bool {
+		return strings.ToLower(providers[i].Display) < strings.ToLower(providers[j].Display)
+	})
+}
+
 // sortProvidersByUrgency sorts providers so the most urgent appear first.
 func sortProvidersByUrgency(providers []ProviderFormatter) {
 	sort.SliceStable(providers, func(i, j int) bool {
@@ -1570,12 +1624,15 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 		return
 	}
 
-	// Sort providers by urgency (most urgent first)
-	sortProvidersByUrgency(output.Providers)
-
+	// JSON keeps the most urgent provider first; people read the table in
+	// the same alphabetical order as the tray menu.
 	if jsonMode {
+		sortProvidersByUrgency(output.Providers)
 		output.PrintJSON(cacheEntry)
-	} else if plainMode || !isTTY() {
+		return
+	}
+	sortProvidersByName(output.Providers)
+	if plainMode || !isTTY() {
 		output.PrintPlain()
 	} else {
 		output.PrintColor()
@@ -1671,6 +1728,9 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}
 
+	if !jsonMode {
+		sortProvidersByName(output.Providers)
+	}
 	if jsonMode {
 		output.PrintJSON(nil)
 	} else if plainMode || !isTTY() {

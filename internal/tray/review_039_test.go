@@ -18,7 +18,7 @@ func TestReview039TrayUsesTypedMonthlyLength(t *testing.T) {
 	want := forecast.Project(w.Utilization, w.ResetsAt, forecast.WindowLength(w))
 	got := windowProjection(w)
 	if got.Unknown || got.ProjectedPct < 60 || got.ProjectedPct > 62 {
-		t.Fatalf("tray=%+v; typed forecast=%+v; menu=%q", got, want, trayWindowStatus(w))
+		t.Fatalf("tray=%+v; typed forecast=%+v; menu=%q", got, want, trayWindowText(w))
 	}
 }
 

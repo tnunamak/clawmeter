@@ -26,6 +26,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
@@ -226,7 +227,13 @@ func onReadyWithConfig(loaded *config.Config) {
 	for _, p := range registry.GetAll() {
 		familyCounts[p.Name()]++
 	}
-	for _, p := range registry.GetAll() {
+	// Providers appear alphabetically by the name the menu shows.
+	providers := registry.GetAll()
+	sort.SliceStable(providers, func(i, j int) bool {
+		return strings.ToLower(providerMenuName(providers[i], familyCounts[providers[i].Name()] > 1)) <
+			strings.ToLower(providerMenuName(providers[j], familyCounts[providers[j].Name()] > 1))
+	})
+	for _, p := range providers {
 		if !shouldCreateProviderMenu(p) {
 			continue
 		}
@@ -647,13 +654,18 @@ type menuItemState struct {
 
 const maxWindowItems = 8 // pre-allocate up to 8 window slots per provider
 
-func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string, repeated bool) *providerMenuItems {
-	displayName := p.DisplayName()
+// providerMenuName is the provider's header in the menu, with the account
+// added when the provider has more than one.
+func providerMenuName(p provider.Provider, repeated bool) string {
 	label := provider.SourceLabel(p)
 	if label == "" {
 		label = provider.SourceID(p)
 	}
-	displayName = trayProviderDisplayName(displayName, label, repeated)
+	return trayProviderDisplayName(p.DisplayName(), label, repeated)
+}
+
+func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connectActions chan<- string, repeated bool) *providerMenuItems {
+	displayName := providerMenuName(p, repeated)
 	// A line above each provider block, hidden with the block.
 	separator := systray.AddSeparatorItem()
 	// The header names the provider and opens its dashboard when clicked.
@@ -669,12 +681,6 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	statusItem := systray.AddMenuItem("Loading...", "")
 	statusItem.Disable()
 	setMenuItemIcon(statusItem, icons.MenuBlank())
-
-	resetItem := systray.AddMenuItem("", "")
-	resetItem.Disable()
-	setMenuItemIcon(resetItem, icons.MenuBlank())
-	resetItem.Hide()
-	resetState := menuItemState{visible: false, enabled: false, initialized: true}
 
 	// Pre-create window items (hidden until populated)
 	windowItems := make([]*systray.MenuItem, maxWindowItems)
@@ -701,6 +707,13 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	for i := range balanceStates {
 		balanceStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
 	}
+
+	// Quota rows come first, then money, then reset credits.
+	resetItem := systray.AddMenuItem("", "")
+	resetItem.Disable()
+	setMenuItemIcon(resetItem, icons.MenuBlank())
+	resetItem.Hide()
+	resetState := menuItemState{visible: false, enabled: false, initialized: true}
 
 	menu := &providerMenuItems{
 		provider:          p,
@@ -811,23 +824,6 @@ func showProviderProblem(menu *providerMenuItems, problem string) {
 	setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+problem)
 	setMenuItemVisible(menu.headerItem, &menu.headerState, true)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
-}
-
-// menuWindows drops windows with nothing used and nothing projected, unless
-// that would leave no window to show.
-func menuWindows(windows []provider.UsageWindow) []provider.UsageWindow {
-	active := make([]provider.UsageWindow, 0, len(windows))
-	for _, window := range windows {
-		proj := windowProjection(window)
-		idle := window.Utilization == 0 && (proj.Unknown || proj.ProjectedPct < 0.5)
-		if !idle {
-			active = append(active, window)
-		}
-	}
-	if len(active) == 0 {
-		return windows
-	}
-	return active
 }
 
 func setMenuItemTitle(item *systray.MenuItem, state *menuItemState, title string) {
@@ -986,6 +982,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
+	windowRows := trayMenuRows(results, menus)
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
@@ -1081,13 +1078,14 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
-		windows := menuWindows(data.PresentationWindows())
+		windows := meter.Shown(data.PresentationWindows())
+		rows := windowRows[name]
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
 				break
 			}
 
-			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], trayWindowStatus(window))
+			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], rows[i])
 			if atRisk := windowRunsOutBeforeReset(window); atRisk != menu.windowAtRisk[i] {
 				menu.windowAtRisk[i] = atRisk
 				icon := icons.MenuBlank()
@@ -1286,7 +1284,7 @@ func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[st
 func pickerTargetLabel(data *provider.UsageData, target iconTarget, displayNames map[string]string) string {
 	label := target.Window
 	if window, _, ok := selectedIconWindow(data, target.Window); ok {
-		label = trayWindowLabel(window)
+		label = meter.Label(window)
 	}
 	return providerDisplayName(target.Provider, displayNames) + ": " + label
 }
@@ -1599,7 +1597,7 @@ func iconMeterState(data *provider.UsageData, windowName string) icons.MeterStat
 	windowLen := forecast.WindowLength(window)
 	return icons.MeterState{
 		UsagePct:     window.Utilization,
-		ExpectedPct:  expectedUsagePct(window.ResetsAt, windowLen),
+		ExpectedPct:  meter.ExpectedPct(window.ResetsAt, windowLen),
 		RiskPct:      windowRiskPct(window, proj),
 		ShowExpected: true,
 		Label:        windowBadgeLabelForWindow(window),
@@ -1613,20 +1611,6 @@ func windowRiskPct(window provider.UsageWindow, proj forecast.Projection) float6
 		return window.Utilization
 	}
 	return proj.ProjectedPct
-}
-
-func expectedUsagePct(resetsAt time.Time, windowLen time.Duration) float64 {
-	if windowLen <= 0 {
-		return 0
-	}
-	elapsed := windowLen - time.Until(resetsAt)
-	if elapsed <= 0 {
-		return 0
-	}
-	if elapsed >= windowLen {
-		return 100
-	}
-	return elapsed.Seconds() / windowLen.Seconds() * 100
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
@@ -1880,44 +1864,110 @@ func humanWindowLabel(window provider.UsageWindow) string {
 	return label
 }
 
-// trayWindowLabel preserves provider-supplied compact labels such as "5h" and
-// "7d" for the constrained tray menu, falling back to the stable internal name.
-func trayWindowLabel(window provider.UsageWindow) string {
-	if label := strings.TrimSpace(window.DisplayName); label != "" {
-		return label
+// trayMenuRows formats the quota rows of every account in one pass over the
+// windows the menu shows. Each window is projected once, so the width of the
+// margin column and the rows agree.
+func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) map[string][]string {
+	type account struct {
+		windows     []provider.UsageWindow
+		projections []forecast.Projection
 	}
-	return strings.TrimSpace(window.Name)
+	accounts := make(map[string]account, len(menus))
+	var all []forecast.Projection
+	for name, menu := range menus {
+		data := results[name]
+		if data == nil || data.Error != "" || data.IsExpired {
+			continue
+		}
+		windows := meter.Shown(data.PresentationWindows())
+		windows = windows[:min(len(windows), len(menu.windowItems))]
+		projections := make([]forecast.Projection, len(windows))
+		for i, window := range windows {
+			if !window.ResetsAt.IsZero() {
+				projections[i] = windowProjection(window)
+			}
+		}
+		all = append(all, projections...)
+		accounts[name] = account{windows, projections}
+	}
+	var shown []meter.Row
+	byAccount := make(map[string][]meter.Row, len(accounts))
+	for name, a := range accounts {
+		byAccount[name] = meter.Rows(a.windows, a.projections)
+		shown = append(shown, byAccount[name]...)
+	}
+	widths := trayColumnWidths(shown)
+	rows := make(map[string][]string, len(accounts))
+	for name, accountRows := range byAccount {
+		for _, row := range accountRows {
+			rows[name] = append(rows[name], trayRowText(row, widths))
+		}
+	}
+	return rows
 }
 
-func trayWindowStatus(window provider.UsageWindow) string {
-	label := trayWindowLabel(window)
-	money := window.MoneyDetail()
-	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-		return label + ": " + money
+// figureSpace is as wide as a digit, so padded numbers line up in the
+// menu's proportional font.
+const figureSpace = "\u2007"
+
+// trayGutter separates a row's columns. Columns line up, so they need space
+// between them, not punctuation.
+const trayGutter = "    "
+
+// trayWidths are the widest values in the menu, in runes, so each column
+// starts at the same place on every row: an early forecast such as "3360%"
+// widens its column instead of pushing its own row out of line. Times are
+// not padded: their letters are not as wide as digits, and they come last.
+type trayWidths struct {
+	used, forecast int
+}
+
+func trayColumnWidths(rows []meter.Row) trayWidths {
+	widths := trayWidths{used: len("100%"), forecast: len("100%")}
+	for _, row := range rows {
+		widths.forecast = max(widths.forecast, len([]rune(row.Forecast)))
+		widths.used = max(widths.used, len([]rune(row.Used)))
 	}
-	if money != "" {
-		label += " (" + money + ")"
+	return widths
+}
+
+// trayRowText writes a row for a native menu, which has no color and no
+// columns: labeled values padded with figure spaces and separated by
+// gutters. Research: divan ai-quota-monitoring/compact-quota-row-
+// typography-for-menus-and-terminal-tables.md.
+func trayRowText(row meter.Row, widths trayWidths) string {
+	if row.Line != "" {
+		return row.Line
 	}
-	row := fmt.Sprintf("%s: %.0f%%", label, window.Utilization)
-	if window.ResetsAt.IsZero() {
-		if window.ResetPolicy == "" {
-			return row + " · reset not reported"
+	bar := meter.BarText(row.Bar)
+	if !row.HasPace() {
+		bar += figureSpace // as wide as the pace mark, so the columns still line up
+	}
+	forecast := "no forecast"
+	switch {
+	case row.Forecast != "":
+		forecast = meter.Pad(row.Forecast, widths.forecast, figureSpace) + " at reset"
+	case row.ForecastState != "":
+		forecast = "forecast " + row.ForecastState
+	}
+	resets := row.Resets
+	if !row.ResetPolicy {
+		resets = "resets in " + row.Resets
+	}
+	columns := []string{row.Code, bar, meter.Pad(row.Used, widths.used, figureSpace) + " used", forecast, resets}
+	switch row.RunsOut {
+	case "":
+	case "now":
+		columns = append(columns, "out now")
+	default:
+		columns = append(columns, "runs out in "+row.RunsOut)
+	}
+	for _, detail := range []string{row.Qualifier, row.Money} {
+		if detail != "" {
+			columns = append(columns, detail)
 		}
-		return row + " · " + window.ResetPolicy
 	}
-	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	row += " · resets in " + format.FormatDuration(time.Until(window.ResetsAt))
-	if proj.Unknown || proj.Stale {
-		return row + " · " + proj.PaceIndicator()
-	}
-	row += " · " + forecast.PaceLabel(proj.ProjectedPct)
-	if proj.WillLastToReset {
-		return row
-	}
-	if proj.RunsOutIn > 0 {
-		return row + " · runs out in " + format.FormatDuration(proj.RunsOutIn)
-	}
-	return row + " · out now"
+	return strings.Join(columns, trayGutter)
 }
 
 // windowRunsOutBeforeReset reports whether a window is projected to run out
@@ -1927,7 +1977,11 @@ func windowRunsOutBeforeReset(window provider.UsageWindow) bool {
 		return false
 	}
 	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	return !proj.Unknown && !proj.Stale && !proj.WillLastToReset
+	if proj.Stale {
+		return false
+	}
+	// A window used up before its forecast warms up has already run out.
+	return window.Utilization >= 100 || !proj.Unknown && !proj.WillLastToReset
 }
 
 func compactProjectionEstimate(proj forecast.Projection) string {
