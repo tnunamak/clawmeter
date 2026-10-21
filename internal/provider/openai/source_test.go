@@ -119,6 +119,36 @@ func TestSourceRevisionIsOpaqueChangesWithMetadataAndDistinguishesMissing(t *tes
 	}
 }
 
+func TestAmbientSourceRevisionFollowsCodexHome(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	writeOpenAIAuth(t, one, "one-access", "one-account")
+	writeOpenAIAuth(t, two, "two-access", "two-account")
+	p := New(config.ProviderConfig{})
+	t.Setenv("CODEX_HOME", one)
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, one) || strings.Contains(first, "secret") {
+		t.Fatalf("ambient revision = %q", first)
+	}
+	// Another process with another CODEX_HOME reads another account.
+	t.Setenv("CODEX_HOME", two)
+	second := p.SourceRevision()
+	if second == "" || second == first {
+		t.Fatalf("revision did not follow CODEX_HOME: %q, %q", first, second)
+	}
+	// Without CODEX_HOME the source reads ~/.codex.
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeOpenAIAuth(t, filepath.Join(home, ".codex"), "home-access", "home-account")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if third := p.SourceRevision(); third == "" || third == first || third == second {
+		t.Fatalf("home revision = %q", third)
+	}
+}
+
 func TestRegistrationExpandsOpenAISourcesAndKeepsIdentityOnDirectAndResetRoutes(t *testing.T) {
 	one, two := t.TempDir(), t.TempDir()
 	writeOpenAIAuth(t, one, "one-access", "one-account")
