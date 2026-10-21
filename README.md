@@ -101,26 +101,12 @@ grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
 Admin API is unavailable to individual accounts. Clawmeter reads them from the
 Claude Console through the Clawmeter Chrome extension:
 
-Setup page, including several Claude accounts:
-<https://tnunamak.github.io/clawmeter/extension/>
-
-1. Click **Connect your browser for Claude resets and API credits…** in the
-   tray menu, or run `clawmeter setup --browser-extension`. Clawmeter writes the
-   extension to a fixed folder (`~/.local/share/clawmeter/extension` on Linux,
-   `~/Library/Application Support/clawmeter/extension` on macOS,
-   `%LOCALAPPDATA%\clawmeter\extension` on Windows). The tray opens the
-   setup page; the command prints the steps and its link.
-2. Open the browser's Extensions page, enable **Developer mode**, choose
-   **Load unpacked** and select that folder. It works in Chrome, Brave, Edge
-   and other Chromium browsers.
-3. Sign in to the Claude Console and claude.ai, keep a claude.ai tab open, and
-   keep the browser and Clawmeter tray running.
-
-The tray offers the extension while a Claude account is set up and the
-extension has not reached Clawmeter in the past week. Clawmeter refreshes the
-folder when it updates; reload the extension or restart the browser to pick
-up the new version. `clawmeter doctor` shows when the extension last
-connected.
+To set it up, choose **Connect your browser for Claude resets and API
+credits…** in the tray menu, or run `clawmeter setup --browser-extension`, then
+follow the [setup page](https://tnunamak.github.io/clawmeter/extension/). It
+covers Chrome, Brave and Edge, and more than one Claude account. The tray
+offers this until the extension connects; `clawmeter doctor` shows when it
+last did.
 
 The extension checks each minute. A reading is live for up to five minutes;
 older readings keep their numbers with a browser reminder, and signing out

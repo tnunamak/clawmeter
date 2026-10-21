@@ -29,35 +29,35 @@ a{color:var(--accent)}
 </head>
 <body>
 <header><img src="icon-128.png" alt=""><h1>Set up the Clawmeter browser extension</h1></header>
-<p class="lead">claude.ai and the Claude Console have no API for your reset credits and prepaid API credits. This small extension reads them from your signed-in browser and sends them to the Clawmeter app on the same computer, and nowhere else.</p>
+<p class="lead">claude.ai and the Claude Console have no API for reset credits or prepaid API credits. This extension reads them in your browser and passes them to Clawmeter on this computer.</p>
 
 <h2>Set it up</h2>
 <ol>
-<li>Get the extension folder: in the Clawmeter tray menu choose <b>Connect your browser for Claude resets and API credits…</b>, or run <code>clawmeter setup --browser-extension</code>.
+<li>In the Clawmeter tray menu, choose <b>Connect your browser for Claude resets and API credits…</b>, or run <code>clawmeter setup --browser-extension</code>. Either one writes the extension folder:
 <div id="folder"></div></li>
-<li>Open your browser's extensions page. Paste the address into the address bar; pages can't link to it.
+<li>Paste your browser's extensions address into the address bar:
 <table>
 <tr><td>Chrome</td><td><code>chrome://extensions</code><button class="copy" data-copy="chrome://extensions">Copy</button></td></tr>
 <tr><td>Brave</td><td><code>brave://extensions</code><button class="copy" data-copy="brave://extensions">Copy</button></td></tr>
 <tr><td>Edge</td><td><code>edge://extensions</code><button class="copy" data-copy="edge://extensions">Copy</button></td></tr>
 </table></li>
-<li>Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and choose the extension folder.
-<div class="note">On Linux the folder is inside a hidden folder. In the file chooser, press <b>Ctrl+L</b> and paste the path.</div></li>
-<li>Keep a claude.ai tab open. Clawmeter reads reset credits through it. API credits are read through a Claude Console tab, or your signed-in session if none is open.</li>
-<li>Check it works: click the Clawmeter icon in the browser toolbar. It lists each Claude account it can see and whether the readings reach Clawmeter.</li>
+<li>Turn on <b>Developer mode</b>, click <b>Load unpacked</b> and choose the folder.
+<div class="note">On Linux the folder is hidden: in the file chooser, press <b>Ctrl+L</b> and paste the path.</div></li>
+<li>Keep a claude.ai tab open. Reset credits are read through it.</li>
+<li>To check, click the Clawmeter icon in the browser toolbar. It lists each account it reads.</li>
 </ol>
 
 <h2>More than one Claude account</h2>
-<p>A browser profile is signed in to one Claude account at a time. To cover more, give each account its own session:</p>
-<div class="card"><h3>Brave: containers, one profile</h3>
-Load the extension once. Open claude.ai in a separate container for each account (right-click a tab, or the Containers button) and sign in there. Keep one claude.ai tab open per account. The extension reads every open tab, so it sees every container's account.</div>
-<div class="card"><h3>Chrome, Edge and other browsers: one profile per account</h3>
-Make a browser profile for each account and load the extension in each profile. They can all use the same folder. Keep a claude.ai tab open in each profile.</div>
-<p>Each account must also be set up in Clawmeter, as a Claude source (<code>clawmeter providers source help claude</code>). Readings for accounts Clawmeter doesn't track are dropped, and the extension's popup shows them as <i>not set up in Clawmeter</i>.</p>
+<p>A browser profile holds one Claude login.</p>
+<div class="card"><h3>Brave: one container per account</h3>
+Load the extension once. Open claude.ai in a container for each account (right-click a tab, or the Containers button), sign in, and keep that tab open.</div>
+<div class="card"><h3>Chrome, Edge and others: one profile per account</h3>
+Load the extension in each profile, from the same folder, and keep a claude.ai tab open in each.</div>
+<p>Add each account to Clawmeter as well (<code>clawmeter providers source help claude</code>). The popup marks an account Clawmeter doesn't track as <i>not set up in Clawmeter</i>.</p>
 
 <h2>Updates and privacy</h2>
-<p>Clawmeter keeps the folder up to date. After Clawmeter updates, click the reload arrow on the extension's card, or restart the browser.</p>
-<p>The extension only talks to claude.ai, the Claude Console and Clawmeter at 127.0.0.1. Firefox and Safari aren't supported yet. Read <a href="https://github.com/tnunamak/clawmeter/blob/main/PRIVACY.md">what it reads and sends</a>, or the <a href="https://github.com/tnunamak/clawmeter">Clawmeter project</a>.</p>
+<p>After Clawmeter updates, click the reload arrow on the extension's card, or restart the browser.</p>
+<p>The extension talks only to claude.ai, the Claude Console and Clawmeter at 127.0.0.1. <a href="https://github.com/tnunamak/clawmeter/blob/main/PRIVACY.md">What it reads and sends</a> · <a href="https://github.com/tnunamak/clawmeter">Clawmeter</a>. Firefox and Safari aren't supported yet.</p>
 
 <script>
 // Clawmeter opens this page with the folder in the fragment, which never
