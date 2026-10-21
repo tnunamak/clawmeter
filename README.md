@@ -108,8 +108,8 @@ Setup page, including several Claude accounts:
    tray menu, or run `clawmeter setup --browser-extension`. Clawmeter writes the
    extension to a fixed folder (`~/.local/share/clawmeter/extension` on Linux,
    `~/Library/Application Support/clawmeter/extension` on macOS,
-   `%LOCALAPPDATA%\clawmeter\extension` on Windows) and opens a page with
-   the steps.
+   `%LOCALAPPDATA%\clawmeter\extension` on Windows). The tray opens the
+   setup page; the command prints the steps and its link.
 2. Open the browser's Extensions page, enable **Developer mode**, choose
    **Load unpacked** and select that folder. It works in Chrome, Brave, Edge
    and other Chromium browsers.
