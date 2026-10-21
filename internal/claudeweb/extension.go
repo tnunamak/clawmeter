@@ -210,6 +210,9 @@ func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 				}
 			}
 			if len(matches) != 1 {
+				// The header tells the extension's popup the account is not
+				// in Clawmeter; a saved reading carries none.
+				w.Header().Set("Clawmeter-Reading", "ignored")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}

@@ -273,18 +273,16 @@ func onReadyWithConfig(loaded *config.Config) {
 	s.reauthVisible = false
 	s.reauthVisibleKnown = true
 
-	// Offer the browser extension until it has reached Clawmeter. A copy
-	// installed earlier is refreshed to this version.
+	// Offer the browser extension until it is set up. A copy installed
+	// earlier is refreshed to this version.
 	mExtension = systray.AddMenuItem(extensionMenuTitle, "Install the extension that reads Claude resets and API credits")
 	mExtension.Hide()
-	if dir, err := browserext.Dir(); err == nil {
-		if _, err := os.Stat(dir); err == nil {
-			go func() {
-				if _, err := browserext.Install(); err != nil {
-					log.Printf("refresh browser extension: %v", err)
-				}
-			}()
-		}
+	if extensionFolderExists() {
+		go func() {
+			if _, err := browserext.Install(); err != nil {
+				log.Printf("refresh browser extension: %v", err)
+			}
+		}()
 	}
 
 	var updateChecking sync.Mutex
@@ -1154,7 +1152,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	// Show/hide reauth button (only for Claude expired tokens)
 	setSharedMenuItemVisible(mReauth, hasExpiredClaude, &s.reauthVisible, &s.reauthVisibleKnown)
 	if mExtension != nil {
-		setSharedMenuItemVisible(mExtension, hasClaude && extensionMissing(claudeweb.LastExtensionContact(), time.Now()),
+		setSharedMenuItemVisible(mExtension, hasClaude && offerExtension(extensionFolderExists(), claudeweb.LastExtensionContact(), time.Now()),
 			&s.extensionVisible, &s.extensionVisibleKnown)
 	}
 
@@ -2118,15 +2116,26 @@ func toggleAutostart(m *systray.MenuItem) {
 }
 
 // mExtension offers the browser extension that reads Claude resets and API
-// credits; updateUI shows it while the extension is missing.
+// credits; updateUI shows it while offerExtension says so.
 var mExtension *systray.MenuItem
 
 const extensionMenuTitle = "Connect your browser for Claude resets and API credits…"
 
-// extensionMissing reports whether the extension has not reached Clawmeter
-// in the past week, so the menu should offer it.
-func extensionMissing(lastContact, now time.Time) bool {
-	return lastContact.IsZero() || now.Sub(lastContact) > 7*24*time.Hour
+// offerExtension reports whether the menu should offer the extension: it has
+// not reached Clawmeter in the past week, and the user has never opened its
+// setup, which writes the folder. Someone who chose not to install it is not
+// asked again; Settings keeps the way back.
+func offerExtension(folderExists bool, lastContact, now time.Time) bool {
+	return !folderExists && (lastContact.IsZero() || now.Sub(lastContact) > 7*24*time.Hour)
+}
+
+func extensionFolderExists() bool {
+	dir, err := browserext.Dir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(dir)
+	return err == nil
 }
 
 // openExtensionSetup installs the extension folder and opens the setup page,

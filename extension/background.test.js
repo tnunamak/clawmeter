@@ -6,14 +6,14 @@ const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [], accounts: [] }),
+function worker(readConsole, fetch = async () => ({ ok: true, status: 204, headers: new Headers() }), readResets = async () => ({ status: "ok", payloads: [], accounts: [] }),
   { tabs = [], executeScript = async () => [] } = {}) {
-  const listeners = {}, created = [], stored = [], sessions = [], queries = [], injections = [], badges = [], opened = [];
+  const listeners = {}, created = [], stored = [], sessions = [], queries = [], injections = [], badges = [], icons = [], opened = [], removed = [];
   const timers = new Map();
   let timerID = 0;
   const context = vm.createContext({
     importScripts: (...names) => assert.deepEqual(names, ["console.js", "resets.js"]),
-    readConsole, readResets, fetch, AbortController, Date,
+    readConsole, readResets, fetch, AbortController, Date, Headers,
     setTimeout: (callback, delay) => { assert.equal(delay, 20000); timers.set(++timerID, callback); return timerID; },
     clearTimeout: id => timers.delete(id),
     chrome: {
@@ -27,7 +27,7 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
       },
       // A tab without a url is a claude.ai tab.
       action: { setBadgeBackgroundColor: async () => {}, setBadgeText: async ({ text }) => badges.push(text),
-        setTitle: async ({ title }) => badges.push(title) },
+        setTitle: async ({ title }) => badges.push(title), setIcon: async ({ path }) => icons.push(path[16]) },
       tabs: { create: async tab => { opened.push(tab); return { id: 7 }; },
         onUpdated: { addListener: fn => { listeners.updated = fn; }, removeListener: () => { listeners.updated = null; } },
         query: async filter => {
@@ -36,12 +36,13 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
           .map(tab => ({ discarded: false, status: "complete", ...tab }));
       } },
       scripting: { executeScript: async injection => { injections.push(injection); return executeScript(injection); } },
-      storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))) },
-        session: { set: async value => sessions.push(JSON.parse(JSON.stringify(value))) } },
+      storage: { local: { get: async () => ({ cache: {} }), set: async value => stored.push(JSON.parse(JSON.stringify(value))),
+        remove: async key => removed.push(key) },
+        session: { get: async () => sessions.at(-1) || {}, set: async value => sessions.push(JSON.parse(JSON.stringify(value))) } },
     },
   });
   vm.runInContext(readFileSync(require.resolve("./background.js"), "utf8"), context);
-  return { context, listeners, created, stored, sessions, timers, queries, injections, badges, opened };
+  return { context, listeners, created, stored, sessions, timers, queries, injections, badges, icons, opened, removed };
 }
 
 test("alarm lifecycle and one poll at a time", async () => {
@@ -332,7 +333,7 @@ const sessionReader = async (read, now, cache, post, pools) => {
   return { status: "ok", payloads: [{ name: "Main", balance: 100, currency: "USD" }], listed: ["main"], failures: [] };
 };
 const signedIn = async (url, options) => url.startsWith("http://127.0.0.1")
-  ? { ok: true, status: 204 } : { ok: true, status: 200, json: async () => [] };
+  ? { ok: true, status: 204, headers: new Headers() } : { ok: true, status: 200, json: async () => [] };
 
 test("a signed-out container tab cannot hide the signed-in main session", async () => {
   const posts = [];
@@ -385,7 +386,7 @@ test("a tab that does not answer beside one that signs out is reported, not hidd
 test("a signed-out main session does not sign out a container whose tab is closed", async () => {
   const posts = [];
   const signedOut = async (url, options) => {
-    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204, headers: new Headers() }; }
     return { ok: false, status: 401 };
   };
   const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
@@ -426,7 +427,7 @@ test("a team pool shared with a container survives the container closing and the
   const posts = [];
   let mainSignedIn = true;
   const fetch = async url => {
-    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204, headers: new Headers() }; }
     return mainSignedIn ? { ok: true, status: 200, json: async () => ({}) } : { ok: false, status: 401 };
   };
   const recent = { at: Date.now(), reconciledAt: Date.now(), daily: {} };
@@ -456,7 +457,7 @@ test("a cost refresh and a failed container read still record the container's po
   const posts = [];
   let mainSignedIn = true;
   const fetch = async url => {
-    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204, headers: new Headers() }; }
     return mainSignedIn ? { ok: true, status: 200, json: async () => ({}) } : { ok: false, status: 401 };
   };
   // The main session lists the team and refreshes its costs, which rewrites
@@ -500,7 +501,7 @@ test("a cost refresh and a failed container read still record the container's po
 test("a pool a container lists but cannot read yet is remembered for a week", async () => {
   const posts = [];
   const fetch = async url => {
-    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204 }; }
+    if (url.startsWith("http://127.0.0.1")) { posts.push(url); return { ok: true, status: 204, headers: new Headers() }; }
     return { ok: false, status: 401 };
   };
   // The main session is signed out; the container lists a pool whose read fails.
@@ -533,26 +534,64 @@ test("a pool a container lists but cannot read yet is remembered for a week", as
   assert.ok(posts.some(url => url.endsWith("/v1/status")));
 });
 
-test("the badge asks for a fix only when Clawmeter misses readings it could have", () => {
-  const { context } = worker(async () => ({ status: "ok", payloads: [] }));
-  const status = (claude, delivery = ["saved"]) => ({ delivery, claude });
-  assert.equal(context.attention(status({ state: "ok", accounts: [] }), true), "");
-  assert.equal(context.attention(status({ state: "ok", accounts: [] }, ["saved", "unreachable"]), false), "Clawmeter isn't running on this computer");
-  assert.equal(context.attention(status({ state: "ok", accounts: [] }, ["rejected"]), false), "Update Clawmeter to accept readings");
-  // A browser that has never read claude.ai is used only for API credits.
-  assert.equal(context.attention(status({ state: "no_tab" }), false), "");
-  assert.equal(context.attention(status({ state: "no_tab" }), true), "Clawmeter needs an open claude.ai tab");
-  assert.equal(context.attention(status({ state: "signed_out" }), true), "Sign in to claude.ai for Clawmeter");
+test("post says what Clawmeter did with a reading", async () => {
+  const reply = (status, ignored) => async () => ({ ok: status < 300, status, headers: new Headers(ignored ? { "Clawmeter-Reading": "ignored" } : {}) });
+  for (const [fetch, want] of [[reply(204), "saved"], [reply(204, true), "ignored"], [reply(400), "rejected"],
+    [reply(403), "rejected"], [reply(500), "failed"], [async () => { throw new TypeError("Failed to fetch"); }, "unreachable"]]) {
+    const { context } = worker(async () => ({ status: "ok", payloads: [] }), fetch);
+    assert.equal(await context.post("/v1/resets", {}), want);
+  }
 });
 
-test("a poll sets the badge, and remembers that claude.ai was read", async () => {
-  const w = worker(async () => ({ status: "ok", payloads: [] }), undefined,
-    async () => ({ status: "ok", payloads: [], accounts: [{ name: "Max", resets: 1 }] }), { tabs: [{ id: 1 }],
-      executeScript: async () => [{ result: { status: 200, body: {} } }] });
+test("the icon greys while Clawmeter is down and badges only refusals that persist", () => {
+  const { context } = worker(async () => ({ status: "ok", payloads: [] }));
+  const quiet = { off: false, problem: "" };
+  const signal = (delivery, previous, claude = { state: "ok", accounts: [] }) =>
+    JSON.parse(JSON.stringify(context.signal({ delivery, claude }, previous)));
+  assert.deepEqual(signal(["saved"]), quiet);
+  // A closed claude.ai tab or a sign-out is for the popup, not the toolbar.
+  assert.deepEqual(signal(["saved"], undefined, { state: "no_tab" }), quiet);
+  assert.deepEqual(signal([], undefined, { state: "signed_out" }), quiet);
+  assert.deepEqual(signal(["saved", "unreachable"]), { off: true, problem: "The Clawmeter app isn't running" });
+  // One refusal, such as a reading that waited out a laptop's sleep, is not shown.
+  assert.deepEqual(signal(["rejected"]), quiet);
+  assert.deepEqual(signal(["rejected"], { refusals: 1 }), quiet);
+  assert.deepEqual(signal(["saved", "rejected"], { refusals: 2 }),
+    { off: false, problem: "Update the Clawmeter app; it can't read this browser's readings" });
+  assert.deepEqual(signal(["failed"], { refusals: 2 }), { off: false, problem: "The Clawmeter app couldn't save readings" });
+  // A check that sent nothing keeps the count; one Clawmeter accepted clears it.
+  const status = { delivery: [], claude: { state: "no_tab" } };
+  context.signal(status, { refusals: 2 });
+  assert.equal(status.refusals, 2);
+  status.delivery = ["ignored"];
+  context.signal(status, { refusals: 2 });
+  assert.equal(status.refusals, 0);
+});
+
+test("a poll sets the icon and badge, and keeps the refusal count for the next", async () => {
+  let code = 400;
+  const w = worker(async () => ({ status: "ok", payloads: [] }), async () => ({ ok: code < 300, status: code, headers: new Headers() }),
+    async (read, now, post) => { await post({}); return { status: "ok", payloads: [], accounts: [] }; });
   await tick();
+  for (let i = 0; i < 3; i++) await w.context.poll();
+  assert.equal(w.sessions.at(-1).status.refusals, 3);
+  assert.deepEqual(w.badges.slice(-2), ["!", "Update the Clawmeter app; it can't read this browser's readings"]);
+  assert.equal(w.icons.at(-1), "icons/icon-16.png");
+  code = 204;
   await w.context.poll();
-  assert.ok(w.stored.some(value => value.claudeRead === true));
   assert.deepEqual(w.badges.slice(-2), ["", "Clawmeter"]);
+  w.context.fetch = async () => { throw new TypeError("Failed to fetch"); };
+  await w.context.poll();
+  assert.deepEqual(w.badges.slice(-2), ["", "The Clawmeter app isn't running"]);
+  assert.equal(w.icons.at(-1), "icons/icon-16-off.png");
+});
+
+test("install forgets the claude.ai flag earlier versions kept", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  w.listeners.install();
+  await tick();
+  assert.deepEqual(w.removed, ["claudeRead"]);
 });
 
 test("open-claude opens a pinned background tab and reads it once it has loaded", async () => {

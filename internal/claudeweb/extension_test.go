@@ -204,8 +204,8 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 		}
 		return string(raw)
 	}
-	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-odl")); got.Code != 204 {
-		t.Fatalf("resets = %d: %s", got.Code, got.Body.String())
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-odl")); got.Code != 204 || got.Header().Get("Clawmeter-Reading") != "" {
+		t.Fatalf("resets = %d %q: %s", got.Code, got.Header().Get("Clawmeter-Reading"), got.Body.String())
 	}
 	summary, err := ReadSummaryFor("claude:odl")
 	if err != nil {
@@ -225,9 +225,10 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 		t.Fatalf("saved summary holds the raw organization ID: %s, %v", raw, err)
 	}
 
-	// An organization Clawmeter doesn't track is accepted and dropped.
-	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-other")); got.Code != 204 || len(results) != 1 {
-		t.Fatalf("untracked = %d, results %d", got.Code, len(results))
+	// An organization Clawmeter doesn't track is accepted and dropped, and
+	// the reply says so.
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-other")); got.Code != 204 || got.Header().Get("Clawmeter-Reading") != "ignored" || len(results) != 1 {
+		t.Fatalf("untracked = %d %q, results %d", got.Code, got.Header().Get("Clawmeter-Reading"), len(results))
 	}
 	for name, bad := range map[string]string{
 		"no grants":  `{"observed_at":"` + observed.Format(time.RFC3339Nano) + `","organization":"org-odl"}`,
@@ -251,7 +252,7 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 
 	// A delayed reading older than the saved one is dropped.
 	observed = observed.Add(-30 * time.Second)
-	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-odl")); got.Code != 204 || len(results) != 1 {
+	if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body("org-odl")); got.Code != 204 || got.Header().Get("Clawmeter-Reading") != "" || len(results) != 1 {
 		t.Fatalf("older reading = %d, results %d", got.Code, len(results))
 	}
 	if kept, err := ReadSummaryFor("claude:odl"); err != nil || kept.MatchSalt != summary.MatchSalt {

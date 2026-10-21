@@ -63,6 +63,7 @@ function connection(delivery) {
   if (!delivery.length) return { text: "Waiting for the first reading", tone: "" };
   if (delivery.includes("unreachable")) return { text: "The Clawmeter app isn't running", tone: "bad" };
   if (delivery.includes("rejected")) return { text: "Clawmeter refused a reading; update Clawmeter", tone: "bad" };
+  if (delivery.includes("failed")) return { text: "Clawmeter couldn't save a reading", tone: "bad" };
   return { text: "Sending to Clawmeter", tone: "ok" };
 }
 
@@ -92,7 +93,7 @@ function claude(status) {
         : row(account.name, account.resets ? `${account.resets} reset${account.resets === 1 ? "" : "s"}` : "no resets")),
         ...unchecked(status), ...untracked(status.accounts)];
     case "no_tab":
-      return [fix("Resets are read through an open claude.ai tab.", openClaude())];
+      return [fix("Resets are read while a claude.ai tab is open.", openClaude(), "muted")];
     case "signed_out":
       return [fix("Signed out of claude.ai.", link("Sign in", "https://claude.ai/login"))];
     default:

@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-// Every file the manifest loads, and every script beside it, must be embedded.
+// Every file the manifest loads, every script beside it, and every icon the
+// worker can switch to must be embedded.
 func TestFilesHoldEverythingTheManifestLoads(t *testing.T) {
 	data, err := Files.ReadFile("manifest.json")
 	if err != nil {
@@ -37,6 +38,15 @@ func TestFilesHoldEverythingTheManifestLoads(t *testing.T) {
 	for _, entry := range entries {
 		if name := entry.Name(); strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".test.js") {
 			want = append(want, name)
+		}
+	}
+	icons, err := os.ReadDir("icons")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range icons {
+		if name := entry.Name(); strings.HasSuffix(name, ".png") {
+			want = append(want, "icons/"+name)
 		}
 	}
 	for _, name := range want {
