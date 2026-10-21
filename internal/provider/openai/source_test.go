@@ -131,8 +131,21 @@ func TestAmbientSourceRevisionFollowsCodexHome(t *testing.T) {
 	}
 	// Another process with another CODEX_HOME reads another account.
 	t.Setenv("CODEX_HOME", two)
-	if second := p.SourceRevision(); second == "" || second == first {
+	second := p.SourceRevision()
+	if second == "" || second == first {
 		t.Fatalf("revision did not follow CODEX_HOME: %q, %q", first, second)
+	}
+	// Without CODEX_HOME the source reads ~/.codex.
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeOpenAIAuth(t, filepath.Join(home, ".codex"), "home-access", "home-account")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if third := p.SourceRevision(); third == "" || third == first || third == second {
+		t.Fatalf("home revision = %q", third)
 	}
 }
 

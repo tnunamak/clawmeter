@@ -132,9 +132,7 @@ func (p *Provider) sourceRevision() string {
 	if err != nil {
 		return ""
 	}
-	if resolved, err := filepath.EvalSymlinks(canonical); err == nil {
-		canonical = resolved
-	}
+	canonical = provider.CanonicalPath(canonical)
 	info, err := os.Stat(path)
 	metadata := "unavailable"
 	if err == nil {
