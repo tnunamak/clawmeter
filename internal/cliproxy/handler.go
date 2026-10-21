@@ -1,7 +1,7 @@
 // Package cliproxy exposes Clawmeter's cached Claude and Codex readings through
 // the read-only subset of CLIProxyAPI's management API that T3 Code reads
 // (apps/server/src/usage/cliproxyApi.ts in pingdotgg/t3code). It answers from
-// the cache the tray keeps; it never fetches, forwards a request, or touches a
+// the cache the tray keeps; it never fetches, forwards a request, or sends a
 // credential.
 package cliproxy
 

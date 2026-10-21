@@ -209,6 +209,17 @@ clawmeter update         # self-update
 clawmeter tray           # run the tray in this session
 ```
 
+### Show quotas in T3 Code
+
+T3 Code can show quotas from a CLIProxyAPI hub (Settings → Add a CLIProxyAPI hub). `clawmeter hub` answers the read-only part of that API, so T3 shows the Claude and Codex accounts Clawmeter tracks, one row per account.
+
+```bash
+export CLAWMETER_HUB_KEY="$(openssl rand -hex 32)"
+clawmeter hub                     # listens on http://127.0.0.1:8318
+```
+
+In T3, enter `http://127.0.0.1:8318` as the hub URL and the same key as the management key. The hub answers from the cache the tray keeps, so keep the tray running. It never fetches, forwards a request or sends a credential anywhere. A reading older than two tray polls (10 minutes by default) shows as unavailable in T3 rather than as current. Codex reset credits are not offered, because redeeming one needs a credit ID that Clawmeter does not have. Plain HTTP is allowed only on a loopback address; to serve another computer, pass `--tls-cert` and `--tls-key`, or put the hub behind a TLS proxy. The hub reads the configuration when it starts, so restart it after adding a source.
+
 ## Providers
 
 | Provider | Tracks |
