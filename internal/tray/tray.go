@@ -7,10 +7,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -2124,23 +2122,16 @@ func extensionMissing(lastContact, now time.Time) bool {
 	return lastContact.IsZero() || now.Sub(lastContact) > 7*24*time.Hour
 }
 
-// openExtensionSetup installs the extension folder and opens a page that
-// walks through loading it.
+// openExtensionSetup installs the extension folder and opens the setup page,
+// which shows the folder.
 func openExtensionSetup() {
 	dir, err := browserext.Install()
-	if err == nil {
-		var page string
-		if page, err = browserext.WriteGuide(dir); err == nil {
-			path := filepath.ToSlash(page)
-			if !strings.HasPrefix(path, "/") {
-				path = "/" + path // C:/Users/... on Windows
-			}
-			openURL((&url.URL{Scheme: "file", Path: path}).String())
-			return
-		}
+	if err != nil {
+		log.Printf("browser extension setup: %v", err)
+		notify("Clawmeter", "Couldn't set up the browser extension: "+err.Error(), "normal")
+		return
 	}
-	log.Printf("browser extension setup: %v", err)
-	notify("Clawmeter", "Couldn't set up the browser extension: "+err.Error(), "normal")
+	openURL(browserext.SetupURL(dir))
 }
 
 func openURL(url string) {

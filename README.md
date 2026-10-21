@@ -92,7 +92,7 @@ dropped.
 
 The result shows under its Claude source as `Resets: 1 · expires Oct 22`. A
 reading more than five minutes old adds when it was read and
-`open claude.ai in your browser`.
+`open claude.ai signed in to this account`.
 
 ### Claude API Credits
 
@@ -101,12 +101,15 @@ grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
 Admin API is unavailable to individual accounts. Clawmeter reads them from the
 Claude Console through the Clawmeter Chrome extension:
 
+Setup page, including several Claude accounts:
+<https://tnunamak.github.io/clawmeter/extension/>
+
 1. Click **Connect your browser for Claude resets and API credits…** in the
    tray menu, or run `clawmeter setup --browser-extension`. Clawmeter writes the
    extension to a fixed folder (`~/.local/share/clawmeter/extension` on Linux,
    `~/Library/Application Support/clawmeter/extension` on macOS,
-   `%LOCALAPPDATA%\clawmeter\extension` on Windows) and opens a page with
-   the steps.
+   `%LOCALAPPDATA%\clawmeter\extension` on Windows). The tray opens the
+   setup page; the command prints the steps and its link.
 2. Open the browser's Extensions page, enable **Developer mode**, choose
    **Load unpacked** and select that folder. It works in Chrome, Brave, Edge
    and other Chromium browsers.

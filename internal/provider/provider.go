@@ -515,7 +515,7 @@ func (r *UsageResetCredits) Summary(now time.Time) string {
 		parts = append(parts, verb+shortDate(expiresAt, now))
 	}
 	if r.Snapshot && !r.FetchedAt.IsZero() && now.Sub(r.FetchedAt) > 5*time.Minute {
-		parts = append(parts, "not updated since "+shortDate(r.FetchedAt, now), "open claude.ai in your browser")
+		parts = append(parts, "not updated since "+shortDate(r.FetchedAt, now), "open claude.ai signed in to this account")
 	}
 	return strings.Join(parts, " · ")
 }

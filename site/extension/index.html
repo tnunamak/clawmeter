@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up the Clawmeter browser extension</title>
+<meta name="description" content="Load the Clawmeter extension so the tray can show Claude reset credits and prepaid API credits.">
+<link rel="icon" href="icon-128.png">
+<style>
+:root{--fg:#1d1d1f;--muted:#6e6e73;--bg:#fff;--code:#f2f2f7;--line:#d2d2d7;--accent:#c2410c}
+@media (prefers-color-scheme:dark){:root{--fg:#e8e8e8;--muted:#a1a1a6;--bg:#1c1c1e;--code:#2c2c2e;--line:#3a3a3c;--accent:#fb923c}}
+*{box-sizing:border-box}
+body{font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:44rem;margin:0 auto;padding:3rem 1.25rem 4rem;color:var(--fg);background:var(--bg)}
+header{display:flex;gap:1rem;align-items:center;margin-bottom:.5rem}
+header img{width:48px;height:48px}
+h1{font-size:1.6rem;margin:0;line-height:1.2}
+h2{font-size:1.15rem;margin:2.25rem 0 .5rem}
+p.lead{color:var(--muted);margin:.5rem 0 1.5rem}
+ol{padding-left:1.4rem}li{margin:.6rem 0}
+code{background:var(--code);padding:.1rem .35rem;border-radius:4px;font-size:.92em;overflow-wrap:anywhere}
+button.copy{margin-left:.4rem;font:inherit;font-size:.8rem;padding:.05rem .55rem;border-radius:6px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer}
+.note{color:var(--muted);font-size:.92rem}
+.card{border:1px solid var(--line);border-radius:10px;padding:.9rem 1.1rem;margin:.75rem 0}
+.card h3{font-size:1rem;margin:0 0 .25rem}
+table{border-collapse:collapse;font-size:.92rem;margin:.5rem 0}
+td{padding:.25rem .75rem .25rem 0;vertical-align:top}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header><img src="icon-128.png" alt=""><h1>Set up the Clawmeter browser extension</h1></header>
+<p class="lead">claude.ai and the Claude Console have no API for your reset credits and prepaid API credits. This small extension reads them from your signed-in browser and sends them to the Clawmeter app on the same computer, and nowhere else.</p>
+
+<h2>Set it up</h2>
+<ol>
+<li>Get the extension folder: in the Clawmeter tray menu choose <b>Connect your browser for Claude resets and API credits…</b>, or run <code>clawmeter setup --browser-extension</code>.
+<div id="folder"></div></li>
+<li>Open your browser's extensions page. Paste the address into the address bar; pages can't link to it.
+<table>
+<tr><td>Chrome</td><td><code>chrome://extensions</code><button class="copy" data-copy="chrome://extensions">Copy</button></td></tr>
+<tr><td>Brave</td><td><code>brave://extensions</code><button class="copy" data-copy="brave://extensions">Copy</button></td></tr>
+<tr><td>Edge</td><td><code>edge://extensions</code><button class="copy" data-copy="edge://extensions">Copy</button></td></tr>
+</table></li>
+<li>Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and choose the extension folder.
+<div class="note">On Linux the folder is inside a hidden folder. In the file chooser, press <b>Ctrl+L</b> and paste the path.</div></li>
+<li>Keep a claude.ai tab open. Clawmeter reads reset credits through it. API credits are read through a Claude Console tab, or your signed-in session if none is open.</li>
+<li>Check it works: click the Clawmeter icon in the browser toolbar. It lists each Claude account it can see and whether the readings reach Clawmeter.</li>
+</ol>
+
+<h2>More than one Claude account</h2>
+<p>A browser profile is signed in to one Claude account at a time. To cover more, give each account its own session:</p>
+<div class="card"><h3>Brave: containers, one profile</h3>
+Load the extension once. Open claude.ai in a separate container for each account (right-click a tab, or the Containers button) and sign in there. Keep one claude.ai tab open per account. The extension reads every open tab, so it sees every container's account.</div>
+<div class="card"><h3>Chrome, Edge and other browsers: one profile per account</h3>
+Make a browser profile for each account and load the extension in each profile. They can all use the same folder. Keep a claude.ai tab open in each profile.</div>
+<p>Each account must also be set up in Clawmeter, as a Claude source (<code>clawmeter providers source help claude</code>). Readings for accounts Clawmeter doesn't track are dropped, and the extension's popup shows them as <i>not set up in Clawmeter</i>.</p>
+
+<h2>Updates and privacy</h2>
+<p>Clawmeter keeps the folder up to date. After Clawmeter updates, click the reload arrow on the extension's card, or restart the browser.</p>
+<p>The extension only talks to claude.ai, the Claude Console and Clawmeter at 127.0.0.1. Firefox and Safari aren't supported yet. Read <a href="https://github.com/tnunamak/clawmeter/blob/main/PRIVACY.md">what it reads and sends</a>, or the <a href="https://github.com/tnunamak/clawmeter">Clawmeter project</a>.</p>
+
+<script>
+// Clawmeter opens this page with the folder in the fragment, which never
+// leaves the browser: #dir=/home/you/.local/share/clawmeter/extension
+const copy = async (button, text) => {
+  try { await navigator.clipboard.writeText(text); button.textContent = "Copied"; }
+  catch { button.textContent = "Select and copy"; }
+};
+const folder = document.getElementById("folder");
+const dir = new URLSearchParams(location.hash.slice(1)).get("dir");
+const line = (label, path) => {
+  const div = document.createElement("div");
+  div.className = "note";
+  div.append(label + " ");
+  const code = document.createElement("code");
+  code.textContent = path;
+  const button = document.createElement("button");
+  button.className = "copy"; button.textContent = "Copy"; button.dataset.copy = path;
+  div.append(code, button);
+  return div;
+};
+if (dir) {
+  folder.append(line("Your folder:", dir));
+} else {
+  folder.append(line("Linux:", "~/.local/share/clawmeter/extension"),
+    line("macOS:", "~/Library/Application Support/clawmeter/extension"),
+    line("Windows:", "%LOCALAPPDATA%\\clawmeter\\extension"));
+}
+document.addEventListener("click", event => {
+  const button = event.target.closest("button.copy");
+  if (button) copy(button, button.dataset.copy);
+});
+</script>
+</body>
+</html>

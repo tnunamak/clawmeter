@@ -1,13 +1,12 @@
 // Package browserext installs the unpacked browser extension that reads
-// Claude resets and API credits, and writes a page that walks through
-// loading it.
+// Claude resets and API credits.
 package browserext
 
 import (
 	"bytes"
 	"fmt"
-	"html/template"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,51 +180,12 @@ func Steps(dir string) []string {
 	}
 }
 
-// WriteGuide writes a page next to the extension folder that walks through
-// loading it, and returns the page's path.
-func WriteGuide(dir string) (string, error) {
-	var page bytes.Buffer
-	if err := guide.Execute(&page, struct{ Dir string }{dir}); err != nil {
-		return "", err
-	}
-	path := filepath.Join(filepath.Dir(dir), "extension-setup.html")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", fmt.Errorf("write the extension setup page: %w", err)
-	}
-	if err := os.WriteFile(path, page.Bytes(), 0o644); err != nil {
-		return "", fmt.Errorf("write the extension setup page: %w", err)
-	}
-	return path, nil
+// SetupURL is the setup page, with the folder in the fragment so the page
+// can show it. A fragment never leaves the browser.
+func SetupURL(dir string) string {
+	return SetupPage + "#dir=" + url.QueryEscape(dir)
 }
 
-var guide = template.Must(template.New("guide").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Connect Clawmeter to your browser</title>
-<style>
-body{font:16px/1.5 system-ui,sans-serif;max-width:42rem;margin:3rem auto;padding:0 1rem;color:#1d1d1f;background:#fff}
-@media (prefers-color-scheme:dark){body{color:#e8e8e8;background:#1c1c1e}code{background:#2c2c2e}}
-h1{font-size:1.5rem;margin-bottom:.25rem}p.lead{color:#6e6e73;margin-top:0}
-ol{padding-left:1.25rem}li{margin:.75rem 0}
-code{background:#f2f2f7;padding:.1rem .35rem;border-radius:4px;word-break:break-all}
-button{margin-left:.5rem;font:inherit;font-size:.85rem;padding:.1rem .6rem;border-radius:6px;border:1px solid #8e8e93;background:transparent;color:inherit;cursor:pointer}
-.note{color:#6e6e73;font-size:.9rem}
-</style></head><body>
-<h1>Connect Clawmeter to your browser</h1>
-<p class="lead">claude.ai and the Claude Console have no API for your reset credits and prepaid API credit balance. A small browser extension reads them from your signed-in session and sends them to Clawmeter on this computer only.</p>
-<ol>
-<li>Open your browser's extensions page: <code>chrome://extensions</code><button data-copy="chrome://extensions">Copy</button><br>
-<span class="note">Brave: <code>brave://extensions</code> · Edge: <code>edge://extensions</code>. Browsers don't let a page link there, so paste it into the address bar.</span></li>
-<li>Turn on <b>Developer mode</b>.</li>
-<li>Click <b>Load unpacked</b> and choose this folder:<br><code id="dir">{{.Dir}}</code><button data-copy="{{.Dir}}">Copy</button></li>
-<li>Keep a claude.ai tab open. Clawmeter reads resets through it, and API credits through a Claude Console tab or your signed-in session.</li>
-</ol>
-<p class="note">Clawmeter keeps this folder up to date. After an update, click the reload arrow on the extension's card, or restart the browser. The extension only talks to claude.ai, the Claude Console and Clawmeter on 127.0.0.1. Firefox and Safari are not supported yet.</p>
-<script>
-for (const button of document.querySelectorAll("button[data-copy]")) {
-  button.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(button.dataset.copy); button.textContent = "Copied"; }
-    catch { button.textContent = "Select and copy"; }
-  });
-}
-</script>
-</body></html>
-`))
+// SetupPage walks through loading the extension, in one browser or for
+// several Claude accounts. Its source is site/extension/index.html.
+const SetupPage = "https://tnunamak.github.io/clawmeter/extension/"
