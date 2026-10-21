@@ -5,6 +5,7 @@ package tray
 import (
 	"context"
 	"errors"
+	"net/url"
 	"runtime"
 	"strings"
 	"testing"
@@ -1617,4 +1618,28 @@ func TestTrayOffersTheBrowserExtensionUntilItHasConnectedThisWeek(t *testing.T) 
 			t.Errorf("extensionMissing(%v) = %v, want %v", tc.contact, got, tc.want)
 		}
 	}
+}
+
+func TestIssueURLNamesTheBuildOnly(t *testing.T) {
+	got := issueURL("v0.51.0", "linux/amd64", "KDE")
+	parsed, err := url.Parse(got)
+	if err != nil || parsed.Host != "github.com" || parsed.Path != "/tnunamak/clawmeter/issues/new" {
+		t.Fatalf("issueURL = %q", got)
+	}
+	body := parsed.Query().Get("body")
+	if !strings.Contains(body, "Clawmeter v0.51.0 · linux/amd64 · KDE") || !strings.Contains(body, "**What happened**") {
+		t.Fatalf("body = %q", body)
+	}
+	if body := mustQuery(t, issueURL("v0.51.0", "darwin/arm64", "")); strings.HasSuffix(strings.TrimSpace(body), "· ") || !strings.HasSuffix(body, "darwin/arm64\n") {
+		t.Fatalf("body without desktop = %q", body)
+	}
+}
+
+func mustQuery(t *testing.T, raw string) string {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Query().Get("body")
 }

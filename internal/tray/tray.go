@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -295,6 +296,8 @@ func onReadyWithConfig(loaded *config.Config) {
 	iconPick := newIconPicker(mSettings)
 	mAutostart := mSettings.AddSubMenuItemCheckbox("Launch at login", "", false)
 	updateAutostartLabel(mAutostart)
+	mSetupExtension := mSettings.AddSubMenuItem("Set up the browser extension…", "")
+	mReport := mSettings.AddSubMenuItem("Report a problem…", "")
 	mSettings.AddSubMenuItem(fmt.Sprintf("Clawmeter %s", version), "").Disable()
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
@@ -604,6 +607,10 @@ func onReadyWithConfig(loaded *config.Config) {
 				}(providerName, menu)
 			case <-mExtension.ClickedCh:
 				go openExtensionSetup()
+			case <-mSetupExtension.ClickedCh:
+				go openExtensionSetup()
+			case <-mReport.ClickedCh:
+				go openURL(issueURL(version, runtime.GOOS+"/"+runtime.GOARCH, os.Getenv("XDG_CURRENT_DESKTOP")))
 			case <-mUpdate.ClickedCh:
 				// Download, verify, replace, and restart can take seconds. Keep
 				// the tray event loop available while the update runs.
@@ -2132,6 +2139,17 @@ func openExtensionSetup() {
 		return
 	}
 	openURL(browserext.SetupURL(dir))
+}
+
+// issueURL opens a new GitHub issue that names this build and desktop. It
+// carries nothing about the user's accounts or usage.
+func issueURL(version, platform, desktop string) string {
+	build := "Clawmeter " + version + " · " + platform
+	if desktop != "" {
+		build += " · " + desktop
+	}
+	body := "**What happened**\n\n\n**What you expected**\n\n\n---\n" + build + "\n"
+	return "https://github.com/tnunamak/clawmeter/issues/new?body=" + url.QueryEscape(body)
 }
 
 func openURL(url string) {
