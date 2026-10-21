@@ -144,7 +144,7 @@ func TestIsLoopbackAddress(t *testing.T) {
 		{"10.0.0.5:8318", false},
 		{"169.254.169.254:80", false},
 		// Hostnames are not resolved, so they are refused conservatively.
-		{"localhost:8318", false},
+		{"localhost:8318", true},
 		{"example.com:8318", false},
 		// A missing or malformed port is not a usable listen address.
 		{"127.0.0.1", false},

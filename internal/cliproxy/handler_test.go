@@ -861,6 +861,24 @@ func authFilesRaw(t *testing.T, h http.Handler) string {
 	return recorder.Body.String()
 }
 
+func TestSourcesWithoutARevisionAreLeftOut(t *testing.T) {
+	ambient := claudeSource("default")
+	ambient.revision = ""
+	pinned := claudeSource("work")
+	h := newHandler(t, []provider.Provider{ambient, pinned}, testMaxAge)
+	request := httptest.NewRequest(http.MethodGet, authFilesPath, nil)
+	request.Header.Set("Authorization", "Bearer "+testManagementKey)
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, request)
+	var body authFilesBody
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Files) != 1 || body.Files[0]["id"] != "claude:work" {
+		t.Fatalf("files = %+v, want only the source with a revision", body.Files)
+	}
+}
+
 func TestNewHandlerValidation(t *testing.T) {
 	if _, err := NewHandler("", []provider.Provider{claudeSource("work")}, time.Minute); err == nil {
 		t.Fatal("NewHandler accepted an empty management key")

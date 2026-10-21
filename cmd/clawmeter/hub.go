@@ -88,10 +88,15 @@ func hubCmd(args []string) int {
 	return 0
 }
 
+// isLoopbackAddress reports whether address listens only on this computer:
+// a loopback IP, or the name localhost.
 func isLoopbackAddress(address string) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
