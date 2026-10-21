@@ -20,9 +20,11 @@ const (
 	repo            = "tnunamak/clawmeter"
 	defaultAPIURL   = "https://api.github.com/repos/" + repo + "/releases/latest"
 	defaultDLPrefix = "https://github.com/" + repo + "/releases/download"
-	httpTimeout     = 15 * time.Second
-	restartHelper   = "__restart-tray"
-	restartDelay    = 750 * time.Millisecond
+	// defaultLatestURL redirects to the latest release's tag page.
+	defaultLatestURL = "https://github.com/" + repo + "/releases/latest"
+	httpTimeout      = 15 * time.Second
+	restartHelper    = "__restart-tray"
+	restartDelay     = 750 * time.Millisecond
 )
 
 // apiURL and dlPrefix are overridable by tests via the package-level
@@ -30,6 +32,7 @@ const (
 var (
 	apiURL     = defaultAPIURL
 	dlPrefix   = defaultDLPrefix
+	latestURL  = defaultLatestURL
 	httpClient = &http.Client{Timeout: httpTimeout}
 )
 
@@ -63,13 +66,23 @@ func checkWith(ctx context.Context, currentVersion, api, dl string, client *http
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("check update: GitHub API returned %d", resp.StatusCode)
-	}
-
 	var rel ghRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("check update: %w", err)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
+			return nil, fmt.Errorf("check update: %w", err)
+		}
+	case http.StatusForbidden, http.StatusTooManyRequests:
+		// Anonymous API requests share a small hourly limit per address, so
+		// other programs on the network can use it up. The release page is
+		// not under that limit; it names the tag but not the assets.
+		tag, err := latestTag(ctx, latestURL, client)
+		if err != nil {
+			return nil, fmt.Errorf("check update: GitHub API returned %d; %w", resp.StatusCode, err)
+		}
+		rel.TagName = tag
+	default:
+		return nil, fmt.Errorf("check update: GitHub API returned %d", resp.StatusCode)
 	}
 
 	if rel.TagName == "" || rel.TagName == currentVersion {
@@ -103,6 +116,33 @@ func checkWith(ctx context.Context, currentVersion, api, dl string, client *http
 	}
 	url := fmt.Sprintf("%s/%s/%s", strings.TrimRight(dl, "/"), rel.TagName, assetName)
 	return &Release{Version: rel.TagName, URL: url}, nil
+}
+
+// latestTag reads the latest release's tag from where page redirects.
+func latestTag(ctx context.Context, page string, client *http.Client) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, page, nil)
+	if err != nil {
+		return "", err
+	}
+	noRedirect := *client
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	location, err := resp.Location()
+	if err != nil {
+		return "", fmt.Errorf("the release page returned %d without a redirect", resp.StatusCode)
+	}
+	tag, found := strings.CutPrefix(location.Path, "/"+repo+"/releases/tag/")
+	if !found {
+		return "", fmt.Errorf("the release page redirected to %s", location.Path)
+	}
+	if _, err := parseVersion(tag); err != nil {
+		return "", fmt.Errorf("the release page named tag %q: %w", tag, err)
+	}
+	return tag, nil
 }
 
 func assetNameFor(goos, goarch string) string {

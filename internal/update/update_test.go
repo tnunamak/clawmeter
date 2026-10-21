@@ -183,3 +183,52 @@ func TestCheck_live(t *testing.T) {
 	}
 	t.Logf("live update: %s -> %s", rel.Version, rel.URL)
 }
+
+func TestCheck_rateLimitedAPIFallsBackToTheReleasePage(t *testing.T) {
+	for name, tc := range map[string]struct {
+		api      int
+		location string
+		want     string
+	}{
+		"403 then tag":        {http.StatusForbidden, "/" + repo + "/releases/tag/v9.9.9", "v9.9.9"},
+		"429 then tag":        {http.StatusTooManyRequests, "/" + repo + "/releases/tag/v9.9.9", "v9.9.9"},
+		"no redirect":         {http.StatusForbidden, "", ""},
+		"another repository":  {http.StatusForbidden, "/someone/else/releases/tag/v9.9.9", ""},
+		"not a version":       {http.StatusForbidden, "/" + repo + "/releases/tag/nightly", ""},
+		"a path in the tag":   {http.StatusForbidden, "/" + repo + "/releases/tag/v9.9.9/x", ""},
+		"other errors do not": {http.StatusBadGateway, "/" + repo + "/releases/tag/v9.9.9", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api" {
+					w.WriteHeader(tc.api)
+					return
+				}
+				if r.Method != http.MethodHead || r.URL.Path != "/latest" {
+					t.Errorf("page request = %s %s", r.Method, r.URL.Path)
+				}
+				if tc.location != "" {
+					w.Header().Set("Location", tc.location)
+					w.WriteHeader(http.StatusFound)
+				}
+			}))
+			defer srv.Close()
+			saved := latestURL
+			latestURL = srv.URL + "/latest"
+			defer func() { latestURL = saved }()
+			rel, err := checkWith(context.Background(), "v0.0.1", srv.URL+"/api", srv.URL+"/download", http.DefaultClient)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("expected an error, got %+v", rel)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rel == nil || rel.Version != tc.want || rel.URL != srv.URL+"/download/"+tc.want+"/"+assetNameFor(runtime.GOOS, runtime.GOARCH) {
+				t.Fatalf("release = %+v", rel)
+			}
+		})
+	}
+}
