@@ -339,15 +339,33 @@ func TestExtensionPairsWithThisUsersExtension(t *testing.T) {
 	// The receiver reads the folder each time, so a token another process
 	// writes there is the one it accepts.
 	folder = strings.Repeat("b", 64)
-	restarted := ExtensionHandler(nil, nil, token)
-	if got := send(restarted, strings.Repeat("a", 64)); got != http.StatusUnauthorized {
+	if got := send(handler, strings.Repeat("a", 64)); got != http.StatusUnauthorized {
 		t.Fatalf("replaced token = %d", got)
 	}
-	if got := send(restarted, folder); got != http.StatusNoContent {
+	if got := send(handler, folder); got != http.StatusNoContent {
 		t.Fatalf("new folder token = %d", got)
 	}
+	restarted := ExtensionHandler(nil, nil, token)
 	if got := send(restarted, ""); got != http.StatusUnauthorized {
 		t.Fatalf("tokenless after restart = %d", got)
+	}
+	// A cleared cache reopens the tokenless window until the next paired
+	// reading.
+	marker, err := pairedPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if got := send(restarted, ""); got != http.StatusNoContent {
+		t.Fatalf("tokenless after a cleared cache = %d", got)
+	}
+	if got := send(restarted, folder); got != http.StatusNoContent {
+		t.Fatalf("paired after a cleared cache = %d", got)
+	}
+	if got := send(restarted, ""); got != http.StatusUnauthorized {
+		t.Fatalf("tokenless after pairing again = %d", got)
 	}
 	// Without a folder token nothing paired can be checked.
 	if got := send(ExtensionHandler(nil, nil, noToken), folder); got != http.StatusUnauthorized {
