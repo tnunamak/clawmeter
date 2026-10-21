@@ -123,11 +123,11 @@ func replaceEnv(env []string, key, value string, windows bool) []string {
 	return append(result, key+"="+value)
 }
 
+// sourceRevision fingerprints the auth file this source reads, ambient or
+// not, so a process whose CODEX_HOME points elsewhere never takes another
+// account's cached reading for its own.
 func (p *Provider) sourceRevision() string {
-	if !p.explicitSource {
-		return ""
-	}
-	path := filepath.Join(p.codexHome, "auth.json")
+	path := filepath.Join(p.authDirectory(), "auth.json")
 	canonical, err := filepath.Abs(path)
 	if err != nil {
 		return ""

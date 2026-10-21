@@ -119,6 +119,23 @@ func TestSourceRevisionIsOpaqueChangesWithMetadataAndDistinguishesMissing(t *tes
 	}
 }
 
+func TestAmbientSourceRevisionFollowsCodexHome(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	writeOpenAIAuth(t, one, "one-access", "one-account")
+	writeOpenAIAuth(t, two, "two-access", "two-account")
+	p := New(config.ProviderConfig{})
+	t.Setenv("CODEX_HOME", one)
+	first := p.SourceRevision()
+	if first == "" || strings.Contains(first, one) || strings.Contains(first, "secret") {
+		t.Fatalf("ambient revision = %q", first)
+	}
+	// Another process with another CODEX_HOME reads another account.
+	t.Setenv("CODEX_HOME", two)
+	if second := p.SourceRevision(); second == "" || second == first {
+		t.Fatalf("revision did not follow CODEX_HOME: %q, %q", first, second)
+	}
+}
+
 func TestRegistrationExpandsOpenAISourcesAndKeepsIdentityOnDirectAndResetRoutes(t *testing.T) {
 	one, two := t.TempDir(), t.TempDir()
 	writeOpenAIAuth(t, one, "one-access", "one-account")
