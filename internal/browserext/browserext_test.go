@@ -3,9 +3,47 @@ package browserext
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 )
+
+var testPairing = []byte(`{"token":"one"}`)
+
+func TestInstallWritesThePairingForThisUserOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "extension")
+	if err := installTo(dir, testPairing); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, pairingFile)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("pairing mode = %v", info.Mode().Perm())
+	}
+	// A new token is a different installation.
+	other := []byte(`{"token":"two"}`)
+	if installed(dir, other) {
+		t.Fatal("a folder with another token counts as installed")
+	}
+	if err := installTo(dir, other); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != string(other) {
+		t.Fatalf("pairing = %s, %v", data, err)
+	}
+	// A pairing others can read is rewritten.
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if installed(dir, other) {
+			t.Fatal("a readable pairing counts as installed")
+		}
+	}
+}
 
 func TestInstallWritesTheExtensionAndRemovesStaleFiles(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "extension")
@@ -16,7 +54,7 @@ func TestInstallWritesTheExtensionAndRemovesStaleFiles(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installTo(dir); err != nil {
+	if err := installTo(dir, testPairing); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"manifest.json", "background.js", "popup.html", filepath.Join("icons", "icon-128.png")} {
@@ -29,7 +67,7 @@ func TestInstallWritesTheExtensionAndRemovesStaleFiles(t *testing.T) {
 	}
 	// A second install leaves the files as they are.
 	before, _ := os.Stat(filepath.Join(dir, "manifest.json"))
-	if err := installTo(dir); err != nil {
+	if err := installTo(dir, testPairing); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.Stat(filepath.Join(dir, "manifest.json"))
@@ -63,7 +101,7 @@ func TestInstallReplacesLinksWithoutWritingThroughThem(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "icons"), filepath.Join(dir, "icons")); err != nil {
 		t.Skip("symlinks unavailable:", err)
 	}
-	if err := installTo(dir); err != nil {
+	if err := installTo(dir, testPairing); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(keep); string(data) != "not ours" {
@@ -72,7 +110,7 @@ func TestInstallReplacesLinksWithoutWritingThroughThem(t *testing.T) {
 	if info, err := os.Lstat(filepath.Join(dir, "icons")); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("icons = %v, %v", info, err)
 	}
-	if !installed(dir) {
+	if !installed(dir, testPairing) {
 		t.Fatal("install incomplete")
 	}
 
@@ -83,13 +121,13 @@ func TestInstallReplacesLinksWithoutWritingThroughThem(t *testing.T) {
 	if err := os.Symlink(outside, dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := installTo(dir); err != nil {
+	if err := installTo(dir, testPairing); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(keep); string(data) != "not ours" {
 		t.Fatal("wrote through the linked folder")
 	}
-	if info, err := os.Lstat(dir); err != nil || info.Mode()&os.ModeSymlink != 0 || !installed(dir) {
+	if info, err := os.Lstat(dir); err != nil || info.Mode()&os.ModeSymlink != 0 || !installed(dir, testPairing) {
 		t.Fatalf("folder = %v, %v", info, err)
 	}
 }
@@ -102,7 +140,7 @@ func TestConcurrentInstallsLeaveOneCompleteFolder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- installTo(dir)
+			errs <- installTo(dir, testPairing)
 		}()
 	}
 	wg.Wait()
@@ -112,7 +150,7 @@ func TestConcurrentInstallsLeaveOneCompleteFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if !installed(dir) {
+	if !installed(dir, testPairing) {
 		t.Fatal("install incomplete")
 	}
 	entries, _ := os.ReadDir(filepath.Dir(dir))

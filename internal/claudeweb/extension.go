@@ -166,6 +166,13 @@ func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 			http.NotFound(w, r)
 			return
 		}
+		if paired, err := checkPairing(r.Header.Get("Clawmeter-Token")); err != nil {
+			http.Error(w, msgSaveFailed, http.StatusInternalServerError)
+			return
+		} else if !paired {
+			http.Error(w, "this extension is paired with another user's Clawmeter", http.StatusUnauthorized)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		defer r.Body.Close()
 		decoder := json.NewDecoder(r.Body)

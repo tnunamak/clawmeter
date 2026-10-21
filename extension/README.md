@@ -8,6 +8,7 @@ claude.ai answers 403 to requests from the extension's background worker, so `ba
 - `console.js` reads prepaid API credits and posts them to `/v1/api-credits`.
 - `popup.html` shows the latest check: whether Clawmeter received it, what each source returned, and links to the pages that fix a problem. `background.js` keeps that check in session storage, so names never reach the disk.
 - The receiver is `internal/claudeweb/extension.go`. It admits only the extension IDs in `ExtensionOrigins`; the manifest `key` fixes the unpacked ID.
+- Every OS user's browser reaches the same loopback port, so the receiver pairs with one extension folder. Clawmeter writes a token to `pairing.json` in the folder it installs (`internal/claudeweb/pairing.go`), and the extension sends it as `Clawmeter-Token`. A wrong token gets 401, which the extension shows as another user's Clawmeter. A reading with no token is accepted until the first paired one arrives, so a browser still running an older copy keeps working. A copy loaded from this source tree has no `pairing.json`; once Clawmeter is paired, copy that file in from the installed folder.
 
 Run the tests with `node --test extension/*.test.js`. `go test ./internal/claudeweb` also runs both readers in Node and posts their output to the Go receiver.
 

@@ -62,6 +62,7 @@ const money = (minor, currency) => {
 // check that sent nothing carries what the check before it found.
 function connection(status) {
   if (!status) return { text: "Waiting for the first reading", tone: "" };
+  if (status.off === "foreign") return { text: "Another user's Clawmeter is answering on this computer", tone: "bad" };
   if (status.off) return { text: "The Clawmeter app isn't running", tone: "bad" };
   if (status.refused === "rejected") return { text: "Clawmeter refused a reading; update Clawmeter", tone: "bad" };
   if (status.refused === "failed") return { text: "Clawmeter couldn't save a reading", tone: "bad" };

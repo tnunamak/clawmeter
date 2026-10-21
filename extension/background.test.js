@@ -21,6 +21,7 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204, heade
         onAlarm: { addListener: fn => { listeners.alarm = fn; } } },
       runtime: {
         id: "self",
+        getURL: path => "chrome-extension://self/" + path,
         onMessage: { addListener: fn => { listeners.message = fn; } },
         onInstalled: { addListener: fn => { listeners.install = fn; } },
         onStartup: { addListener: fn => { listeners.startup = fn; } },
@@ -82,6 +83,7 @@ test("authenticated GET and local JSON POST with failures quiet", async () => {
     await post({ pool: "hashed", balance: 10 });
     return { status: "ok", payloads: [{ pool: "hashed", balance: 10 }] };
   }, async (url, options) => {
+    if (url === "chrome-extension://self/pairing.json") return { json: async () => ({ token: "paired" }) };
     requests.push({ url, options });
     if (url.startsWith("http://127.0.0.1")) throw new Error("Not running");
     return { ok: true, status: 200, json: async () => [] };
@@ -94,6 +96,7 @@ test("authenticated GET and local JSON POST with failures quiet", async () => {
   assert.equal(requests[1].url, "http://127.0.0.1:17344/v1/api-credits");
   assert.equal(requests[1].options.method, "POST");
   assert.equal(requests[1].options.credentials, "omit");
+  assert.equal(requests[1].options.headers["Clawmeter-Token"], "paired");
   assert.equal(w.stored.length, 1);
   assert.equal(w.timers.size, 0);
 });
@@ -537,7 +540,7 @@ test("a pool a container lists but cannot read yet is remembered for a week", as
 test("post says what Clawmeter did with a reading", async () => {
   const reply = (status, ignored) => async () => ({ ok: status < 300, status, headers: new Headers(ignored ? { "Clawmeter-Reading": "ignored" } : {}) });
   for (const [fetch, want] of [[reply(204), "saved"], [reply(204, true), "ignored"], [reply(400), "rejected"],
-    [reply(403), "rejected"], [reply(500), "failed"], [async () => { throw new TypeError("Failed to fetch"); }, "unreachable"]]) {
+    [reply(403), "rejected"], [reply(401), "foreign"], [reply(500), "failed"], [async () => { throw new TypeError("Failed to fetch"); }, "unreachable"]]) {
     const { context } = worker(async () => ({ status: "ok", payloads: [] }), fetch);
     assert.equal(await context.post("/v1/resets", {}), want);
   }
@@ -553,6 +556,8 @@ test("the icon greys while Clawmeter is down and badges only refusals that persi
   assert.deepEqual(signal(["saved"], undefined, { state: "no_tab" }), quiet);
   assert.deepEqual(signal([], undefined, { state: "signed_out" }), quiet);
   assert.deepEqual(signal(["saved", "unreachable"]), { off: true, problem: "The Clawmeter app isn't running" });
+  // Another OS user's Clawmeter holds the port; this user can't fix that here.
+  assert.deepEqual(signal(["foreign"]), { off: true, problem: "Another user's Clawmeter is answering on this computer" });
   // One refusal, such as a reading that waited out a laptop's sleep, is not shown.
   assert.deepEqual(signal(["rejected"]), quiet);
   assert.deepEqual(signal(["rejected"], { refusals: 1 }), quiet);
@@ -602,7 +607,7 @@ test("checks keep the icon and badge across checks that send nothing", async () 
   send = false;
   await w.context.poll();
   assert.deepEqual(shown(), down);
-  assert.equal(w.sessions.at(-1).status.off, true);
+  assert.equal(w.sessions.at(-1).status.off, "unreachable");
 });
 
 test("install forgets the claude.ai flag earlier versions kept", async () => {
@@ -654,4 +659,17 @@ test("open-claude reads the new tab even when a check was already running", asyn
   for (let i = 0; i < 20 && !replies.length; i++) await tick();
   assert.equal(reads, 2);
   assert.deepEqual(replies, [true]);
+});
+
+test("a copy without a pairing file sends no token", async () => {
+  const headers = [];
+  const w = worker(async (getJSON, now, cache, post) => { await post({}); return { status: "ok", payloads: [] }; },
+    async (url, options) => {
+      if (url.startsWith("chrome-extension://")) throw new TypeError("Failed to fetch");
+      if (url.startsWith("http://127.0.0.1")) headers.push(options.headers);
+      return { ok: true, status: 204, headers: new Headers(), json: async () => [] };
+    });
+  await w.context.poll();
+  assert.ok(headers.length);
+  assert.ok(headers.every(sent => !("Clawmeter-Token" in sent)));
 });

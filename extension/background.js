@@ -21,21 +21,38 @@ async function request(url, options, read) {
   }
 }
 
+// pairingToken is the token the Clawmeter app wrote beside the extension,
+// which tells it this browser belongs to the same OS user, or "" when there
+// is none, as in a copy loaded from the source tree.
+async function pairingToken() {
+  try {
+    const response = await fetch(chrome.runtime.getURL("pairing.json"), { cache: "no-store" });
+    const { token } = await response.json();
+    return typeof token === "string" ? token : "";
+  } catch {
+    return "";
+  }
+}
+
 // post sends a reading to Clawmeter and returns what happened to it:
 // "saved", "ignored" (Clawmeter does not track that account), "rejected"
-// (Clawmeter can't read it), "failed" (Clawmeter couldn't save it), or
-// "unreachable" (Clawmeter is not running).
+// (Clawmeter can't read it), "failed" (Clawmeter couldn't save it),
+// "foreign" (another OS user's Clawmeter answered), or "unreachable"
+// (Clawmeter is not running).
 async function post(path, body) {
+  const token = await pairingToken();
   let response;
   try {
     response = await request("http://127.0.0.1:17344" + path, {
       method: "POST", credentials: "omit",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json", ...(token ? { "Clawmeter-Token": token } : {}) },
+      body: JSON.stringify(body),
     });
   } catch {
     return "unreachable";
   }
   if (response.ok) return response.headers.get("Clawmeter-Reading") === "ignored" ? "ignored" : "saved";
+  if (response.status === 401) return "foreign";
   return response.status >= 500 ? "failed" : "rejected";
 }
 
@@ -110,9 +127,10 @@ async function readEverySession(pattern, fallback, read, mainSession = false) {
 const message = error => String(error?.message || error);
 
 // signal sets the toolbar icon from a check's status and the one before it.
-// The icon turns grey while the Clawmeter app can't be reached. The "!" badge
-// appears only when Clawmeter has refused this browser's readings in three
-// checks in a row, which the user must fix and nothing else reports. A
+// The icon turns grey while this user's Clawmeter app can't be reached,
+// because it isn't running or another OS user's copy holds its port. The
+// "!" badge appears only when Clawmeter has refused this browser's readings
+// in three checks in a row, which the user must fix and nothing else reports. A
 // closed claude.ai tab or a signed-out site is not flagged: reset grants
 // change rarely, the tray shows how old each reading is, and the popup
 // offers the fix. A check that sent nothing learned nothing about the app,
@@ -120,19 +138,22 @@ const message = error => String(error?.message || error);
 // status for the next check and the popup.
 function signal(status, previous) {
   if (status.delivery.length) {
-    status.off = status.delivery.includes("unreachable");
+    status.off = ["foreign", "unreachable"].find(kind => status.delivery.includes(kind)) || "";
     status.refused = ["rejected", "failed"].find(kind => status.delivery.includes(kind));
     status.refusals = status.refused ? (previous?.refusals || 0) + 1 : 0;
   } else {
-    status.off = previous?.off === true;
+    status.off = previous?.off || "";
     status.refused = previous?.refused;
     status.refusals = previous?.refusals || 0;
   }
-  if (status.off) return { off: true, problem: "The Clawmeter app isn't running" };
+  if (status.off) return { off: true, problem: offProblem(status.off) };
   if (status.refusals < 3) return { off: false, problem: "" };
   return { off: false, problem: status.refused === "failed" ? "The Clawmeter app couldn't save readings"
     : "Update the Clawmeter app; it can't read this browser's readings" };
 }
+
+const offProblem = off => off === "foreign" ? "Another user's Clawmeter is answering on this computer"
+  : "The Clawmeter app isn't running";
 
 const icon = off => Object.fromEntries([16, 32].map(size => [size, `icons/icon-${size}${off ? "-off" : ""}.png`]));
 

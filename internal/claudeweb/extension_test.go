@@ -299,3 +299,87 @@ func TestExtensionContactIsRecordedForAdmittedRequestsOnly(t *testing.T) {
 		t.Fatalf("contact = %v", at)
 	}
 }
+
+// resetPairingMemory makes the next pairing read come from the disk, as
+// after a restart.
+func resetPairingMemory(t *testing.T) {
+	t.Helper()
+	pairingMu.Lock()
+	loaded = nil
+	pairingMu.Unlock()
+}
+
+func TestExtensionPairsWithThisUsersExtension(t *testing.T) {
+	isolateUserCache(t)
+	resetPairingMemory(t)
+	t.Cleanup(func() { resetPairingMemory(t) })
+	send := func(handler http.Handler, token string) int {
+		request := httptest.NewRequest("POST", "http://"+extensionAddress+"/v1/status", strings.NewReader(`{"status":"signed_out"}`))
+		request.Host = extensionAddress
+		request.Header.Set("Origin", ExtensionOrigins[0])
+		if token != "" {
+			request.Header.Set("Clawmeter-Token", token)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response.Code
+	}
+	handler := ExtensionHandler(nil, nil)
+	token, err := ExtensionToken()
+	if err != nil || len(token) != 64 {
+		t.Fatalf("token = %q, %v", token, err)
+	}
+	// Another user's extension is refused and does not count as contact.
+	if got := send(handler, strings.Repeat("0", 64)); got != http.StatusUnauthorized {
+		t.Fatalf("foreign token = %d", got)
+	}
+	if !LastExtensionContact().IsZero() {
+		t.Fatal("a refused extension was recorded as contact")
+	}
+	// An extension from before pairing is accepted until a paired one speaks.
+	if got := send(handler, ""); got != http.StatusNoContent {
+		t.Fatalf("tokenless before pairing = %d", got)
+	}
+	if got := send(handler, token); got != http.StatusNoContent {
+		t.Fatalf("paired = %d", got)
+	}
+	if got := send(handler, ""); got != http.StatusUnauthorized {
+		t.Fatalf("tokenless after pairing = %d", got)
+	}
+	// Pairing survives a restart.
+	resetPairingMemory(t)
+	if again, err := ExtensionToken(); err != nil || again != token {
+		t.Fatalf("token changed: %q, %v", again, err)
+	}
+	restarted := ExtensionHandler(nil, nil)
+	if got := send(restarted, ""); got != http.StatusUnauthorized {
+		t.Fatalf("tokenless after restart = %d", got)
+	}
+	if got := send(restarted, token); got != http.StatusNoContent {
+		t.Fatalf("paired after restart = %d", got)
+	}
+	preflight := extensionRequest(handler, "OPTIONS", "/v1/status", extensionAddress, ExtensionOrigins[0], "")
+	if !strings.Contains(preflight.Header().Get("Access-Control-Allow-Headers"), "Clawmeter-Token") {
+		t.Fatalf("preflight allows %q", preflight.Header().Get("Access-Control-Allow-Headers"))
+	}
+}
+
+func TestExtensionPairingOutlivesAClearedCache(t *testing.T) {
+	isolateUserCache(t)
+	resetPairingMemory(t)
+	t.Cleanup(func() { resetPairingMemory(t) })
+	token, err := ExtensionToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := pairingPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := ExtensionToken(); err != nil || again != token {
+		t.Fatalf("token changed after the cache was cleared: %q, %v", again, err)
+	}
+}

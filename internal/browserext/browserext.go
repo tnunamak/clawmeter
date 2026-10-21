@@ -4,6 +4,7 @@ package browserext
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -13,7 +14,12 @@ import (
 	"sync"
 
 	"github.com/tnunamak/clawmeter/extension"
+	"github.com/tnunamak/clawmeter/internal/claudeweb"
 )
+
+// pairingFile gives the extension the token that pairs it with this user's
+// Clawmeter. Only this user can read it.
+const pairingFile = "pairing.json"
 
 // Dir is where the unpacked extension lives: a fixed folder, so the browser
 // keeps loading it after Clawmeter updates it.
@@ -44,14 +50,25 @@ func Dir() (string, error) {
 	return filepath.Join(base, "clawmeter", "extension"), nil
 }
 
-// Install writes the extension into Dir, replacing files that changed and
-// removing ones the extension no longer has. It returns the folder.
+// Install writes the extension and its pairing token into Dir, replacing
+// files that changed and removing ones the extension no longer has. It
+// returns the folder.
 func Install() (string, error) {
 	dir, err := Dir()
 	if err != nil {
 		return "", err
 	}
-	return dir, installTo(dir)
+	token, err := claudeweb.ExtensionToken()
+	if err != nil {
+		return "", fmt.Errorf("install the browser extension: %w", err)
+	}
+	pairing, err := json.Marshal(struct {
+		Token string `json:"token"`
+	}{token})
+	if err != nil {
+		return "", err
+	}
+	return dir, installTo(dir, pairing)
 }
 
 // installMu serializes installs in this process: the tray refreshes the
@@ -62,10 +79,10 @@ var installMu sync.Mutex
 // in, so nothing is written through a link or into a half-written folder,
 // and a browser never loads a mix of versions. A folder that already holds
 // exactly the extension is left alone.
-func installTo(dir string) error {
+func installTo(dir string, pairing []byte) error {
 	installMu.Lock()
 	defer installMu.Unlock()
-	if installed(dir) {
+	if installed(dir, pairing) {
 		return nil
 	}
 	parent := filepath.Dir(dir)
@@ -91,6 +108,9 @@ func installTo(dir string) error {
 		}
 		return os.WriteFile(path, data, 0o644)
 	})
+	if err == nil {
+		err = os.WriteFile(filepath.Join(stage, pairingFile), pairing, 0o600)
+	}
 	if err != nil {
 		return fmt.Errorf("install the browser extension: %w", err)
 	}
@@ -110,7 +130,7 @@ func installTo(dir string) error {
 			_ = os.Rename(old, dir)
 		}
 		// Another install may have just finished the same work.
-		if installed(dir) {
+		if installed(dir, pairing) {
 			return nil
 		}
 		return fmt.Errorf("replace the browser extension: %w", err)
@@ -122,12 +142,19 @@ func installTo(dir string) error {
 }
 
 // installed reports whether dir is a real folder holding exactly the
-// extension's files, with no links and nothing else.
-func installed(dir string) bool {
+// extension's files and pairing, with no links and nothing else.
+func installed(dir string, pairing []byte) bool {
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 		return false
 	}
-	want := map[string]bool{}
+	path := filepath.Join(dir, pairingFile)
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		return false
+	}
+	if existing, err := os.ReadFile(path); err != nil || !bytes.Equal(existing, pairing) {
+		return false
+	}
+	want := map[string]bool{pairingFile: true}
 	same := fs.WalkDir(extension.Files, ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
