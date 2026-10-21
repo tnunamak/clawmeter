@@ -105,8 +105,11 @@ To set it up, choose **Connect your browser for Claude resets and API
 credits…** in the tray menu, or run `clawmeter setup --browser-extension`, then
 follow the [setup page](https://tnunamak.github.io/clawmeter/extension/). It
 covers Chrome, Brave and Edge, and more than one Claude account. The tray
-offers this until the extension connects; `clawmeter doctor` shows when it
-last did.
+offers this until the extension connects, and keeps it under Settings → Set up
+the browser extension… for another browser or profile. `clawmeter doctor` shows
+when the extension last connected. To report a bug, choose Settings → Report a
+problem…, which opens a GitHub issue that names your Clawmeter version and
+platform.
 
 The extension checks each minute. A reading is live for up to five minutes;
 older readings keep their numbers with a browser reminder, and signing out
