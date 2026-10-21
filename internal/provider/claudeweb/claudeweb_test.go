@@ -75,7 +75,7 @@ func TestExtensionReadingRoutesByOrganizationAcrossRealProfiles(t *testing.T) {
 	sources := []provider.Provider{anthropic.NewSource(cfg, native), anthropic.NewSource(cfg, odl)}
 
 	var results []claudeweb.Result
-	handler := claudeweb.ExtensionHandler(func() []claudeweb.Account { return Accounts(sources) }, func(result claudeweb.Result) { results = append(results, result) })
+	handler := claudeweb.ExtensionHandler(func() []claudeweb.Account { return Accounts(sources) }, func(result claudeweb.Result) { results = append(results, result) }, func() (string, error) { return "", nil })
 	body, _ := json.Marshal(map[string]any{
 		"observed_at": time.Now().UTC().Format(time.RFC3339Nano), "organization": "org-odl",
 		"grants": []map[string]any{{

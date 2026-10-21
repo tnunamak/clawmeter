@@ -96,7 +96,7 @@ func admit(w http.ResponseWriter, r *http.Request, method string, origins ...str
 	w.Header().Set("Vary", "Origin")
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Clawmeter-Token")
 		w.Header().Set("Access-Control-Allow-Private-Network", "true")
 		w.WriteHeader(http.StatusNoContent)
 		return false

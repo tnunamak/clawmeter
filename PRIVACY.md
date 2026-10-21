@@ -47,6 +47,8 @@ API credit pool snapshots are also stored in the user cache directory as `claude
 
 Claude reset grant snapshots are stored the same way as `claude-web-resets*.json`. They hold reset expiry times, the observation time, the Claude source they belong to, and a salted hash of the organization ID.
 
+The extension folder Clawmeter installs holds `pairing.json`, a random token readable only by you. The extension sends it with each reading, and Clawmeter refuses readings that carry any other token, so another OS user's browser on the same computer cannot post into your Clawmeter. A browser still running a copy of the extension from before pairing sends no token, so Clawmeter accepts tokenless readings until the first reading with your token arrives; `claude-extension-paired.json` in the cache directory records that moment, and from then on a token is required. Clearing the cache reopens that window until the next reading with your token, about a minute later.
+
 ## Browser Extension
 
 The optional Clawmeter browser extension reads Claude data that your signed-in browser can already see and sends it only to Clawmeter on the same computer.
