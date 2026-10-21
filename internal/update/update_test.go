@@ -197,6 +197,10 @@ func TestCheck_rateLimitedAPIFallsBackToTheReleasePage(t *testing.T) {
 		"not a version":       {http.StatusForbidden, "/" + repo + "/releases/tag/nightly", ""},
 		"a path in the tag":   {http.StatusForbidden, "/" + repo + "/releases/tag/v9.9.9/x", ""},
 		"other errors do not": {http.StatusBadGateway, "/" + repo + "/releases/tag/v9.9.9", ""},
+		"another host":        {http.StatusForbidden, "https://example.com/" + repo + "/releases/tag/v9.9.9", ""},
+		"an encoded path":     {http.StatusForbidden, "/" + repo + "/releases/tag/v9.9.9%2F..%2Fx", ""},
+		"a query is ignored":  {http.StatusForbidden, "/" + repo + "/releases/tag/v9.9.9?from=x", "v9.9.9"},
+		"the current tag":     {http.StatusForbidden, "/" + repo + "/releases/tag/v0.0.1", "none"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +221,12 @@ func TestCheck_rateLimitedAPIFallsBackToTheReleasePage(t *testing.T) {
 			latestURL = srv.URL + "/latest"
 			defer func() { latestURL = saved }()
 			rel, err := checkWith(context.Background(), "v0.0.1", srv.URL+"/api", srv.URL+"/download", http.DefaultClient)
+			if tc.want == "none" {
+				if err != nil || rel != nil {
+					t.Fatalf("same version = %+v, %v", rel, err)
+				}
+				return
+			}
 			if tc.want == "" {
 				if err == nil {
 					t.Fatalf("expected an error, got %+v", rel)
@@ -230,5 +240,16 @@ func TestCheck_rateLimitedAPIFallsBackToTheReleasePage(t *testing.T) {
 				t.Fatalf("release = %+v", rel)
 			}
 		})
+	}
+}
+
+func TestLatestTagNeedsARedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/"+repo+"/releases/tag/v9.9.9")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	if tag, err := latestTag(context.Background(), srv.URL, http.DefaultClient); err == nil {
+		t.Fatalf("a 200 with a Location gave tag %q", tag)
 	}
 }

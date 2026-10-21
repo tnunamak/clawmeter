@@ -132,8 +132,11 @@ func latestTag(ctx context.Context, page string, client *http.Client) (string, e
 	}
 	resp.Body.Close()
 	location, err := resp.Location()
-	if err != nil {
+	if err != nil || resp.StatusCode < 300 || resp.StatusCode > 399 {
 		return "", fmt.Errorf("the release page returned %d without a redirect", resp.StatusCode)
+	}
+	if location.Host != req.URL.Host {
+		return "", fmt.Errorf("the release page redirected to another host, %s", location.Host)
 	}
 	tag, found := strings.CutPrefix(location.Path, "/"+repo+"/releases/tag/")
 	if !found {
