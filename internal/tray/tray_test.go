@@ -1604,18 +1604,22 @@ func TestTrayMeterMarksWhereAnEvenPaceWouldBe(t *testing.T) {
 	}
 }
 
-func TestTrayOffersTheBrowserExtensionUntilItHasConnectedThisWeek(t *testing.T) {
+func TestTrayOffersTheBrowserExtensionUntilItIsSetUp(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
+		folder  bool
 		contact time.Time
 		want    bool
 	}{
-		{time.Time{}, true},
-		{now.Add(-time.Hour), false},
-		{now.Add(-8 * 24 * time.Hour), true},
+		{false, time.Time{}, true},
+		{false, now.Add(-time.Hour), false},
+		{false, now.Add(-8 * 24 * time.Hour), true},
+		// Opening the setup once is enough; the menu does not ask again.
+		{true, time.Time{}, false},
+		{true, now.Add(-8 * 24 * time.Hour), false},
 	} {
-		if got := extensionMissing(tc.contact, now); got != tc.want {
-			t.Errorf("extensionMissing(%v) = %v, want %v", tc.contact, got, tc.want)
+		if got := offerExtension(tc.folder, tc.contact, now); got != tc.want {
+			t.Errorf("offerExtension(%v, %v) = %v, want %v", tc.folder, tc.contact, got, tc.want)
 		}
 	}
 }

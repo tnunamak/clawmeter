@@ -22,19 +22,21 @@ async function request(url, options, read) {
 }
 
 // post sends a reading to Clawmeter and returns what happened to it:
-// "saved", "ignored" (Clawmeter does not track that account), "rejected",
-// or "unreachable" (Clawmeter is not running).
+// "saved", "ignored" (Clawmeter does not track that account), "rejected"
+// (Clawmeter can't read it), "failed" (Clawmeter couldn't save it), or
+// "unreachable" (Clawmeter is not running).
 async function post(path, body) {
+  let response;
   try {
-    const response = await request("http://127.0.0.1:17344" + path, {
+    response = await request("http://127.0.0.1:17344" + path, {
       method: "POST", credentials: "omit",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    if (response.status === 204) return "ignored";
-    return response.ok ? "saved" : "rejected";
   } catch {
     return "unreachable";
   }
+  if (response.ok) return response.headers.get("Clawmeter-Reading") === "ignored" ? "ignored" : "saved";
+  return response.status >= 500 ? "failed" : "rejected";
 }
 
 // claude.ai answers a background worker's request with 403, so read it from
@@ -107,26 +109,37 @@ async function readEverySession(pattern, fallback, read, mainSession = false) {
 
 const message = error => String(error?.message || error);
 
-// attention says what the toolbar badge asks the user to fix, or "" when
-// nothing. A missing claude.ai tab counts only once claude.ai has been read,
-// so a browser used only for API credits is never flagged.
-function attention(status, claudeRead) {
-  if (status.delivery.includes("unreachable")) return "Clawmeter isn't running on this computer";
-  if (status.delivery.includes("rejected")) return "Update Clawmeter to accept readings";
-  if (claudeRead && status.claude?.state === "no_tab") return "Clawmeter needs an open claude.ai tab";
-  if (claudeRead && status.claude?.state === "signed_out") return "Sign in to claude.ai for Clawmeter";
-  return "";
+// signal sets the toolbar icon from a check's status and the one before it.
+// The icon turns grey while the Clawmeter app can't be reached. The "!" badge
+// appears only when Clawmeter has refused this browser's readings in three
+// checks in a row, which the user must fix and nothing else reports. A
+// closed claude.ai tab or a signed-out site is not flagged: reset grants
+// change rarely, the tray shows how old each reading is, and the popup
+// offers the fix. A check that sent nothing learned nothing about the app,
+// so it keeps what the one before it found. signal records its findings in
+// status for the next check and the popup.
+function signal(status, previous) {
+  if (status.delivery.length) {
+    status.off = status.delivery.includes("unreachable");
+    status.refused = ["rejected", "failed"].find(kind => status.delivery.includes(kind));
+    status.refusals = status.refused ? (previous?.refusals || 0) + 1 : 0;
+  } else {
+    status.off = previous?.off === true;
+    status.refused = previous?.refused;
+    status.refusals = previous?.refusals || 0;
+  }
+  if (status.off) return { off: true, problem: "The Clawmeter app isn't running" };
+  if (status.refusals < 3) return { off: false, problem: "" };
+  return { off: false, problem: status.refused === "failed" ? "The Clawmeter app couldn't save readings"
+    : "Update the Clawmeter app; it can't read this browser's readings" };
 }
 
-async function showAttention(status) {
-  let { claudeRead } = await chrome.storage.local.get("claudeRead");
-  if (!claudeRead && status.claude?.state === "ok" && status.claude.accounts.length) {
-    claudeRead = true;
-    await chrome.storage.local.set({ claudeRead });
-  }
-  const problem = attention(status, claudeRead === true);
+const icon = off => Object.fromEntries([16, 32].map(size => [size, `icons/icon-${size}${off ? "-off" : ""}.png`]));
+
+async function showSignal({ off, problem }) {
+  await chrome.action.setIcon({ path: icon(off) });
   await chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
-  await chrome.action.setBadgeText({ text: problem ? "!" : "" });
+  await chrome.action.setBadgeText({ text: problem && !off ? "!" : "" });
   await chrome.action.setTitle({ title: problem || "Clawmeter" });
 }
 
@@ -258,12 +271,17 @@ async function check() {
     // Failed polls never refresh the receiver's observation time.
     status.console = { state: "error", error: message(error) };
   } finally {
+    let shown = null;
+    try {
+      const { status: previous } = await chrome.storage.session.get("status");
+      shown = signal(status, previous);
+    } catch {}
     try {
       if (cache) await chrome.storage.local.set({ cache, sessions });
       await chrome.storage.session.set({ status });
     } catch {}
     try {
-      await showAttention(status);
+      if (shown) await showSignal(shown);
     } catch {}
   }
 }
@@ -278,6 +296,11 @@ chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === "poll") void poll();
 });
 // Poll at once on install and browser start, not a minute later.
-chrome.runtime.onInstalled.addListener(() => { void ensureAlarm().catch(() => {}); void poll(); });
+chrome.runtime.onInstalled.addListener(() => {
+  // Earlier versions stored whether claude.ai had ever been read.
+  void chrome.storage.local.remove("claudeRead").catch(() => {});
+  void ensureAlarm().catch(() => {});
+  void poll();
+});
 chrome.runtime.onStartup.addListener(() => { void ensureAlarm().catch(() => {}); void poll(); });
 void ensureAlarm().catch(() => {});

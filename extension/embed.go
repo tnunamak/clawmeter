@@ -6,5 +6,5 @@ import "embed"
 
 // Files are the extension files a browser loads; tests and docs stay out.
 //
-//go:embed manifest.json background.js console.js resets.js popup.html popup.js icons/icon-16.png icons/icon-32.png icons/icon-48.png icons/icon-128.png
+//go:embed manifest.json background.js console.js resets.js popup.html popup.js icons/icon-16.png icons/icon-32.png icons/icon-16-off.png icons/icon-32-off.png icons/icon-48.png icons/icon-128.png
 var Files embed.FS

@@ -41,7 +41,9 @@ test("a partial Console reading lists its pools and the tabs that did not answer
 test("each warning carries the action that clears it", () => {
   const { context, text } = popup();
   const [noTab] = context.claude({ state: "no_tab" });
-  assert.match(text(noTab), /open claude\.ai tab/);
+  assert.match(text(noTab), /claude\.ai tab is open/);
+  // A closed tab is a normal state, not a warning.
+  assert.equal(noTab.className, "muted");
   assert.equal(noTab.children.at(-1).tag, "button");
   assert.equal(noTab.children.at(-1).textContent, "Open a pinned tab");
   const [signedOut] = context.claude({ state: "signed_out" });
@@ -55,4 +57,18 @@ test("an account Clawmeter does not track says how to add it", () => {
   const rendered = account => context.claude({ state: "ok", accounts: [account] }).map(text).join("\n");
   assert.match(rendered({ name: "Team", resets: 0, delivery: "ignored" }), /not in Clawmeter[\s\S]*providers source help claude/);
   assert.doesNotMatch(rendered({ name: "Max", resets: 1, delivery: "saved" }), /providers source/);
+});
+
+test("the connection line names each way a reading can fail", () => {
+  const { context } = popup();
+  assert.match(context.connection(undefined).text, /Waiting for the first reading/);
+  assert.equal(context.connection({ delivery: ["saved", "ignored"] }).tone, "ok");
+  assert.match(context.connection({ delivery: ["unreachable"], off: true }).text, /isn't running/);
+  assert.match(context.connection({ delivery: ["rejected"], refused: "rejected" }).text, /update Clawmeter/);
+  assert.match(context.connection({ delivery: ["saved", "failed"], refused: "failed" }).text, /couldn't save/);
+  // A check that sent nothing shows what the last one found.
+  assert.match(context.connection({ delivery: [], off: true }).text, /isn't running/);
+  assert.match(context.connection({ delivery: [], refused: "failed" }).text, /couldn't save/);
+  assert.match(context.connection({ delivery: [], refused: "rejected" }).text, /update Clawmeter/);
+  assert.match(context.connection({ delivery: [] }).text, /Nothing to send/);
 });
