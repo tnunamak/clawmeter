@@ -559,6 +559,10 @@ test("the icon greys while Clawmeter is down and badges only refusals that persi
   assert.deepEqual(signal(["saved", "rejected"], { refusals: 2 }),
     { off: false, problem: "Update the Clawmeter app; it can't read this browser's readings" });
   assert.deepEqual(signal(["failed"], { refusals: 2 }), { off: false, problem: "The Clawmeter app couldn't save readings" });
+  // A reading Clawmeter can't read outranks one it couldn't save, in either order.
+  const update = { off: false, problem: "Update the Clawmeter app; it can't read this browser's readings" };
+  assert.deepEqual(signal(["failed", "rejected"], { refusals: 2 }), update);
+  assert.deepEqual(signal(["rejected", "failed"], { refusals: 2 }), update);
   // A check that sent nothing keeps what the last one found; one Clawmeter
   // accepted clears it.
   const status = { delivery: [], claude: { state: "no_tab" } };

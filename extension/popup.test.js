@@ -68,5 +68,7 @@ test("the connection line names each way a reading can fail", () => {
   assert.match(context.connection({ delivery: ["saved", "failed"], refused: "failed" }).text, /couldn't save/);
   // A check that sent nothing shows what the last one found.
   assert.match(context.connection({ delivery: [], off: true }).text, /isn't running/);
+  assert.match(context.connection({ delivery: [], refused: "failed" }).text, /couldn't save/);
+  assert.match(context.connection({ delivery: [], refused: "rejected" }).text, /update Clawmeter/);
   assert.match(context.connection({ delivery: [] }).text, /Nothing to send/);
 });
