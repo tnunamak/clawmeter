@@ -107,6 +107,48 @@ async function readEverySession(pattern, fallback, read, mainSession = false) {
 
 const message = error => String(error?.message || error);
 
+// attention says what the toolbar badge asks the user to fix, or "" when
+// nothing. A missing claude.ai tab counts only once claude.ai has been read,
+// so a browser used only for API credits is never flagged.
+function attention(status, claudeRead) {
+  if (status.delivery.includes("unreachable")) return "Clawmeter isn't running on this computer";
+  if (status.delivery.includes("rejected")) return "Update Clawmeter to accept readings";
+  if (claudeRead && status.claude?.state === "no_tab") return "Clawmeter needs an open claude.ai tab";
+  if (claudeRead && status.claude?.state === "signed_out") return "Sign in to claude.ai for Clawmeter";
+  return "";
+}
+
+async function showAttention(status) {
+  let { claudeRead } = await chrome.storage.local.get("claudeRead");
+  if (!claudeRead && status.claude?.state === "ok" && status.claude.accounts.length) {
+    claudeRead = true;
+    await chrome.storage.local.set({ claudeRead });
+  }
+  const problem = attention(status, claudeRead === true);
+  await chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
+  await chrome.action.setBadgeText({ text: problem ? "!" : "" });
+  await chrome.action.setTitle({ title: problem || "Clawmeter" });
+}
+
+// openClaude opens claude.ai in a pinned background tab and reads it as soon
+// as it has loaded.
+async function openClaude() {
+  const tab = await chrome.tabs.create({ url: "https://claude.ai/", pinned: true, active: false });
+  await new Promise(resolve => {
+    const done = (id, change) => {
+      if (id !== tab.id || change.status !== "complete") return;
+      chrome.tabs.onUpdated.removeListener(done);
+      resolve();
+    };
+    chrome.tabs.onUpdated.addListener(done);
+    setTimeout(() => { chrome.tabs.onUpdated.removeListener(done); resolve(); }, 20000);
+  });
+  // A check already running may have looked for tabs before this one
+  // existed, so wait it out and start one that sees the tab.
+  if (running) await running.catch(() => {});
+  await poll();
+}
+
 const unseenPoolAge = 7 * 24 * 60 * 60 * 1000;
 
 // poll runs one check at a time; a caller that arrives during a check waits
@@ -220,12 +262,15 @@ async function check() {
       if (cache) await chrome.storage.local.set({ cache, sessions });
       await chrome.storage.session.set({ status });
     } catch {}
+    try {
+      await showAttention(status);
+    } catch {}
   }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  if (sender.id !== chrome.runtime.id || message !== "poll") return;
-  poll().then(() => reply(true), () => reply(false));
+  if (sender.id !== chrome.runtime.id || (message !== "poll" && message !== "open-claude")) return;
+  (message === "poll" ? poll() : openClaude()).then(() => reply(true), () => reply(false));
   return true;
 });
 
