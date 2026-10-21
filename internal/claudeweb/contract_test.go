@@ -74,7 +74,7 @@ const getJSON = async url => {
 
 	isolateUserCache(t)
 	var results []Result
-	handler := ExtensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) })
+	handler := ExtensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) }, noToken)
 	for _, post := range posted {
 		if got := extensionRequest(handler, "POST", post.Path, extensionAddress, ExtensionOrigins[0], string(post.Body)); got.Code != 204 {
 			t.Fatalf("%s = %d %q for %s", post.Path, got.Code, got.Body.String(), post.Body)

@@ -4,7 +4,10 @@ package browserext
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -14,12 +17,46 @@ import (
 	"sync"
 
 	"github.com/tnunamak/clawmeter/extension"
-	"github.com/tnunamak/clawmeter/internal/claudeweb"
 )
 
-// pairingFile gives the extension the token that pairs it with this user's
-// Clawmeter. Only this user can read it.
+// pairingFile holds the token that pairs the extension with this user's
+// Clawmeter: the extension sends it and the receiver checks it. Only this
+// user can read it.
 const pairingFile = "pairing.json"
+
+// Token is the pairing token in the installed folder, or "" when there is
+// none.
+func Token() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return readToken(filepath.Join(dir, pairingFile))
+}
+
+// readToken reads a pairing file; a missing or malformed one has no token.
+func readToken(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var pairing struct {
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(data, &pairing) != nil || len(pairing.Token) != 64 {
+		return "", nil
+	}
+	return pairing.Token, nil
+}
+
+// private reports whether path is a regular file only its owner can read.
+func private(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm() == 0o600)
+}
 
 // Dir is where the unpacked extension lives: a fixed folder, so the browser
 // keeps loading it after Clawmeter updates it.
@@ -58,9 +95,21 @@ func Install() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	token, err := claudeweb.ExtensionToken()
-	if err != nil {
-		return "", fmt.Errorf("install the browser extension: %w", err)
+	// Keep the folder's token, so a browser already paired stays paired and
+	// every Clawmeter process reads the same one. A copy others could read
+	// is replaced.
+	token := ""
+	if path := filepath.Join(dir, pairingFile); private(path) {
+		if token, err = readToken(path); err != nil {
+			return "", fmt.Errorf("install the browser extension: %w", err)
+		}
+	}
+	if token == "" {
+		var raw [32]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return "", fmt.Errorf("install the browser extension: %w", err)
+		}
+		token = hex.EncodeToString(raw[:])
 	}
 	pairing, err := json.Marshal(struct {
 		Token string `json:"token"`
@@ -148,7 +197,7 @@ func installed(dir string, pairing []byte) bool {
 		return false
 	}
 	path := filepath.Join(dir, pairingFile)
-	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+	if !private(path) {
 		return false
 	}
 	if existing, err := os.ReadFile(path); err != nil || !bytes.Equal(existing, pairing) {

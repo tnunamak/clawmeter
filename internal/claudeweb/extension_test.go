@@ -22,7 +22,7 @@ func extensionRequest(handler http.Handler, method, path, host, origin, body str
 
 func TestExtensionRejectsBadRequests(t *testing.T) {
 	isolateUserCache(t)
-	handler := ExtensionHandler(func() []Account { return testAccounts }, nil)
+	handler := ExtensionHandler(func() []Account { return testAccounts }, nil, noToken)
 	valid := extensionBody(t)
 	encode := func(body map[string]any) string {
 		raw, err := json.Marshal(body)
@@ -71,7 +71,7 @@ func TestExtensionRejectsBadRequests(t *testing.T) {
 func TestExtensionSavesAndLinksPrivately(t *testing.T) {
 	isolateUserCache(t)
 	saves := 0
-	handler := ExtensionHandler(func() []Account { return testAccounts }, func(Result) { saves++ })
+	handler := ExtensionHandler(func() []Account { return testAccounts }, func(Result) { saves++ }, noToken)
 	body, _ := json.Marshal(extensionBody(t))
 	post := func() APICreditPool {
 		t.Helper()
@@ -108,7 +108,7 @@ func TestExtensionAmbiguousOrMissingLinkSavesUnlinked(t *testing.T) {
 		{{Key: "invalid/key", OrgUUID: "org-odl"}},
 	} {
 		isolateUserCache(t)
-		handler := ExtensionHandler(func() []Account { return accounts }, nil)
+		handler := ExtensionHandler(func() []Account { return accounts }, nil, noToken)
 		raw, _ := json.Marshal(extensionBody(t))
 		got := extensionRequest(handler, "POST", "/v1/api-credits", extensionAddress, ExtensionOrigins[0], string(raw))
 		pools, _ := ReadAPICreditPools()
@@ -121,7 +121,7 @@ func TestExtensionAmbiguousOrMissingLinkSavesUnlinked(t *testing.T) {
 func TestExtensionSignOutRoundTrip(t *testing.T) {
 	isolateUserCache(t)
 	saves := 0
-	handler := ExtensionHandler(nil, func(Result) { saves++ })
+	handler := ExtensionHandler(nil, func(Result) { saves++ }, noToken)
 	if state, err := ReadExtensionState(); err != nil || state.Status != "" {
 		t.Fatalf("missing state = %+v, %v", state, err)
 	}
@@ -145,7 +145,7 @@ func TestExtensionSignOutRoundTrip(t *testing.T) {
 
 func TestExtensionObservationTime(t *testing.T) {
 	isolateUserCache(t)
-	handler := ExtensionHandler(nil, nil)
+	handler := ExtensionHandler(nil, nil, noToken)
 	for _, tc := range []struct {
 		name     string
 		observed string
@@ -188,7 +188,7 @@ func TestExtensionObservationTime(t *testing.T) {
 func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 	isolateUserCache(t)
 	var results []Result
-	handler := ExtensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) })
+	handler := ExtensionHandler(func() []Account { return testAccounts }, func(result Result) { results = append(results, result) }, noToken)
 	observed := time.Now().Add(-time.Minute).UTC()
 	ends := observed.Add(10 * 24 * time.Hour).Format(time.RFC3339)
 	body := func(org string) string {
@@ -262,7 +262,7 @@ func TestExtensionSavesResetsForATrackedOrganization(t *testing.T) {
 
 func TestExtensionJudgesGrantsOnTheReceiverClock(t *testing.T) {
 	isolateUserCache(t)
-	handler := ExtensionHandler(func() []Account { return testAccounts }, nil)
+	handler := ExtensionHandler(func() []Account { return testAccounts }, nil, noToken)
 	// The reading is four minutes old; the grant started after it was read
 	// but before it arrived, so it is usable now.
 	now := time.Now()
@@ -284,7 +284,7 @@ func TestExtensionJudgesGrantsOnTheReceiverClock(t *testing.T) {
 
 func TestExtensionContactIsRecordedForAdmittedRequestsOnly(t *testing.T) {
 	isolateUserCache(t)
-	handler := ExtensionHandler(nil, nil)
+	handler := ExtensionHandler(nil, nil, noToken)
 	if !LastExtensionContact().IsZero() {
 		t.Fatal("contact recorded before any request")
 	}
@@ -300,19 +300,11 @@ func TestExtensionContactIsRecordedForAdmittedRequestsOnly(t *testing.T) {
 	}
 }
 
-// resetPairingMemory makes the next pairing read come from the disk, as
-// after a restart.
-func resetPairingMemory(t *testing.T) {
-	t.Helper()
-	pairingMu.Lock()
-	loaded = nil
-	pairingMu.Unlock()
-}
+// noToken is a user with no installed extension folder.
+func noToken() (string, error) { return "", nil }
 
 func TestExtensionPairsWithThisUsersExtension(t *testing.T) {
 	isolateUserCache(t)
-	resetPairingMemory(t)
-	t.Cleanup(func() { resetPairingMemory(t) })
 	send := func(handler http.Handler, token string) int {
 		request := httptest.NewRequest("POST", "http://"+extensionAddress+"/v1/status", strings.NewReader(`{"status":"signed_out"}`))
 		request.Host = extensionAddress
@@ -324,11 +316,9 @@ func TestExtensionPairsWithThisUsersExtension(t *testing.T) {
 		handler.ServeHTTP(response, request)
 		return response.Code
 	}
-	handler := ExtensionHandler(nil, nil)
-	token, err := ExtensionToken()
-	if err != nil || len(token) != 64 {
-		t.Fatalf("token = %q, %v", token, err)
-	}
+	folder := strings.Repeat("a", 64)
+	token := func() (string, error) { return folder, nil }
+	handler := ExtensionHandler(nil, nil, token)
 	// Another user's extension is refused and does not count as contact.
 	if got := send(handler, strings.Repeat("0", 64)); got != http.StatusUnauthorized {
 		t.Fatalf("foreign token = %d", got)
@@ -340,46 +330,35 @@ func TestExtensionPairsWithThisUsersExtension(t *testing.T) {
 	if got := send(handler, ""); got != http.StatusNoContent {
 		t.Fatalf("tokenless before pairing = %d", got)
 	}
-	if got := send(handler, token); got != http.StatusNoContent {
+	if got := send(handler, folder); got != http.StatusNoContent {
 		t.Fatalf("paired = %d", got)
 	}
 	if got := send(handler, ""); got != http.StatusUnauthorized {
 		t.Fatalf("tokenless after pairing = %d", got)
 	}
-	// Pairing survives a restart.
-	resetPairingMemory(t)
-	if again, err := ExtensionToken(); err != nil || again != token {
-		t.Fatalf("token changed: %q, %v", again, err)
+	// The receiver reads the folder each time, so a token another process
+	// writes there is the one it accepts.
+	folder = strings.Repeat("b", 64)
+	restarted := ExtensionHandler(nil, nil, token)
+	if got := send(restarted, strings.Repeat("a", 64)); got != http.StatusUnauthorized {
+		t.Fatalf("replaced token = %d", got)
 	}
-	restarted := ExtensionHandler(nil, nil)
+	if got := send(restarted, folder); got != http.StatusNoContent {
+		t.Fatalf("new folder token = %d", got)
+	}
 	if got := send(restarted, ""); got != http.StatusUnauthorized {
 		t.Fatalf("tokenless after restart = %d", got)
 	}
-	if got := send(restarted, token); got != http.StatusNoContent {
-		t.Fatalf("paired after restart = %d", got)
+	// Without a folder token nothing paired can be checked.
+	if got := send(ExtensionHandler(nil, nil, noToken), folder); got != http.StatusUnauthorized {
+		t.Fatalf("no folder = %d", got)
+	}
+	failing := ExtensionHandler(nil, nil, func() (string, error) { return "", os.ErrPermission })
+	if got := send(failing, folder); got != http.StatusInternalServerError {
+		t.Fatalf("unreadable folder = %d", got)
 	}
 	preflight := extensionRequest(handler, "OPTIONS", "/v1/status", extensionAddress, ExtensionOrigins[0], "")
 	if !strings.Contains(preflight.Header().Get("Access-Control-Allow-Headers"), "Clawmeter-Token") {
 		t.Fatalf("preflight allows %q", preflight.Header().Get("Access-Control-Allow-Headers"))
-	}
-}
-
-func TestExtensionPairingOutlivesAClearedCache(t *testing.T) {
-	isolateUserCache(t)
-	resetPairingMemory(t)
-	t.Cleanup(func() { resetPairingMemory(t) })
-	token, err := ExtensionToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	path, err := pairingPath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if again, err := ExtensionToken(); err != nil || again != token {
-		t.Fatalf("token changed after the cache was cleared: %q, %v", again, err)
 	}
 }

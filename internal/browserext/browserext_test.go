@@ -16,12 +16,8 @@ func TestInstallWritesThePairingForThisUserOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, pairingFile)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		t.Errorf("pairing mode = %v", info.Mode().Perm())
+	if !private(path) {
+		t.Fatal("pairing file is not private")
 	}
 	// A new token is a different installation.
 	other := []byte(`{"token":"two"}`)
@@ -41,6 +37,43 @@ func TestInstallWritesThePairingForThisUserOnly(t *testing.T) {
 		}
 		if installed(dir, other) {
 			t.Fatal("a readable pairing counts as installed")
+		}
+	}
+}
+
+func TestInstallKeepsTheFolderTokenAcrossProcesses(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", data)
+	t.Setenv("LOCALAPPDATA", data)
+	t.Setenv("HOME", data)
+	if token, err := Token(); err != nil || token != "" {
+		t.Fatalf("token before install = %q, %v", token, err)
+	}
+	if _, err := Install(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Token()
+	if err != nil || len(first) != 64 {
+		t.Fatalf("token = %q, %v", first, err)
+	}
+	// Another install, as from the command line while the tray runs, keeps it.
+	if _, err := Install(); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := Token(); err != nil || again != first {
+		t.Fatalf("token changed: %q, %v", again, err)
+	}
+	// A copy others could read is replaced with a new token.
+	if runtime.GOOS != "windows" {
+		dir, _ := Dir()
+		if err := os.Chmod(filepath.Join(dir, pairingFile), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Install(); err != nil {
+			t.Fatal(err)
+		}
+		if again, err := Token(); err != nil || again == first || len(again) != 64 {
+			t.Fatalf("exposed token kept: %q, %v", again, err)
 		}
 	}
 }

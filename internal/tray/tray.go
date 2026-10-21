@@ -546,7 +546,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				return
 			}
 			publishAPICredits()
-		})
+		}, browserext.Token)
 		if err != nil {
 			log.Printf("claude extension listener: %v", err)
 		}

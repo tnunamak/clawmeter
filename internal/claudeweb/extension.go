@@ -111,7 +111,9 @@ func LastExtensionContact() time.Time {
 
 // ServeExtension receives browser polls until ctx is cancelled. saved reports
 // each stored reading; a Result without resets is an API credit reading.
-func ServeExtension(ctx context.Context, accounts func() []Account, saved func(Result)) error {
+// token reads the pairing token from this user's extension folder, or ""
+// when there is none.
+func ServeExtension(ctx context.Context, accounts func() []Account, saved func(Result), token func() (string, error)) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -120,7 +122,7 @@ func ServeExtension(ctx context.Context, accounts func() []Account, saved func(R
 		return fmt.Errorf("start Claude extension: %w", err)
 	}
 	server := &http.Server{
-		Handler: ExtensionHandler(accounts, saved), ReadHeaderTimeout: 2 * time.Second,
+		Handler: ExtensionHandler(accounts, saved, token), ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second,
 	}
 	done := make(chan struct{})
@@ -150,8 +152,9 @@ type extensionResetsPayload struct {
 }
 
 // ExtensionHandler serves the extension's readings. It admits only the
-// extension's origin on the loopback address; saved is as for ServeExtension.
-func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handler {
+// extension's origin on the loopback address, paired with this user's folder;
+// saved and token are as for ServeExtension.
+func ExtensionHandler(accounts func() []Account, saved func(Result), token func() (string, error)) http.Handler {
 	var mu sync.Mutex
 	var contactWritten time.Time
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +169,7 @@ func ExtensionHandler(accounts func() []Account, saved func(Result)) http.Handle
 			http.NotFound(w, r)
 			return
 		}
-		if paired, err := checkPairing(r.Header.Get("Clawmeter-Token")); err != nil {
+		if paired, err := checkPairing(r.Header.Get("Clawmeter-Token"), token); err != nil {
 			http.Error(w, msgSaveFailed, http.StatusInternalServerError)
 			return
 		} else if !paired {

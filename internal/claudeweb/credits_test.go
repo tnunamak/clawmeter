@@ -38,7 +38,7 @@ func extensionBody(t *testing.T) map[string]any {
 
 func TestExtensionRejectsUnreadableCredits(t *testing.T) {
 	isolateUserCache(t)
-	handler := ExtensionHandler(func() []Account { return testAccounts }, nil)
+	handler := ExtensionHandler(func() []Account { return testAccounts }, nil, noToken)
 	for name, mutate := range map[string]func(map[string]any){
 		"balance out of range": func(body map[string]any) { body["balance"] = -100000000001 },
 		"bad currency":         func(body map[string]any) { body["currency"] = "dollars" },
