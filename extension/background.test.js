@@ -574,3 +574,26 @@ test("open-claude opens a pinned background tab and reads it once it has loaded"
   assert.deepEqual(replies, [true]);
   assert.equal(w.listeners.updated, null);
 });
+
+test("open-claude reads the new tab even when a check was already running", async () => {
+  let reads = 0, release;
+  const w = worker(async () => {
+    reads++;
+    if (reads === 1) await new Promise(resolve => { release = resolve; });
+    return { status: "ok", payloads: [] };
+  });
+  await tick();
+  void w.context.poll();
+  await tick();
+  assert.equal(reads, 1);
+  const replies = [];
+  w.listeners.message("open-claude", { id: "self" }, value => replies.push(value));
+  await tick();
+  w.listeners.updated(7, { status: "complete" });
+  await tick();
+  assert.equal(reads, 1);
+  release();
+  for (let i = 0; i < 20 && !replies.length; i++) await tick();
+  assert.equal(reads, 2);
+  assert.deepEqual(replies, [true]);
+});

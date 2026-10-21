@@ -143,6 +143,9 @@ async function openClaude() {
     chrome.tabs.onUpdated.addListener(done);
     setTimeout(() => { chrome.tabs.onUpdated.removeListener(done); resolve(); }, 20000);
   });
+  // A check already running may have looked for tabs before this one
+  // existed, so wait it out and start one that sees the tab.
+  if (running) await running.catch(() => {});
   await poll();
 }
 
