@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -17,6 +18,15 @@ import (
 // MinimumPollIntervalSeconds bounds automatic tray polling. Manual refreshes
 // remain available when the user needs an immediate reading.
 const MinimumPollIntervalSeconds = 300
+
+// PollInterval is how often the tray polls for a configured number of
+// seconds, which is never below the minimum.
+func PollInterval(seconds int) time.Duration {
+	if seconds < MinimumPollIntervalSeconds {
+		seconds = MinimumPollIntervalSeconds
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // Config holds the application configuration.
 type Config struct {

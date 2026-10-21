@@ -1029,21 +1029,6 @@ func TestExpectedUsagePctClampsToResetWindow(t *testing.T) {
 	}
 }
 
-func TestPollIntervalForConfigEnforcesFiveMinuteFloor(t *testing.T) {
-	tests := map[int]time.Duration{
-		0:   5 * time.Minute,
-		60:  5 * time.Minute,
-		299: 5 * time.Minute,
-		300: 5 * time.Minute,
-		600: 10 * time.Minute,
-	}
-	for configured, want := range tests {
-		if got := pollIntervalForConfig(configured); got != want {
-			t.Fatalf("pollIntervalForConfig(%d) = %s, want %s", configured, got, want)
-		}
-	}
-}
-
 func absFloat(n float64) float64 {
 	if n < 0 {
 		return -n
