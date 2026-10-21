@@ -844,14 +844,19 @@ func TestNoCredentialLeakage(t *testing.T) {
 		bodies = append(bodies, recorder.Body.String())
 	}
 
-	// Also the unavailable-read path, where an account identifier is echoed.
-	isolatedInvalid := newHandler(t, []provider.Provider{claudeSource("work")}, testMaxAge)
-	bodies = append(bodies, authFilesRaw(t, isolatedInvalid))
-	bodies = append(bodies, callAPI(t, isolatedInvalid, apiCallBody{
+	// Also the unavailable-read path: the same source on another login.
+	rotated := claudeSource("work")
+	rotated.revision = "rev-claude-work-another-login"
+	isolatedInvalid := newHandler(t, []provider.Provider{rotated}, testMaxAge)
+	unavailable := callAPI(t, isolatedInvalid, apiCallBody{
 		AuthIndex: indexFor(t, isolatedInvalid, "claude:work"),
 		Method:    http.MethodGet,
 		URL:       claudeUsageURL,
-	}).Body)
+	})
+	if unavailable.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("another login's reading status_code = %d, want 503", unavailable.StatusCode)
+	}
+	bodies = append(bodies, authFilesRaw(t, isolatedInvalid), unavailable.Body)
 
 	for i, body := range bodies {
 		if strings.Contains(body, leakToken) {

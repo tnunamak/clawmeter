@@ -167,11 +167,18 @@ func (p *Provider) SourceLabel() string    { return p.sourceLabel }
 func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
 func (p *Provider) SourceRevision() string {
 	if p.pinnedNative {
-		// Pinned Default reads ~/.claude. A revision distinct from the ambient
-		// route's keeps cache entries written by that route (possibly another
-		// account) from being served under this source, and the file's
-		// metadata changes it when another login replaces the file.
-		return "native-pinned-" + credentialsFileRevision(homeCredentialsDir())
+		// Pinned Default reads the first of a configured token, the macOS
+		// Keychain and ~/.claude. Each route has its own revision, so a
+		// process on one route never accepts a reading written on another,
+		// and none matches the ambient route's (possibly another account).
+		switch {
+		case p.cfg.OAuthToken != "":
+			return "native-pinned-token-" + provider.CredentialSourceRevision("claude-config-token", p.cfg.OAuthToken)
+		case keychainFirst:
+			return "native-pinned-keychain-" + credentialsFileRevision(homeCredentialsDir())
+		default:
+			return "native-pinned-" + credentialsFileRevision(homeCredentialsDir())
+		}
 	}
 	if !p.explicitSource {
 		return ""
@@ -180,13 +187,14 @@ func (p *Provider) SourceRevision() string {
 }
 
 // AccountBound reports whether SourceRevision identifies the login this
-// source reads. A chosen config directory is read alone. Pinned Default reads
-// ~/.claude, unless a configured token or, on macOS, the Keychain comes first.
+// source reads: a chosen config directory's file, or pinned Default's
+// configured token or ~/.claude file. A Keychain login cannot be
+// fingerprinted without reading it, and the ambient route has no revision.
 func (p *Provider) AccountBound() bool {
 	if p.explicitSource {
 		return true
 	}
-	return p.pinnedNative && p.cfg.OAuthToken == "" && !keychainFirst
+	return p.pinnedNative && (p.cfg.OAuthToken != "" || !keychainFirst)
 }
 
 // keychainFirst is whether the Keychain is read before ~/.claude.

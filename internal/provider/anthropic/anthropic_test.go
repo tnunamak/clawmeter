@@ -589,14 +589,16 @@ func TestAccountBoundOnlyWhenTheRevisionIdentifiesTheLogin(t *testing.T) {
 	if newSource(config.ProviderConfig{Sources: []config.SourceConfig{native}}, native).AccountBound() {
 		t.Error("a lone ambient Default is account bound")
 	}
-	// A configured token is read before ~/.claude and is not in the revision.
-	if newSource(config.ProviderConfig{OAuthToken: "configured", Sources: both}, native).AccountBound() {
-		t.Error("pinned Default with a configured token is account bound")
+	// A configured token is read before ~/.claude; its hash is the revision.
+	tokened := newSource(config.ProviderConfig{OAuthToken: "configured-b", Sources: both}, native)
+	if !tokened.AccountBound() {
+		t.Error("pinned Default with a configured token is not account bound")
 	}
 	keychainFirst = true
 	if pinned.AccountBound() {
 		t.Error("pinned Default is account bound where the Keychain is read first")
 	}
+	keychainFirst = false
 
 	// Another login written to ~/.claude changes the pinned revision.
 	dir := filepath.Join(home, ".claude")
@@ -608,8 +610,51 @@ func TestAccountBoundOnlyWhenTheRevisionIdentifiesTheLogin(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"a-different-and-longer-login"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if after := pinned.SourceRevision(); after == before || strings.Contains(after, "token") {
+	if after := pinned.SourceRevision(); after == before || strings.Contains(after, "first") || strings.Contains(after, "longer") {
 		t.Fatalf("pinned revision did not follow the login file: %q, %q", before, after)
+	}
+}
+
+// Two processes sharing a cache but reading Default through different routes
+// must never accept each other's readings: a writer with a configured token
+// and a reader using ~/.claude, or one reading the Keychain.
+func TestPinnedRoutesNeverShareARevision(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeTestCredentials(t, filepath.Join(home, ".claude"), "file-account", "")
+	saved := keychainFirst
+	t.Cleanup(func() { keychainFirst = saved })
+	native := config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}
+	other := config.SourceConfig{ID: "odl", Credential: config.CredentialRef{Kind: "config-dir", Ref: t.TempDir()}}
+	both := []config.SourceConfig{native, other}
+	revision := func(cfg config.ProviderConfig) string {
+		t.Helper()
+		p, err := (sourceCapability{}).NewSource(cfg, native)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.(*Provider).SourceRevision()
+	}
+	keychainFirst = false
+	file := revision(config.ProviderConfig{Sources: both})
+	tokenB := revision(config.ProviderConfig{OAuthToken: "secret-bravo", Sources: both})
+	tokenC := revision(config.ProviderConfig{OAuthToken: "secret-charlie", Sources: both})
+	keychainFirst = true
+	keychain := revision(config.ProviderConfig{Sources: both})
+	seen := map[string]string{}
+	for name, rev := range map[string]string{"file": file, "token B": tokenB, "token C": tokenC, "keychain": keychain} {
+		if rev == "" || strings.Contains(rev, "bravo") || strings.Contains(rev, "charlie") {
+			t.Fatalf("%s revision = %q", name, rev)
+		}
+		if previous, ok := seen[rev]; ok {
+			t.Fatalf("%s and %s share revision %q", name, previous, rev)
+		}
+		seen[rev] = name
+	}
+	// A reading the token-B writer cached is not accepted by the file reader.
+	if cache.SourceRevisionMatches(map[string]string{"claude": tokenB}, "claude", file) {
+		t.Fatal("a file-route reader accepts a token-route reading")
 	}
 }
 
