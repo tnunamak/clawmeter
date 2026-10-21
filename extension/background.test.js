@@ -6,9 +6,9 @@ const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
-function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [] }),
+function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), readResets = async () => ({ status: "ok", payloads: [], accounts: [] }),
   { tabs = [], executeScript = async () => [] } = {}) {
-  const listeners = {}, created = [], stored = [], sessions = [], queries = [], injections = [];
+  const listeners = {}, created = [], stored = [], sessions = [], queries = [], injections = [], badges = [], opened = [];
   const timers = new Map();
   let timerID = 0;
   const context = vm.createContext({
@@ -26,7 +26,11 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
         onStartup: { addListener: fn => { listeners.startup = fn; } },
       },
       // A tab without a url is a claude.ai tab.
-      tabs: { query: async filter => {
+      action: { setBadgeBackgroundColor: async () => {}, setBadgeText: async ({ text }) => badges.push(text),
+        setTitle: async ({ title }) => badges.push(title) },
+      tabs: { create: async tab => { opened.push(tab); return { id: 7 }; },
+        onUpdated: { addListener: fn => { listeners.updated = fn; }, removeListener: () => { listeners.updated = null; } },
+        query: async filter => {
         queries.push(filter);
         return tabs.filter(tab => (tab.url || "https://claude.ai/").startsWith(filter.url.slice(0, -1)))
           .map(tab => ({ discarded: false, status: "complete", ...tab }));
@@ -37,7 +41,7 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204 }), re
     },
   });
   vm.runInContext(readFileSync(require.resolve("./background.js"), "utf8"), context);
-  return { context, listeners, created, stored, sessions, timers, queries, injections };
+  return { context, listeners, created, stored, sessions, timers, queries, injections, badges, opened };
 }
 
 test("alarm lifecycle and one poll at a time", async () => {
@@ -527,4 +531,46 @@ test("a pool a container lists but cannot read yet is remembered for a week", as
   await vm.runInContext("poll()", w.context);
   assert.deepEqual(w.stored.at(-1).sessions, {});
   assert.ok(posts.some(url => url.endsWith("/v1/status")));
+});
+
+test("the badge asks for a fix only when Clawmeter misses readings it could have", () => {
+  const { context } = worker(async () => ({ status: "ok", payloads: [] }));
+  const status = (claude, delivery = ["saved"]) => ({ delivery, claude });
+  assert.equal(context.attention(status({ state: "ok", accounts: [] }), true), "");
+  assert.equal(context.attention(status({ state: "ok", accounts: [] }, ["saved", "unreachable"]), false), "Clawmeter isn't running on this computer");
+  assert.equal(context.attention(status({ state: "ok", accounts: [] }, ["rejected"]), false), "Update Clawmeter to accept readings");
+  // A browser that has never read claude.ai is used only for API credits.
+  assert.equal(context.attention(status({ state: "no_tab" }), false), "");
+  assert.equal(context.attention(status({ state: "no_tab" }), true), "Clawmeter needs an open claude.ai tab");
+  assert.equal(context.attention(status({ state: "signed_out" }), true), "Sign in to claude.ai for Clawmeter");
+});
+
+test("a poll sets the badge, and remembers that claude.ai was read", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }), undefined,
+    async () => ({ status: "ok", payloads: [], accounts: [{ name: "Max", resets: 1 }] }), { tabs: [{ id: 1 }],
+      executeScript: async () => [{ result: { status: 200, body: {} } }] });
+  await tick();
+  await w.context.poll();
+  assert.ok(w.stored.some(value => value.claudeRead === true));
+  assert.deepEqual(w.badges.slice(-2), ["", "Clawmeter"]);
+});
+
+test("open-claude opens a pinned background tab and reads it once it has loaded", async () => {
+  let reads = 0;
+  const w = worker(async () => { reads++; return { status: "ok", payloads: [] }; });
+  await tick();
+  const replies = [];
+  assert.equal(w.listeners.message("open-claude", { id: "self" }, value => replies.push(value)), true);
+  await tick();
+  assert.deepEqual(JSON.parse(JSON.stringify(w.opened)), [{ url: "https://claude.ai/", pinned: true, active: false }]);
+  const before = reads;
+  w.listeners.updated(8, { status: "complete" });
+  w.listeners.updated(7, { status: "loading" });
+  await tick();
+  assert.equal(reads, before);
+  w.listeners.updated(7, { status: "complete" });
+  for (let i = 0; i < 10 && !replies.length; i++) await tick();
+  assert.equal(reads, before + 1);
+  assert.deepEqual(replies, [true]);
+  assert.equal(w.listeners.updated, null);
 });

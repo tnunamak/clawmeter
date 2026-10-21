@@ -16,6 +16,40 @@ function row(name, value, className) {
   return div;
 }
 
+function link(text, href) {
+  const a = document.createElement("a");
+  a.textContent = text;
+  a.href = href;
+  a.target = "_blank";
+  return a;
+}
+
+function code(text) {
+  const element = document.createElement("code");
+  element.textContent = text;
+  return element;
+}
+
+// fix is a warning followed by the one action that clears it.
+function fix(text, action, className = "warn") {
+  const p = paragraph(text + " ", className);
+  p.append(action);
+  return p;
+}
+
+// openClaude asks the worker to open a pinned claude.ai tab and read it.
+function openClaude() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Open a pinned tab";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Opening…";
+    await chrome.runtime.sendMessage("open-claude");
+  });
+  return button;
+}
+
 const money = (minor, currency) => {
   try {
     return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(minor / 100);
@@ -27,7 +61,7 @@ const money = (minor, currency) => {
 // connection says whether the last readings reached the Clawmeter app.
 function connection(delivery) {
   if (!delivery.length) return { text: "Waiting for the first reading", tone: "" };
-  if (delivery.includes("unreachable")) return { text: "Clawmeter isn't running on this computer", tone: "bad" };
+  if (delivery.includes("unreachable")) return { text: "The Clawmeter app isn't running", tone: "bad" };
   if (delivery.includes("rejected")) return { text: "Clawmeter refused a reading; update Clawmeter", tone: "bad" };
   return { text: "Sending to Clawmeter", tone: "ok" };
 }
@@ -39,6 +73,13 @@ function unchecked(status) {
   return count ? [paragraph(`${count} tab${count === 1 ? "" : "s"} didn't answer; accounts signed in only there aren't shown. Open ${count === 1 ? "it" : "them"} to include ${count === 1 ? "it" : "them"}.`, "warn")] : [];
 }
 
+// untracked tells how to add accounts that Clawmeter does not track.
+function untracked(accounts) {
+  return accounts.some(account => account.delivery === "ignored")
+    ? [fix("Add it to Clawmeter with", code("clawmeter providers source help claude"), "muted")]
+    : [];
+}
+
 function claude(status) {
   if (!status) return [paragraph("Not read yet.", "muted")];
   switch (status.state) {
@@ -47,13 +88,13 @@ function claude(status) {
         return status.unchecked ? unchecked(status) : [paragraph("No Claude plan in this browser.", "muted")];
       }
       return [...status.accounts.map(account => account.error ? row(account.name, "couldn't read", "warn") : account.delivery === "ignored"
-        ? row(account.name, "not set up in Clawmeter", "muted")
+        ? row(account.name, "not in Clawmeter", "muted")
         : row(account.name, account.resets ? `${account.resets} reset${account.resets === 1 ? "" : "s"}` : "no resets")),
-        ...unchecked(status)];
+        ...unchecked(status), ...untracked(status.accounts)];
     case "no_tab":
-      return [paragraph("Keep a claude.ai tab open. Clawmeter reads resets through it.", "warn")];
+      return [fix("Resets are read through an open claude.ai tab.", openClaude())];
     case "signed_out":
-      return [paragraph("Sign in to claude.ai.", "warn")];
+      return [fix("Signed out of claude.ai.", link("Sign in", "https://claude.ai/login"))];
     default:
       return [paragraph("Couldn't read claude.ai: " + status.error, "warn")];
   }
@@ -61,7 +102,7 @@ function claude(status) {
 
 function credits(status) {
   if (!status) return [paragraph("Not read yet.", "muted")];
-  if (status.state === "signed_out") return [paragraph("Sign in to the Claude Console.", "warn")];
+  if (status.state === "signed_out") return [fix("Signed out of the Claude Console.", link("Sign in", "https://platform.claude.com/"))];
   if (status.state !== "ok") return [paragraph("Couldn't read the Claude Console: " + status.error, "warn")];
   const rows = status.pools.map(pool => row(pool.name, money(pool.balance, pool.currency)));
   for (const failure of status.failures || []) rows.push(row(failure.name, "couldn't read", "warn"));

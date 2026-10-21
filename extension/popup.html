@@ -25,6 +25,8 @@
   .note { margin: 0; padding: 10px 16px; color: #9aa4ae; font-size: 12px; border-bottom: 1px solid #2a3037; }
   footer { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; color: #9aa4ae; }
   button { font: inherit; color: #e6eaee; background: #252a30; border: 1px solid #3a414a; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  code { font: 12px ui-monospace, monospace; color: #c9d1d9; white-space: nowrap; }
+  .warn button { margin-left: 4px; padding: 1px 8px; }
   button:disabled { opacity: .6; cursor: default; }
 </style>
 </head>
@@ -46,7 +48,7 @@
   <div id="console"><p class="muted">Not read yet.</p></div>
   <div class="links"><a href="https://platform.claude.com/settings/billing" target="_blank">Open billing</a></div>
 </section>
-<p class="note">To add another Claude account, sign in to it in a separate session: a container tab, where your browser has them, or another browser profile with this extension. Keep a claude.ai tab open in each, and a Console tab for its API credits.</p>
+<p class="note"><a href="https://tnunamak.github.io/clawmeter/extension/#accounts" target="_blank">Add another Claude account</a></p>
 <footer>
   <span id="updated"></span>
   <button id="refresh" type="button">Refresh</button>

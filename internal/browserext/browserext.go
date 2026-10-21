@@ -176,7 +176,7 @@ func Steps(dir string) []string {
 		"Open your browser's extensions page: chrome://extensions (Brave: brave://extensions, Edge: edge://extensions).",
 		"Turn on Developer mode.",
 		"Click Load unpacked and choose " + dir,
-		"Keep a claude.ai tab open; Clawmeter reads resets through it.",
+		"Click the Clawmeter icon in the toolbar. It shows what to sign in to, and opens the claude.ai tab that resets are read through.",
 	}
 }
 
