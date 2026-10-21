@@ -144,7 +144,7 @@ func TestIsLoopbackAddress(t *testing.T) {
 		{"10.0.0.5:8318", false},
 		{"169.254.169.254:80", false},
 		// Hostnames are not resolved, so they are refused conservatively.
-		{"localhost:8318", true},
+		{"localhost:8318", false},
 		{"example.com:8318", false},
 		// A missing or malformed port is not a usable listen address.
 		{"127.0.0.1", false},
@@ -157,5 +157,23 @@ func TestIsLoopbackAddress(t *testing.T) {
 				t.Fatalf("isLoopbackAddress(%q) = %v, want %v", c.address, got, c.want)
 			}
 		})
+	}
+}
+
+func TestListenAddressSpellsLocalhostAsALoopbackIP(t *testing.T) {
+	for in, want := range map[string]string{
+		"localhost:8318":   "127.0.0.1:8318",
+		"LOCALHOST:9":      "127.0.0.1:9",
+		"127.0.0.1:8318":   "127.0.0.1:8318",
+		"0.0.0.0:8318":     "0.0.0.0:8318",
+		"hub.example:8318": "hub.example:8318",
+		"not an address":   "not an address",
+	} {
+		if got := listenAddress(in); got != want {
+			t.Errorf("listenAddress(%q) = %q, want %q", in, got, want)
+		}
+		if in == "localhost:8318" && !isLoopbackAddress(listenAddress(in)) {
+			t.Error("localhost is not accepted after normalization")
+		}
 	}
 }

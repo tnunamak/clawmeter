@@ -153,3 +153,7 @@ func readAuthFile(dir string) (*authFile, error) {
 	}
 	return &auth, nil
 }
+
+// AccountBound is true: the revision fingerprints the login file this source
+// reads, ambient or not.
+func (p *Provider) AccountBound() bool { return true }

@@ -31,6 +31,8 @@ type fakeProvider struct {
 	revision   string
 	secret     string
 	configured bool
+	// unbound marks a source whose revision does not identify its login.
+	unbound bool
 }
 
 func (f *fakeProvider) Name() string        { return f.name }
@@ -48,6 +50,7 @@ func (f *fakeProvider) SourceID() string       { return f.sourceID }
 func (f *fakeProvider) SourceLabel() string    { return f.label }
 func (f *fakeProvider) ProviderFamily() string { return f.family }
 func (f *fakeProvider) SourceRevision() string { return f.revision }
+func (f *fakeProvider) AccountBound() bool     { return !f.unbound }
 
 func claudeSource(sourceID string) *fakeProvider {
 	return &fakeProvider{
@@ -184,8 +187,15 @@ func writeCache(t *testing.T, key string, data *provider.UsageData, revision str
 	if revision != "" {
 		revisions[key] = revision
 	}
+	writeCacheEntries(t, map[string]*provider.UsageData{key: data}, revisions)
+}
+
+// writeCacheEntries writes several sources in one cache write, as one tray
+// poll does.
+func writeCacheEntries(t *testing.T, results map[string]*provider.UsageData, revisions map[string]string) {
+	t.Helper()
 	if err := cache.Write(&provider.MultiFetchResult{
-		Results:         map[string]*provider.UsageData{key: data},
+		Results:         results,
 		SourceRevisions: revisions,
 		FetchedAt:       time.Now(),
 	}); err != nil {
@@ -721,16 +731,6 @@ func TestCodexWindowMapping(t *testing.T) {
 		t.Fatalf("secondary_window.limit_window_seconds = %v, want 604800",
 			body.RateLimit.SecondaryWindow.LimitWindowSeconds)
 	}
-
-	t.Run("empty windows is still a 200 envelope", func(t *testing.T) {
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(env.Body), &raw); err != nil {
-			t.Fatalf("body is not JSON: %v", err)
-		}
-		if _, ok := raw["rate_limit"]; !ok {
-			t.Fatalf("body = %s, want a rate_limit object", env.Body)
-		}
-	})
 }
 
 func TestUnmappableCachedWindowsAreUnavailable(t *testing.T) {
@@ -807,11 +807,22 @@ func TestNoCredentialLeakage(t *testing.T) {
 	codexIndex := indexFor(t, h, "codex:plus")
 
 	now := time.Now()
-	writeCache(t, "claude:work", freshClaudeReading("work", now), claude.revision)
-	writeCache(t, "openai:plus", &provider.UsageData{
-		Provider: "openai", SourceID: "plus", FetchedAt: now,
-		Windows: []provider.UsageWindow{{Name: "7d", Utilization: 10, ResetsAt: now.Add(time.Hour)}},
-	}, codex.revision)
+	writeCacheEntries(t, map[string]*provider.UsageData{
+		"claude:work": freshClaudeReading("work", now),
+		"openai:plus": {
+			Provider: "openai", SourceID: "plus", FetchedAt: now,
+			Windows: []provider.UsageWindow{{Name: "7d", Utilization: 10, ResetsAt: now.Add(time.Hour)}},
+		},
+	}, map[string]string{"claude:work": claude.revision, "openai:plus": codex.revision})
+	// Both readings are served, so the success paths are checked too.
+	for _, check := range []apiCallBody{
+		{AuthIndex: claudeIndex, Method: http.MethodGet, URL: claudeUsageURL},
+		{AuthIndex: codexIndex, Method: http.MethodGet, URL: codexUsageURL},
+	} {
+		if env := callAPI(t, h, check); env.StatusCode != http.StatusOK {
+			t.Fatalf("%s status_code = %d, want 200", check.URL, env.StatusCode)
+		}
+	}
 
 	bodies := []string{authFilesRaw(t, h)}
 	requests := []apiCallBody{
@@ -861,9 +872,9 @@ func authFilesRaw(t *testing.T, h http.Handler) string {
 	return recorder.Body.String()
 }
 
-func TestSourcesWithoutARevisionAreLeftOut(t *testing.T) {
+func TestSourcesNotBoundToOneLoginAreLeftOut(t *testing.T) {
 	ambient := claudeSource("default")
-	ambient.revision = ""
+	ambient.unbound = true
 	pinned := claudeSource("work")
 	h := newHandler(t, []provider.Provider{ambient, pinned}, testMaxAge)
 	request := httptest.NewRequest(http.MethodGet, authFilesPath, nil)

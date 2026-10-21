@@ -167,15 +167,35 @@ func (p *Provider) SourceLabel() string    { return p.sourceLabel }
 func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
 func (p *Provider) SourceRevision() string {
 	if p.pinnedNative {
-		// Pinned Default reads only ~/.claude. A distinct, stable revision keeps
-		// cache entries written by the old ambient route (possibly another
-		// account) from being served as stale fallback under this source.
-		return fmt.Sprintf("%x", sha256.Sum256([]byte("native-pinned\x00"+filepath.Join(homeCredentialsDir(), ".credentials.json"))))
+		// Pinned Default reads ~/.claude. A revision distinct from the ambient
+		// route's keeps cache entries written by that route (possibly another
+		// account) from being served under this source, and the file's
+		// metadata changes it when another login replaces the file.
+		return "native-pinned-" + credentialsFileRevision(homeCredentialsDir())
 	}
 	if !p.explicitSource {
 		return ""
 	}
-	path := filepath.Join(p.configDir, ".credentials.json")
+	return credentialsFileRevision(p.configDir)
+}
+
+// AccountBound reports whether SourceRevision identifies the login this
+// source reads. A chosen config directory is read alone. Pinned Default reads
+// ~/.claude, unless a configured token or, on macOS, the Keychain comes first.
+func (p *Provider) AccountBound() bool {
+	if p.explicitSource {
+		return true
+	}
+	return p.pinnedNative && p.cfg.OAuthToken == "" && !keychainFirst
+}
+
+// keychainFirst is whether the Keychain is read before ~/.claude.
+var keychainFirst = runtime.GOOS == "darwin"
+
+// credentialsFileRevision fingerprints the credentials file in configDir by
+// its resolved path and metadata, never its contents.
+func credentialsFileRevision(configDir string) string {
+	path := filepath.Join(configDir, ".credentials.json")
 	canonical, err := filepath.Abs(path)
 	if err != nil {
 		return ""

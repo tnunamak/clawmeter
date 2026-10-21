@@ -560,6 +560,59 @@ func TestPinnedNativeSourceHasDistinctRevision(t *testing.T) {
 	}
 }
 
+// The T3 hub serves only sources whose revision identifies their login.
+func TestAccountBoundOnlyWhenTheRevisionIdentifiesTheLogin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	saved := keychainFirst
+	keychainFirst = false
+	t.Cleanup(func() { keychainFirst = saved })
+	native := config.SourceConfig{ID: "default", Credential: config.CredentialRef{Kind: "native"}}
+	explicit := config.SourceConfig{ID: "odl", Credential: config.CredentialRef{Kind: "config-dir", Ref: t.TempDir()}}
+	both := []config.SourceConfig{native, explicit}
+	newSource := func(cfg config.ProviderConfig, source config.SourceConfig) *Provider {
+		t.Helper()
+		p, err := (sourceCapability{}).NewSource(cfg, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.(*Provider)
+	}
+	if !newSource(config.ProviderConfig{Sources: both}, explicit).AccountBound() {
+		t.Error("a config-dir source is not account bound")
+	}
+	pinned := newSource(config.ProviderConfig{Sources: both}, native)
+	if !pinned.AccountBound() {
+		t.Error("pinned Default without a configured token is not account bound")
+	}
+	if newSource(config.ProviderConfig{Sources: []config.SourceConfig{native}}, native).AccountBound() {
+		t.Error("a lone ambient Default is account bound")
+	}
+	// A configured token is read before ~/.claude and is not in the revision.
+	if newSource(config.ProviderConfig{OAuthToken: "configured", Sources: both}, native).AccountBound() {
+		t.Error("pinned Default with a configured token is account bound")
+	}
+	keychainFirst = true
+	if pinned.AccountBound() {
+		t.Error("pinned Default is account bound where the Keychain is read first")
+	}
+
+	// Another login written to ~/.claude changes the pinned revision.
+	dir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestCredentials(t, dir, "first-token", "")
+	before := pinned.SourceRevision()
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"a-different-and-longer-login"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if after := pinned.SourceRevision(); after == before || strings.Contains(after, "token") {
+		t.Fatalf("pinned revision did not follow the login file: %q, %q", before, after)
+	}
+}
+
 // Regression: a source ID repointed at another config dir is another account
 // and must not inherit the previous account's 429 backoff.
 func TestRepointedSourceDoesNotInheritBackoff(t *testing.T) {

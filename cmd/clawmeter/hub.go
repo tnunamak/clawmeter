@@ -40,7 +40,8 @@ func hubCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "clawmeter: --tls-cert and --tls-key must be set together")
 		return 1
 	}
-	if !isLoopbackAddress(*listen) && *tlsCert == "" {
+	address := listenAddress(*listen)
+	if !isLoopbackAddress(address) && *tlsCert == "" {
 		fmt.Fprintln(os.Stderr, "clawmeter: refusing plain HTTP on a non-loopback address; configure TLS or use a loopback reverse proxy")
 		return 1
 	}
@@ -61,7 +62,7 @@ func hubCmd(args []string) int {
 	}
 
 	server := &http.Server{
-		Addr:              *listen,
+		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -74,7 +75,7 @@ func hubCmd(args []string) int {
 	if *tlsCert != "" {
 		scheme = "https"
 	}
-	fmt.Fprintf(os.Stderr, "clawmeter: read-only CLIProxyAPI-compatible hub listening on %s://%s\n", scheme, *listen)
+	fmt.Fprintf(os.Stderr, "clawmeter: read-only CLIProxyAPI-compatible hub listening on %s://%s\n", scheme, address)
 
 	if *tlsCert != "" {
 		err = server.ListenAndServeTLS(*tlsCert, *tlsKey)
@@ -88,15 +89,20 @@ func hubCmd(args []string) int {
 	return 0
 }
 
-// isLoopbackAddress reports whether address listens only on this computer:
-// a loopback IP, or the name localhost.
+// listenAddress spells localhost as 127.0.0.1, so the address checked is
+// the address served and no resolver can move it off this computer.
+func listenAddress(address string) string {
+	if host, port, err := net.SplitHostPort(address); err == nil && strings.EqualFold(host, "localhost") {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return address
+}
+
+// isLoopbackAddress reports whether address is a loopback IP and port.
 func isLoopbackAddress(address string) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
 		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
