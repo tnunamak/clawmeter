@@ -127,7 +127,10 @@ func NewHandler(managementKey string, sources []provider.Provider, maxAge time.D
 	}
 	for _, source := range sources {
 		providerName, ok := hubProvider(source)
-		if !ok {
+		// A source with no revision follows whatever login its process
+		// finds, so the hub cannot tell whether a cached reading is that
+		// account's; it is left out rather than shown under the wrong name.
+		if !ok || provider.SourceRevision(source) == "" {
 			continue
 		}
 		sourceID := provider.SourceID(source)
