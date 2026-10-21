@@ -58,12 +58,14 @@ const money = (minor, currency) => {
   }
 };
 
-// connection says whether the last readings reached the Clawmeter app.
-function connection(delivery) {
-  if (!delivery.length) return { text: "Waiting for the first reading", tone: "" };
-  if (delivery.includes("unreachable")) return { text: "The Clawmeter app isn't running", tone: "bad" };
-  if (delivery.includes("rejected")) return { text: "Clawmeter refused a reading; update Clawmeter", tone: "bad" };
-  if (delivery.includes("failed")) return { text: "Clawmeter couldn't save a reading", tone: "bad" };
+// connection says whether the last readings reached the Clawmeter app. A
+// check that sent nothing carries what the check before it found.
+function connection(status) {
+  if (!status) return { text: "Waiting for the first reading", tone: "" };
+  if (status.off) return { text: "The Clawmeter app isn't running", tone: "bad" };
+  if (status.refused === "rejected") return { text: "Clawmeter refused a reading; update Clawmeter", tone: "bad" };
+  if (status.refused === "failed") return { text: "Clawmeter couldn't save a reading", tone: "bad" };
+  if (!status.delivery?.length) return { text: "Nothing to send to Clawmeter yet", tone: "" };
   return { text: "Sending to Clawmeter", tone: "ok" };
 }
 
@@ -112,7 +114,7 @@ function credits(status) {
 }
 
 function render(status) {
-  const state = connection(status?.delivery || []);
+  const state = connection(status);
   element("connection").className = state.tone;
   element("connection-text").textContent = state.text;
   element("claude").replaceChildren(...claude(status?.claude));

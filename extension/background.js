@@ -115,13 +115,22 @@ const message = error => String(error?.message || error);
 // checks in a row, which the user must fix and nothing else reports. A
 // closed claude.ai tab or a signed-out site is not flagged: reset grants
 // change rarely, the tray shows how old each reading is, and the popup
-// offers the fix.
+// offers the fix. A check that sent nothing learned nothing about the app,
+// so it keeps what the one before it found. signal records its findings in
+// status for the next check and the popup.
 function signal(status, previous) {
-  const refused = status.delivery.find(delivery => delivery === "rejected" || delivery === "failed");
-  status.refusals = refused ? (previous?.refusals || 0) + 1 : status.delivery.length ? 0 : previous?.refusals || 0;
-  if (status.delivery.includes("unreachable")) return { off: true, problem: "The Clawmeter app isn't running" };
+  if (status.delivery.length) {
+    status.off = status.delivery.includes("unreachable");
+    status.refused = ["rejected", "failed"].find(kind => status.delivery.includes(kind));
+    status.refusals = status.refused ? (previous?.refusals || 0) + 1 : 0;
+  } else {
+    status.off = previous?.off === true;
+    status.refused = previous?.refused;
+    status.refusals = previous?.refusals || 0;
+  }
+  if (status.off) return { off: true, problem: "The Clawmeter app isn't running" };
   if (status.refusals < 3) return { off: false, problem: "" };
-  return { off: false, problem: refused === "failed" ? "The Clawmeter app couldn't save readings"
+  return { off: false, problem: status.refused === "failed" ? "The Clawmeter app couldn't save readings"
     : "Update the Clawmeter app; it can't read this browser's readings" };
 }
 

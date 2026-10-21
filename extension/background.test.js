@@ -559,31 +559,46 @@ test("the icon greys while Clawmeter is down and badges only refusals that persi
   assert.deepEqual(signal(["saved", "rejected"], { refusals: 2 }),
     { off: false, problem: "Update the Clawmeter app; it can't read this browser's readings" });
   assert.deepEqual(signal(["failed"], { refusals: 2 }), { off: false, problem: "The Clawmeter app couldn't save readings" });
-  // A check that sent nothing keeps the count; one Clawmeter accepted clears it.
+  // A check that sent nothing keeps what the last one found; one Clawmeter
+  // accepted clears it.
   const status = { delivery: [], claude: { state: "no_tab" } };
-  context.signal(status, { refusals: 2 });
-  assert.equal(status.refusals, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.signal(status, { refusals: 3, refused: "failed" }))),
+    { off: false, problem: "The Clawmeter app couldn't save readings" });
+  assert.equal(status.refusals, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.signal({ delivery: [] }, { off: true }))),
+    { off: true, problem: "The Clawmeter app isn't running" });
   status.delivery = ["ignored"];
-  context.signal(status, { refusals: 2 });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.signal(status, { refusals: 3, refused: "failed" }))), quiet);
   assert.equal(status.refusals, 0);
 });
 
-test("a poll sets the icon and badge, and keeps the refusal count for the next", async () => {
-  let code = 400;
+test("checks keep the icon and badge across checks that send nothing", async () => {
+  let code = 500, send = true;
   const w = worker(async () => ({ status: "ok", payloads: [] }), async () => ({ ok: code < 300, status: code, headers: new Headers() }),
-    async (read, now, post) => { await post({}); return { status: "ok", payloads: [], accounts: [] }; });
+    async (read, now, post) => { if (send) await post({}); return { status: "ok", payloads: [], accounts: [] }; });
   await tick();
+  const shown = () => ({ badge: w.badges.at(-2), title: w.badges.at(-1), icon: w.icons.at(-1) });
   for (let i = 0; i < 3; i++) await w.context.poll();
   assert.equal(w.sessions.at(-1).status.refusals, 3);
-  assert.deepEqual(w.badges.slice(-2), ["!", "Update the Clawmeter app; it can't read this browser's readings"]);
-  assert.equal(w.icons.at(-1), "icons/icon-16.png");
+  const refused = { badge: "!", title: "The Clawmeter app couldn't save readings", icon: "icons/icon-16.png" };
+  assert.deepEqual(shown(), refused);
+  // The source closes: nothing is sent, and the cause is not reinvented.
+  send = false;
+  await w.context.poll();
+  assert.deepEqual(shown(), refused);
+  send = true;
   code = 204;
   await w.context.poll();
-  assert.deepEqual(w.badges.slice(-2), ["", "Clawmeter"]);
+  assert.deepEqual(shown(), { badge: "", title: "Clawmeter", icon: "icons/icon-16.png" });
   w.context.fetch = async () => { throw new TypeError("Failed to fetch"); };
   await w.context.poll();
-  assert.deepEqual(w.badges.slice(-2), ["", "The Clawmeter app isn't running"]);
-  assert.equal(w.icons.at(-1), "icons/icon-16-off.png");
+  const down = { badge: "", title: "The Clawmeter app isn't running", icon: "icons/icon-16-off.png" };
+  assert.deepEqual(shown(), down);
+  // Sending nothing is not proof the app came back.
+  send = false;
+  await w.context.poll();
+  assert.deepEqual(shown(), down);
+  assert.equal(w.sessions.at(-1).status.off, true);
 });
 
 test("install forgets the claude.ai flag earlier versions kept", async () => {
