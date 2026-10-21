@@ -3,7 +3,6 @@ package browserext
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -39,19 +38,10 @@ func TestInstallWritesTheExtensionAndRemovesStaleFiles(t *testing.T) {
 	}
 }
 
-func TestGuideNamesTheFolderSafely(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "a<b>", "extension")
-	page, err := WriteGuide(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(page)
-	if err != nil {
-		t.Fatal(err)
-	}
-	html := string(data)
-	if !strings.Contains(html, "Load unpacked") || !strings.Contains(html, "a&lt;b&gt;") || strings.Contains(html, "a<b>") {
-		t.Fatalf("guide = %s", html)
+func TestSetupURLCarriesTheFolderInTheFragment(t *testing.T) {
+	got := SetupURL("/home/a b/.local/share/clawmeter/extension")
+	if got != SetupPage+"#dir=%2Fhome%2Fa+b%2F.local%2Fshare%2Fclawmeter%2Fextension" {
+		t.Fatalf("SetupURL = %q", got)
 	}
 }
 

@@ -147,7 +147,7 @@ func TestResetSnapshotRowIsCompactAndVisibleWhenUsageIsStale(t *testing.T) {
 		},
 	}
 	got := resetCreditTraySummary(data, observedAt.Add(time.Hour))
-	want := "Resets: 1 · expires " + observedAt.Add(28*24*time.Hour).Local().Format("Jan 2") + " · not updated since " + observedAt.Local().Format("15:04") + " · open claude.ai in your browser"
+	want := "Resets: 1 · expires " + observedAt.Add(28*24*time.Hour).Local().Format("Jan 2") + " · not updated since " + observedAt.Local().Format("15:04") + " · open claude.ai signed in to this account"
 	if got != want {
 		t.Errorf("reset snapshot row = %q, want %q", got, want)
 	}

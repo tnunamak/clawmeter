@@ -92,7 +92,7 @@ dropped.
 
 The result shows under its Claude source as `Resets: 1 · expires Oct 22`. A
 reading more than five minutes old adds when it was read and
-`open claude.ai in your browser`.
+`open claude.ai signed in to this account`.
 
 ### Claude API Credits
 
@@ -100,6 +100,9 @@ Prepaid Claude API credits (for example the monthly API credit a Max plan
 grants) have no API for their balance or expiry, and Anthropic's Usage & Cost
 Admin API is unavailable to individual accounts. Clawmeter reads them from the
 Claude Console through the Clawmeter Chrome extension:
+
+Setup page, including several Claude accounts:
+<https://tnunamak.github.io/clawmeter/extension/>
 
 1. Click **Connect your browser for Claude resets and API credits…** in the
    tray menu, or run `clawmeter setup --browser-extension`. Clawmeter writes the

@@ -339,6 +339,7 @@ func setupBrowserExtension(dryRun bool) integrationResult {
 	for i, step := range browserext.Steps(dir) {
 		detail += fmt.Sprintf("\n    %d. %s", i+1, step)
 	}
+	detail += "\n    Several Claude accounts, and more help: " + browserext.SetupPage
 	return integrationResult{Name: name, Status: "installed", Detail: detail, Changed: true}
 }
 
