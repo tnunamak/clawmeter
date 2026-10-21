@@ -149,6 +149,34 @@ func TestAmbientSourceRevisionFollowsCodexHome(t *testing.T) {
 	}
 }
 
+func TestAccountBoundOnlyWhileCodexKeepsItsLoginInAFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	p := New(config.ProviderConfig{})
+	if !p.AccountBound() {
+		t.Fatal("no config.toml: Codex's default file store is not account bound")
+	}
+	for config, want := range map[string]bool{
+		"model = \"o4\"\n":                                                                true,
+		"cli_auth_credentials_store = \"file\"\n":                                         true,
+		"cli_auth_credentials_store = 'file' # default\n":                                 true,
+		"cli_auth_credentials_store = \"keyring\"\n":                                      false,
+		"cli_auth_credentials_store=\"auto\"\n":                                           false,
+		"cli_auth_credentials_store = \"ephemeral\"\n":                                    false,
+		"[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n":                     true,
+		"profile = \"work\"\n[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n": false,
+		"profile = \"home\"\n[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n": true,
+		"cli_auth_credentials_store = \"keyring\"\nprofile = \"work\"\n[profiles.work]\ncli_auth_credentials_store = \"file\"\n": true,
+	} {
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := p.AccountBound(); got != want {
+			t.Errorf("config %q: AccountBound = %v, want %v", config, got, want)
+		}
+	}
+}
+
 func TestRegistrationExpandsOpenAISourcesAndKeepsIdentityOnDirectAndResetRoutes(t *testing.T) {
 	one, two := t.TempDir(), t.TempDir()
 	writeOpenAIAuth(t, one, "one-access", "one-account")

@@ -154,6 +154,49 @@ func readAuthFile(dir string) (*authFile, error) {
 	return &auth, nil
 }
 
-// AccountBound is true: the revision fingerprints the login file this source
-// reads, ambient or not.
-func (p *Provider) AccountBound() bool { return true }
+// AccountBound reports whether the revision identifies this source's login:
+// true while Codex keeps it in auth.json, its default. A keyring, automatic
+// or in-memory store holds a login the revision cannot fingerprint.
+func (p *Provider) AccountBound() bool { return storesLoginInFile(p.authDirectory()) }
+
+// storesLoginInFile reads cli_auth_credentials_store from Codex's
+// config.toml in home: the top-level value, overridden by the selected
+// profile's. A config that cannot be read counts as not.
+func storesLoginInFile(home string) bool {
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	store, profile, table := "file", "", ""
+	profileStore := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			table = strings.TrimSpace(strings.Trim(line, "[]"))
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		value, _, _ = strings.Cut(value, "#")
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		switch key = strings.TrimSpace(key); {
+		case table == "" && key == "profile":
+			profile = value
+		case table == "" && key == "cli_auth_credentials_store":
+			store = value
+		case table != "" && key == "cli_auth_credentials_store" && strings.TrimPrefix(table, "profiles.") != table:
+			if profile != "" && table == "profiles."+profile {
+				profileStore = value
+			}
+		}
+	}
+	if profileStore != "" {
+		store = profileStore
+	}
+	return store == "file"
+}
