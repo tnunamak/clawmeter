@@ -254,31 +254,43 @@ func (t *exhaustionTracker) ranOutAt(source string, w provider.UsageWindow, now 
 	return at
 }
 
-// sourceIdentities maps each provider's source key to its account identity.
-func sourceIdentities(providers []provider.Provider) map[string]string {
+// sourceIdentities maps each provider's source key to the account its
+// reading in this refresh came from. fetched holds the login revision each
+// reading was taken with. A source is left out, and so not observed, when it
+// has no such revision or its login has changed since the reading: a reading
+// must never be filed under an account it was not read from.
+func sourceIdentities(providers []provider.Provider, fetched map[string]string) map[string]string {
 	identities := make(map[string]string, len(providers))
 	for _, p := range providers {
-		if identity := sourceIdentity(p); identity != "" {
-			identities[provider.SourceKey(p)] = identity
+		key := provider.SourceKey(p)
+		if identity := sourceIdentity(p, fetched[key]); identity != "" {
+			identities[key] = identity
 		}
 	}
 	return identities
 }
 
-// sourceIdentity names the account a source reads. A Claude profile's
-// organization identifies it; other sources use their credential revision.
-// The raw values are hashed, so the saved file holds no account secrets. An
-// empty result means the source cannot be told apart from another account.
-func sourceIdentity(p provider.Provider) string {
+// sourceIdentity names the account a reading taken with login revision
+// fetched came from. A Claude profile's organization identifies it, so a
+// renewed token keeps its history; other sources use the revision itself.
+// The organization is read before the revision is compared, so it belongs to
+// the same login as the reading. Values are hashed, so the saved file holds
+// no account secrets. An empty result means the reading cannot be tied to an
+// account.
+func sourceIdentity(p provider.Provider, fetched string) string {
+	if fetched == "" {
+		return ""
+	}
+	identity := "rev:" + exhaustionDigest(fetched)
 	if org, ok := p.(interface{ ClaudeOrganizationUUID() string }); ok {
 		if uuid := strings.TrimSpace(org.ClaudeOrganizationUUID()); uuid != "" {
-			return "org:" + exhaustionDigest(uuid)
+			identity = "org:" + exhaustionDigest(uuid)
 		}
 	}
-	if revision := provider.SourceRevision(p); revision != "" {
-		return "rev:" + exhaustionDigest(revision)
+	if provider.SourceRevision(p) != fetched {
+		return ""
 	}
-	return ""
+	return identity
 }
 
 func exhaustionDigest(s string) string {

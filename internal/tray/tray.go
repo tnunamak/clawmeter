@@ -394,7 +394,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		s.mu.Unlock()
 
-		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
+		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured, result.SourceRevisions), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
 		_ = cache.Write(result)
 
 		now := time.Now()

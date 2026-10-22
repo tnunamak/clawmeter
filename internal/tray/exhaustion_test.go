@@ -413,26 +413,43 @@ func TestExhaustionSourceNotReadThisRunShowsNothing(t *testing.T) {
 }
 
 func TestSourceIdentityHashesAndPrefersTheOrganization(t *testing.T) {
-	org := sourceIdentity(orgTestProvider{sourceMenuTestProvider{id: "default", revision: "rev-1"}, "11111111-2222-3333-4444-555555555555"})
+	withOrg := orgTestProvider{sourceMenuTestProvider{id: "default", revision: "rev-1"}, "11111111-2222-3333-4444-555555555555"}
+	org := sourceIdentity(withOrg, "rev-1")
 	if !strings.HasPrefix(org, "org:") || len(org) != len("org:")+16 || strings.Contains(org, "1111") {
 		t.Fatalf("organization identity = %q; want org: plus 16 hex digits of a hash", org)
 	}
-	rev := sourceIdentity(sourceMenuTestProvider{id: "default", revision: "rev-1"})
+	rev := sourceIdentity(sourceMenuTestProvider{id: "default", revision: "rev-1"}, "rev-1")
 	if !strings.HasPrefix(rev, "rev:") || len(rev) != len("rev:")+16 {
 		t.Fatalf("revision identity = %q; want rev: plus 16 hex digits", rev)
 	}
-	if rev == sourceIdentity(sourceMenuTestProvider{id: "default", revision: "rev-2"}) {
+	if rev == sourceIdentity(sourceMenuTestProvider{id: "default", revision: "rev-2"}, "rev-2") {
 		t.Fatal("different revisions produced the same identity")
 	}
-	if got := sourceIdentity(sourceMenuTestProvider{id: "default"}); got != "" {
-		t.Fatalf("source with neither organization nor revision = %q; want empty", got)
+	if got := sourceIdentity(sourceMenuTestProvider{id: "default"}, ""); got != "" {
+		t.Fatalf("reading without a login revision = %q; want empty", got)
 	}
-	if got := sourceIdentity(orgTestProvider{sourceMenuTestProvider{id: "default"}, ""}); got != "" {
-		t.Fatalf("empty organization and no revision = %q; want empty", got)
+	if got := sourceIdentity(withOrg, ""); got != "" {
+		t.Fatalf("organization without a reading revision = %q; want empty", got)
 	}
-	ids := sourceIdentities([]provider.Provider{sourceMenuTestProvider{id: "default", revision: "rev-1"}, sourceMenuTestProvider{id: "default"}})
+	ids := sourceIdentities([]provider.Provider{sourceMenuTestProvider{id: "default", revision: "rev-1"}, sourceMenuTestProvider{id: "odl"}},
+		map[string]string{"claude": "rev-1"})
 	if ids["claude"] != rev || len(ids) != 1 {
 		t.Fatalf("sourceIdentities = %v; want only the source with an identity, keyed by source key", ids)
+	}
+}
+
+func TestAReadingIsNotFiledUnderALoginThatReplacedIt(t *testing.T) {
+	// The reading was taken with login rev-A; the source now holds rev-B.
+	switched := sourceMenuTestProvider{id: "default", revision: "rev-B"}
+	if got := sourceIdentity(switched, "rev-A"); got != "" {
+		t.Fatalf("identity after a login change = %q; want empty", got)
+	}
+	withOrg := orgTestProvider{switched, "22222222-2222-3333-4444-555555555555"}
+	if got := sourceIdentity(withOrg, "rev-A"); got != "" {
+		t.Fatalf("organization identity after a login change = %q; want empty", got)
+	}
+	if ids := sourceIdentities([]provider.Provider{switched}, map[string]string{"claude": "rev-A"}); len(ids) != 0 {
+		t.Fatalf("sourceIdentities = %v; want none", ids)
 	}
 }
 
