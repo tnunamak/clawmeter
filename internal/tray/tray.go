@@ -794,6 +794,9 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	return menu
 }
 
+// lastExtensionContact is a variable so tests can set the browser contact.
+var lastExtensionContact = claudeweb.LastExtensionContact
+
 // openBalanceRow opens the Console for a balance row that carries an action.
 func openBalanceRow(menu *providerMenuItems, row int, open func(string)) {
 	trayRenderMu.Lock()
@@ -837,14 +840,19 @@ func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances
 		}
 		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
+	now := time.Now()
+	contact := lastExtensionContact()
 	for _, pool := range data.CreditPools {
-		title := pool.TrayLine(time.Now())
+		if pool.ObservationSource == "extension" {
+			pool.ExtensionContactAt = contact
+		}
+		title := pool.TrayLine(now)
 		// A lone pool on the Claude API row needs no label; anywhere else it
 		// sits among other rows.
 		if data.Provider != provider.ClaudeAPISourceName || len(data.CreditPools) > 1 {
 			title = pool.Name + ": " + title
 		}
-		show(title, pool.Action)
+		show(title, pool.Action(now))
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)

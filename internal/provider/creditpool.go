@@ -40,9 +40,10 @@ type UsageCreditPool struct {
 	Live              bool      `json:"live"`
 	ObservationSource string    `json:"observation_source,omitempty"`
 	SignedOut         bool      `json:"signed_out,omitempty"`
-	// Action is the step that clears this pool's warning, such as "sign in
-	// to the Claude Console". The tray row opens the Console for it.
-	Action string `json:"action,omitempty"`
+	// ExtensionContactAt is when the browser extension last reached
+	// Clawmeter. With it, a stale extension reading tells a signed-in browser
+	// that could not read this organization from a browser that is not running.
+	ExtensionContactAt time.Time `json:"extension_contact_at,omitempty"`
 	// Projection from ObservedAt at BurnPerDay, set only with ExpiresAt.
 	ProjectedSpend  int64     `json:"projected_spend_before_expiry,omitempty"`
 	ProjectedUnused int64     `json:"projected_unused_at_expiry,omitempty"`
@@ -55,6 +56,15 @@ type UsageCreditPool struct {
 	// expiry or projection until the next check.
 	ExpiredSinceCheck time.Time `json:"expired_since_check,omitempty"`
 }
+
+// The step that clears a pool's warning, and the window in which a recent
+// extension contact means the browser is running.
+const (
+	signInAction           = "sign in to the Claude Console"
+	updateAction           = "open your browser to update"
+	consoleAction          = "open the Claude Console"
+	extensionContactWindow = 3 * time.Minute
+)
 
 // CreditGrant is one tranche of a pool, as observed.
 type CreditGrant struct {
@@ -227,16 +237,38 @@ func (p UsageCreditPool) freshness(now time.Time) string {
 		return "checked " + shortDate(p.ObservedAt, now)
 	}
 	if p.SignedOut {
-		return p.Action
+		return p.Action(now)
 	}
 	if p.IsLive(now) {
 		return ""
 	}
 	stale := "not updated since " + p.ObservedAt.Local().Format("15:04")
-	if p.Action != "" {
-		return stale + " · " + p.Action
+	if action := p.Action(now); action != "" {
+		return stale + " · " + action
 	}
 	return stale
+}
+
+// Action is the step that clears this pool's warning at now, or "" when it
+// needs none. It is chosen when the pool is drawn, because a reading that was
+// live at fetch time can be stale by then.
+func (p UsageCreditPool) Action(now time.Time) string {
+	if p.ObservationSource != "extension" {
+		if !p.ExpiredSinceCheck.IsZero() {
+			return consoleAction
+		}
+		return ""
+	}
+	switch {
+	case p.SignedOut:
+		return signInAction
+	case p.IsLive(now):
+		return ""
+	case !p.ExtensionContactAt.IsZero() && now.Sub(p.ExtensionContactAt) <= extensionContactWindow:
+		return signInAction
+	default:
+		return updateAction
+	}
 }
 
 // expiryTime shows the local date and time. Consoles often show expiry as a
@@ -257,8 +289,8 @@ func (p UsageCreditPool) expiredLine(now time.Time) string {
 		}
 		return line
 	}
-	if p.Action != "" {
-		return line + " · " + p.Action
+	if action := p.Action(now); action != "" {
+		return line + " · " + action
 	}
 	return line
 }
@@ -268,10 +300,11 @@ func (p UsageCreditPool) MarshalJSON() ([]byte, error) {
 	type pool UsageCreditPool
 	out := struct {
 		pool
-		ExpiresAt         *time.Time `json:"expires_at,omitempty"`
-		RunsOutAt         *time.Time `json:"runs_out_at,omitempty"`
-		NextCreditAt      *time.Time `json:"next_credit_at,omitempty"`
-		ExpiredSinceCheck *time.Time `json:"expired_since_check,omitempty"`
+		ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+		RunsOutAt          *time.Time `json:"runs_out_at,omitempty"`
+		NextCreditAt       *time.Time `json:"next_credit_at,omitempty"`
+		ExtensionContactAt *time.Time `json:"extension_contact_at,omitempty"`
+		ExpiredSinceCheck  *time.Time `json:"expired_since_check,omitempty"`
 	}{pool: pool(p)}
 	if !p.ExpiredSinceCheck.IsZero() {
 		out.ExpiredSinceCheck = &p.ExpiredSinceCheck
@@ -284,6 +317,9 @@ func (p UsageCreditPool) MarshalJSON() ([]byte, error) {
 	}
 	if !p.NextCreditAt.IsZero() {
 		out.NextCreditAt = &p.NextCreditAt
+	}
+	if !p.ExtensionContactAt.IsZero() {
+		out.ExtensionContactAt = &p.ExtensionContactAt
 	}
 	return json.Marshal(out)
 }
