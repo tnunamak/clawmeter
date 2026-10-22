@@ -33,6 +33,9 @@ type fakeProvider struct {
 	configured bool
 	// unbound marks a source whose revision does not identify its login.
 	unbound bool
+	// onRevision runs at each SourceRevision call, to change the source
+	// while a read is in progress.
+	onRevision func()
 }
 
 func (f *fakeProvider) Name() string        { return f.name }
@@ -49,7 +52,12 @@ func (f *fakeProvider) FetchUsage(context.Context) (*provider.UsageData, error) 
 func (f *fakeProvider) SourceID() string       { return f.sourceID }
 func (f *fakeProvider) SourceLabel() string    { return f.label }
 func (f *fakeProvider) ProviderFamily() string { return f.family }
-func (f *fakeProvider) SourceRevision() string { return f.revision }
+func (f *fakeProvider) SourceRevision() string {
+	if f.onRevision != nil {
+		f.onRevision()
+	}
+	return f.revision
+}
 func (f *fakeProvider) AccountBound() bool     { return !f.unbound }
 
 func claudeSource(sourceID string) *fakeProvider {
@@ -909,6 +917,21 @@ func TestBindingLostWhileRunningMakesAReadingUnavailable(t *testing.T) {
 	source.unbound = true
 	if env := callAPI(t, h, read); env.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("unbound status_code = %d, want 503", env.StatusCode)
+	}
+}
+
+// The login moves out of the file between the hub's first revision read and
+// its binding check; the store-only revision stays the same throughout.
+func TestBindingLostDuringAReadMakesItUnavailable(t *testing.T) {
+	isolatedCacheHome(t)
+	source := claudeSource("work")
+	h := newHandler(t, []provider.Provider{source}, testMaxAge)
+	index := indexFor(t, h, "claude:work")
+	writeCache(t, "claude:work", freshClaudeReading("work", time.Now()), source.revision)
+	source.onRevision = func() { source.unbound = true }
+	env := callAPI(t, h, apiCallBody{AuthIndex: index, Method: http.MethodGet, URL: claudeUsageURL})
+	if env.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status_code = %d, want 503", env.StatusCode)
 	}
 }
 

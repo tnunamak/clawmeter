@@ -289,13 +289,15 @@ func authIndex(providerName, sourceID string) string {
 // cachedUsage returns the source's cached reading when it belongs to the
 // source's current credential and is at most maxAge old.
 func cachedUsage(account account, maxAge time.Duration) (*provider.UsageData, bool) {
+	key := provider.SourceKey(account.source)
+	revisionBefore := provider.SourceRevision(account.source)
 	// Binding can change while the hub runs, for example when Codex moves
-	// its login into the keyring, so it is checked on every read.
+	// its login into the keyring. It is checked between the two revision
+	// reads: a change before the check makes the source unbound, and one
+	// after it changes the second revision.
 	if !provider.IsAccountBound(account.source) {
 		return nil, false
 	}
-	key := provider.SourceKey(account.source)
-	revisionBefore := provider.SourceRevision(account.source)
 	entry, err := cache.Read()
 	if err != nil || entry == nil {
 		return nil, false
