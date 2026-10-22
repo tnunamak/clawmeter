@@ -142,3 +142,12 @@ func TestExpiredCreditsNameTheConsoleOnlyWhenThereIsAnAction(t *testing.T) {
 		t.Fatalf("stale extension expiry = %q", got)
 	}
 }
+
+func TestAnOldCreditReadingNamesItsDay(t *testing.T) {
+	observed := time.Date(2026, time.October, 19, 22, 23, 0, 0, time.Local)
+	now := time.Date(2026, time.October, 22, 14, 0, 0, 0, time.Local)
+	pool := UsageCreditPool{Name: "Org", Currency: "USD", Balance: 100, ObservationSource: "extension", ObservedAt: observed}
+	if got := pool.TrayLine(now); !strings.Contains(got, "not updated since Oct 19 ·") {
+		t.Fatalf("TrayLine = %q; want the day of an old reading", got)
+	}
+}
