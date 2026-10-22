@@ -394,7 +394,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		s.mu.Unlock()
 
-		windowExhaustion.observeFetched(result.Results, skipped, time.Now(), 2*config.PollInterval(pollIntervalSeconds))
+		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
 		_ = cache.Write(result)
 
 		now := time.Now()
@@ -1807,7 +1807,7 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 		return appendResetCreditTooltip(display, data)
 	}
 	title := iconTooltipTitle(display, window)
-	tooltip := compactIconTooltip(title, window, proj, windowExhaustion.ranOutAt(name, window))
+	tooltip := compactIconTooltip(title, window, proj, windowExhaustion.ranOutAt(name, window, time.Now()))
 	return appendResetCreditTooltip(tooltip, data)
 }
 
@@ -1941,7 +1941,7 @@ func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*prov
 		accountRows := meter.Rows(a.windows, a.projections)
 		for i := range accountRows {
 			if accountRows[i].RunsOut == "now" {
-				accountRows[i].RanOutAt = windowExhaustion.ranOutAt(name, a.windows[i])
+				accountRows[i].RanOutAt = windowExhaustion.ranOutAt(name, a.windows[i], time.Now())
 			}
 		}
 		byAccount[name] = accountRows

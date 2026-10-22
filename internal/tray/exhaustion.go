@@ -3,6 +3,8 @@
 package tray
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"os"
@@ -23,13 +25,21 @@ const (
 	exhaustionResetTolerance = 2 * time.Minute
 	// exhaustionRetention keeps a finished reset period in the file for a day.
 	exhaustionRetention = 24 * time.Hour
+	// exhaustionDigits is how many hex digits of a hash identify an account.
+	exhaustionDigits = 16
 )
 
 // exhaustionRecord is what the tray saw of one window in one reset period.
+// Every time in it is the tray's own clock, never a provider's timestamp.
 type exhaustionRecord struct {
+	// Account is the login the readings came from, as an opaque digest. A
+	// reading from another account starts a new record.
+	Account string `json:"account"`
 	// ResetsAt is the first reset seen for the period. Later readings are
 	// compared with it, so jitter cannot drift the period along.
 	ResetsAt time.Time `json:"resets_at"`
+	// LastSeen is the latest reading. A reading not after it is ignored.
+	LastSeen time.Time `json:"last_seen"`
 	// LastBelow is the latest reading under 100%.
 	LastBelow time.Time `json:"last_below"`
 	// FirstFull is the first reading at 100% since LastBelow.
@@ -38,8 +48,9 @@ type exhaustionRecord struct {
 
 // exhaustionLog says when a quota window ran out, but only when the tray saw
 // the change: a reading under 100% followed by one at 100%, with the two
-// readings close enough together. A window first seen full, or with readings
-// far apart (the machine slept, or the tray was off), has no time.
+// readings no more than maxGap apart, on one account, in one reset period. A
+// window first seen full, or with readings far apart (the machine slept, or
+// the tray was off), has no time.
 type exhaustionLog struct {
 	Windows map[string]exhaustionRecord `json:"windows"`
 }
@@ -56,10 +67,10 @@ func sameReset(a, b time.Time) bool {
 	return gap <= exhaustionResetTolerance
 }
 
-// observe records one reading of a window taken at the given time. A window
-// without a reset is not tracked.
-func (l *exhaustionLog) observe(source string, w provider.UsageWindow, at time.Time) {
-	if w.ResetsAt.IsZero() {
+// observe records one reading of a window taken at the given time. A source
+// with no account, or a window with no reset, is not tracked.
+func (l *exhaustionLog) observe(source, account string, w provider.UsageWindow, at time.Time) {
+	if account == "" || w.ResetsAt.IsZero() {
 		return
 	}
 	if l.Windows == nil {
@@ -67,9 +78,13 @@ func (l *exhaustionLog) observe(source string, w provider.UsageWindow, at time.T
 	}
 	key := exhaustionKey(source, w.Name)
 	rec, ok := l.Windows[key]
-	if !ok || !sameReset(rec.ResetsAt, w.ResetsAt) {
-		rec = exhaustionRecord{ResetsAt: w.ResetsAt}
+	if ok && !at.After(rec.LastSeen) {
+		return
 	}
+	if !ok || rec.Account != account || !sameReset(rec.ResetsAt, w.ResetsAt) {
+		rec = exhaustionRecord{Account: account, ResetsAt: w.ResetsAt}
+	}
+	rec.LastSeen = at
 	if w.Utilization < 100 {
 		rec.LastBelow = at
 		rec.FirstFull = time.Time{}
@@ -80,14 +95,18 @@ func (l *exhaustionLog) observe(source string, w provider.UsageWindow, at time.T
 }
 
 // ranOutAt returns when the window ran out, if the tray saw it happen within
-// maxGap. The window must be full now, in the same reset period as the
-// record.
-func (l *exhaustionLog) ranOutAt(source string, w provider.UsageWindow, maxGap time.Duration) (time.Time, bool) {
+// maxGap and the transition is not in the future of now. The window must be
+// full now, on the same account and in the same reset period as the record.
+func (l *exhaustionLog) ranOutAt(source, account string, w provider.UsageWindow, maxGap time.Duration, now time.Time) (time.Time, bool) {
 	rec, ok := l.Windows[exhaustionKey(source, w.Name)]
-	if !ok || w.ResetsAt.IsZero() || w.Utilization < 100 || !sameReset(rec.ResetsAt, w.ResetsAt) {
+	if !ok || account == "" || rec.Account != account || w.ResetsAt.IsZero() || w.Utilization < 100 || !sameReset(rec.ResetsAt, w.ResetsAt) {
 		return time.Time{}, false
 	}
-	if rec.LastBelow.IsZero() || rec.FirstFull.IsZero() || rec.FirstFull.Sub(rec.LastBelow) > maxGap {
+	if rec.LastBelow.IsZero() || rec.FirstFull.IsZero() {
+		return time.Time{}, false
+	}
+	gap := rec.FirstFull.Sub(rec.LastBelow)
+	if gap <= 0 || gap > maxGap || rec.FirstFull.After(now) {
 		return time.Time{}, false
 	}
 	return rec.FirstFull, true
@@ -160,43 +179,59 @@ func (l *exhaustionLog) save(path string, now time.Time) error {
 // and tooltip read from it, on different goroutines.
 var windowExhaustion exhaustionTracker
 
-// exhaustionTracker guards an exhaustionLog and the settings it needs. Its
-// zero value is an empty log that is not saved.
+// exhaustionTracker guards an exhaustionLog and the per-run state that says
+// which saved records may be shown. Its zero value is an empty log that is
+// not saved.
 type exhaustionTracker struct {
 	mu     sync.Mutex
 	path   string
 	maxGap time.Duration
-	log    exhaustionLog
+	// identities is each configured source's account as of the latest refresh.
+	identities map[string]string
+	// observed maps a source to the account it was last read as in this run.
+	// A record loaded from disk is shown only after this run has read its
+	// source under the same account.
+	observed map[string]string
+	log      exhaustionLog
 }
 
 // load replaces the log with the one saved at path, and sets maxGap, the
-// longest gap between two readings that still counts as a transition.
+// longest gap between two readings that still counts as a transition. Until
+// the next refresh, no time is shown.
 func (t *exhaustionTracker) load(path string, maxGap time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.path = path
 	t.maxGap = maxGap
+	t.identities = nil
+	t.observed = nil
 	t.log = loadExhaustionLog(path)
 }
 
 // observeFetched records the windows of the results this refresh fetched.
-// Cached fallbacks are skipped: they are not readings taken now, and a
-// reading's own FetchedAt is used when set.
-func (t *exhaustionTracker) observeFetched(results, cached map[string]*provider.UsageData, now time.Time, maxGap time.Duration) {
+// identities maps each source key to its account; a source without one is not
+// tracked. Cached fallbacks are skipped: they are not readings taken now.
+// Every reading is stamped with now, the tray's clock.
+func (t *exhaustionTracker) observeFetched(results, cached map[string]*provider.UsageData, identities map[string]string, now time.Time, maxGap time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.maxGap = maxGap
+	t.identities = identities
+	if t.observed == nil {
+		t.observed = make(map[string]string)
+	}
 	for name, data := range results {
+		account := identities[name]
+		if account == "" {
+			continue
+		}
 		if _, wasCached := cached[name]; wasCached || !freshReading(data) {
 			continue
 		}
-		at := data.FetchedAt
-		if at.IsZero() {
-			at = now
-		}
 		for _, w := range data.Windows {
-			t.log.observe(name, w, at)
+			t.log.observe(name, account, w, now)
 		}
+		t.observed[name] = account
 	}
 	if err := t.log.save(t.path, now); err != nil {
 		log.Printf("save quota exhaustion log: %v", err)
@@ -204,14 +239,51 @@ func (t *exhaustionTracker) observeFetched(results, cached map[string]*provider.
 }
 
 // ranOutAt returns when the window ran out, or zero when the tray cannot say.
-func (t *exhaustionTracker) ranOutAt(source string, w provider.UsageWindow) time.Time {
+// A source answers only if this run has read it under its current account.
+func (t *exhaustionTracker) ranOutAt(source string, w provider.UsageWindow, now time.Time) time.Time {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	at, ok := t.log.ranOutAt(source, w, t.maxGap)
+	account := t.identities[source]
+	if account == "" || t.observed[source] != account {
+		return time.Time{}
+	}
+	at, ok := t.log.ranOutAt(source, account, w, t.maxGap, now)
 	if !ok {
 		return time.Time{}
 	}
 	return at
+}
+
+// sourceIdentities maps each provider's source key to its account identity.
+func sourceIdentities(providers []provider.Provider) map[string]string {
+	identities := make(map[string]string, len(providers))
+	for _, p := range providers {
+		if identity := sourceIdentity(p); identity != "" {
+			identities[provider.SourceKey(p)] = identity
+		}
+	}
+	return identities
+}
+
+// sourceIdentity names the account a source reads. A Claude profile's
+// organization identifies it; other sources use their credential revision.
+// The raw values are hashed, so the saved file holds no account secrets. An
+// empty result means the source cannot be told apart from another account.
+func sourceIdentity(p provider.Provider) string {
+	if org, ok := p.(interface{ ClaudeOrganizationUUID() string }); ok {
+		if uuid := strings.TrimSpace(org.ClaudeOrganizationUUID()); uuid != "" {
+			return "org:" + exhaustionDigest(uuid)
+		}
+	}
+	if revision := provider.SourceRevision(p); revision != "" {
+		return "rev:" + exhaustionDigest(revision)
+	}
+	return ""
+}
+
+func exhaustionDigest(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:exhaustionDigits]
 }
 
 // freshReading reports whether data came from a successful fetch. Stale,
