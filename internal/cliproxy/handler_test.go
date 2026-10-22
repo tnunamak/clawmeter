@@ -539,7 +539,6 @@ func TestCachedReadingFreshness(t *testing.T) {
 		name  string
 		apply func(*provider.UsageData)
 	}{
-		{"stale reading", func(data *provider.UsageData) { data.Stale = true }},
 		{"expired credentials", func(data *provider.UsageData) { data.IsExpired = true }},
 		{"fetch error", func(data *provider.UsageData) { data.Error = "authentication failed" }},
 		{"zero fetch time", func(data *provider.UsageData) { data.FetchedAt = time.Time{} }},
@@ -554,6 +553,26 @@ func TestCachedReadingFreshness(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("reading kept after a failed poll is 200 while young", func(t *testing.T) {
+		h, source := setup(t)
+		data := freshClaudeReading(sourceID, time.Now().Add(-6*time.Minute))
+		data.MarkStale("rate limited")
+		writeCache(t, "claude:"+sourceID, data, source.revision)
+		if env := call(t, h); env.StatusCode != http.StatusOK {
+			t.Fatalf("status_code = %d, want 200; body = %s", env.StatusCode, env.Body)
+		}
+	})
+
+	t.Run("reading kept after failed polls is 503 once older than maxAge", func(t *testing.T) {
+		h, source := setup(t)
+		data := freshClaudeReading(sourceID, time.Now().Add(-testMaxAge-time.Minute))
+		data.MarkStale("rate limited")
+		writeCache(t, "claude:"+sourceID, data, source.revision)
+		if env := call(t, h); env.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("status_code = %d, want 503; body = %s", env.StatusCode, env.Body)
+		}
+	})
 
 	t.Run("reading for another source is 503", func(t *testing.T) {
 		h, source := setup(t)
