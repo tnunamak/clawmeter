@@ -45,20 +45,11 @@ const (
 	tokenPlanConnectTarget = "token-plan"
 )
 
-func pollIntervalForConfig(seconds int) time.Duration {
-	interval := time.Duration(seconds) * time.Second
-	minimum := time.Duration(config.MinimumPollIntervalSeconds) * time.Second
-	if interval < minimum {
-		return minimum
-	}
-	return interval
-}
-
 func resetPollIntervalIfChanged(currentSeconds, nextSeconds int, reset func(time.Duration)) int {
 	if currentSeconds == nextSeconds {
 		return currentSeconds
 	}
-	reset(pollIntervalForConfig(nextSeconds))
+	reset(config.PollInterval(nextSeconds))
 	return nextSeconds
 }
 
@@ -157,7 +148,7 @@ func onReady() {
 		mQuit := systray.AddMenuItem("Quit", "")
 		systray.EndMenuUpdate()
 		go func() {
-			ticker := time.NewTicker(pollIntervalForConfig(0))
+			ticker := time.NewTicker(config.PollInterval(0))
 			defer ticker.Stop()
 			retryTrayConfig(ticker.C, mQuit.ClickedCh, func() (*config.Config, error) {
 				return config.Load(all.SourceValidator())
@@ -303,7 +294,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	// Guard against concurrent refreshes
 	var refreshing sync.Mutex
 
-	ticker := time.NewTicker(pollIntervalForConfig(loaded.Settings.PollInterval))
+	ticker := time.NewTicker(config.PollInterval(loaded.Settings.PollInterval))
 	pollIntervalSeconds := loaded.Settings.PollInterval
 
 	// reloadConfig re-reads config.yaml from disk and propagates changes

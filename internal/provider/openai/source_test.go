@@ -149,6 +149,75 @@ func TestAmbientSourceRevisionFollowsCodexHome(t *testing.T) {
 	}
 }
 
+func TestAccountBoundOnlyWhileCodexKeepsItsLoginInAFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	p := New(config.ProviderConfig{})
+	if !p.AccountBound() {
+		t.Fatal("no config.toml: Codex's default file store is not account bound")
+	}
+	for _, tc := range []struct {
+		config string
+		want   bool
+	}{
+		{"model = \"o4\"\n", true},
+		{"cli_auth_credentials_store = \"file\"\n", true},
+		{"cli_auth_credentials_store = 'file' # default\n", true},
+		{"cli_auth_credentials_store = \"keyring\"\n", false},
+		{"cli_auth_credentials_store=\"auto\"\n", false},
+		{"cli_auth_credentials_store = \"ephemeral\"\n", false},
+		{"\"cli_auth_credentials_store\" = \"keyring\"\n", false},
+		// A profile applies only when selected.
+		{"[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n", true},
+		{"profile = \"work\"\n[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n", false},
+		{"profile = \"work\"\n[profiles.work] # active\ncli_auth_credentials_store = \"keyring\"\n", false},
+		{"profile = \"work\"\n[profiles.\"work\"]\ncli_auth_credentials_store = \"keyring\"\n", false},
+		{"profile = \"work\"\nprofiles.work.cli_auth_credentials_store = \"keyring\"\n", false},
+		{"profile = \"work\"\nprofiles = { work = { cli_auth_credentials_store = \"keyring\" } }\n", false},
+		{"profile = \"home\"\n[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n", true},
+		{"cli_auth_credentials_store = \"keyring\"\nprofile = \"work\"\n[profiles.work]\ncli_auth_credentials_store = \"file\"\n", true},
+		// A config that cannot be parsed, or a value of the wrong type, is
+		// an unknown store.
+		{"cli_auth_credentials_store = \"file\"\n[broken\n", false},
+		{"cli_auth_credentials_store = 1\n", false},
+	} {
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tc.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := p.AccountBound(); got != tc.want {
+			t.Errorf("config %q: AccountBound = %v, want %v", tc.config, got, tc.want)
+		}
+	}
+}
+
+// A reading cached while Codex kept its login in one store must not match a
+// process that finds the login in another, with auth.json unchanged.
+func TestRevisionChangesWithTheLoginStore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	writeOpenAIAuth(t, home, "file-access", "file-account")
+	p := New(config.ProviderConfig{})
+	file := p.SourceRevision()
+	setStore := func(store string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("cli_auth_credentials_store = \""+store+"\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setStore("keyring")
+	keyring := p.SourceRevision()
+	setStore("auto")
+	auto := p.SourceRevision()
+	setStore("file")
+	back := p.SourceRevision()
+	if keyring == file || auto == file || keyring == auto || keyring == "" || auto == "" {
+		t.Fatalf("revisions: file %q, keyring %q, auto %q", file, keyring, auto)
+	}
+	if back == keyring {
+		t.Fatal("returning to the file store kept the keyring revision")
+	}
+}
+
 func TestRegistrationExpandsOpenAISourcesAndKeepsIdentityOnDirectAndResetRoutes(t *testing.T) {
 	one, two := t.TempDir(), t.TempDir()
 	writeOpenAIAuth(t, one, "one-access", "one-account")

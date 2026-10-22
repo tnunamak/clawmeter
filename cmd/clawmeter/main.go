@@ -178,6 +178,8 @@ func run() int {
 		return doctorCmd(os.Args[2:])
 	case "tray":
 		return trayCmd(os.Args[2:])
+	case "hub":
+		return hubCmd(os.Args[2:])
 	case "config":
 		return configCmd(os.Args[2:])
 	case "providers":
@@ -1236,6 +1238,7 @@ Commands:
   setup                     Install or show local integrations
   doctor                    Check provider and integration readiness
   tray                      Run as system tray icon
+  hub                       Serve cached Claude and Codex quotas to T3 Code
   config                    Manage configuration
   update                    Self-update to the latest release
   version                   Show version

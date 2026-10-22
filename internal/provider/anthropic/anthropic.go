@@ -167,15 +167,43 @@ func (p *Provider) SourceLabel() string    { return p.sourceLabel }
 func (p *Provider) IsEnrolledSource() bool { return p.enrolledSource }
 func (p *Provider) SourceRevision() string {
 	if p.pinnedNative {
-		// Pinned Default reads only ~/.claude. A distinct, stable revision keeps
-		// cache entries written by the old ambient route (possibly another
-		// account) from being served as stale fallback under this source.
-		return fmt.Sprintf("%x", sha256.Sum256([]byte("native-pinned\x00"+filepath.Join(homeCredentialsDir(), ".credentials.json"))))
+		// Pinned Default reads the first of a configured token, the macOS
+		// Keychain and ~/.claude. Each route has its own revision, so a
+		// process on one route never accepts a reading written on another,
+		// and none matches the ambient route's (possibly another account).
+		switch {
+		case p.cfg.OAuthToken != "":
+			return "native-pinned-token-" + provider.CredentialSourceRevision("claude-config-token", p.cfg.OAuthToken)
+		case keychainFirst:
+			return "native-pinned-keychain-" + credentialsFileRevision(homeCredentialsDir())
+		default:
+			return "native-pinned-" + credentialsFileRevision(homeCredentialsDir())
+		}
 	}
 	if !p.explicitSource {
 		return ""
 	}
-	path := filepath.Join(p.configDir, ".credentials.json")
+	return credentialsFileRevision(p.configDir)
+}
+
+// AccountBound reports whether SourceRevision identifies the login this
+// source reads: a chosen config directory's file, or pinned Default's
+// configured token or ~/.claude file. A Keychain login cannot be
+// fingerprinted without reading it, and the ambient route has no revision.
+func (p *Provider) AccountBound() bool {
+	if p.explicitSource {
+		return true
+	}
+	return p.pinnedNative && (p.cfg.OAuthToken != "" || !keychainFirst)
+}
+
+// keychainFirst is whether the Keychain is read before ~/.claude.
+var keychainFirst = runtime.GOOS == "darwin"
+
+// credentialsFileRevision fingerprints the credentials file in configDir by
+// its resolved path and metadata, never its contents.
+func credentialsFileRevision(configDir string) string {
+	path := filepath.Join(configDir, ".credentials.json")
 	canonical, err := filepath.Abs(path)
 	if err != nil {
 		return ""

@@ -61,6 +61,17 @@ func FamilyName(p Provider) string {
 // SourceRevision is an optional non-secret identity of the credential source.
 type SourceRevisionCapability interface{ SourceRevision() string }
 
+// AccountBoundCapability marks a source whose SourceRevision changes whenever
+// the login it reads could belong to another account. A reader that only sees
+// cached readings, such as the T3 hub, serves only these sources.
+type AccountBoundCapability interface{ AccountBound() bool }
+
+// IsAccountBound reports whether p declares AccountBoundCapability.
+func IsAccountBound(p Provider) bool {
+	source, ok := p.(AccountBoundCapability)
+	return ok && source.AccountBound()
+}
+
 // CredentialSourceRevision returns a stable, one-way credential fingerprint.
 // API credentials are high-entropy secrets; hashing lets separate Clawmeter
 // processes validate the private (0600) cache without persisting the secret.
