@@ -45,6 +45,16 @@ func cachePath() (string, error) {
 	return filepath.Join(dir, "usage.json"), nil
 }
 
+// Path returns the named file inside the clawmeter cache directory, for
+// small state that belongs beside the usage cache.
+func Path(name string) (string, error) {
+	dir, err := cacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
 // Read loads cached usage data from disk.
 func Read() (*Entry, error) {
 	path, err := cachePath()

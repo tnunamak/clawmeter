@@ -27,7 +27,7 @@ func TestReview039TrayUnknownIsNotSafe(t *testing.T) {
 		ResetsAt: time.Now().Add(299 * time.Minute)}
 	data := &provider.UsageData{Windows: []provider.UsageWindow{w}}
 	proj := windowProjection(w)
-	got := compactIconTooltip("Claude", w, proj)
+	got := compactIconTooltip("Claude", w, proj, time.Time{})
 	meter := iconMeterState(data, "5h")
 	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est. 0%") || meter.RiskPct < 100 {
 		t.Fatalf("exhausted quota presented as safe: tooltip=%q meter=%+v", got, meter)

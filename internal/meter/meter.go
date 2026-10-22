@@ -156,6 +156,9 @@ type Row struct {
 	// RunsOut is the time until the window runs out before its reset,
 	// "now" when it already has, or empty when it lasts to the reset.
 	RunsOut string
+	// RanOutAt is when the window ran out, if a renderer knows it. Only a
+	// row whose RunsOut is "now" can have it. Zero means the time is unknown.
+	RanOutAt time.Time
 }
 
 // HasPace reports whether the bar carries a pace mark.

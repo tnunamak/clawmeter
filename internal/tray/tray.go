@@ -296,6 +296,7 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	ticker := time.NewTicker(config.PollInterval(loaded.Settings.PollInterval))
 	pollIntervalSeconds := loaded.Settings.PollInterval
+	windowExhaustion.load(exhaustionPath(), 2*config.PollInterval(pollIntervalSeconds))
 
 	// reloadConfig re-reads config.yaml from disk and propagates changes
 	// to the registry filter and per-provider menu state. This is what
@@ -393,6 +394,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		s.mu.Unlock()
 
+		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured, result.SourceRevisions), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
 		_ = cache.Write(result)
 
 		now := time.Now()
@@ -1805,7 +1807,7 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 		return appendResetCreditTooltip(display, data)
 	}
 	title := iconTooltipTitle(display, window)
-	tooltip := compactIconTooltip(title, window, proj)
+	tooltip := compactIconTooltip(title, window, proj, windowExhaustion.ranOutAt(name, window, time.Now()))
 	return appendResetCreditTooltip(tooltip, data)
 }
 
@@ -1830,7 +1832,9 @@ func staleTooltipReason(data *provider.UsageData) string {
 	return format.HumanizeError(data.Warning)
 }
 
-func compactIconTooltip(title string, window provider.UsageWindow, proj forecast.Projection) string {
+// compactIconTooltip lines up the title, run-out state, reset, and estimate.
+// ranOutAt is when the tray saw the window run out, or zero if it cannot say.
+func compactIconTooltip(title string, window provider.UsageWindow, proj forecast.Projection, ranOutAt time.Time) string {
 	parts := make([]string, 0, 4)
 	if title != "" {
 		parts = append(parts, title)
@@ -1839,7 +1843,7 @@ func compactIconTooltip(title string, window provider.UsageWindow, proj forecast
 	case proj.Unknown || proj.Stale:
 		parts = append(parts, fmt.Sprintf("Current %.0f%%", window.Utilization))
 	case proj.RunOutNote() != "":
-		parts = append(parts, upperFirst(proj.RunOutNote()))
+		parts = append(parts, upperFirst(ranOutNote(proj.RunOutNote(), ranOutAt, time.Now())))
 	case !proj.WillLastToReset:
 		parts = append(parts, "Out now")
 	default:
@@ -1934,7 +1938,13 @@ func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*prov
 	var shown []meter.Row
 	byAccount := make(map[string][]meter.Row, len(accounts))
 	for name, a := range accounts {
-		byAccount[name] = meter.Rows(a.windows, a.projections)
+		accountRows := meter.Rows(a.windows, a.projections)
+		for i := range accountRows {
+			if accountRows[i].RunsOut == "now" {
+				accountRows[i].RanOutAt = windowExhaustion.ranOutAt(name, a.windows[i], time.Now())
+			}
+		}
+		byAccount[name] = accountRows
 		shown = append(shown, byAccount[name]...)
 	}
 	widths := trayColumnWidths(shown)
@@ -1999,7 +2009,7 @@ func trayRowText(row meter.Row, widths trayWidths) string {
 	switch row.RunsOut {
 	case "":
 	case "now":
-		columns = append(columns, "out now")
+		columns = append(columns, ranOutLabel(row.RanOutAt, time.Now()))
 	default:
 		columns = append(columns, "runs out in "+row.RunsOut)
 	}
