@@ -58,7 +58,7 @@ func (f *fakeProvider) SourceRevision() string {
 	}
 	return f.revision
 }
-func (f *fakeProvider) AccountBound() bool     { return !f.unbound }
+func (f *fakeProvider) AccountBound() bool { return !f.unbound }
 
 func claudeSource(sourceID string) *fakeProvider {
 	return &fakeProvider{
