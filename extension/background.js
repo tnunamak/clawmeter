@@ -192,6 +192,9 @@ function poll() {
   return running;
 }
 
+// Renewal dates persist across checks, so the link state is read hourly, not every minute.
+const resetLinkStates = new Map();
+
 async function check() {
   let cache;
   let sessions;
@@ -210,7 +213,7 @@ async function check() {
   // An organization seen in one session is not read again in another.
   const resetOrganizations = new Set();
   const resets = await readEverySession("https://claude.ai/*", getJSON,
-    read => readResets(read, Date.now, payload => send("/v1/resets", payload), resetOrganizations));
+    read => readResets(read, Date.now, payload => send("/v1/resets", payload), resetOrganizations, resetLinkStates));
   const resetsRead = resets.results.filter(result => result.status === "ok");
   // Resets and credits are independent; a failure in one never blocks the other.
   if (resetsRead.length) {

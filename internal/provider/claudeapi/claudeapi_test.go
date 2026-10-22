@@ -91,3 +91,22 @@ func TestSignOutIsOrderedPerPool(t *testing.T) {
 		t.Fatalf("B not live: %+v", newer)
 	}
 }
+
+func TestLinkedSourceCarriesItsNextCreditDate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("HOME", dir)
+	next := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Second)
+	if err := claudeweb.WriteSummary(claudeweb.GrantSummary{ObservedAt: time.Now(), ResetCreditsTarget: "claude:odl", MatchSalt: "s", MatchHash: "h", NextCreditAt: &next}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextCreditAt("claude:odl"); !got.Equal(next) {
+		t.Fatalf("nextCreditAt = %v, want %v", got, next)
+	}
+	if got := nextCreditAt("claude:spare"); !got.IsZero() {
+		t.Fatalf("source without a reading = %v", got)
+	}
+	if got := nextCreditAt(""); !got.IsZero() {
+		t.Fatalf("unlinked pool = %v", got)
+	}
+}

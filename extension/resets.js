@@ -1,13 +1,17 @@
 "use strict";
 
 const claudeOrigin = "https://claude.ai";
+// The Console's plan renewal date changes monthly, so each organization's
+// link state is read at most once an hour.
+const linkStateTTL = 60 * 60 * 1000;
 
 // readResets reads promotional reset grants for each claude.ai organization in
 // the signed-in session and posts one payload per organization. The receiver
 // keeps only organizations that match a Claude source set up in Clawmeter.
 // A caller that reads several sessions passes one set of organizations
 // already read; one that failed in a session can still be read by the next.
-async function readResets(getJSON, now, post = async () => {}, read = new Set()) {
+// links caches each organization's renewal lookup across polls.
+async function readResets(getJSON, now, post = async () => {}, read = new Set(), links = new Map()) {
   const clock = typeof now === "function" ? now : () => now;
   const time = new Date(clock()).getTime();
   if (!Number.isFinite(time)) throw new Error("Invalid poll time");
@@ -21,6 +25,20 @@ async function readResets(getJSON, now, post = async () => {}, read = new Set())
       throw error;
     }
     return result.body;
+  };
+  // The renewal date is extra: any failure or unexpected answer means none.
+  const renewalOf = async (id, at) => {
+    const cached = links.get(id);
+    if (cached && at - cached.at < linkStateTTL) return cached.next;
+    let next = null;
+    try {
+      const state = await request(`/api/quirky-lollipop/link-state?organization_uuid=${encodeURIComponent(id)}`);
+      if (state?.status === "linked" && timestamp(state.next_grant_at)) next = new Date(Date.parse(state.next_grant_at)).toISOString();
+    } catch {
+      next = null;
+    }
+    links.set(id, { at, next });
+    return next;
   };
   let data;
   try {
@@ -65,6 +83,8 @@ async function readResets(getJSON, now, post = async () => {}, read = new Set())
       // Date each organization by its own read; a slow poll must not age later ones.
       const observed = clock();
       const payload = { observed_at: new Date(observed).toISOString(), organization: id, grants };
+      const nextCredit = await renewalOf(id, observed);
+      if (nextCredit) payload.next_credit_at = nextCredit;
       const delivery = await post(payload);
       payloads.push(payload);
       read.add(id);

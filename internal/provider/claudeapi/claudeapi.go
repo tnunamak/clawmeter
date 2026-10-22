@@ -54,7 +54,14 @@ func (p *Provider) sourceRevision(pools []claudeweb.APICreditPool, now time.Time
 				expired++
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s:%s:%t:%t", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), p.linkedSource(pool), pool.Source, poolLive(pool, now, state), poolSignedOut(pool, state)))
+		linked := p.linkedSource(pool)
+		next := ""
+		if linked != "" {
+			if at, ok := claudeweb.NextCreditAt(linked); ok {
+				next = at.UTC().Format(time.RFC3339Nano)
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s:%s:%t:%t:%s", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), linked, pool.Source, poolLive(pool, now, state), poolSignedOut(pool, state), next))
 	}
 	return "claude-api-credits-v1:" + strings.Join(parts, ",")
 }
@@ -87,6 +94,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	for _, pool := range saved {
 		presented := Pool(pool, now)
 		presented.Source = p.linkedSource(pool)
+		presented.NextCreditAt = nextCreditAt(presented.Source)
 		data.CreditPools = append(data.CreditPools, presented)
 		if pool.ObservedAt.After(data.FetchedAt) {
 			data.FetchedAt = pool.ObservedAt
@@ -107,6 +115,16 @@ func (p *Provider) linkedSource(pool claudeweb.APICreditPool) string {
 		}
 	}
 	return ""
+}
+
+// nextCreditAt is when the linked Claude plan next grants its monthly credit,
+// or zero when the source is unlinked or no reading says so.
+func nextCreditAt(source string) time.Time {
+	if source == "" {
+		return time.Time{}
+	}
+	next, _ := claudeweb.NextCreditAt(source)
+	return next
 }
 
 // Pool turns a saved Console snapshot into a credit pool as of now.

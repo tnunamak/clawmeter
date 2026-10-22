@@ -1,6 +1,8 @@
 package claudeweb
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,5 +43,22 @@ func TestGrantInventoryRejectsUnknownPauseOrSchedule(t *testing.T) {
 	paused := false
 	if _, err := activeGrantExpiries([]grantPayload{{ResetsLeft: new(1), EndsAt: now.Add(time.Hour).Format(time.RFC3339Nano), Paused: &paused}}, now); err == nil {
 		t.Fatal("missing start time accepted")
+	}
+}
+
+func TestGrantSummaryNextCreditDateRoundTrips(t *testing.T) {
+	next := time.Date(2026, 10, 24, 5, 50, 6, 0, time.UTC)
+	observed := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	data, err := json.Marshal(GrantSummary{ObservedAt: observed, ResetCreditsTarget: "claude:odl", NextCreditAt: &next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored GrantSummary
+	if err := json.Unmarshal(data, &restored); err != nil || restored.NextCreditAt == nil || !restored.NextCreditAt.Equal(next) {
+		t.Fatalf("round trip = %+v, %v; json %s", restored, err, data)
+	}
+	data, err = json.Marshal(GrantSummary{ObservedAt: observed, ResetCreditsTarget: "claude:odl"})
+	if err != nil || strings.Contains(string(data), "next_credit_at") {
+		t.Fatalf("unknown next credit serialized: %s, %v", data, err)
 	}
 }

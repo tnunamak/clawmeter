@@ -7,6 +7,45 @@ import (
 	"time"
 )
 
+func TestNextCreditShowsAfterTheRunOutTime(t *testing.T) {
+	utc(t)
+	observed := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	next := time.Date(2026, 10, 24, 5, 50, 0, 0, time.UTC)
+	pool := UsageCreditPool{Name: "Org", Currency: "USD", Balance: 5753, MonthlyCredit: 20000, NextCreditAt: next, ObservedAt: observed}
+	for _, tc := range []struct {
+		name string
+		pool UsageCreditPool
+		now  time.Time
+		want string
+	}{
+		{"with amount", pool, observed, "$57.53 left · next $200.00 credit Oct 24 05:50 · checked 12:00"},
+		{"without amount", func() UsageCreditPool { p := pool; p.MonthlyCredit = 0; return p }(), observed, "$57.53 left · next credit Oct 24 05:50 · checked 12:00"},
+		{"zero", func() UsageCreditPool { p := pool; p.NextCreditAt = time.Time{}; return p }(), observed, "$57.53 left · checked 12:00"},
+		{"passed", pool, next.Add(time.Second), "$57.53 left · checked Oct 22"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.pool.TrayLine(tc.now); got != tc.want {
+				t.Fatalf("TrayLine() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := pool.Summary(observed); !strings.HasPrefix(got, "$57.53 left · ") || !strings.Contains(got, " · next $200.00 credit Oct 24 05:50 · checked 12:00") {
+		t.Fatalf("Summary() = %q", got)
+	}
+	data, err := json.Marshal(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored UsageCreditPool
+	if err := json.Unmarshal(data, &restored); err != nil || !restored.NextCreditAt.Equal(next) || restored.TrayLine(observed) != pool.TrayLine(observed) {
+		t.Fatalf("round trip = %+v, %v; json %s", restored, err, data)
+	}
+	data, err = json.Marshal(UsageCreditPool{Name: "Org", Currency: "USD", Balance: 1})
+	if err != nil || strings.Contains(string(data), "next_credit_at") {
+		t.Fatalf("zero next credit serialized: %s, %v", data, err)
+	}
+}
+
 func TestLinkedCreditPoolsMoveUnderTheirClaudeSource(t *testing.T) {
 	linked := UsageCreditPool{Name: "Family's Individual Organization", Organization: "Family's Individual Organization", Source: "claude", Balance: 19988}
 	gone := UsageCreditPool{Name: "Lost", Organization: "Lost", Source: "claude:missing", Balance: 5}

@@ -44,6 +44,9 @@ type UsageCreditPool struct {
 	ProjectedSpend  int64     `json:"projected_spend_before_expiry,omitempty"`
 	ProjectedUnused int64     `json:"projected_unused_at_expiry,omitempty"`
 	RunsOutAt       time.Time `json:"runs_out_at,omitempty"`
+	// NextCreditAt is when the plan funding this pool next grants its monthly
+	// credit. It is set only for a linked pool.
+	NextCreditAt time.Time `json:"next_credit_at,omitempty"`
 	// ExpiredSinceCheck is set when credits seen in the snapshot have since
 	// expired. The snapshot no longer describes the pool, so it carries no
 	// expiry or projection until the next check.
@@ -158,6 +161,9 @@ func (p UsageCreditPool) Summary(now time.Time) string {
 	default:
 		parts = append(parts, "on pace to spend "+formatMinorUnits(int(p.ProjectedSpend), p.Currency)+" more before it expires "+expiryTime(p.ExpiresAt, now))
 	}
+	if next := p.nextCreditText(now); next != "" {
+		parts = append(parts, next)
+	}
 	if freshness := p.freshness(now); freshness != "" {
 		parts = append(parts, freshness)
 	}
@@ -177,6 +183,9 @@ func (p UsageCreditPool) TrayLine(now time.Time) string {
 	case !p.ExpiresAt.IsZero():
 		parts = append(parts, formatMinorUnits(int(p.ProjectedUnused), p.Currency)+" expires "+expiryTime(p.ExpiresAt, now))
 	}
+	if next := p.nextCreditText(now); next != "" {
+		parts = append(parts, next)
+	}
 	if freshness := p.freshness(now); freshness != "" {
 		parts = append(parts, freshness)
 	}
@@ -190,6 +199,19 @@ func (p UsageCreditPool) balanceText() string {
 		return formatMinorUnits(int(-p.Balance), p.Currency) + " unpaid · add funds"
 	}
 	return formatMinorUnits(int(p.Balance), p.Currency) + " left"
+}
+
+// nextCreditText is "next $200.00 credit Oct 24 00:50", or "next credit Oct 24
+// 00:50" when the monthly amount is unknown. It is empty once the date has passed.
+func (p UsageCreditPool) nextCreditText(now time.Time) string {
+	if p.NextCreditAt.IsZero() || !p.NextCreditAt.After(now) {
+		return ""
+	}
+	label := "next credit"
+	if p.MonthlyCredit > 0 {
+		label = "next " + formatMinorUnits(int(p.MonthlyCredit), p.Currency) + " credit"
+	}
+	return label + " " + expiryTime(p.NextCreditAt, now)
 }
 
 // IsLive also checks age when a cached pool is rendered.
@@ -238,6 +260,7 @@ func (p UsageCreditPool) MarshalJSON() ([]byte, error) {
 		pool
 		ExpiresAt         *time.Time `json:"expires_at,omitempty"`
 		RunsOutAt         *time.Time `json:"runs_out_at,omitempty"`
+		NextCreditAt      *time.Time `json:"next_credit_at,omitempty"`
 		ExpiredSinceCheck *time.Time `json:"expired_since_check,omitempty"`
 	}{pool: pool(p)}
 	if !p.ExpiredSinceCheck.IsZero() {
@@ -248,6 +271,9 @@ func (p UsageCreditPool) MarshalJSON() ([]byte, error) {
 	}
 	if !p.RunsOutAt.IsZero() {
 		out.RunsOutAt = &p.RunsOutAt
+	}
+	if !p.NextCreditAt.IsZero() {
+		out.NextCreditAt = &p.NextCreditAt
 	}
 	return json.Marshal(out)
 }
