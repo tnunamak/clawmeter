@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -69,9 +70,9 @@ func sameReset(a, b time.Time) bool {
 
 // observe records one reading of a window taken at the given time. A source
 // with no account, or a window with no reset, is not tracked.
-func (l *exhaustionLog) observe(source, account string, w provider.UsageWindow, at time.Time) {
+func (l *exhaustionLog) observe(source, account string, w provider.UsageWindow, at time.Time, maxGap time.Duration) (recovered bool) {
 	if account == "" || w.ResetsAt.IsZero() {
-		return
+		return false
 	}
 	if l.Windows == nil {
 		l.Windows = make(map[string]exhaustionRecord)
@@ -79,19 +80,26 @@ func (l *exhaustionLog) observe(source, account string, w provider.UsageWindow, 
 	key := exhaustionKey(source, w.Name)
 	rec, ok := l.Windows[key]
 	if ok && !at.After(rec.LastSeen) {
-		return
+		return false
 	}
+	// A window recovers when the previous reading of the same account saw it
+	// full, recently enough that the two readings belong to one blocked
+	// episode. A reading after a long gap, such as the first after a restart
+	// or a night asleep, only sets a new baseline.
+	wasOut := ok && rec.Account == account && !rec.FirstFull.IsZero() && at.Sub(rec.LastSeen) <= maxGap
 	if !ok || rec.Account != account || !sameReset(rec.ResetsAt, w.ResetsAt) {
 		rec = exhaustionRecord{Account: account, ResetsAt: w.ResetsAt}
 	}
 	rec.LastSeen = at
 	if w.Utilization < 100 {
+		recovered = wasOut
 		rec.LastBelow = at
 		rec.FirstFull = time.Time{}
 	} else if rec.FirstFull.IsZero() {
 		rec.FirstFull = at
 	}
 	l.Windows[key] = rec
+	return recovered
 }
 
 // ranOutAt returns when the window ran out, if the tray saw it happen within
@@ -212,7 +220,7 @@ func (t *exhaustionTracker) load(path string, maxGap time.Duration) {
 // identities maps each source key to its account; a source without one is not
 // tracked. Cached fallbacks are skipped: they are not readings taken now.
 // Every reading is stamped with now, the tray's clock.
-func (t *exhaustionTracker) observeFetched(results, cached map[string]*provider.UsageData, identities map[string]string, now time.Time, maxGap time.Duration) {
+func (t *exhaustionTracker) observeFetched(results, cached map[string]*provider.UsageData, identities map[string]string, now time.Time, maxGap time.Duration) (available []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.maxGap = maxGap
@@ -228,14 +236,27 @@ func (t *exhaustionTracker) observeFetched(results, cached map[string]*provider.
 		if _, wasCached := cached[name]; wasCached || !freshReading(data) {
 			continue
 		}
+		recovered, stillOut := false, false
 		for _, w := range data.Windows {
-			t.log.observe(name, account, w, now)
+			if t.log.observe(name, account, w, now, maxGap) {
+				recovered = true
+			}
+			if w.Utilization >= 100 {
+				stillOut = true
+			}
+		}
+		// Only a whole account counts: with another window still out, the
+		// account cannot work yet.
+		if recovered && !stillOut {
+			available = append(available, name)
 		}
 		t.observed[name] = account
 	}
 	if err := t.log.save(t.path, now); err != nil {
 		log.Printf("save quota exhaustion log: %v", err)
 	}
+	sort.Strings(available)
+	return available
 }
 
 // ranOutAt returns when the window ran out, or zero when the tray cannot say.

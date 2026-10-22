@@ -585,13 +585,19 @@ type ResetAnnouncement struct {
 }
 
 // Summary is the one-line fact shared by the CLI and tray, for example
-// "Reset announced for ~10:00 · codex-resets.com". The date comes first when
-// the time is not today. It is empty for a nil announcement.
+// "Reset announced for ~10:00 · codex-resets.com", with "· unconfirmed"
+// before the feed once the time has passed. The date comes first when the
+// time is not today. It is empty for a nil announcement.
 func (a *ResetAnnouncement) Summary(now time.Time) string {
 	if a == nil {
 		return ""
 	}
-	return "Reset announced for ~" + announcementTime(a.ScheduledFor, now) + " · " + a.Feed
+	text := "Reset announced for ~" + announcementTime(a.ScheduledFor, now)
+	// Once the time has passed, the feed still cannot say the reset arrived.
+	if !a.ScheduledFor.After(now) {
+		text += " · unconfirmed"
+	}
+	return text + " · " + a.Feed
 }
 
 // AgentField is the --agent form, for example

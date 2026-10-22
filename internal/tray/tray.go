@@ -398,7 +398,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		s.mu.Unlock()
 
-		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured, result.SourceRevisions), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
+		available := windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured, result.SourceRevisions), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
 		_ = cache.Write(result)
 
 		// The feed is read after the usage cache is written: announcements
@@ -406,6 +406,11 @@ func onReadyWithConfig(loaded *config.Config) {
 		s.mu.Lock()
 		currentCfg := cfg
 		s.mu.Unlock()
+		if currentCfg.Settings.NotifyQuotaAvailable && len(available) > 0 {
+			if title, body := quotaAvailableNotice(available, result.Results, providerMenus, time.Now()); title != "" {
+				go notify(title, body, "low")
+			}
+		}
 		feed := refreshResetAnnouncements(currentCfg, configured)
 		s.mu.Lock()
 		s.feedReading = feed

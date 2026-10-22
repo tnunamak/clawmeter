@@ -444,6 +444,7 @@ func configShowCmd(args []string) int {
 	fmt.Printf("  Poll interval: %d seconds\n", cfg.Settings.PollInterval)
 	fmt.Printf("  Check for updates: %t\n", cfg.ShouldCheckForUpdates())
 	fmt.Printf("  Codex reset announcements: %t\n", cfg.Settings.CodexResetAnnouncements)
+	fmt.Printf("  Notify when quota is available again: %t\n", cfg.Settings.NotifyQuotaAvailable)
 	fmt.Printf("  Warning threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Warning)
 	fmt.Printf("  Critical threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Critical)
 
@@ -458,6 +459,7 @@ func configSetCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "  critical_threshold <percent>")
 		fmt.Fprintln(os.Stderr, "  check_for_updates <true|false>")
 		fmt.Fprintln(os.Stderr, "  codex_reset_announcements <true|false>")
+		fmt.Fprintln(os.Stderr, "  notify_quota_available <true|false>")
 		return 1
 	}
 
@@ -524,6 +526,13 @@ func configSetCmd(args []string) int {
 			return 1
 		}
 		cfg.Settings.CodexResetAnnouncements = enabled
+	case "notify_quota_available":
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
+			return 1
+		}
+		cfg.Settings.NotifyQuotaAvailable = enabled
 	default:
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown config key %q\n", key)
 		return 1
@@ -1307,6 +1316,9 @@ Settable keys:
   codex_reset_announcements <bool>
                             Show announced Codex resets from codex-resets.com,
                             an unofficial third-party feed (default: false)
+  notify_quota_available <bool>
+                            Notify when an account the tray saw run out has
+                            quota again (default: false)
 
 Examples:
   clawmeter config show

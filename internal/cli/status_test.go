@@ -391,7 +391,9 @@ func TestFormatPlainIncludesResetCredits(t *testing.T) {
 }
 
 func TestClaudeResetSnapshotRemainsExplicitWhenUsageIsStale(t *testing.T) {
-	observedAt := time.Date(2026, time.September, 24, 17, 28, 0, 0, time.FixedZone("CDT", -5*60*60))
+	// Relative to now: a fixed date made the credit expire, and the test
+	// fail, once the clock passed it.
+	observedAt := time.Now().Add(-10 * time.Minute)
 	data := &provider.UsageData{
 		Provider: "claude", SourceID: "odl", SourceLabel: "ODL", Stale: true,
 		FetchedAt: observedAt.Add(-time.Hour),
