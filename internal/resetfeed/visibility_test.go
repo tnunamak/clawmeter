@@ -218,3 +218,35 @@ func TestAnnounceAllKeepsNilNil(t *testing.T) {
 		t.Fatalf("AnnounceAll(nil) = %v, want nil", got)
 	}
 }
+
+// After the announced time, a window that is only projected to run out is not
+// blocked by anything the announcement could change. This is what a Codex
+// account looks like once a global reset has arrived: low use, a new window,
+// a fast pace.
+func TestAPassedAnnouncementIsHiddenForAWindowWithRoom(t *testing.T) {
+	now := time.Now()
+	data := codexReading(now, window("7d", 60, 5*24*time.Hour, now))
+	r := announcementAt(now, -4*time.Hour, now)
+	if got := Visible(data, r, now); got != nil {
+		t.Fatalf("passed announcement, window with room: got %+v, want nil", got)
+	}
+}
+
+func TestAPassedAnnouncementIsShownWhileTheWindowIsStillOut(t *testing.T) {
+	now := time.Now()
+	data := codexReading(now, window("7d", 100, 3*24*time.Hour, now))
+	r := announcementAt(now, -time.Hour, now)
+	got := Visible(data, r, now)
+	if got == nil || !reflect.DeepEqual(got.Windows, []string{"7d"}) {
+		t.Fatalf("passed announcement, window still out: got %+v, want it for 7d", got)
+	}
+}
+
+func TestAReadingFromBeforeAPassedAnnouncementDoesNotShowIt(t *testing.T) {
+	now := time.Now()
+	data := codexReading(now.Add(-2*time.Hour), window("7d", 100, 3*24*time.Hour, now))
+	r := announcementAt(now, -time.Hour, now)
+	if got := Visible(data, r, now); got != nil {
+		t.Fatalf("reading from before the announced time: got %+v, want nil", got)
+	}
+}

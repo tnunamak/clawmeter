@@ -477,3 +477,10 @@ func TestNoneAnnouncementRevalidatesWithETag(t *testing.T) {
 		t.Fatalf("304 on a none reading: %+v", reading)
 	}
 }
+
+func TestALongRetryAfterIsCut(t *testing.T) {
+	now := time.Now()
+	if got := retryAfter("999999999", now); got != LastGoodLimit {
+		t.Fatalf("retryAfter = %v, want %v", got, LastGoodLimit)
+	}
+}

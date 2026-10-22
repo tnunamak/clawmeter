@@ -205,21 +205,22 @@ func unusable(st stored, now time.Time) stored {
 }
 
 // retryAfter reads a Retry-After header in seconds or as an HTTP date. A
-// missing, zero, or past value falls back to the default backoff.
+// missing, zero, or past value falls back to the default backoff, and a wait
+// longer than LastGoodLimit is cut to it, so a bad header cannot switch the
+// feed off for good.
 func retryAfter(header string, now time.Time) time.Duration {
 	header = strings.TrimSpace(header)
+	wait := failureBackoff
 	if secs, err := strconv.Atoi(header); err == nil {
 		if secs > 0 {
-			return time.Duration(secs) * time.Second
+			wait = time.Duration(secs) * time.Second
 		}
-		return failureBackoff
-	}
-	if at, err := http.ParseTime(header); err == nil {
+	} else if at, err := http.ParseTime(header); err == nil {
 		if d := at.Sub(now); d > 0 {
-			return d
+			wait = d
 		}
 	}
-	return failureBackoff
+	return min(wait, LastGoodLimit)
 }
 
 func (st stored) reading() Reading {

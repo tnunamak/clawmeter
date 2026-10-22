@@ -35,7 +35,7 @@ func Visible(data *provider.UsageData, r Reading, now time.Time) *provider.Reset
 
 	var windows []string
 	for _, window := range data.PresentationWindows() {
-		if bearsOn(window, a.ScheduledFor, now) {
+		if bearsOn(window, a.ScheduledFor, data.FetchedAt, now) {
 			windows = append(windows, window.Name)
 		}
 	}
@@ -56,13 +56,20 @@ func Visible(data *provider.UsageData, r Reading, now time.Time) *provider.Reset
 	}
 }
 
-// bearsOn reports whether a window is blocked at the announced time: it is out
-// now, or the current rate runs it out before its own reset, and that reset
-// is later than the announcement. A window whose reset has passed carries a
-// stale reading and does not qualify.
-func bearsOn(window provider.UsageWindow, scheduledFor, now time.Time) bool {
+// bearsOn reports whether the announcement bears on a window. Before the
+// announced time, the window must be out now or run out before its own reset
+// at the current rate. Once the time has passed, only a window that is still
+// out counts, in a reading taken after that time: an announced reset that has
+// passed changes nothing for a window with room, and a reading from before it
+// cannot say whether the window is still out. Either way the window's own
+// reset must come after the announced time, and a window whose reset has
+// passed carries a stale reading and does not count.
+func bearsOn(window provider.UsageWindow, scheduledFor, fetchedAt, now time.Time) bool {
 	if window.ResetsAt.IsZero() || !window.ResetsAt.After(now) || !window.ResetsAt.After(scheduledFor) {
 		return false
+	}
+	if !scheduledFor.After(now) {
+		return window.Utilization >= 100 && fetchedAt.After(scheduledFor)
 	}
 	if window.Utilization >= 100 {
 		return true

@@ -289,6 +289,10 @@ after the announced time. The line shows while:
   `scheduled_for` time, which is no more than six hours in the past;
 - the account's latest reading is fresh (not stale, errored or expired) and
   has a qualifying window;
+- once the announced time has passed, the qualifying window is still out now
+  (not merely projected to run out), in a reading taken after that time. After
+  a global reset arrives, the account has a new window with room, so the line
+  goes away; a reading from before the time cannot say either way;
 - the feed was read successfully within the last two hours.
 
 Copy: `Reset announced for ~10:00 · codex-resets.com` (a date as well when the
@@ -321,7 +325,7 @@ account data. The response is cached in the Clawmeter cache directory with its
 ETag and the time of the last successful read, shared by every process. A read
 younger than 15 minutes is reused; an older one is revalidated with
 `If-None-Match`, ignoring the response's own max-age. 429 and 503 honour
-Retry-After, other failures back off to 15 minutes, and a failure keeps the
+Retry-After (at most two hours), other failures back off to 15 minutes, and a failure keeps the
 last good reading, which stops showing two hours after its last successful
 read. Bodies are size-limited and validated; any unexpected shape shows
 nothing. A changed ETag with the same `scheduled_reset` is not a new event.
