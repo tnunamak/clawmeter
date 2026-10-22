@@ -895,6 +895,23 @@ func TestSourcesNotBoundToOneLoginAreLeftOut(t *testing.T) {
 	}
 }
 
+func TestBindingLostWhileRunningMakesAReadingUnavailable(t *testing.T) {
+	isolatedCacheHome(t)
+	source := claudeSource("work")
+	h := newHandler(t, []provider.Provider{source}, testMaxAge)
+	index := indexFor(t, h, "claude:work")
+	writeCache(t, "claude:work", freshClaudeReading("work", time.Now()), source.revision)
+	read := apiCallBody{AuthIndex: index, Method: http.MethodGet, URL: claudeUsageURL}
+	if env := callAPI(t, h, read); env.StatusCode != http.StatusOK {
+		t.Fatalf("bound status_code = %d, want 200", env.StatusCode)
+	}
+	// The login moved somewhere the revision cannot follow.
+	source.unbound = true
+	if env := callAPI(t, h, read); env.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unbound status_code = %d, want 503", env.StatusCode)
+	}
+}
+
 func TestNewHandlerValidation(t *testing.T) {
 	if _, err := NewHandler("", []provider.Provider{claudeSource("work")}, time.Minute); err == nil {
 		t.Fatal("NewHandler accepted an empty management key")

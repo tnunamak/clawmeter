@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/shellpath"
 )
@@ -125,7 +126,8 @@ func replaceEnv(env []string, key, value string, windows bool) []string {
 
 // sourceRevision fingerprints the auth file this source reads, ambient or
 // not, so a process whose CODEX_HOME points elsewhere never takes another
-// account's cached reading for its own.
+// account's cached reading for its own. A login kept outside the file gets
+// a revision of its own store, so readings never cross between stores.
 func (p *Provider) sourceRevision() string {
 	path := filepath.Join(p.authDirectory(), "auth.json")
 	canonical, err := filepath.Abs(path)
@@ -133,6 +135,9 @@ func (p *Provider) sourceRevision() string {
 		return ""
 	}
 	canonical = provider.CanonicalPath(canonical)
+	if store := codexLoginStore(p.authDirectory()); store != "file" {
+		return fmt.Sprintf("%x", sha256.Sum256([]byte("codex-login-store\x00"+store+"\x00"+canonical)))
+	}
 	info, err := os.Stat(path)
 	metadata := "unavailable"
 	if err == nil {
@@ -157,46 +162,37 @@ func readAuthFile(dir string) (*authFile, error) {
 // AccountBound reports whether the revision identifies this source's login:
 // true while Codex keeps it in auth.json, its default. A keyring, automatic
 // or in-memory store holds a login the revision cannot fingerprint.
-func (p *Provider) AccountBound() bool { return storesLoginInFile(p.authDirectory()) }
+func (p *Provider) AccountBound() bool { return codexLoginStore(p.authDirectory()) == "file" }
 
-// storesLoginInFile reads cli_auth_credentials_store from Codex's
-// config.toml in home: the top-level value, overridden by the selected
-// profile's. A config that cannot be read counts as not.
-func storesLoginInFile(home string) bool {
+// codexLoginStore is where Codex keeps the login for home, as
+// cli_auth_credentials_store in config.toml sets it: the selected profile's
+// value, else the top-level one, else "file". It is "" when the config
+// cannot be read or parsed, which counts as an unknown store.
+func codexLoginStore(home string) string {
 	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
 	if errors.Is(err, os.ErrNotExist) {
-		return true
+		return "file"
 	}
 	if err != nil {
-		return false
+		return ""
 	}
-	store, profile, table := "file", "", ""
-	profileStore := ""
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") {
-			table = strings.TrimSpace(strings.Trim(line, "[]"))
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		value, _, _ = strings.Cut(value, "#")
-		value = strings.Trim(strings.TrimSpace(value), `"'`)
-		switch key = strings.TrimSpace(key); {
-		case table == "" && key == "profile":
-			profile = value
-		case table == "" && key == "cli_auth_credentials_store":
-			store = value
-		case table != "" && key == "cli_auth_credentials_store" && strings.TrimPrefix(table, "profiles.") != table:
-			if profile != "" && table == "profiles."+profile {
-				profileStore = value
-			}
-		}
+	type storeSetting struct {
+		Store *string `toml:"cli_auth_credentials_store"`
 	}
-	if profileStore != "" {
-		store = profileStore
+	var config struct {
+		storeSetting
+		Profile  string                  `toml:"profile"`
+		Profiles map[string]storeSetting `toml:"profiles"`
 	}
-	return store == "file"
+	if _, err := toml.Decode(string(data), &config); err != nil {
+		return ""
+	}
+	store := "file"
+	if config.Store != nil {
+		store = *config.Store
+	}
+	if selected, ok := config.Profiles[config.Profile]; config.Profile != "" && ok && selected.Store != nil {
+		store = *selected.Store
+	}
+	return store
 }
