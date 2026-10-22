@@ -5,7 +5,8 @@ package tray
 import "time"
 
 // loginCheckInterval is how often the tray looks for a changed login, such as
-// Claude Code renewing its token. Each check only reads file metadata.
+// Claude Code renewing its token. Each check lists the configured sources,
+// which reads their credentials, and fingerprints their login files.
 const loginCheckInterval = 20 * time.Second
 
 // loginRefreshGap is the least time between two refreshes that a login change
@@ -24,14 +25,26 @@ type loginWatch struct {
 }
 
 // due records the current revisions and reports whether a refresh should
-// start now. The first check only records them. A change stays pending until
-// ran is called, so a refresh that could not start is tried again.
-func (w *loginWatch) due(current map[string]string, now time.Time) bool {
-	if w.seen != nil {
+// start now. On the first check, a source counts as changed when its revision
+// differs from the one the last refresh read it with, so a renewal between
+// that refresh and this check is not missed; sources the refresh did not
+// record are taken as they are. Later checks compare with the previous
+// check, never with refresh results, so a source a refresh cannot record
+// does not start a refresh every minute. A change stays pending until ran
+// is called, so a refresh that could not start is tried again.
+func (w *loginWatch) due(current, refreshed map[string]string, now time.Time) bool {
+	if w.seen == nil {
+		w.seen = make(map[string]string, len(current))
 		for name, revision := range current {
-			if previous, ok := w.seen[name]; !ok || previous != revision {
-				w.pending = true
+			if previous, ok := refreshed[name]; ok {
+				revision = previous
 			}
+			w.seen[name] = revision
+		}
+	}
+	for name, revision := range current {
+		if previous, ok := w.seen[name]; !ok || previous != revision {
+			w.pending = true
 		}
 	}
 	w.seen = current

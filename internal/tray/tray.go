@@ -561,7 +561,11 @@ func onReadyWithConfig(loaded *config.Config) {
 		for range loginTicker.C {
 			shellpath.Init()
 			now := time.Now()
-			if watch.due(providerSourceRevisions(registry.GetConfigured()), now) && refresh(false) {
+			current := providerSourceRevisions(registry.GetConfigured())
+			s.mu.Lock()
+			refreshed := cloneSourceRevisions(s.lastSourceRevisions)
+			s.mu.Unlock()
+			if watch.due(current, refreshed, now) && refresh(false) {
 				watch.ran(now)
 			}
 		}
