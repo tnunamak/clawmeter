@@ -241,3 +241,32 @@ func TestAccountIdentityLeaksNoCredential(t *testing.T) {
 		}
 	}
 }
+
+// Two lists can look up one login at once. A lookup that fails after the
+// other succeeded must not hide the known email.
+func TestALateFailedLookupKeepsTheKnownIdentity(t *testing.T) {
+	source := &identifiedProvider{fakeProvider: claudeSource("work"), identity: provider.AccountIdentity{Email: "work@example.com"}}
+	h := newHandler(t, []provider.Provider{source}, testMaxAge)
+	var concurrent http.Handler
+	source.onIdentity = func() {
+		if concurrent == nil {
+			return
+		}
+		// While this lookup is in flight, another list succeeds.
+		inner := concurrent
+		concurrent = nil
+		source.err = nil
+		authFiles(t, inner)
+		source.err = errors.New("timed out")
+	}
+	concurrent = h
+	source.err = errors.New("timed out")
+	if file := fileByID(t, authFiles(t, h), "claude:work"); file["email"] != nil {
+		t.Fatalf("failed lookup gave an email: %v", file)
+	}
+	source.onIdentity = nil
+	source.err = errors.New("must not be asked again")
+	if file := fileByID(t, authFiles(t, h), "claude:work"); file["email"] != "work@example.com" {
+		t.Fatalf("after a late failure the list is %v, want the email the other lookup found", file)
+	}
+}

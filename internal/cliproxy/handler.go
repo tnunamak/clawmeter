@@ -373,7 +373,7 @@ func (h *handler) identity(ctx context.Context, account account, revisionBefore 
 		var err error
 		identity, err = source.AccountIdentity(ctx)
 		if err != nil || identity.Email == "" {
-			h.remember(account, knownIdentity{revision: revisionBefore, failedAt: time.Now()})
+			h.rememberFailure(account, revisionBefore)
 			return provider.AccountIdentity{}, false
 		}
 	}
@@ -388,6 +388,17 @@ func (h *handler) remember(account account, known knownIdentity) {
 	h.mu.Lock()
 	h.identities[account.id] = known
 	h.mu.Unlock()
+}
+
+// rememberFailure records a failed lookup, unless a concurrent lookup for
+// the same login has already succeeded.
+func (h *handler) rememberFailure(account account, revision string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if known, ok := h.identities[account.id]; ok && known.revision == revision && known.failedAt.IsZero() {
+		return
+	}
+	h.identities[account.id] = knownIdentity{revision: revision, failedAt: time.Now()}
 }
 
 // cachedUsage returns the source's cached reading when it belongs to the
