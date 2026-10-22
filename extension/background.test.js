@@ -673,3 +673,24 @@ test("a copy without a pairing file sends no token", async () => {
   assert.ok(headers.length);
   assert.ok(headers.every(sent => !("Clawmeter-Token" in sent)));
 });
+
+test("a restarted worker keeps the hourly renewal lookup", async () => {
+  const { readResets } = require("./resets.js");
+  const reads = [];
+  const executeScript = async ({ args: [url] }) => {
+    const path = new URL(url).pathname;
+    reads.push(path);
+    if (path === "/api/organizations") return [{ result: { status: 200, body: [{ uuid: "org-a", name: "A" }] } }];
+    if (path.startsWith("/api/quirky-lollipop/")) {
+      return [{ result: { status: 200, body: { status: "linked", next_grant_at: "2099-01-01T00:00:00Z" } } }];
+    }
+    return [{ result: { status: 200, body: { cedar_ember: { eligible: true, grants: [] } } } }];
+  };
+  const first = worker(async () => ({ status: "ok", payloads: [], failures: [] }), undefined, readResets, { tabs: [{ id: 1 }], executeScript });
+  await vm.runInContext("poll()", first.context);
+  // The browser stops the worker between checks; session storage outlives it.
+  const second = worker(async () => ({ status: "ok", payloads: [], failures: [] }), undefined, readResets, { tabs: [{ id: 1 }], executeScript });
+  second.sessions.push(...first.sessions);
+  await vm.runInContext("poll()", second.context);
+  assert.equal(reads.filter(path => path.startsWith("/api/quirky-lollipop/")).length, 1);
+});

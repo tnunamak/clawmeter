@@ -192,9 +192,6 @@ function poll() {
   return running;
 }
 
-// Renewal dates persist across checks, so the link state is read hourly, not every minute.
-const resetLinkStates = new Map();
-
 async function check() {
   let cache;
   let sessions;
@@ -212,8 +209,18 @@ async function check() {
   };
   // An organization seen in one session is not read again in another.
   const resetOrganizations = new Set();
+  // Renewal lookups are read hourly, not every minute. The worker stops
+  // between checks, so they are kept in session storage, which is in memory,
+  // and saved with the status when the check ends.
+  let resetLinks;
+  try {
+    const { resetLinks: stored } = await chrome.storage.session.get("resetLinks");
+    resetLinks = new Map(Array.isArray(stored) ? stored : []);
+  } catch {
+    resetLinks = new Map();
+  }
   const resets = await readEverySession("https://claude.ai/*", getJSON,
-    read => readResets(read, Date.now, payload => send("/v1/resets", payload), resetOrganizations, resetLinkStates));
+    read => readResets(read, Date.now, payload => send("/v1/resets", payload), resetOrganizations, resetLinks));
   const resetsRead = resets.results.filter(result => result.status === "ok");
   // Resets and credits are independent; a failure in one never blocks the other.
   if (resetsRead.length) {
@@ -302,7 +309,7 @@ async function check() {
     } catch {}
     try {
       if (cache) await chrome.storage.local.set({ cache, sessions });
-      await chrome.storage.session.set({ status });
+      await chrome.storage.session.set({ status, resetLinks: [...resetLinks] });
     } catch {}
     try {
       if (shown) await showSignal(shown);
