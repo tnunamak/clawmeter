@@ -273,12 +273,14 @@ func sourceIdentities(providers []provider.Provider, fetched map[string]string) 
 // sourceIdentity names the account a reading taken with login revision
 // fetched came from. A Claude profile's organization identifies it, so a
 // renewed token keeps its history; other sources use the revision itself.
-// The organization is read before the revision is compared, so it belongs to
-// the same login as the reading. Values are hashed, so the saved file holds
-// no account secrets. An empty result means the reading cannot be tied to an
-// account.
+// The organization is read between two checks that the login is still the
+// one the reading used. A login file's revision includes its write time, so
+// switching away and back between the checks gives a new revision and fails
+// them; only a restore that also keeps the file's size and nanosecond write
+// time could pass. Values are hashed, so the saved file holds no account
+// secrets. An empty result means the reading cannot be tied to an account.
 func sourceIdentity(p provider.Provider, fetched string) string {
-	if fetched == "" {
+	if fetched == "" || provider.SourceRevision(p) != fetched {
 		return ""
 	}
 	identity := "rev:" + exhaustionDigest(fetched)

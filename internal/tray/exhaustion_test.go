@@ -546,3 +546,35 @@ func TestTrayMenuRowsSaysOutNowUntilTheRunIsObserved(t *testing.T) {
 		t.Fatalf("row before this run observed the source = %q; want out now", rows["a"][0])
 	}
 }
+
+// switchingSource changes login while its organization is read.
+type switchingSource struct {
+	sourceMenuTestProvider
+	revisions []string
+	org       string
+	onOrg     func(*switchingSource)
+}
+
+func (s *switchingSource) SourceRevision() string {
+	r := s.revisions[0]
+	if len(s.revisions) > 1 {
+		s.revisions = s.revisions[1:]
+	}
+	return r
+}
+
+func (s *switchingSource) ClaudeOrganizationUUID() string { return s.org }
+
+func TestAnOrganizationReadDuringALoginSwitchIsNotUsed(t *testing.T) {
+	// The reading used rev-A. The login switches to B before the
+	// organization is read and is restored afterwards; the restore writes
+	// the file again, so its revision is new.
+	s := &switchingSource{sourceMenuTestProvider: sourceMenuTestProvider{id: "default"}, revisions: []string{"rev-A", "rev-A2"}, org: "org-B"}
+	if got := sourceIdentity(s, "rev-A"); got != "" {
+		t.Fatalf("identity = %q; want none when the login changed around the organization read", got)
+	}
+	s = &switchingSource{sourceMenuTestProvider: sourceMenuTestProvider{id: "default"}, revisions: []string{"rev-B"}, org: "org-B"}
+	if got := sourceIdentity(s, "rev-A"); got != "" {
+		t.Fatalf("identity = %q; want none when the login changed before the organization read", got)
+	}
+}
