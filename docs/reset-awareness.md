@@ -243,3 +243,85 @@ prompts unless the user explicitly opens the existing quota surfaces. This is
 smaller but stronger: it cannot waste a reset, cannot nag the user into burning
 one, and degrades to the current Clawmeter experience on every unsupported
 provider.
+
+## Codex Reset Announcements
+
+Status: design, 2026-10-22. The owner asked whether the public feed at
+https://codex-resets.com can add value. It records posts in which an OpenAI
+Codex lead announces global Codex usage resets, and it classifies some posts
+as scheduled ("lands tomorrow before 10am PST") or as AI forecasts.
+
+### What the evidence supports
+
+- The feed is third party and unofficial. OpenAI's help article on Codex
+  resets makes eligibility and timing discretionary, says a global reset may
+  not reach every account or every limit, and names the account's Usage page
+  as the place to confirm one. A global reset also does not refund a banked
+  reset already redeemed: https://help.openai.com/en/articles/20001498-how-resets-work-in-codex
+- The feed cannot say when a reset happened. On 2026-10-22 its status still
+  listed the 17:00 UTC reset as scheduled at 20:31 UTC, after the owner had
+  received it. None of its 64 history events records an execution time; they
+  carry only `announced_at`.
+- It carries no account identity or eligibility. Clawmeter's own Codex reading
+  is the only source for "can this account work now".
+- Its forecasts have no published calibration history, so a percentage cannot
+  be judged.
+
+Research record: divan `ai-quota-monitoring/codex-reset-announcements-do-not-prove-account-quota-or-scheduled-execution.md`.
+
+### The one decision it informs
+
+A Codex account that is out, or will run out before its own reset, faces a
+choice: wait, switch to another provider, or redeem a banked reset. A reset
+announced for a time before the account's own reset changes that choice, and
+nothing else in Clawmeter can tell the user about it. Clawmeter states the
+announcement and leaves the decision to the user; it does not advise waiting
+or holding a banked reset (the PRD's non-goal on recommendation copy stands).
+
+### What Clawmeter shows
+
+One line on each Codex account, only while it bears on that account:
+
+- Upcoming: an announcement with a scheduled time in the future, and a Codex
+  window of this account that is out or will run out before its own reset,
+  where that reset comes after the announced time.
+  `Reset announced for 10:00 · codex-resets.com`
+  (a date as well when the time is not today).
+- Not seen yet: the announced time has passed, less than six hours ago, and the
+  account's latest reading, taken after the announced time, still has such a
+  window. `Reset announced for 10:00 not seen on this account yet · codex-resets.com`
+- Otherwise nothing: no announcement, an announcement without a time, an
+  account with room, a reading that shows the window recovered, or more than six
+  hours after the announced time.
+
+Every surface shows the same fact: the tray row and tooltip, `clawmeter
+status`, `--json` (an `announced_reset` object with `scheduled_for`,
+`announced_at`, `source_url`, `feed_url`, `checked_at` and `state`), and
+`--agent` (`announced_reset=… state=upcoming|not_seen source=codex-resets.com
+unofficial`). The tray row opens the announcement's source page; the text
+names the feed, which satisfies its request for a link back.
+
+Not shown: AI forecasts and percentages, the latest executed reset, banked
+grant announcements (the account's own reset-credit count shows what arrived),
+a feed list, notifications of any kind, and advice.
+
+### Fetching
+
+Only when a Codex source is configured, and only `GET /api/v1/status`. The
+response is cached in the Clawmeter cache directory with its ETag and read time;
+a reading younger than 15 minutes is reused by every process (tray and CLI), an
+older one is revalidated with `If-None-Match`. 429 and 503 honour Retry-After
+and back off; a failure keeps the last good reading for at most six hours, after
+which nothing shows. Bodies are size-limited and validated; any unexpected
+shape shows nothing. `codex_reset_announcements: false` in the config turns
+the feed off. PRIVACY.md lists the request, which carries no account data.
+
+### Edge cases
+
+- Several Codex accounts: each decides from its own windows; one may show the
+  line while another does not.
+- Time zones: times are absolute and shown in local time.
+- A schedule moved by a later post: the feed's current `scheduled_reset` wins;
+  nothing is remembered between readings.
+- A reading taken before the announced time cannot show "not seen yet".
+- Offline or feed down: no line after six hours; never an error in the tray.
