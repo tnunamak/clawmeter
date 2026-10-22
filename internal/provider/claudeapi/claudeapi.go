@@ -69,7 +69,7 @@ func (p *Provider) sourceRevision(pools []claudeweb.APICreditPool, now time.Time
 		linked := p.linkedSource(pool)
 		next := ""
 		if linked != "" {
-			if at, ok := claudeweb.NextCreditAt(linked); ok {
+			if at := p.nextCreditAt(linked); !at.IsZero() {
 				next = at.UTC().Format(time.RFC3339Nano)
 			}
 		}
@@ -107,7 +107,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 	for _, pool := range saved {
 		presented := Pool(pool, now)
 		presented.Source = p.linkedSource(pool)
-		presented.NextCreditAt = nextCreditAt(presented.Source)
+		presented.NextCreditAt = p.nextCreditAt(presented.Source)
 		data.CreditPools = append(data.CreditPools, presented)
 		if pool.ObservedAt.After(data.FetchedAt) {
 			data.FetchedAt = pool.ObservedAt
@@ -131,13 +131,19 @@ func (p *Provider) linkedSource(pool claudeweb.APICreditPool) string {
 }
 
 // nextCreditAt is when the linked Claude plan next grants its monthly credit,
-// or zero when the source is unlinked or no reading says so.
-func nextCreditAt(source string) time.Time {
+// or zero when the source is unlinked or no reading of its current
+// organization says so.
+func (p *Provider) nextCreditAt(source string) time.Time {
 	if source == "" {
 		return time.Time{}
 	}
-	next, _ := claudeweb.NextCreditAt(source)
-	return next
+	for _, claude := range p.claude {
+		if provider.SourceKey(claude) == source {
+			next, _ := claudeweb.NextCreditAt(source, claudewebprovider.OrganizationUUID(claude))
+			return next
+		}
+	}
+	return time.Time{}
 }
 
 // Pool turns a saved Console snapshot into a credit pool as of now.

@@ -57,10 +57,11 @@ func ReadSummaryFor(target string) (GrantSummary, error) {
 }
 
 // NextCreditAt returns when the plan behind a Claude source next grants its
-// monthly API credit, if that is still ahead.
-func NextCreditAt(target string) (time.Time, bool) {
+// monthly API credit, if that is still ahead and was read for orgUUID, the
+// source's current organization.
+func NextCreditAt(target, orgUUID string) (time.Time, bool) {
 	summary, err := ReadSummaryFor(target)
-	if err != nil || summary.NextCreditAt == nil || !summary.NextCreditAt.After(time.Now()) {
+	if err != nil || !summary.MatchesOrg(orgUUID) || summary.NextCreditAt == nil || !summary.NextCreditAt.After(time.Now()) {
 		return time.Time{}, false
 	}
 	return *summary.NextCreditAt, true

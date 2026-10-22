@@ -408,9 +408,12 @@ func TestExtensionStoresTheNextCreditDate(t *testing.T) {
 			if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body(tc.extra)); got.Code != 204 {
 				t.Fatalf("resets = %d: %s", got.Code, got.Body.String())
 			}
-			next, ok := NextCreditAt("claude:odl")
+			next, ok := NextCreditAt("claude:odl", "org-odl")
 			if ok != tc.want || (ok && !next.Equal(tc.at)) {
 				t.Fatalf("NextCreditAt() = %v, %v; want %v, %v", next, ok, tc.want, tc.at)
+			}
+			if _, ok := NextCreditAt("claude:odl", "org-other"); ok {
+				t.Fatal("a date read for another organization was returned")
 			}
 		})
 	}
