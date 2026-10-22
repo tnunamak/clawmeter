@@ -2,7 +2,11 @@
 
 package tray
 
-import "time"
+import (
+	"time"
+
+	"github.com/tnunamak/clawmeter/internal/provider"
+)
 
 // loginCheckInterval is how often the tray looks for a changed login, such as
 // Claude Code renewing its token. Each check lists the configured sources,
@@ -55,4 +59,18 @@ func (w *loginWatch) due(current, refreshed map[string]string, now time.Time) bo
 func (w *loginWatch) ran(now time.Time) {
 	w.pending = false
 	w.lastRun = now
+}
+
+// loginRevisions fingerprints the logins of account-bound sources only. Other
+// sources' revisions can change with every reading, such as the API credit
+// pools the browser extension updates each minute, and watching them would
+// refresh every provider once a minute.
+func loginRevisions(providers []provider.Provider) map[string]string {
+	bound := make([]provider.Provider, 0, len(providers))
+	for _, p := range providers {
+		if provider.IsAccountBound(p) {
+			bound = append(bound, p)
+		}
+	}
+	return providerSourceRevisions(bound)
 }

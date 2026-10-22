@@ -561,7 +561,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		for range loginTicker.C {
 			shellpath.Init()
 			now := time.Now()
-			current := providerSourceRevisions(registry.GetConfigured())
+			current := loginRevisions(registry.GetConfigured())
 			s.mu.Lock()
 			refreshed := cloneSourceRevisions(s.lastSourceRevisions)
 			s.mu.Unlock()
