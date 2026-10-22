@@ -298,10 +298,19 @@ func label(in Inputs, key string, data *provider.UsageData) string {
 	if family == "" && data != nil {
 		family = data.Provider
 	}
-	if in.FamilySourceCounts[family] > 1 && in.SourceLabels[key] != "" {
-		return name + " · " + in.SourceLabels[key]
+	if in.FamilySourceCounts[family] <= 1 {
+		return name
 	}
-	return name
+	// Several sources of one provider need telling apart; a source without a
+	// label is named by its ID.
+	suffix := in.SourceLabels[key]
+	if suffix == "" && data != nil {
+		suffix = data.SourceID
+	}
+	if suffix == "" {
+		return name
+	}
+	return name + " · " + suffix
 }
 
 func reading(data *provider.UsageData) Reading {
@@ -368,7 +377,8 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 
 	known := out.Forecast.State == ForecastKnown
 	switch {
-	case !fresh:
+	case !fresh, !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
+		// A reading from before the window's reset says nothing about now.
 		out.Exhaustion.State = ExhaustionUnknown
 	case w.Utilization >= 100:
 		out.Exhaustion.State = ExhaustionOut

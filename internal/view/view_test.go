@@ -530,3 +530,24 @@ func TestSnapshotCarriesItsClock(t *testing.T) {
 		t.Fatalf("empty snapshot = %+v", snap)
 	}
 }
+
+func TestAFullWindowWhoseResetHasPassedIsNotOut(t *testing.T) {
+	snap := Build(inputs(map[string]*provider.UsageData{"codex": fresh("openai", fiveHour(100, -time.Minute))}), at)
+	if got := findWindow(t, account(t, snap, "codex"), "5h").Exhaustion.State; got != ExhaustionUnknown {
+		t.Fatalf("exhaustion = %v; a reading from before the reset says nothing about now", got)
+	}
+}
+
+func TestASourceWithoutALabelIsNamedByItsID(t *testing.T) {
+	data := fresh("claude", fiveHour(10, midWindow))
+	data.SourceID = "work"
+	in := Inputs{
+		Results:            map[string]*provider.UsageData{"claude:work": data},
+		DisplayNames:       map[string]string{"claude:work": "Claude"},
+		Families:           map[string]string{"claude:work": "claude"},
+		FamilySourceCounts: map[string]int{"claude": 2},
+	}
+	if got := account(t, Build(in, at), "claude:work").Label; got != "Claude · work" {
+		t.Fatalf("label = %q", got)
+	}
+}
