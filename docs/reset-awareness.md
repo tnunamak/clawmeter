@@ -280,48 +280,62 @@ or holding a banked reset (the PRD's non-goal on recommendation copy stands).
 
 ### What Clawmeter shows
 
-One line on each Codex account, only while it bears on that account:
+One line on each Codex account, only while it bears on that account. A window
+qualifies when it is out now or is projected to run out before its own reset
+(the existing "out now" and "runs out in" facts), and its own reset comes
+after the announced time. The line shows while:
 
-- Upcoming: an announcement with a scheduled time in the future, and a Codex
-  window of this account that is out or will run out before its own reset,
-  where that reset comes after the announced time.
-  `Reset announced for 10:00 · codex-resets.com`
-  (a date as well when the time is not today).
-- Not seen yet: the announced time has passed, less than six hours ago, and the
-  account's latest reading, taken after the announced time, still has such a
-  window. `Reset announced for 10:00 not seen on this account yet · codex-resets.com`
-- Otherwise nothing: no announcement, an announcement without a time, an
-  account with room, a reading that shows the window recovered, or more than six
-  hours after the announced time.
+- the feed's current `scheduled_reset` is a `regular` reset with a
+  `scheduled_for` time, which is no more than six hours in the past;
+- the account's latest reading is fresh (not stale, errored or expired) and
+  has a qualifying window;
+- the feed was read successfully within the last two hours.
+
+Copy: `Reset announced for ~10:00 · codex-resets.com` (a date as well when the
+time is not today). The tilde marks the feed's time as approximate: posts say
+things like "before 10am PST". The line carries no claim about whether the
+reset reached the account; the window rows above it already say whether the
+account is still out. It sits after the reset-credit row, the last line of the
+account. In the tray it opens the announcement's source post.
 
 Every surface shows the same fact: the tray row and tooltip, `clawmeter
-status`, `--json` (an `announced_reset` object with `scheduled_for`,
-`announced_at`, `source_url`, `feed_url`, `checked_at` and `state`), and
-`--agent` (`announced_reset=… state=upcoming|not_seen source=codex-resets.com
-unofficial`). The tray row opens the announcement's source page; the text
-names the feed, which satisfies its request for a link back.
+status`, `--json` and `--agent`. JSON adds to the Codex source an
+`announced_reset` object: `kind` ("third_party_announcement"), `official`
+(false), `feed` ("codex-resets.com"), `source_url`, `announced_at`,
+`scheduled_for`, `approximate` (true), `windows` (the qualifying window names),
+`feed_checked_at`, and `shown_until` (`scheduled_for` plus six hours). The
+agent line adds `announced_reset=[~<time> unofficial source=codex-resets.com
+windows=7d]`. The announcement never changes quota values, projections,
+natural reset times, risk status, icon choice or exit codes.
 
-Not shown: AI forecasts and percentages, the latest executed reset, banked
-grant announcements (the account's own reset-credit count shows what arrived),
-a feed list, notifications of any kind, and advice.
+Not shown: AI forecasts and percentages, banked or mixed posts, the latest
+executed reset, a feed list, notifications of any kind, and advice.
 
 ### Fetching
 
-Only when a Codex source is configured, and only `GET /api/v1/status`. The
-response is cached in the Clawmeter cache directory with its ETag and read time;
-a reading younger than 15 minutes is reused by every process (tray and CLI), an
-older one is revalidated with `If-None-Match`. 429 and 503 honour Retry-After
-and back off; a failure keeps the last good reading for at most six hours, after
-which nothing shows. Bodies are size-limited and validated; any unexpected
-shape shows nothing. `codex_reset_announcements: false` in the config turns
-the feed off. PRIVACY.md lists the request, which carries no account data.
+Off by default. The feed is a third party and unofficial, and Clawmeter
+otherwise talks only to providers the user signed in to, so the user turns it
+on with `codex_reset_announcements: true` in the config; it then runs only when
+a Codex source is configured. Only `GET /api/v1/status` is requested, with no
+account data. The response is cached in the Clawmeter cache directory with its
+ETag and the time of the last successful read, shared by every process. A read
+younger than 15 minutes is reused; an older one is revalidated with
+`If-None-Match`, ignoring the response's own max-age. 429 and 503 honour
+Retry-After, other failures back off to 15 minutes, and a failure keeps the
+last good reading, which stops showing two hours after its last successful
+read. Bodies are size-limited and validated; any unexpected shape shows
+nothing. A changed ETag with the same `scheduled_reset` is not a new event.
 
 ### Edge cases
 
 - Several Codex accounts: each decides from its own windows; one may show the
   line while another does not.
-- Time zones: times are absolute and shown in local time.
-- A schedule moved by a later post: the feed's current `scheduled_reset` wins;
-  nothing is remembered between readings.
-- A reading taken before the announced time cannot show "not seen yet".
-- Offline or feed down: no line after six hours; never an error in the tray.
+- A reset that refills one window and not another: the line stays while any
+  window still qualifies, and names it in JSON and agent output.
+- Time zones: times are absolute and shown in local time; machines get RFC 3339.
+- A schedule moved or withdrawn by a later post: the feed's current
+  `scheduled_reset` wins; nothing is remembered between readings.
+- An account reading that is stale: no line; the row already says the reading
+  is stale.
+- Offline or feed down: the line stops two hours after the last successful
+  read; never an error in the tray.
