@@ -183,17 +183,25 @@ func (h *handler) authFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	files := make([]authFile, 0, len(h.accounts))
-	for _, account := range h.accounts {
-		file := authFile{ID: account.id, AuthIndex: account.index, Provider: account.provider}
-		if identity, ok := h.identity(r.Context(), account); ok {
-			file.Email = identity.Email
-			if account.provider == "codex" && (identity.WorkspaceID != "" || identity.PlanType != "") {
-				file.IDToken = &authIDTokens{ChatGPTAccountID: identity.WorkspaceID, PlanType: identity.PlanType}
+	files := make([]authFile, len(h.accounts))
+	// Identities are read in parallel so a slow provider delays the list
+	// by one lookup, not one per account.
+	var wg sync.WaitGroup
+	for i, account := range h.accounts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			file := authFile{ID: account.id, AuthIndex: account.index, Provider: account.provider}
+			if identity, ok := h.identity(r.Context(), account); ok {
+				file.Email = identity.Email
+				if account.provider == "codex" && (identity.WorkspaceID != "" || identity.PlanType != "") {
+					file.IDToken = &authIDTokens{ChatGPTAccountID: identity.WorkspaceID, PlanType: identity.PlanType}
+				}
 			}
-		}
-		files = append(files, file)
+			files[i] = file
+		}()
 	}
+	wg.Wait()
 	writeJSON(w, http.StatusOK, authFilesResponse{ObservedAt: time.Now().UTC(), Files: files})
 }
 
