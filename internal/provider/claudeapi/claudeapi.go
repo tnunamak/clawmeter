@@ -20,6 +20,18 @@ import (
 
 const name = "claude_api"
 
+// The one-click steps that clear a pool's warning. The tray row opens the
+// Console for each.
+const (
+	signInAction  = "sign in to the Claude Console"
+	updateAction  = "open your browser to update"
+	consoleAction = "open the Claude Console"
+)
+
+// extensionContactWindow is how recently the browser extension must have
+// reached Clawmeter for the browser to count as running.
+const extensionContactWindow = 3 * time.Minute
+
 // Provider reads saved pools. Claude sources are the local accounts a pool
 // may be linked to through the Claude plan that funds it.
 type Provider struct {
@@ -42,10 +54,10 @@ func (*Provider) DashboardURL() string { return claudeweb.ConsoleURL }
 func (p *Provider) SourceRevision() string {
 	pools, _ := claudeweb.ReadAPICreditPools()
 	state, _ := claudeweb.ReadExtensionState()
-	return p.sourceRevision(pools, time.Now(), state)
+	return p.sourceRevision(pools, time.Now(), state, claudeweb.LastExtensionContact())
 }
 
-func (p *Provider) sourceRevision(pools []claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState) string {
+func (p *Provider) sourceRevision(pools []claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState, contact time.Time) string {
 	parts := make([]string, 0, len(pools))
 	for _, pool := range pools {
 		expired := 0
@@ -61,7 +73,8 @@ func (p *Provider) sourceRevision(pools []claudeweb.APICreditPool, now time.Time
 				next = at.UTC().Format(time.RFC3339Nano)
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s:%s:%t:%t:%s", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), linked, pool.Source, poolLive(pool, now, state), poolSignedOut(pool, state), next))
+		recent := now.Sub(contact) <= extensionContactWindow
+		parts = append(parts, fmt.Sprintf("%s@%s:%d:%t:%s:%s:%t:%t:%s:%t", pool.Pool[:16], pool.ObservedAt.UTC().Format(time.RFC3339Nano), expired, now.Before(pool.MonthResetsAt), linked, pool.Source, poolLive(pool, now, state), poolSignedOut(pool, state), next, recent))
 	}
 	return "claude-api-credits-v1:" + strings.Join(parts, ",")
 }
@@ -130,7 +143,7 @@ func nextCreditAt(source string) time.Time {
 // Pool turns a saved Console snapshot into a credit pool as of now.
 func Pool(saved claudeweb.APICreditPool, now time.Time) provider.UsageCreditPool {
 	state, _ := claudeweb.ReadExtensionState()
-	return poolWithState(saved, now, state)
+	return poolWithState(saved, now, state, claudeweb.LastExtensionContact())
 }
 
 func poolSignedOut(saved claudeweb.APICreditPool, state claudeweb.ExtensionState) bool {
@@ -141,7 +154,29 @@ func poolLive(saved claudeweb.APICreditPool, now time.Time, state claudeweb.Exte
 	return saved.Source == "extension" && now.Sub(saved.ObservedAt) <= 5*time.Minute && !poolSignedOut(saved, state)
 }
 
-func poolWithState(saved claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState) provider.UsageCreditPool {
+// poolAction names the step that clears a pool's warning, or "" when it
+// needs none. A stale extension reading with a recent contact means the
+// browser runs but could not read this organization, so the fix is to sign in.
+func poolAction(saved claudeweb.APICreditPool, pool provider.UsageCreditPool, now, contact time.Time) string {
+	if saved.Source != "extension" {
+		if !pool.ExpiredSinceCheck.IsZero() {
+			return consoleAction
+		}
+		return ""
+	}
+	switch {
+	case pool.SignedOut:
+		return signInAction
+	case pool.Live:
+		return ""
+	case now.Sub(contact) <= extensionContactWindow:
+		return signInAction
+	default:
+		return updateAction
+	}
+}
+
+func poolWithState(saved claudeweb.APICreditPool, now time.Time, state claudeweb.ExtensionState, contact time.Time) provider.UsageCreditPool {
 	grants := make([]provider.CreditGrant, 0, len(saved.Grants))
 	for _, grant := range saved.Grants {
 		grants = append(grants, provider.CreditGrant{Remaining: grant.Remaining, ExpiresAt: grant.ExpiresAt})
@@ -158,5 +193,6 @@ func poolWithState(saved claudeweb.APICreditPool, now time.Time, state claudeweb
 	pool.ObservationSource = saved.Source
 	pool.SignedOut = poolSignedOut(saved, state)
 	pool.Live = poolLive(saved, now, state)
+	pool.Action = poolAction(saved, pool, now, contact)
 	return pool
 }

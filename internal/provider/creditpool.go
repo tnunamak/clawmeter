@@ -40,6 +40,9 @@ type UsageCreditPool struct {
 	Live              bool      `json:"live"`
 	ObservationSource string    `json:"observation_source,omitempty"`
 	SignedOut         bool      `json:"signed_out,omitempty"`
+	// Action is the step that clears this pool's warning, such as "sign in
+	// to the Claude Console". The tray row opens the Console for it.
+	Action string `json:"action,omitempty"`
 	// Projection from ObservedAt at BurnPerDay, set only with ExpiresAt.
 	ProjectedSpend  int64     `json:"projected_spend_before_expiry,omitempty"`
 	ProjectedUnused int64     `json:"projected_unused_at_expiry,omitempty"`
@@ -224,12 +227,16 @@ func (p UsageCreditPool) freshness(now time.Time) string {
 		return "checked " + shortDate(p.ObservedAt, now)
 	}
 	if p.SignedOut {
-		return "sign in to the Claude Console in your browser"
+		return p.Action
 	}
 	if p.IsLive(now) {
 		return ""
 	}
-	return "not updated since " + p.ObservedAt.Local().Format("15:04") + " · is your browser open?"
+	stale := "not updated since " + p.ObservedAt.Local().Format("15:04")
+	if p.Action != "" {
+		return stale + " · " + p.Action
+	}
+	return stale
 }
 
 // expiryTime shows the local date and time. Consoles often show expiry as a
@@ -250,7 +257,10 @@ func (p UsageCreditPool) expiredLine(now time.Time) string {
 		}
 		return line
 	}
-	return line + " · check again"
+	if p.Action != "" {
+		return line + " · " + p.Action
+	}
+	return line
 }
 
 // MarshalJSON omits unknown times instead of serializing Go's zero time.

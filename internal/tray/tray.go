@@ -677,6 +677,7 @@ type providerMenuItems struct {
 	windowStates      []menuItemState
 	windowAtRisk      []bool
 	balanceStates     []menuItemState
+	balanceActions    []string // per balance row; guarded by trayRenderMu
 	separatorState    menuItemState
 }
 
@@ -768,7 +769,15 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
 		balanceStates:     balanceStates,
+		balanceActions:    make([]string, len(balanceItems)),
 		separatorState:    menuItemState{visible: true, initialized: true},
+	}
+	for row, item := range balanceItems {
+		go func() {
+			for range item.ClickedCh {
+				openBalanceRow(menu, row, openURL)
+			}
+		}()
 	}
 	go func() {
 		for range header.ClickedCh {
@@ -783,6 +792,16 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		}
 	}()
 	return menu
+}
+
+// openBalanceRow opens the Console for a balance row that carries an action.
+func openBalanceRow(menu *providerMenuItems, row int, open func(string)) {
+	trayRenderMu.Lock()
+	action := menu.balanceActions[row]
+	trayRenderMu.Unlock()
+	if action != "" {
+		open(claudeweb.ConsoleURL)
+	}
 }
 
 func setProviderSeparatorVisible(menu *providerMenuItems, visible bool) {
@@ -802,10 +821,12 @@ func hideProviderMenu(menu *providerMenuItems) {
 // stay visible even when the row's usage reading failed.
 func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances []provider.UsageBalance) int {
 	rows := 0
-	show := func(title string) {
+	show := func(title, action string) {
 		if rows < len(menu.balanceItems) {
 			setMenuItemTitle(menu.balanceItems[rows], &menu.balanceStates[rows], title)
 			setMenuItemVisible(menu.balanceItems[rows], &menu.balanceStates[rows], true)
+			setMenuItemEnabled(menu.balanceItems[rows], &menu.balanceStates[rows], action != "")
+			menu.balanceActions[rows] = action
 			rows++
 		}
 	}
@@ -814,7 +835,7 @@ func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances
 		if label == "" {
 			label = balance.Name
 		}
-		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
+		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
 	for _, pool := range data.CreditPools {
 		title := pool.TrayLine(time.Now())
@@ -823,10 +844,12 @@ func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances
 		if data.Provider != provider.ClaudeAPISourceName || len(data.CreditPools) > 1 {
 			title = pool.Name + ": " + title
 		}
-		show(title)
+		show(title, pool.Action)
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
+		setMenuItemEnabled(menu.balanceItems[i], &menu.balanceStates[i], false)
+		menu.balanceActions[i] = ""
 	}
 	return rows
 }

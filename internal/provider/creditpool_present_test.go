@@ -97,13 +97,16 @@ func TestExtensionCreditPoolPresentation(t *testing.T) {
 		if got := render(observed); !strings.Contains(got, "$1.00 left") || strings.Contains(got, "checked") || strings.Contains(got, "browser") {
 			t.Fatalf("live = %q", got)
 		}
-		if got := render(observed.Add(6 * time.Minute)); !strings.HasSuffix(got, "not updated since "+observed.Local().Format("15:04")+" · is your browser open?") || !strings.Contains(got, "$1.00 left") {
+	}
+	pool.Action = "open your browser to update"
+	for _, render := range []func(time.Time) string{pool.Summary, pool.TrayLine} {
+		if got := render(observed.Add(6 * time.Minute)); !strings.HasSuffix(got, "not updated since "+observed.Local().Format("15:04")+" · open your browser to update") || !strings.Contains(got, "$1.00 left") {
 			t.Fatalf("stale = %q", got)
 		}
 	}
-	pool.Live, pool.SignedOut = false, true
+	pool.Live, pool.SignedOut, pool.Action = false, true, "sign in to the Claude Console"
 	for _, got := range []string{pool.Summary(observed), pool.TrayLine(observed)} {
-		if !strings.HasSuffix(got, "sign in to the Claude Console in your browser") {
+		if !strings.HasSuffix(got, "sign in to the Claude Console") || strings.Contains(got, "browser") {
 			t.Fatalf("signed out = %q", got)
 		}
 	}
@@ -114,5 +117,18 @@ func TestExtensionCreditPoolPresentation(t *testing.T) {
 	var restored UsageCreditPool
 	if err := json.Unmarshal(data, &restored); err != nil || restored.TrayLine(observed) != pool.TrayLine(observed) {
 		t.Fatalf("cached presentation changed: %+v, %v", restored, err)
+	}
+}
+
+func TestExpiredCreditsNameTheConsoleOnlyWhenThereIsAnAction(t *testing.T) {
+	observed := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	expired := observed.Add(-time.Minute)
+	pool := UsageCreditPool{Name: "Org", Currency: "USD", Balance: 0, ObservedAt: observed, ExpiredSinceCheck: expired}
+	if got := pool.TrayLine(observed); strings.Contains(got, "check again") || !strings.HasSuffix(got, "after the last check") {
+		t.Fatalf("no action = %q", got)
+	}
+	pool.Action = "open the Claude Console"
+	if got := pool.TrayLine(observed); !strings.HasSuffix(got, "after the last check · open the Claude Console") {
+		t.Fatalf("with action = %q", got)
 	}
 }
