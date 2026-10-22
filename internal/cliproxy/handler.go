@@ -34,9 +34,17 @@ const (
 	cacheUnavailableMsg = `{"error":"no current Clawmeter reading for this account"}`
 )
 
+var (
+	// identityBudget bounds the identity lookups of one account list, so a
+	// slow provider cannot keep T3 from getting the list.
+	identityBudget = 4 * time.Second
+	// identityRetry is how long a failed lookup is not repeated for the
+	// same login.
+	identityRetry = 2 * time.Minute
+)
+
 type account struct {
 	id       string
-	index    string
 	provider string
 	source   provider.Provider
 }
@@ -45,17 +53,17 @@ type handler struct {
 	key      string
 	maxAge   time.Duration
 	accounts []account
-	byIndex  map[string]account
 
 	mu sync.Mutex
-	// identities holds each account's last identity with the source
-	// revision it was read under, so one login is looked up once.
+	// identities holds each account's last identity lookup with the source
+	// revision it was made under, keyed by account ID.
 	identities map[string]knownIdentity
 }
 
 type knownIdentity struct {
 	revision string
 	identity provider.AccountIdentity
+	failedAt time.Time
 }
 
 type authFilesResponse struct {
@@ -144,9 +152,9 @@ func NewHandler(managementKey string, sources []provider.Provider, maxAge time.D
 	h := &handler{
 		key:        managementKey,
 		maxAge:     maxAge,
-		byIndex:    make(map[string]account, len(sources)),
 		identities: make(map[string]knownIdentity, len(sources)),
 	}
+	seen := make(map[string]bool, len(sources))
 	for _, source := range sources {
 		providerName, ok := hubProvider(source)
 		// A source whose revision does not identify its login could show
@@ -156,13 +164,11 @@ func NewHandler(managementKey string, sources []provider.Provider, maxAge time.D
 		}
 		sourceID := provider.SourceID(source)
 		id := providerName + ":" + sourceID
-		index := authIndex(providerName, sourceID)
-		if _, exists := h.byIndex[index]; exists {
+		if seen[id] {
 			return nil, fmt.Errorf("duplicate hub source identity")
 		}
-		entry := account{id: id, index: index, provider: providerName, source: source}
-		h.accounts = append(h.accounts, entry)
-		h.byIndex[index] = entry
+		seen[id] = true
+		h.accounts = append(h.accounts, account{id: id, provider: providerName, source: source})
 	}
 	return h.routes(), nil
 }
@@ -184,15 +190,18 @@ func (h *handler) authFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	files := make([]authFile, len(h.accounts))
-	// Identities are read in parallel so a slow provider delays the list
-	// by one lookup, not one per account.
+	// Identities are read in parallel within one budget, so a slow
+	// provider delays the list by at most the budget.
+	ctx, cancel := context.WithTimeout(r.Context(), identityBudget)
+	defer cancel()
 	var wg sync.WaitGroup
 	for i, account := range h.accounts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			file := authFile{ID: account.id, AuthIndex: account.index, Provider: account.provider}
-			if identity, ok := h.identity(r.Context(), account); ok {
+			revision := provider.SourceRevision(account.source)
+			file := authFile{ID: account.id, AuthIndex: loginIndex(account, revision), Provider: account.provider}
+			if identity, ok := h.identity(ctx, account, revision); ok {
 				file.Email = identity.Email
 				if account.provider == "codex" && (identity.WorkspaceID != "" || identity.PlanType != "") {
 					file.IDToken = &authIDTokens{ChatGPTAccountID: identity.WorkspaceID, PlanType: identity.PlanType}
@@ -231,7 +240,7 @@ func (h *handler) apiCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	account, ok := h.byIndex[request.AuthIndex]
+	account, revision, ok := h.accountFor(request.AuthIndex)
 	if !ok {
 		h.writeAPIResponse(w, http.StatusNotFound, `{"error":"unknown source"}`)
 		return
@@ -243,7 +252,7 @@ func (h *handler) apiCall(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case account.provider == "claude" && request.URL == claudeUsageURL:
-		data, ok := cachedUsage(account, h.maxAge)
+		data, ok := cachedUsage(account, revision, h.maxAge)
 		if !ok {
 			h.writeAPIResponse(w, http.StatusServiceUnavailable, cacheUnavailableMsg)
 			return
@@ -255,7 +264,7 @@ func (h *handler) apiCall(w http.ResponseWriter, r *http.Request) {
 		}
 		h.writeAPIResponse(w, http.StatusOK, body)
 	case account.provider == "codex" && request.URL == codexUsageURL:
-		data, ok := cachedUsage(account, h.maxAge)
+		data, ok := cachedUsage(account, revision, h.maxAge)
 		if !ok {
 			h.writeAPIResponse(w, http.StatusServiceUnavailable, cacheUnavailableMsg)
 			return
@@ -318,48 +327,78 @@ func hubProvider(source provider.Provider) (string, bool) {
 	}
 }
 
-func authIndex(providerName, sourceID string) string {
-	sum := sha256.Sum256([]byte(providerName + "\x00" + sourceID))
+// loginIndex is the auth_index of an account listed while its source read
+// the login with this revision. T3 lists accounts and reads their usage in
+// separate requests; because the index changes with the login, a read for an
+// account listed before a new login finds no account, instead of returning
+// the new login's numbers under the email listed for the old one.
+func loginIndex(account account, revision string) string {
+	sum := sha256.Sum256([]byte(account.provider + "\x00" + provider.SourceID(account.source) + "\x00" + revision))
 	return hex.EncodeToString(sum[:8])
+}
+
+// accountFor finds the account whose current login has this auth_index, and
+// returns the revision of that login.
+func (h *handler) accountFor(index string) (account, string, bool) {
+	for _, account := range h.accounts {
+		revision := provider.SourceRevision(account.source)
+		if loginIndex(account, revision) == index {
+			return account, revision, true
+		}
+	}
+	return account{}, "", false
 }
 
 // identity returns the identity of the login the account's source reads now.
 // T3 shows the account's readings under the login with that email, so an
 // identity read while the login changed is withheld: without one, T3 shows
 // the account on its own row.
-func (h *handler) identity(ctx context.Context, account account) (provider.AccountIdentity, bool) {
+func (h *handler) identity(ctx context.Context, account account, revisionBefore string) (provider.AccountIdentity, bool) {
 	source, ok := account.source.(provider.AccountIdentityCapability)
 	if !ok {
 		return provider.AccountIdentity{}, false
 	}
-	revisionBefore := provider.SourceRevision(account.source)
 	if revisionBefore == "" || !provider.IsAccountBound(account.source) {
 		return provider.AccountIdentity{}, false
 	}
 	h.mu.Lock()
-	known, found := h.identities[account.index]
+	known, found := h.identities[account.id]
 	h.mu.Unlock()
+	found = found && known.revision == revisionBefore
+	if found && !known.failedAt.IsZero() && time.Since(known.failedAt) < identityRetry {
+		return provider.AccountIdentity{}, false
+	}
 	identity := known.identity
-	if !found || known.revision != revisionBefore {
+	if !found || !known.failedAt.IsZero() {
 		var err error
-		if identity, err = source.AccountIdentity(ctx); err != nil || identity.Email == "" {
+		identity, err = source.AccountIdentity(ctx)
+		if err != nil || identity.Email == "" {
+			h.remember(account, knownIdentity{revision: revisionBefore, failedAt: time.Now()})
 			return provider.AccountIdentity{}, false
 		}
 	}
 	if provider.SourceRevision(account.source) != revisionBefore {
 		return provider.AccountIdentity{}, false
 	}
-	h.mu.Lock()
-	h.identities[account.index] = knownIdentity{revision: revisionBefore, identity: identity}
-	h.mu.Unlock()
+	h.remember(account, knownIdentity{revision: revisionBefore, identity: identity})
 	return identity, true
 }
 
+func (h *handler) remember(account account, known knownIdentity) {
+	h.mu.Lock()
+	h.identities[account.id] = known
+	h.mu.Unlock()
+}
+
 // cachedUsage returns the source's cached reading when it belongs to the
-// source's current credential and is at most maxAge old.
-func cachedUsage(account account, maxAge time.Duration) (*provider.UsageData, bool) {
+// login with the listed revision, which is still the source's current one,
+// and is at most maxAge old.
+func cachedUsage(account account, listed string, maxAge time.Duration) (*provider.UsageData, bool) {
 	key := provider.SourceKey(account.source)
 	revisionBefore := provider.SourceRevision(account.source)
+	if revisionBefore != listed {
+		return nil, false
+	}
 	// Binding can change while the hub runs, for example when Codex moves
 	// its login into the keyring. It is checked between the two revision
 	// reads: a change before the check makes the source unbound, and one

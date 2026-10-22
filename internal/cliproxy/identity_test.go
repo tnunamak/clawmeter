@@ -3,7 +3,12 @@ package cliproxy
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
@@ -17,12 +22,19 @@ type identifiedProvider struct {
 	// onIdentity runs at each identity read, to change the source while it
 	// is being read.
 	onIdentity func()
+	// stall makes the read wait until its context ends, like a provider
+	// that never answers.
+	stall bool
 }
 
-func (f *identifiedProvider) AccountIdentity(context.Context) (provider.AccountIdentity, error) {
+func (f *identifiedProvider) AccountIdentity(ctx context.Context) (provider.AccountIdentity, error) {
 	f.calls++
 	if f.onIdentity != nil {
 		f.onIdentity()
+	}
+	if f.stall {
+		<-ctx.Done()
+		return provider.AccountIdentity{}, ctx.Err()
 	}
 	return f.identity, f.err
 }
@@ -117,5 +129,115 @@ func TestAccountIdentityIsReadOncePerLogin(t *testing.T) {
 	source.err = errors.New("offline")
 	if file := fileByID(t, authFiles(t, h), "claude:work"); file["email"] != nil {
 		t.Fatalf("email = %v when the new login's identity is unknown, want none", file["email"])
+	}
+}
+
+// T3 lists accounts, then reads each one's usage in a second request. A new
+// login between the two must not put the new login's numbers under the
+// email listed for the old one.
+func TestAReadForAnAccountListedBeforeANewLoginIsRefused(t *testing.T) {
+	isolatedCacheHome(t)
+	source := &identifiedProvider{fakeProvider: claudeSource("work"), identity: provider.AccountIdentity{Email: "old@example.com"}}
+	h := newHandler(t, []provider.Provider{source}, testMaxAge)
+	listed := fileByID(t, authFiles(t, h), "claude:work")
+	oldIndex, _ := listed["auth_index"].(string)
+	alsoListed := indexFor(t, h, "claude:work")
+
+	source.revision = "rev-claude-work-new-login"
+	source.identity = provider.AccountIdentity{Email: "new@example.com"}
+	writeCache(t, "claude:work", freshClaudeReading("work", time.Now()), source.revision)
+
+	for _, index := range []string{oldIndex, alsoListed} {
+		if env := callAPI(t, h, apiCallBody{AuthIndex: index, Method: http.MethodGet, URL: claudeUsageURL}); env.StatusCode == http.StatusOK {
+			t.Fatalf("read for the old login's index status_code = 200, want refused; body = %s", env.Body)
+		}
+	}
+
+	relisted := fileByID(t, authFiles(t, h), "claude:work")
+	newIndex, _ := relisted["auth_index"].(string)
+	if newIndex == oldIndex || relisted["email"] != "new@example.com" {
+		t.Fatalf("after a new login the list is %v, want a new index and the new email", relisted)
+	}
+	if env := callAPI(t, h, apiCallBody{AuthIndex: newIndex, Method: http.MethodGet, URL: claudeUsageURL}); env.StatusCode != http.StatusOK {
+		t.Fatalf("read for the new index status_code = %d, want 200", env.StatusCode)
+	}
+}
+
+func TestStalledIdentityLookupsDoNotHoldUpTheList(t *testing.T) {
+	isolatedCacheHome(t)
+	oldBudget := identityBudget
+	identityBudget = 100 * time.Millisecond
+	t.Cleanup(func() { identityBudget = oldBudget })
+
+	stalled := []*identifiedProvider{
+		{fakeProvider: claudeSource("one"), stall: true},
+		{fakeProvider: claudeSource("two"), stall: true},
+		{fakeProvider: claudeSource("three"), stall: true},
+	}
+	codex := &identifiedProvider{fakeProvider: codexSource("plus"), identity: provider.AccountIdentity{Email: "plus@example.com"}}
+	sources := []provider.Provider{stalled[0], stalled[1], stalled[2], codex}
+	server := httptest.NewUnstartedServer(newHandler(t, sources, testMaxAge))
+	// The hub's own server deadline is 10 seconds; this one is shorter than
+	// three stalled lookups in a row.
+	server.Config.WriteTimeout = time.Second
+	server.Start()
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodGet, server.URL+authFilesPath, nil)
+	request.Header.Set("Authorization", "Bearer "+testManagementKey)
+	started := time.Now()
+	client := server.Client()
+	client.Timeout = 2 * time.Second
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("auth-files: %v", err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if elapsed := time.Since(started); response.StatusCode != http.StatusOK || elapsed > 500*time.Millisecond {
+		t.Fatalf("auth-files = %d after %s, want 200 within the identity budget; body = %s", response.StatusCode, elapsed, body)
+	}
+	for _, id := range []string{"claude:one", "claude:two", "claude:three", "codex:plus"} {
+		if !strings.Contains(string(body), `"id":"`+id+`"`) {
+			t.Fatalf("auth-files lacks %s: %s", id, body)
+		}
+	}
+	if strings.Count(string(body), `"email"`) != 1 {
+		t.Fatalf("auth-files = %s, want an email only for the account that answered", body)
+	}
+}
+
+func TestAFailedIdentityLookupIsRetriedLater(t *testing.T) {
+	source := &identifiedProvider{fakeProvider: claudeSource("work"), err: errors.New("profile: http 429")}
+	h := newHandler(t, []provider.Provider{source}, testMaxAge)
+	authFiles(t, h)
+	authFiles(t, h)
+	if source.calls != 1 {
+		t.Fatalf("lookups = %d right after a failure, want 1", source.calls)
+	}
+
+	oldRetry := identityRetry
+	identityRetry = 0
+	t.Cleanup(func() { identityRetry = oldRetry })
+	source.err = nil
+	source.identity = provider.AccountIdentity{Email: "work@example.com"}
+	if file := fileByID(t, authFiles(t, h), "claude:work"); file["email"] != "work@example.com" || source.calls != 2 {
+		t.Fatalf("after the retry wait: file = %v, lookups = %d; want the email from a second lookup", file, source.calls)
+	}
+}
+
+func TestAccountIdentityLeaksNoCredential(t *testing.T) {
+	claude := &identifiedProvider{fakeProvider: claudeSource("work"), identity: provider.AccountIdentity{Email: "work@example.com"}}
+	codex := &identifiedProvider{fakeProvider: codexSource("plus"), identity: provider.AccountIdentity{
+		Email: "plus@example.com", WorkspaceID: "acct-1", PlanType: "pro",
+	}}
+	body := authFilesRaw(t, newHandler(t, []provider.Provider{claude, codex}, testMaxAge))
+	if !strings.Contains(body, "work@example.com") || !strings.Contains(body, "acct-1") {
+		t.Fatalf("auth-files = %s, want the identities", body)
+	}
+	for _, secret := range []string{leakToken, claude.revision, codex.revision} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("auth-files leaks %q: %s", secret, body)
+		}
 	}
 }

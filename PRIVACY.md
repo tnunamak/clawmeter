@@ -65,7 +65,7 @@ Uninstalling Clawmeter removes installed binaries and shortcuts according to the
 
 ## T3 Code Hub
 
-`clawmeter hub` runs only when you start it. It needs a management key that you choose, and it serves plain HTTP only on a loopback address. It answers T3 Code with the Claude and Codex readings in the usage cache. With each account, it gives the account's email so that T3 can match the account with its own login. For Codex, it also gives the ChatGPT workspace ID and plan, read from the ID token that Codex saved in `auth.json`. For Claude, it asks Anthropic's `GET /api/oauth/profile` endpoint with that account's token, once per login, and keeps the email only in memory. It never returns tokens, never forwards T3's requests, and never writes these values to disk.
+`clawmeter hub` runs only when you start it. It needs a management key that you choose, and it serves plain HTTP only on a loopback address. It answers T3 Code with the Claude and Codex readings in the usage cache. With each account, it gives the account's email so that T3 can match the account with its own login. For Codex, it also gives the ChatGPT workspace ID and plan, read from the ID token that Codex saved in `auth.json`. For Claude, it asks Anthropic's `GET /api/oauth/profile` endpoint with that account's token, and keeps the email only in memory until the login changes. It never returns tokens, never forwards T3's requests, and never writes these values to disk.
 
 ## How To Disable Providers
 
