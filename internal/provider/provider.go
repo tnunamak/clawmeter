@@ -72,6 +72,23 @@ func IsAccountBound(p Provider) bool {
 	return ok && source.AccountBound()
 }
 
+// AccountIdentity names the login a source reads, as its provider reports it.
+// A consumer such as T3 matches it with its own logins, so it must come from
+// the same credential as the source's readings.
+type AccountIdentity struct {
+	Email string
+	// WorkspaceID and PlanType are the ChatGPT account and plan of a Codex
+	// login; Claude sources leave them empty.
+	WorkspaceID string
+	PlanType    string
+}
+
+// AccountIdentityCapability reads the identity of the login a source reads.
+// It may ask the provider, but it never renews or writes a credential.
+type AccountIdentityCapability interface {
+	AccountIdentity(ctx context.Context) (AccountIdentity, error)
+}
+
 // CredentialSourceRevision returns a stable, one-way credential fingerprint.
 // API credentials are high-entropy secrets; hashing lets separate Clawmeter
 // processes validate the private (0600) cache without persisting the secret.

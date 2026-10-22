@@ -1,11 +1,13 @@
 // Package cliproxy exposes Clawmeter's cached Claude and Codex readings through
 // the read-only subset of CLIProxyAPI's management API that T3 Code reads
 // (apps/server/src/usage/cliproxyApi.ts in pingdotgg/t3code). It answers from
-// the cache the tray keeps; it never fetches, forwards a request, or sends a
-// credential.
+// the cache the tray keeps and never forwards a request or returns a
+// credential. Its only own request is for each account's identity, which T3
+// uses to match the account with its own login.
 package cliproxy
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -15,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/cache"
@@ -43,6 +46,16 @@ type handler struct {
 	maxAge   time.Duration
 	accounts []account
 	byIndex  map[string]account
+
+	mu sync.Mutex
+	// identities holds each account's last identity with the source
+	// revision it was read under, so one login is looked up once.
+	identities map[string]knownIdentity
+}
+
+type knownIdentity struct {
+	revision string
+	identity provider.AccountIdentity
 }
 
 type authFilesResponse struct {
@@ -51,9 +64,17 @@ type authFilesResponse struct {
 }
 
 type authFile struct {
-	ID        string `json:"id"`
-	AuthIndex string `json:"auth_index"`
-	Provider  string `json:"provider"`
+	ID        string        `json:"id"`
+	AuthIndex string        `json:"auth_index"`
+	Provider  string        `json:"provider"`
+	Email     string        `json:"email,omitempty"`
+	IDToken   *authIDTokens `json:"id_token,omitempty"`
+}
+
+// authIDTokens holds the claims T3 reads from a Codex login's ID token.
+type authIDTokens struct {
+	ChatGPTAccountID string `json:"chatgpt_account_id,omitempty"`
+	PlanType         string `json:"plan_type,omitempty"`
 }
 
 type apiCallRequest struct {
@@ -121,9 +142,10 @@ func NewHandler(managementKey string, sources []provider.Provider, maxAge time.D
 	}
 
 	h := &handler{
-		key:     managementKey,
-		maxAge:  maxAge,
-		byIndex: make(map[string]account, len(sources)),
+		key:        managementKey,
+		maxAge:     maxAge,
+		byIndex:    make(map[string]account, len(sources)),
+		identities: make(map[string]knownIdentity, len(sources)),
 	}
 	for _, source := range sources {
 		providerName, ok := hubProvider(source)
@@ -163,7 +185,14 @@ func (h *handler) authFiles(w http.ResponseWriter, r *http.Request) {
 
 	files := make([]authFile, 0, len(h.accounts))
 	for _, account := range h.accounts {
-		files = append(files, authFile{ID: account.id, AuthIndex: account.index, Provider: account.provider})
+		file := authFile{ID: account.id, AuthIndex: account.index, Provider: account.provider}
+		if identity, ok := h.identity(r.Context(), account); ok {
+			file.Email = identity.Email
+			if account.provider == "codex" && (identity.WorkspaceID != "" || identity.PlanType != "") {
+				file.IDToken = &authIDTokens{ChatGPTAccountID: identity.WorkspaceID, PlanType: identity.PlanType}
+			}
+		}
+		files = append(files, file)
 	}
 	writeJSON(w, http.StatusOK, authFilesResponse{ObservedAt: time.Now().UTC(), Files: files})
 }
@@ -284,6 +313,38 @@ func hubProvider(source provider.Provider) (string, bool) {
 func authIndex(providerName, sourceID string) string {
 	sum := sha256.Sum256([]byte(providerName + "\x00" + sourceID))
 	return hex.EncodeToString(sum[:8])
+}
+
+// identity returns the identity of the login the account's source reads now.
+// T3 shows the account's readings under the login with that email, so an
+// identity read while the login changed is withheld: without one, T3 shows
+// the account on its own row.
+func (h *handler) identity(ctx context.Context, account account) (provider.AccountIdentity, bool) {
+	source, ok := account.source.(provider.AccountIdentityCapability)
+	if !ok {
+		return provider.AccountIdentity{}, false
+	}
+	revisionBefore := provider.SourceRevision(account.source)
+	if revisionBefore == "" || !provider.IsAccountBound(account.source) {
+		return provider.AccountIdentity{}, false
+	}
+	h.mu.Lock()
+	known, found := h.identities[account.index]
+	h.mu.Unlock()
+	identity := known.identity
+	if !found || known.revision != revisionBefore {
+		var err error
+		if identity, err = source.AccountIdentity(ctx); err != nil || identity.Email == "" {
+			return provider.AccountIdentity{}, false
+		}
+	}
+	if provider.SourceRevision(account.source) != revisionBefore {
+		return provider.AccountIdentity{}, false
+	}
+	h.mu.Lock()
+	h.identities[account.index] = knownIdentity{revision: revisionBefore, identity: identity}
+	h.mu.Unlock()
+	return identity, true
 }
 
 // cachedUsage returns the source's cached reading when it belongs to the
