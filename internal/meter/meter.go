@@ -114,11 +114,14 @@ func ExpectedPct(resetsAt time.Time, length time.Duration) float64 {
 // Shown drops windows with nothing used and nothing projected, unless that
 // would leave no window to show.
 func Shown(windows []provider.UsageWindow) []provider.UsageWindow {
+	return ShownAt(windows, time.Now())
+}
+
+// ShownAt is Shown judged at the given time.
+func ShownAt(windows []provider.UsageWindow, at time.Time) []provider.UsageWindow {
 	active := make([]provider.UsageWindow, 0, len(windows))
 	for _, window := range windows {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-		idle := window.Utilization == 0 && (proj.Unknown || proj.ProjectedPct < 0.5)
-		if !idle {
+		if !IdleAt(window, at) {
 			active = append(active, window)
 		}
 	}
@@ -126,6 +129,13 @@ func Shown(windows []provider.UsageWindow) []provider.UsageWindow {
 		return windows
 	}
 	return active
+}
+
+// IdleAt reports whether a window has nothing used and nothing projected at
+// the given time. Shown leaves idle windows out of a list.
+func IdleAt(window provider.UsageWindow, at time.Time) bool {
+	proj := forecast.ProjectAt(window.Utilization, window.ResetsAt, forecast.WindowLength(window), at)
+	return window.Utilization == 0 && (proj.Unknown || proj.ProjectedPct < 0.5)
 }
 
 // Row is one quota window ready to display. Values are unpadded; each
