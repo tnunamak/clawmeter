@@ -242,7 +242,7 @@ func (p UsageCreditPool) freshness(now time.Time) string {
 	if p.IsLive(now) {
 		return ""
 	}
-	stale := "not updated since " + p.ObservedAt.Local().Format("15:04")
+	stale := "not updated since " + shortDate(p.ObservedAt, now)
 	if action := p.Action(now); action != "" {
 		return stale + " · " + action
 	}
