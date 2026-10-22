@@ -868,6 +868,8 @@ func hideProviderWindows(menu *providerMenuItems) {
 	}
 	for i, b := range menu.balanceItems {
 		setMenuItemVisible(b, &menu.balanceStates[i], false)
+		setMenuItemEnabled(b, &menu.balanceStates[i], false)
+		menu.balanceActions[i] = ""
 	}
 }
 

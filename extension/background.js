@@ -307,8 +307,11 @@ async function check() {
       const { status: previous } = await chrome.storage.session.get("status");
       shown = signal(status, previous);
     } catch {}
+    // A failed cost-cache write must not lose the status or renewal lookups.
     try {
       if (cache) await chrome.storage.local.set({ cache, sessions });
+    } catch {}
+    try {
       await chrome.storage.session.set({ status, resetLinks: [...resetLinks] });
     } catch {}
     try {

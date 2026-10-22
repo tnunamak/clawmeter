@@ -694,3 +694,21 @@ test("a restarted worker keeps the hourly renewal lookup", async () => {
   await vm.runInContext("poll()", second.context);
   assert.equal(reads.filter(path => path.startsWith("/api/quirky-lollipop/")).length, 1);
 });
+
+test("a failed cost-cache write still saves the status and renewal lookups", async () => {
+  const { readResets } = require("./resets.js");
+  const executeScript = async ({ args: [url] }) => {
+    const path = new URL(url).pathname;
+    if (path === "/api/organizations") return [{ result: { status: 200, body: [{ uuid: "org-a", name: "A" }] } }];
+    if (path.startsWith("/api/quirky-lollipop/")) {
+      return [{ result: { status: 200, body: { status: "linked", next_grant_at: "2099-01-01T00:00:00Z" } } }];
+    }
+    return [{ result: { status: 200, body: { cedar_ember: { eligible: true, grants: [] } } } }];
+  };
+  const w = worker(async () => ({ status: "ok", payloads: [], failures: [] }), undefined, readResets, { tabs: [{ id: 1 }], executeScript });
+  w.context.chrome.storage.local.set = async () => { throw new Error("quota"); };
+  await vm.runInContext("poll()", w.context);
+  const saved = w.sessions.at(-1);
+  assert.ok(saved.status);
+  assert.deepEqual(saved.resetLinks.map(([id]) => id), ["org-a"]);
+});

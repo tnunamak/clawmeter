@@ -81,3 +81,21 @@ func TestBalanceRowOpensTheConsoleOnlyWhenItCarriesAStep(t *testing.T) {
 		t.Fatalf("opened = %q", opened)
 	}
 }
+
+func TestAHiddenBalanceRowOpensNothing(t *testing.T) {
+	defer systray.ResetMenu()
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: provider.ClaudeAPISourceName}, false, nil, false)
+	stale := time.Now().Add(-6 * time.Minute)
+	drawBalanceRows(t, menu, time.Time{}, provider.UsageCreditPool{Name: "Org", Currency: "USD", Balance: 5753, ObservationSource: "extension", ObservedAt: stale})
+	if menu.balanceActions[0] == "" {
+		t.Fatal("stale row has no step")
+	}
+	trayRenderMu.Lock()
+	hideProviderWindows(menu)
+	trayRenderMu.Unlock()
+	opened := 0
+	openBalanceRow(menu, 0, func(string) { opened++ })
+	if opened != 0 || menu.balanceStates[0].enabled {
+		t.Fatalf("a click on a hidden row opened %d pages; enabled %v", opened, menu.balanceStates[0].enabled)
+	}
+}
