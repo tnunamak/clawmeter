@@ -300,7 +300,7 @@ func TestCompactIconTooltipShowsBlockedGap(t *testing.T) {
 		WillLastToReset: false,
 		RunsOutIn:       90 * time.Minute,
 		RunsOutEarlyBy:  time.Hour,
-	})
+	}, time.Time{})
 
 	for _, want := range []string{
 		"Codex 7-Day",
@@ -322,7 +322,7 @@ func TestCompactIconTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
 		ProjectedPct:    180,
 		WillLastToReset: false,
 		RunsOutEarlyBy:  2 * time.Hour,
-	})
+	}, time.Time{})
 
 	if !strings.Contains(got, "Out now (2h00m until reset)") {
 		t.Fatalf("compactIconTooltip() = %q, want already-out wait", got)
@@ -1321,7 +1321,7 @@ func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			window := provider.UsageWindow{Utilization: 100, ResetsAt: time.Now().Add(time.Hour)}
-			got := compactIconTooltip("Test", window, tc.proj)
+			got := compactIconTooltip("Test", window, tc.proj, time.Time{})
 			if !strings.Contains(got, "Current 100%") || !strings.Contains(got, tc.want) || strings.Contains(got, "Won't run out") || strings.Contains(got, "Est. 0%") {
 				t.Fatalf("tooltip = %q", got)
 			}
