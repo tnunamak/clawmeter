@@ -44,8 +44,8 @@ func observeReading(tr *exhaustionTracker, source, account string, util float64,
 
 func TestExhaustionReportsFirstFullAfterBelow(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 
 	got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(10*time.Minute))
 	if !ok || !got.Equal(testBase.Add(5*time.Minute)) {
@@ -55,8 +55,8 @@ func TestExhaustionReportsFirstFullAfterBelow(t *testing.T) {
 
 func TestExhaustionHasNoTimeWhenFirstSeenFull(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 
 	if got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(10*time.Minute)); ok {
 		t.Fatalf("ranOutAt = %v; want no time when the tray first saw the window full", got)
@@ -65,8 +65,8 @@ func TestExhaustionHasNoTimeWhenFirstSeenFull(t *testing.T) {
 
 func TestExhaustionHasNoTimeAcrossAGapLargerThanMaxGap(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(30*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(30*time.Minute))
 
 	if got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(40*time.Minute)); ok {
 		t.Fatalf("ranOutAt = %v; want no time across a gap of 30m with maxGap 10m", got)
@@ -75,8 +75,8 @@ func TestExhaustionHasNoTimeAcrossAGapLargerThanMaxGap(t *testing.T) {
 
 func TestExhaustionNewResetPeriodClearsTheRecord(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 	if _, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(10*time.Minute)); !ok {
 		t.Fatal("old period lost its transition before the reset moved")
 	}
@@ -84,7 +84,7 @@ func TestExhaustionNewResetPeriodClearsTheRecord(t *testing.T) {
 	// The period rolls over, and the window is full again on its first
 	// reading. That is not a transition the tray saw.
 	next := testReset.Add(5 * time.Hour)
-	l.observe("claude", testAccount, windowAt(100, next), testBase.Add(5*time.Hour), testMaxGap)
+	l.observe("claude", testAccount, windowAt(100, next), testBase.Add(5*time.Hour))
 	if got, ok := l.ranOutAt("claude", testAccount, windowAt(100, next), testMaxGap, testBase.Add(6*time.Hour)); ok {
 		t.Fatalf("ranOutAt in the new period = %v; want none", got)
 	}
@@ -95,8 +95,8 @@ func TestExhaustionNewResetPeriodClearsTheRecord(t *testing.T) {
 
 func TestExhaustionResetJitterKeepsTheRecord(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset.Add(-3*time.Second)), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset.Add(2*time.Second)), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset.Add(-3*time.Second)), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset.Add(2*time.Second)), testBase.Add(5*time.Minute))
 
 	got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset.Add(-1*time.Second)), testMaxGap, testBase.Add(10*time.Minute))
 	if !ok || !got.Equal(testBase.Add(5*time.Minute)) {
@@ -106,9 +106,9 @@ func TestExhaustionResetJitterKeepsTheRecord(t *testing.T) {
 
 func TestExhaustionDropToBelowStartsAnotherTransition(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(60, testReset), testBase.Add(5*time.Minute), testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(10*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(60, testReset), testBase.Add(5*time.Minute))
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(10*time.Minute))
 
 	got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(11*time.Minute))
 	if !ok || !got.Equal(testBase.Add(10*time.Minute)) {
@@ -118,8 +118,8 @@ func TestExhaustionDropToBelowStartsAnotherTransition(t *testing.T) {
 
 func TestExhaustionNoTimeWhileWindowIsNotFull(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 
 	if got, ok := l.ranOutAt("claude", testAccount, windowAt(90, testReset), testMaxGap, testBase.Add(10*time.Minute)); ok {
 		t.Fatalf("ranOutAt for a window now at 90%% = %v; want none", got)
@@ -128,7 +128,7 @@ func TestExhaustionNoTimeWhileWindowIsNotFull(t *testing.T) {
 
 func TestExhaustionIgnoresWindowsWithoutAReset(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(100, time.Time{}), testBase, testMaxGap)
+	l.observe("claude", testAccount, windowAt(100, time.Time{}), testBase)
 	if len(l.Windows) != 0 {
 		t.Fatalf("observed a window with no reset: %+v", l.Windows)
 	}
@@ -139,8 +139,8 @@ func TestExhaustionIgnoresWindowsWithoutAReset(t *testing.T) {
 
 func TestExhaustionIgnoresReadingsWithoutAnAccount(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", "", windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", "", windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", "", windowAt(80, testReset), testBase)
+	l.observe("claude", "", windowAt(100, testReset), testBase.Add(5*time.Minute))
 	if len(l.Windows) != 0 {
 		t.Fatalf("tracked a reading with no account: %+v", l.Windows)
 	}
@@ -151,12 +151,12 @@ func TestExhaustionIgnoresReadingsWithoutAnAccount(t *testing.T) {
 
 func TestExhaustionAccountSwitchInheritsNoTime(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 
 	// The source now reads another account whose window resets at the same
 	// moment and is already full on its first reading.
-	l.observe("claude", otherAcct, windowAt(100, testReset), testBase.Add(10*time.Minute), testMaxGap)
+	l.observe("claude", otherAcct, windowAt(100, testReset), testBase.Add(10*time.Minute))
 	now := testBase.Add(11 * time.Minute)
 	if got, ok := l.ranOutAt("claude", otherAcct, windowAt(100, testReset), testMaxGap, now); ok {
 		t.Fatalf("new account inherited a time: %v", got)
@@ -166,8 +166,8 @@ func TestExhaustionAccountSwitchInheritsNoTime(t *testing.T) {
 	}
 
 	// The new account's own transition then works.
-	l.observe("claude", otherAcct, windowAt(70, testReset), testBase.Add(12*time.Minute), testMaxGap)
-	l.observe("claude", otherAcct, windowAt(100, testReset), testBase.Add(13*time.Minute), testMaxGap)
+	l.observe("claude", otherAcct, windowAt(70, testReset), testBase.Add(12*time.Minute))
+	l.observe("claude", otherAcct, windowAt(100, testReset), testBase.Add(13*time.Minute))
 	got, ok := l.ranOutAt("claude", otherAcct, windowAt(100, testReset), testMaxGap, testBase.Add(14*time.Minute))
 	if !ok || !got.Equal(testBase.Add(13*time.Minute)) {
 		t.Fatalf("new account's own transition = %v, %t; want %v", got, ok, testBase.Add(13*time.Minute))
@@ -176,8 +176,8 @@ func TestExhaustionAccountSwitchInheritsNoTime(t *testing.T) {
 
 func TestExhaustionRecordAnswersOnlyForItsAccount(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 	if got, ok := l.ranOutAt("claude", otherAcct, windowAt(100, testReset), testMaxGap, testBase.Add(10*time.Minute)); ok {
 		t.Fatalf("another account read the record's time %v", got)
 	}
@@ -197,12 +197,12 @@ func TestExhaustionZeroGapIsRejected(t *testing.T) {
 
 func TestExhaustionIgnoresReadingsNotAfterTheLastSeen(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 
 	// An equal time and an earlier time must not rewrite the record.
-	l.observe("claude", testAccount, windowAt(50, testReset), testBase.Add(5*time.Minute), testMaxGap)
-	l.observe("claude", testAccount, windowAt(50, testReset), testBase.Add(time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(50, testReset), testBase.Add(5*time.Minute))
+	l.observe("claude", testAccount, windowAt(50, testReset), testBase.Add(time.Minute))
 
 	got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(10*time.Minute))
 	if !ok || !got.Equal(testBase.Add(5*time.Minute)) {
@@ -212,8 +212,8 @@ func TestExhaustionIgnoresReadingsNotAfterTheLastSeen(t *testing.T) {
 
 func TestExhaustionFutureTransitionIsNotShown(t *testing.T) {
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(80, testReset), testBase, testMaxGap)
-	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(80, testReset), testBase)
+	l.observe("claude", testAccount, windowAt(100, testReset), testBase.Add(5*time.Minute))
 
 	if got, ok := l.ranOutAt("claude", testAccount, windowAt(100, testReset), testMaxGap, testBase.Add(4*time.Minute)); ok {
 		t.Fatalf("ranOutAt before the transition's time = %v; want none", got)
@@ -223,9 +223,9 @@ func TestExhaustionFutureTransitionIsNotShown(t *testing.T) {
 func TestExhaustionPrunesPeriodsEndedMoreThanADayAgo(t *testing.T) {
 	now := testBase
 	var l exhaustionLog
-	l.observe("claude", testAccount, windowAt(100, now.Add(-25*time.Hour)), now.Add(-26*time.Hour), testMaxGap)
-	l.observe("claude:dondo", testAccount, windowAt(100, now.Add(-23*time.Hour)), now.Add(-24*time.Hour), testMaxGap)
-	l.observe("codex", testAccount, windowAt(100, now.Add(time.Hour)), now.Add(-time.Minute), testMaxGap)
+	l.observe("claude", testAccount, windowAt(100, now.Add(-25*time.Hour)), now.Add(-26*time.Hour))
+	l.observe("claude:dondo", testAccount, windowAt(100, now.Add(-23*time.Hour)), now.Add(-24*time.Hour))
+	l.observe("codex", testAccount, windowAt(100, now.Add(time.Hour)), now.Add(-time.Minute))
 
 	path := filepath.Join(t.TempDir(), "exhaustion.json")
 	if err := l.save(path, now); err != nil {

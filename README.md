@@ -125,12 +125,14 @@ clawmeter config set notify_quota_available true
 ```
 
 When the tray has seen an account run out and a later reading of the same
-account shows room in every window, it sends one desktop notification, for
+account, within two poll intervals, shows room in every window that was out,
+it sends one desktop notification, for
 example `Codex quota available again` with `Codex: 5h 0% used, 7d 4% used` and
 the time of the reading. It comes from the account's own reading, never from an
-announcement, and once per time the account ran out. A reading after a long
-gap, such as the first one after the computer wakes or the tray starts, sets a
-new baseline instead of notifying. Quota on the meter does not prove a request
+announcement, and once per time the account ran out. The tray keeps this in
+memory, so starting it, a long gap between readings (the computer slept) or a
+different account on the same source sets a new baseline instead of
+notifying. A window missing from a reading keeps waiting for it. Quota on the meter does not prove a request
 will succeed.
 
 ### Claude API Credits

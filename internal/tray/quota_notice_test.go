@@ -10,70 +10,93 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
-func TestAWindowSeenOutRecoversWhenTheNextReadingHasRoom(t *testing.T) {
-	var l exhaustionLog
-	l.observe("codex", testAccount, windowAt(100, testReset), testBase, testMaxGap)
-	if !l.observe("codex", testAccount, windowAt(4, testReset.Add(7*24*time.Hour)), testBase.Add(5*time.Minute), testMaxGap) {
-		t.Fatal("a full window followed by a new period with room did not recover")
+// watchReading is one fresh reading of codex with the given windows.
+func watchReading(windows ...provider.UsageWindow) map[string]*provider.UsageData {
+	return map[string]*provider.UsageData{"codex": {Windows: windows}}
+}
+
+func win(name string, used float64) provider.UsageWindow {
+	return provider.UsageWindow{Name: name, Utilization: used, ResetsAt: testReset}
+}
+
+var watchIDs = map[string]string{"codex": testAccount}
+
+func TestARecoveryIsReportedOncePerEpisode(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("5h", 100), win("7d", 100)), nil, watchIDs, testBase, testMaxGap)
+	if got := r.observe(watchReading(win("5h", 10), win("7d", 100)), nil, watchIDs, testBase.Add(5*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v while 7d is still out", got)
 	}
-	var same exhaustionLog
-	same.observe("codex", testAccount, windowAt(100, testReset), testBase, testMaxGap)
-	if !same.observe("codex", testAccount, windowAt(40, testReset), testBase.Add(5*time.Minute), testMaxGap) {
-		t.Fatal("a full window that dropped below 100% in the same period did not recover")
+	if got := r.observe(watchReading(win("5h", 12), win("7d", 3)), nil, watchIDs, testBase.Add(10*time.Minute), testMaxGap); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("recovered = %v, want [codex]", got)
+	}
+	if got := r.observe(watchReading(win("5h", 13), win("7d", 4)), nil, watchIDs, testBase.Add(15*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v again", got)
 	}
 }
 
-func TestOnlyARecentBlockedEpisodeOfTheSameAccountRecovers(t *testing.T) {
+func TestAWindowMissingFromAReadingKeepsTheEpisodeOpen(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("5h", 100), win("7d", 100)), nil, watchIDs, testBase, testMaxGap)
+	if got := r.observe(watchReading(win("5h", 10)), nil, watchIDs, testBase.Add(5*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v with 7d missing", got)
+	}
+	if got := r.observe(watchReading(win("5h", 10), win("7d", 10)), nil, watchIDs, testBase.Add(10*time.Minute), testMaxGap); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("recovered = %v once 7d is back with room, want [codex]", got)
+	}
+}
+
+func TestAWindowWithoutAResetTimeCountsToo(t *testing.T) {
+	var r recoveryWatch
+	daily := provider.UsageWindow{Name: "daily", Utilization: 100}
+	r.observe(watchReading(win("5h", 100), daily), nil, watchIDs, testBase, testMaxGap)
+	if got := r.observe(watchReading(win("5h", 5), daily), nil, watchIDs, testBase.Add(5*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v while the daily window is still out", got)
+	}
+	daily.Utilization = 20
+	if got := r.observe(watchReading(win("5h", 5), daily), nil, watchIDs, testBase.Add(10*time.Minute), testMaxGap); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("recovered = %v, want [codex]", got)
+	}
+}
+
+func TestOnlyARecentEpisodeOfTheSameAccountRecovers(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		first   float64
 		account string
 		gap     time.Duration
 	}{
-		{"first reading only had room", 80, testAccount, 5 * time.Minute},
-		{"readings too far apart, such as after a restart", 100, testAccount, testMaxGap + time.Minute},
-		{"another account now", 100, otherAcct, 5 * time.Minute},
+		{"readings too far apart", testAccount, testMaxGap + time.Minute},
+		{"another account now", otherAcct, 5 * time.Minute},
+		{"a reading at the same time", testAccount, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var l exhaustionLog
-			l.observe("codex", testAccount, windowAt(tc.first, testReset), testBase, testMaxGap)
-			if l.observe("codex", tc.account, windowAt(10, testReset), testBase.Add(tc.gap), testMaxGap) {
-				t.Fatal("recovered; want a new baseline")
+			var r recoveryWatch
+			r.observe(watchReading(win("5h", 100)), nil, watchIDs, testBase, testMaxGap)
+			if got := r.observe(watchReading(win("5h", 10)), nil, map[string]string{"codex": tc.account}, testBase.Add(tc.gap), testMaxGap); len(got) != 0 {
+				t.Fatalf("recovered = %v; want a baseline", got)
 			}
 		})
 	}
 }
 
-func TestAnAccountIsAvailableOnlyWhenNoWindowIsStillOut(t *testing.T) {
-	var tr exhaustionTracker
-	ids := map[string]string{"codex": testAccount}
-	week := testReset.Add(5 * 24 * time.Hour)
-	reading := func(fiveHour, weekly float64) map[string]*provider.UsageData {
-		return map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{
-			{Name: "5h", Utilization: fiveHour, ResetsAt: testReset},
-			{Name: "7d", Utilization: weekly, ResetsAt: week},
-		}}}
-	}
-	tr.observeFetched(reading(100, 100), nil, ids, testBase, testMaxGap)
-	if got := tr.observeFetched(reading(10, 100), nil, ids, testBase.Add(5*time.Minute), testMaxGap); len(got) != 0 {
-		t.Fatalf("available = %v while 7d is still out", got)
-	}
-	if got := tr.observeFetched(reading(12, 3), nil, ids, testBase.Add(10*time.Minute), testMaxGap); !reflect.DeepEqual(got, []string{"codex"}) {
-		t.Fatalf("available = %v, want [codex] once every window has room", got)
-	}
-	if got := tr.observeFetched(reading(13, 4), nil, ids, testBase.Add(15*time.Minute), testMaxGap); len(got) != 0 {
-		t.Fatalf("available = %v on the next reading; want one notice per episode", got)
+func TestAFreshWatchSetsABaseline(t *testing.T) {
+	var r recoveryWatch
+	if got := r.observe(watchReading(win("5h", 10)), nil, watchIDs, testBase, testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v on the first reading", got)
 	}
 }
 
-func TestAStaleReadingNeverMakesAnAccountAvailable(t *testing.T) {
-	var tr exhaustionTracker
-	ids := map[string]string{"codex": testAccount}
-	tr.observeFetched(map[string]*provider.UsageData{"codex": readingAt(100, testReset)}, nil, ids, testBase, testMaxGap)
-	stale := readingAt(10, testReset)
-	stale.Stale = true
-	if got := tr.observeFetched(map[string]*provider.UsageData{"codex": stale}, nil, ids, testBase.Add(5*time.Minute), testMaxGap); len(got) != 0 {
-		t.Fatalf("available = %v from a stale reading", got)
+func TestStaleAndCachedReadingsAreIgnored(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("5h", 100)), nil, watchIDs, testBase, testMaxGap)
+	stale := watchReading(win("5h", 10))
+	stale["codex"].Stale = true
+	if got := r.observe(stale, nil, watchIDs, testBase.Add(5*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v from a stale reading", got)
+	}
+	cachedReading := watchReading(win("5h", 10))
+	if got := r.observe(cachedReading, cachedReading, watchIDs, testBase.Add(6*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v from a cached reading", got)
 	}
 }
 
