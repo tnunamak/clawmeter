@@ -32,6 +32,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
+	"github.com/tnunamak/clawmeter/internal/resetfeed"
 	"github.com/tnunamak/clawmeter/internal/shellpath"
 	"github.com/tnunamak/clawmeter/internal/status"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
@@ -94,6 +95,9 @@ type state struct {
 	emptyVisibleKnown         bool
 	providerSetupVisible      bool
 	providerSetupVisibleKnown bool
+	// feedReading is the last codex-resets.com reading, set by refresh. It is
+	// empty when the setting is off or no Codex source is configured.
+	feedReading resetfeed.Reading
 }
 
 type iconTarget struct {
@@ -397,6 +401,16 @@ func onReadyWithConfig(loaded *config.Config) {
 		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured, result.SourceRevisions), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
 		_ = cache.Write(result)
 
+		// The feed is read after the usage cache is written: announcements
+		// are display-only and never enter the usage cache.
+		s.mu.Lock()
+		currentCfg := cfg
+		s.mu.Unlock()
+		feed := refreshResetAnnouncements(currentCfg, configured)
+		s.mu.Lock()
+		s.feedReading = feed
+		s.mu.Unlock()
+
 		now := time.Now()
 		s.mu.Lock()
 		s.lastResults = result.Results
@@ -463,7 +477,9 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		s.mu.Lock()
 		results := provider.PresentResetCreditSources(s.lastResults)
+		feed := s.feedReading
 		s.mu.Unlock()
+		results = resetfeed.AnnounceAll(results, feed, time.Now())
 		if results != nil {
 			displayNames := providerDisplayNames(providerMenus)
 			updateTrayIcon(results)
@@ -659,6 +675,7 @@ type providerMenuItems struct {
 	headerItem        *systray.MenuItem
 	statusItem        *systray.MenuItem
 	resetItem         *systray.MenuItem
+	announceItem      *systray.MenuItem
 	connectable       bool // the name row can run the quota connection
 	headerAction      string
 	headerConnects    atomic.Bool
@@ -674,6 +691,8 @@ type providerMenuItems struct {
 	headerState       menuItemState
 	statusState       menuItemState
 	resetState        menuItemState
+	announceState     menuItemState
+	announceURL       string // source post of the shown announcement; guarded by trayRenderMu
 	windowStates      []menuItemState
 	windowAtRisk      []bool
 	balanceStates     []menuItemState
@@ -751,12 +770,19 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	resetItem.Hide()
 	resetState := menuItemState{visible: false, enabled: false, initialized: true}
 
+	// An announced Codex reset sits after the reset-credit row and opens its
+	// source post when clicked.
+	announceItem := systray.AddMenuItem("", "")
+	setMenuItemIcon(announceItem, icons.MenuBlank())
+	announceItem.Hide()
+
 	menu := &providerMenuItems{
 		provider:          p,
 		displayName:       displayName,
 		headerItem:        header,
 		statusItem:        statusItem,
 		resetItem:         resetItem,
+		announceItem:      announceItem,
 		connectable:       connectable,
 		windowItems:       windowItems,
 		balanceItems:      balanceItems,
@@ -766,6 +792,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		headerState:       menuItemState{title: displayName, visible: true, enabled: opensDashboard || connectable, initialized: true},
 		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
 		resetState:        resetState,
+		announceState:     menuItemState{visible: false, enabled: true, initialized: true},
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
 		balanceStates:     balanceStates,
@@ -779,6 +806,11 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 			}
 		}()
 	}
+	go func() {
+		for range announceItem.ClickedCh {
+			openAnnouncement(menu, openURL)
+		}
+	}()
 	go func() {
 		for range header.ClickedCh {
 			if menu.headerConnects.Load() {
@@ -796,6 +828,16 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 
 // lastExtensionContact is a variable so tests can set the browser contact.
 var lastExtensionContact = claudeweb.LastExtensionContact
+
+// openAnnouncement opens the source post of the announcement on the row.
+func openAnnouncement(menu *providerMenuItems, open func(string)) {
+	trayRenderMu.Lock()
+	target := menu.announceURL
+	trayRenderMu.Unlock()
+	if target != "" {
+		open(target)
+	}
+}
 
 // openBalanceRow opens the Console for a balance row that carries an action.
 func openBalanceRow(menu *providerMenuItems, row int, open func(string)) {
@@ -815,6 +857,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setMenuItemVisible(menu.headerItem, &menu.headerState, false)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
+	setMenuItemVisible(menu.announceItem, &menu.announceState, false)
 	hideProviderWindows(menu)
 	setProviderSeparatorVisible(menu, false)
 }
@@ -1043,6 +1086,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	defer trayRenderMu.Unlock()
 	fetched := results
 	results = provider.PresentResetCreditSources(results)
+	results = resetfeed.AnnounceAll(results, latestFeedReading(), time.Now())
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 
@@ -1075,6 +1119,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			continue
 		}
 		updateResetCreditRow(menu, data, time.Now())
+		updateAnnouncementRow(menu, data, time.Now())
 		if provider.FamilyName(menu.provider) == "claude" {
 			hasClaude = true
 		}
@@ -1244,6 +1289,55 @@ func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now
 	setMenuItemTitle(menu.resetItem, &menu.resetState, title)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, true)
 }
+
+// updateAnnouncementRow shows the announced Codex reset that bears on this
+// account. Attachment already removed announcements that do not apply, so a
+// nil announcement hides the row.
+func updateAnnouncementRow(menu *providerMenuItems, data *provider.UsageData, now time.Time) {
+	var announced *provider.ResetAnnouncement
+	if data != nil {
+		announced = data.AnnouncedReset
+	}
+	title := announced.Summary(now)
+	if title == "" {
+		menu.announceURL = ""
+		setMenuItemVisible(menu.announceItem, &menu.announceState, false)
+		return
+	}
+	menu.announceURL = announced.SourceURL
+	setMenuItemTitle(menu.announceItem, &menu.announceState, title)
+	setMenuItemVisible(menu.announceItem, &menu.announceState, true)
+}
+
+// latestFeedReading returns the feed reading the tray renders with.
+func latestFeedReading() resetfeed.Reading {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.feedReading
+}
+
+// refreshResetAnnouncements reads the codex-resets.com feed when the user
+// opted in and a Codex source is configured. Otherwise it makes no request.
+func refreshResetAnnouncements(current *config.Config, configured []provider.Provider) resetfeed.Reading {
+	if !resetfeed.Wanted(current.Settings.CodexResetAnnouncements, configured) {
+		return resetfeed.Reading{}
+	}
+	client, err := resetFeedClient()
+	if err != nil {
+		log.Printf("codex reset feed: %v", err)
+		return resetfeed.Reading{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	reading, err := client.Read(ctx)
+	if err != nil {
+		log.Printf("codex reset feed: %v", err)
+	}
+	return reading
+}
+
+// resetFeedClient is replaced by tests so that no request leaves the process.
+var resetFeedClient = resetfeed.Default
 
 func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, iconPick *iconPicker, mEmpty, mProviderSetup *systray.MenuItem) bool {
 	// Read and publish after any in-flight refresh has finished publishing.
@@ -1846,9 +1940,21 @@ func trayTooltip(results map[string]*provider.UsageData, displayNames map[string
 
 func appendResetCreditTooltip(tooltip string, data *provider.UsageData) string {
 	if resetLine := resetCreditTraySummary(data, time.Now()); resetLine != "" {
-		return tooltip + "\n" + resetLine
+		tooltip += "\n" + resetLine
+	}
+	if announced := announcementSummary(data, time.Now()); announced != "" {
+		tooltip += "\n" + announced
 	}
 	return tooltip
+}
+
+// announcementSummary is the tray form of an announced reset, empty when none
+// bears on the account.
+func announcementSummary(data *provider.UsageData, now time.Time) string {
+	if data == nil {
+		return ""
+	}
+	return data.AnnouncedReset.Summary(now)
 }
 
 func resetCreditTraySummary(data *provider.UsageData, now time.Time) string {

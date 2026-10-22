@@ -94,6 +94,27 @@ The result shows under its Claude source as `Resets: 1 · expires Oct 22`. A
 reading more than five minutes old adds when it was read and
 `open claude.ai signed in to this account`.
 
+### Announced Codex Resets (opt-in)
+
+Off by default. Turn it on with:
+
+```bash
+clawmeter config set codex_reset_announcements true
+```
+
+Clawmeter then reads the public feed at codex-resets.com, a third-party site
+that records posts by OpenAI Codex staff about global usage resets. When a post
+schedules a reset that bears on a Codex account (a window is out now, or will
+run out before its own reset), that account shows one line:
+
+`Reset announced for ~10:00 · codex-resets.com`
+
+The time is approximate and the source is unofficial. Clawmeter cannot tell
+whether the reset reached your account. The line opens the post when you click
+it in the tray. It never changes usage numbers, projections, or exit codes, and
+OpenAI decides which accounts get a reset. Check the account's Usage page to
+confirm. See [Privacy Policy](PRIVACY.md) for the request this makes.
+
 ### Claude API Credits
 
 Prepaid Claude API credits (for example the monthly API credit a Max plan

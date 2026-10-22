@@ -561,21 +561,75 @@ func shortDate(t, now time.Time) string {
 	}
 }
 
+// ResetAnnouncementKind labels a third-party announcement. Clawmeter never
+// presents one as an official provider fact.
+const ResetAnnouncementKind = "third_party_announcement"
+
+// ResetAnnouncementFeed names the third-party feed an announcement came from.
+const ResetAnnouncementFeed = "codex-resets.com"
+
+// ResetAnnouncement is an unofficial report that a global Codex usage reset is
+// scheduled, shown only while it bears on one Codex account. It never changes
+// quota values, projections, reset times, risk, or exit codes.
+type ResetAnnouncement struct {
+	Kind          string    `json:"kind"`
+	Official      bool      `json:"official"`
+	Feed          string    `json:"feed"`
+	SourceURL     string    `json:"source_url"`
+	AnnouncedAt   time.Time `json:"announced_at"`
+	ScheduledFor  time.Time `json:"scheduled_for"`
+	Approximate   bool      `json:"approximate"`
+	Windows       []string  `json:"windows"`
+	FeedCheckedAt time.Time `json:"feed_checked_at"`
+	ShownUntil    time.Time `json:"shown_until"`
+}
+
+// Summary is the one-line fact shared by the CLI and tray, for example
+// "Reset announced for ~10:00 · codex-resets.com". The date comes first when
+// the time is not today. It is empty for a nil announcement.
+func (a *ResetAnnouncement) Summary(now time.Time) string {
+	if a == nil {
+		return ""
+	}
+	return "Reset announced for ~" + announcementTime(a.ScheduledFor, now) + " · " + a.Feed
+}
+
+// AgentField is the --agent form, for example
+// "announced_reset=[~2026-10-23T10:00:00-07:00 unofficial source=codex-resets.com windows=7d]".
+func (a *ResetAnnouncement) AgentField() string {
+	if a == nil {
+		return ""
+	}
+	return "announced_reset=[~" + a.ScheduledFor.Local().Format(time.RFC3339) +
+		" unofficial source=" + a.Feed + " windows=" + strings.Join(a.Windows, ",") + "]"
+}
+
+// announcementTime shows a time of day for today, otherwise the short date
+// and the time of day.
+func announcementTime(t, now time.Time) string {
+	t, now = t.Local(), now.Local()
+	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+		return t.Format("15:04")
+	}
+	return shortDate(t, now) + " " + t.Format("15:04")
+}
+
 // UsageData contains usage information for a provider.
 type UsageData struct {
 	Provider           string             `json:"provider"` // Provider name
 	SourceID           string             `json:"source_id,omitempty"`
 	SourceLabel        string             `json:"source_label,omitempty"`
 	ResetCreditsTarget string             `json:"reset_credits_target,omitempty"`
-	FetchedAt          time.Time          `json:"fetched_at"`              // When this data was fetched
-	Windows            []UsageWindow      `json:"windows"`                 // Usage windows (providers may have 1 or more)
-	Balances           []UsageBalance     `json:"balances,omitempty"`      // Non-resetting balances
-	CreditPools        []UsageCreditPool  `json:"credit_pools,omitempty"`  // Prepaid API credit pools
-	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"` // Optional banked usage-limit reset metadata
-	IsExpired          bool               `json:"is_expired,omitempty"`    // True if credentials are expired
-	Error              string             `json:"error,omitempty"`         // Error message if fetch failed
-	Stale              bool               `json:"stale,omitempty"`         // True if showing last good data after refresh failed
-	Warning            string             `json:"warning,omitempty"`       // Short non-blocking data quality note
+	FetchedAt          time.Time          `json:"fetched_at"`                // When this data was fetched
+	Windows            []UsageWindow      `json:"windows"`                   // Usage windows (providers may have 1 or more)
+	Balances           []UsageBalance     `json:"balances,omitempty"`        // Non-resetting balances
+	CreditPools        []UsageCreditPool  `json:"credit_pools,omitempty"`    // Prepaid API credit pools
+	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"`   // Optional banked usage-limit reset metadata
+	AnnouncedReset     *ResetAnnouncement `json:"announced_reset,omitempty"` // Unofficial announced reset that bears on this account
+	IsExpired          bool               `json:"is_expired,omitempty"`      // True if credentials are expired
+	Error              string             `json:"error,omitempty"`           // Error message if fetch failed
+	Stale              bool               `json:"stale,omitempty"`           // True if showing last good data after refresh failed
+	Warning            string             `json:"warning,omitempty"`         // Short non-blocking data quality note
 	// InvalidatesPriorUsage means the current response disproves the semantic
 	// validity of earlier readings, so callers must not use stale fallback.
 	InvalidatesPriorUsage bool `json:"-"`

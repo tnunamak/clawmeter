@@ -21,6 +21,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
+	"github.com/tnunamak/clawmeter/internal/resetfeed"
 	"github.com/tnunamak/clawmeter/internal/status"
 )
 
@@ -212,6 +213,9 @@ func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
 		if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
 			addSpan(summary)
 		}
+		if announced := announcementSummary(pf.Data, time.Now()); announced != "" {
+			addSpan(announced)
+		}
 	}
 	if note != "" {
 		addSpan(dim + note + reset)
@@ -292,6 +296,9 @@ func (pf *ProviderFormatter) FormatPlain() string {
 	if resetSummary := resetCreditSummary(pf.Data, time.Now()); resetSummary != "" {
 		parts = append(parts, resetSummary)
 	}
+	if announced := announcementSummary(pf.Data, time.Now()); announced != "" {
+		parts = append(parts, announced)
+	}
 	for _, balance := range pf.Data.Balances {
 		label := balance.DisplayName
 		if label == "" {
@@ -327,6 +334,15 @@ func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 		return ""
 	}
 	return data.ResetCredits.Summary(now)
+}
+
+// announcementSummary is the announced-reset line. Attachment has already
+// decided that it bears on this account; the empty string means it does not.
+func announcementSummary(data *provider.UsageData, now time.Time) string {
+	if data == nil {
+		return ""
+	}
+	return data.AnnouncedReset.Summary(now)
 }
 
 // appendSnapshotLines keeps browser-checked facts (reset grants, API credit
@@ -515,6 +531,9 @@ type agentQuotaSummary struct {
 	Status   string
 	Tier     int
 	Stale    bool
+	// Announced is set on the account's first qualifying window, so the
+	// announcement is printed once per account inside its quota summary.
+	Announced *provider.ResetAnnouncement
 }
 
 func (m *MultiProviderOutput) agentQuotaSummaries() []string {
@@ -530,14 +549,18 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 			if pf.Data.Stale {
 				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
 			}
-			quotas = append(quotas, agentQuotaSummary{
+			quota := agentQuotaSummary{
 				Provider: pf.Display,
 				Window:   window,
 				Proj:     proj,
 				Status:   agentStatus(window, proj),
 				Tier:     tier,
 				Stale:    pf.Data.Stale,
-			})
+			}
+			if announced := pf.Data.AnnouncedReset; announced != nil && len(announced.Windows) > 0 && window.Name == announced.Windows[0] {
+				quota.Announced = announced
+			}
+			quotas = append(quotas, quota)
 		}
 	}
 
@@ -584,6 +607,9 @@ func (m *MultiProviderOutput) agentQuotaSummaries() []string {
 		}
 		if quota.Stale {
 			fields = append(fields, "data=stale")
+		}
+		if quota.Announced != nil {
+			fields = append(fields, quota.Announced.AgentField())
 		}
 		out = append(out, fmt.Sprintf("%s %s(%s)", quota.Provider, quota.Window.Name, strings.Join(fields, ",")))
 	}
@@ -1027,6 +1053,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 	configuredNames := registry.ConfiguredNames()
 	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
 		output := buildOutputFromCache(registry, cfg, cacheEntry)
+		attachResetAnnouncements(output, registry, cfg, time.Now())
 		if showAll {
 			output.IncludeAllProviders(registry, cfg)
 		} else {
@@ -1079,6 +1106,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 
 	// Build output
 	output := buildOutputFromResult(registry, cfg, result, statuses)
+	attachResetAnnouncements(output, registry, cfg, time.Now())
 	if showAll {
 		output.IncludeAllProviders(registry, cfg)
 	} else {
@@ -1086,6 +1114,29 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 	}
 
 	return output, nil, 0
+}
+
+// resetFeedClient builds the codex-resets.com client. Tests replace it so
+// that no request leaves the test process.
+var resetFeedClient = resetfeed.Default
+
+// attachResetAnnouncements shows an announced Codex reset on each account it
+// bears on. It runs only when the user opted in and a Codex source is
+// configured. It changes display data only, never quota values or exit codes.
+func attachResetAnnouncements(output *MultiProviderOutput, registry *provider.Registry, cfg *config.Config, now time.Time) {
+	if !resetfeed.Wanted(cfg.Settings.CodexResetAnnouncements, registry.GetConfigured()) {
+		return
+	}
+	client, err := resetFeedClient()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	reading, _ := client.Read(ctx)
+	for i := range output.Providers {
+		output.Providers[i].Data = resetfeed.Announce(output.Providers[i].Data, reading, now)
+	}
 }
 
 func loadCachedStatusOutput(showAll bool) (*MultiProviderOutput, int) {
@@ -1727,6 +1778,7 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 	for _, p := range display {
 		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}
+	attachResetAnnouncements(output, registry, cfg, time.Now())
 
 	if !jsonMode {
 		sortProvidersByName(output.Providers)

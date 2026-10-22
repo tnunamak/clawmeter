@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -442,6 +443,7 @@ func configShowCmd(args []string) int {
 	fmt.Printf("\nSettings:\n")
 	fmt.Printf("  Poll interval: %d seconds\n", cfg.Settings.PollInterval)
 	fmt.Printf("  Check for updates: %t\n", cfg.ShouldCheckForUpdates())
+	fmt.Printf("  Codex reset announcements: %t\n", cfg.Settings.CodexResetAnnouncements)
 	fmt.Printf("  Warning threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Warning)
 	fmt.Printf("  Critical threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Critical)
 
@@ -455,6 +457,7 @@ func configSetCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "  warning_threshold <percent>")
 		fmt.Fprintln(os.Stderr, "  critical_threshold <percent>")
 		fmt.Fprintln(os.Stderr, "  check_for_updates <true|false>")
+		fmt.Fprintln(os.Stderr, "  codex_reset_announcements <true|false>")
 		return 1
 	}
 
@@ -514,6 +517,13 @@ func configSetCmd(args []string) int {
 			return 1
 		}
 		cfg.Settings.CheckForUpdates = &enabled
+	case "codex_reset_announcements":
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
+			return 1
+		}
+		cfg.Settings.CodexResetAnnouncements = enabled
 	default:
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown config key %q\n", key)
 		return 1
@@ -1294,6 +1304,9 @@ Settable keys:
   warning_threshold <%>     Notification warning threshold (default: 80)
   critical_threshold <%>    Notification critical threshold (default: 95)
   check_for_updates <bool>  Automatic GitHub release checks (default: true)
+  codex_reset_announcements <bool>
+                            Show announced Codex resets from codex-resets.com,
+                            an unofficial third-party feed (default: false)
 
 Examples:
   clawmeter config show
