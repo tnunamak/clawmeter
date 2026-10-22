@@ -314,10 +314,11 @@ func onReadyWithConfig(loaded *config.Config) {
 		pollIntervalSeconds = resetPollIntervalIfChanged(pollIntervalSeconds, newCfg.Settings.PollInterval, ticker.Reset)
 	}
 
-	// Refresh usage only (lightweight, runs every poll cycle)
-	refresh := func(force bool) {
+	// Refresh usage only (lightweight, runs every poll cycle). It reports
+	// false when another refresh was already running.
+	refresh := func(force bool) bool {
 		if !refreshing.TryLock() {
-			return // already refreshing
+			return false
 		}
 		defer refreshing.Unlock()
 
@@ -406,6 +407,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		trayRenderMu.Lock()
 		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
 		trayRenderMu.Unlock()
+		return true
 	}
 
 	// Refresh status pages (heavier, runs less often)
@@ -553,6 +555,17 @@ func onReadyWithConfig(loaded *config.Config) {
 	// Setup tickers
 	statusTicker := time.NewTicker(15 * time.Minute) // status pages checked less often
 	updateTicker := time.NewTicker(updateCheckInterval)
+	loginTicker := time.NewTicker(loginCheckInterval)
+	go func() {
+		var watch loginWatch
+		for range loginTicker.C {
+			shellpath.Init()
+			now := time.Now()
+			if watch.due(providerSourceRevisions(registry.GetConfigured()), now) && refresh(false) {
+				watch.ran(now)
+			}
+		}
+	}()
 	// Event loop (never blocks on network I/O)
 	go func() {
 		for {
@@ -617,6 +630,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				ticker.Stop()
 				statusTicker.Stop()
 				updateTicker.Stop()
+				loginTicker.Stop()
 				systray.Quit()
 				return
 			}
