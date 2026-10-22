@@ -3,8 +3,11 @@
 package tray
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
 func TestLoginWatchRefreshesOnceAfterALoginChanges(t *testing.T) {
@@ -88,5 +91,29 @@ func TestLoginWatchFirstCheckIgnoresSourcesTheRefreshDidNotRecord(t *testing.T) 
 	var w loginWatch
 	if w.due(map[string]string{"claude": "a", "openai": "x"}, map[string]string{"claude": "a"}, start) {
 		t.Fatal("a source missing from the last refresh started a refresh")
+	}
+}
+
+type watchedSource struct {
+	name, revision string
+	bound          bool
+}
+
+func (s watchedSource) Name() string                                          { return s.name }
+func (watchedSource) DisplayName() string                                     { return "" }
+func (watchedSource) Description() string                                     { return "" }
+func (watchedSource) DashboardURL() string                                    { return "" }
+func (watchedSource) IsConfigured() bool                                      { return true }
+func (s watchedSource) SourceRevision() string                                { return s.revision }
+func (s watchedSource) AccountBound() bool                                    { return s.bound }
+func (watchedSource) FetchUsage(context.Context) (*provider.UsageData, error) { return nil, nil }
+
+func TestLoginRevisionsWatchOnlyAccountBoundSources(t *testing.T) {
+	got := loginRevisions([]provider.Provider{
+		watchedSource{name: "claude", revision: "login", bound: true},
+		watchedSource{name: "claude_api", revision: "changes-every-reading"},
+	})
+	if len(got) != 1 || got["claude"] != "login" {
+		t.Fatalf("loginRevisions = %v, want only the account-bound login", got)
 	}
 }
