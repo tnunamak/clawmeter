@@ -24,6 +24,8 @@ Clawmeter does not send provider credentials to Tim Nunamaker, GitHub, SignPath,
 
 Clawmeter contacts provider-owned APIs only to fetch quota, usage, account, or rate-limit status for enabled providers. These requests go to the provider you configured. For Antigravity, Clawmeter may refresh an expired access token through `oauth2.googleapis.com`, then calls Google's read-only `loadCodeAssist` and `retrieveUserQuotaSummary` methods. It does not submit prompts or consume model quota.
 
+Only if you turn on announced Codex resets (`clawmeter config set codex_reset_announcements true`, off by default), Clawmeter reads a third-party feed of posts about Codex usage resets at `https://codex-resets.com/api/v1/status`. It makes this request only when a Codex source is configured, at most about every 15 minutes, with a plain GET that carries no credentials and no account identifiers. The feed's host can see your IP address, as with any web request. Turn it off with `clawmeter config set codex_reset_announcements false`.
+
 Clawmeter also checks GitHub Releases for application updates. The tray performs periodic update checks, and users can trigger update checks manually from the app. These requests go to GitHub's public API for `tnunamak/clawmeter` release metadata and do not include provider credentials.
 
 The Windows installer exposes an automatic update-check option. Automatic update checks can also be disabled later in local config:
@@ -44,6 +46,8 @@ Clawmeter stores its own configuration and cache locally:
 The usage cache stores derived quota/status data, recent provider errors, and opaque source-revision fingerprints so the tray and CLI avoid excessive polling and never reuse one account's data for another. For environment-backed sources, that fingerprint is a one-way SHA-256 hash of the selected route and high-entropy API credential. Raw credentials, environment-variable names, credential paths, account IDs, and email addresses are not stored in the cache. The cache file is private to the OS user (`0600` on Unix), and the default cache TTL is 60 seconds.
 
 API credit pool snapshots are also stored in the user cache directory as `claude-api-credits-<first 16 hex characters of the pool hash>.json`. They include organization name, currency, balance, credit grants and expiry, month and daily spend, observation time, plan name, and monthly credit. The pool identity is an unsalted SHA-256 hash of `clawmeter-api-pool` plus the organization ID; a plan link uses a salted hash. Neither stores the raw organization ID or browser cookies.
+
+The announced-reset feed reading is stored as `codex-reset-feed.json` in the cache directory. It holds the feed's ETag, when the feed was last read, and the scheduled reset it listed. It holds no account data and no raw response.
 
 Claude reset grant snapshots are stored the same way as `claude-web-resets*.json`. They hold reset expiry times, the observation time, the Claude source they belong to, and a salted hash of the organization ID.
 

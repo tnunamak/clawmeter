@@ -176,6 +176,10 @@ type GlobalSettings struct {
 
 	// NotificationThresholds for usage warnings
 	NotificationThresholds NotificationConfig `yaml:"notification_thresholds,omitempty"`
+
+	// CodexResetAnnouncements opts into reading the third-party
+	// codex-resets.com feed. Off by default; when off, no request is made.
+	CodexResetAnnouncements bool `yaml:"codex_reset_announcements,omitempty"`
 }
 
 // NotificationConfig holds notification settings.
