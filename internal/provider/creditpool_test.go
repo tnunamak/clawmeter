@@ -87,7 +87,7 @@ func TestCreditPoolAsksForACheckOnceObservedCreditsExpire(t *testing.T) {
 	if !pool.ExpiredSinceCheck.Equal(observed.AddDate(0, 0, 10)) || !pool.ExpiresAt.IsZero() || !pool.RunsOutAt.IsZero() || pool.ProjectedSpend != 0 {
 		t.Fatalf("pool = %+v, want only the expiry since the check", pool)
 	}
-	if got, want := pool.Summary(now), "credits expired Oct 11 00:00, after the last check · check again"; got != want {
+	if got, want := pool.Summary(now), "credits expired Oct 11 00:00, after the last check · open the Claude Console"; got != want {
 		t.Fatalf("Summary() = %q, want %q", got, want)
 	}
 	if got := pool.TrayLine(now); got != pool.Summary(now) {

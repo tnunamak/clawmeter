@@ -380,3 +380,41 @@ func TestExtensionPairsWithThisUsersExtension(t *testing.T) {
 		t.Fatalf("preflight allows %q", preflight.Header().Get("Access-Control-Allow-Headers"))
 	}
 }
+
+func TestExtensionStoresTheNextCreditDate(t *testing.T) {
+	isolateUserCache(t)
+	handler := ExtensionHandler(func() []Account { return testAccounts }, nil, noToken)
+	observed := time.Now().Add(-time.Minute).UTC()
+	ends := observed.Add(10 * 24 * time.Hour).Format(time.RFC3339)
+	body := func(extra string) string {
+		return `{"observed_at":"` + observed.Format(time.RFC3339Nano) + `","organization":"org-odl","grants":[` +
+			`{"resets_left":2,"starts_at":"2026-01-01T00:00:00Z","ends_at":"` + ends + `","paused":false}]` + extra + `}`
+	}
+	future := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Second)
+	past := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		name  string
+		extra string
+		want  bool
+		at    time.Time
+	}{
+		{"future", `,"next_credit_at":"` + future.Format(time.RFC3339) + `"`, true, future},
+		{"absent", ``, false, time.Time{}},
+		{"unparseable", `,"next_credit_at":"soon"`, false, time.Time{}},
+		{"not a string", `,"next_credit_at":5`, false, time.Time{}},
+		{"past", `,"next_credit_at":"` + past.Format(time.RFC3339) + `"`, false, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extensionRequest(handler, "POST", "/v1/resets", extensionAddress, ExtensionOrigins[0], body(tc.extra)); got.Code != 204 {
+				t.Fatalf("resets = %d: %s", got.Code, got.Body.String())
+			}
+			next, ok := NextCreditAt("claude:odl", "org-odl")
+			if ok != tc.want || (ok && !next.Equal(tc.at)) {
+				t.Fatalf("NextCreditAt() = %v, %v; want %v, %v", next, ok, tc.want, tc.at)
+			}
+			if _, ok := NextCreditAt("claude:odl", "org-other"); ok {
+				t.Fatal("a date read for another organization was returned")
+			}
+		})
+	}
+}

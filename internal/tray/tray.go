@@ -677,6 +677,7 @@ type providerMenuItems struct {
 	windowStates      []menuItemState
 	windowAtRisk      []bool
 	balanceStates     []menuItemState
+	balanceActions    []string // per balance row; guarded by trayRenderMu
 	separatorState    menuItemState
 }
 
@@ -768,7 +769,15 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
 		balanceStates:     balanceStates,
+		balanceActions:    make([]string, len(balanceItems)),
 		separatorState:    menuItemState{visible: true, initialized: true},
+	}
+	for row, item := range balanceItems {
+		go func() {
+			for range item.ClickedCh {
+				openBalanceRow(menu, row, openURL)
+			}
+		}()
 	}
 	go func() {
 		for range header.ClickedCh {
@@ -783,6 +792,19 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		}
 	}()
 	return menu
+}
+
+// lastExtensionContact is a variable so tests can set the browser contact.
+var lastExtensionContact = claudeweb.LastExtensionContact
+
+// openBalanceRow opens the Console for a balance row that carries an action.
+func openBalanceRow(menu *providerMenuItems, row int, open func(string)) {
+	trayRenderMu.Lock()
+	action := menu.balanceActions[row]
+	trayRenderMu.Unlock()
+	if action != "" {
+		open(claudeweb.ConsoleURL)
+	}
 }
 
 func setProviderSeparatorVisible(menu *providerMenuItems, visible bool) {
@@ -802,10 +824,12 @@ func hideProviderMenu(menu *providerMenuItems) {
 // stay visible even when the row's usage reading failed.
 func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances []provider.UsageBalance) int {
 	rows := 0
-	show := func(title string) {
+	show := func(title, action string) {
 		if rows < len(menu.balanceItems) {
 			setMenuItemTitle(menu.balanceItems[rows], &menu.balanceStates[rows], title)
 			setMenuItemVisible(menu.balanceItems[rows], &menu.balanceStates[rows], true)
+			setMenuItemEnabled(menu.balanceItems[rows], &menu.balanceStates[rows], action != "")
+			menu.balanceActions[rows] = action
 			rows++
 		}
 	}
@@ -814,19 +838,26 @@ func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances
 		if label == "" {
 			label = balance.Name
 		}
-		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
+		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
+	now := time.Now()
+	contact := lastExtensionContact()
 	for _, pool := range data.CreditPools {
-		title := pool.TrayLine(time.Now())
+		if pool.ObservationSource == "extension" {
+			pool.ExtensionContactAt = contact
+		}
+		title := pool.TrayLine(now)
 		// A lone pool on the Claude API row needs no label; anywhere else it
 		// sits among other rows.
 		if data.Provider != provider.ClaudeAPISourceName || len(data.CreditPools) > 1 {
 			title = pool.Name + ": " + title
 		}
-		show(title)
+		show(title, pool.Action(now))
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
+		setMenuItemEnabled(menu.balanceItems[i], &menu.balanceStates[i], false)
+		menu.balanceActions[i] = ""
 	}
 	return rows
 }
@@ -837,6 +868,8 @@ func hideProviderWindows(menu *providerMenuItems) {
 	}
 	for i, b := range menu.balanceItems {
 		setMenuItemVisible(b, &menu.balanceStates[i], false)
+		setMenuItemEnabled(b, &menu.balanceStates[i], false)
+		menu.balanceActions[i] = ""
 	}
 }
 

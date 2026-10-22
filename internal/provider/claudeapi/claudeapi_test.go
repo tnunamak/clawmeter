@@ -1,11 +1,13 @@
 package claudeapi
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
+	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
 // A cached pool must not outlive its grant: the revision changes when a
@@ -51,7 +53,7 @@ func TestExtensionPoolFreshness(t *testing.T) {
 		{"old sign out", observed.Add(time.Minute), claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(-time.Second)}, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := poolWithState(saved, tc.now, tc.state)
+			got := poolWithState(saved, tc.now, tc.state, time.Time{})
 			if got.Live != tc.live || got.SignedOut != tc.signedOut || got.Balance != 100 {
 				t.Fatalf("pool = %+v", got)
 			}
@@ -70,7 +72,7 @@ func TestExtensionPoolFreshness(t *testing.T) {
 	}
 	for _, source := range []string{"", "bookmark"} {
 		saved.Source = source
-		if got := poolWithState(saved, observed, claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Second)}); got.Live || got.SignedOut || !strings.Contains(got.Summary(observed), "checked ") {
+		if got := poolWithState(saved, observed, claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Second)}, time.Time{}); got.Live || got.SignedOut || !strings.Contains(got.Summary(observed), "checked ") {
 			t.Fatalf("bookmark changed: %+v", got)
 		}
 	}
@@ -83,11 +85,96 @@ func TestSignOutIsOrderedPerPool(t *testing.T) {
 	b := a
 	b.Pool, b.Name, b.ObservedAt = strings.Repeat("b", 64), "B", observed.Add(2*time.Minute)
 	now := b.ObservedAt
-	older, newer := poolWithState(a, now, state), poolWithState(b, now, state)
+	older, newer := poolWithState(a, now, state, time.Time{}), poolWithState(b, now, state, time.Time{})
 	if older.Live || !older.SignedOut || !strings.Contains(older.Summary(now), "sign in to the Claude Console") {
 		t.Fatalf("A revived: %+v", older)
 	}
 	if !newer.Live || newer.SignedOut {
 		t.Fatalf("B not live: %+v", newer)
+	}
+}
+
+type linkedClaudeSource struct{ id, org string }
+
+func (linkedClaudeSource) Name() string                     { return "claude" }
+func (linkedClaudeSource) DisplayName() string              { return "Claude" }
+func (linkedClaudeSource) Description() string              { return "test" }
+func (linkedClaudeSource) DashboardURL() string             { return "" }
+func (linkedClaudeSource) IsConfigured() bool               { return true }
+func (s linkedClaudeSource) SourceID() string               { return s.id }
+func (s linkedClaudeSource) SourceLabel() string            { return s.id }
+func (linkedClaudeSource) SourceRevision() string           { return "" }
+func (s linkedClaudeSource) ClaudeOrganizationUUID() string { return s.org }
+func (linkedClaudeSource) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return &provider.UsageData{Provider: "claude"}, nil
+}
+
+func TestLinkedSourceCarriesItsNextCreditDate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("HOME", dir)
+	next := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Second)
+	if err := claudeweb.WriteSummary(claudeweb.GrantSummary{ObservedAt: time.Now(), ResetCreditsTarget: "claude:odl", MatchSalt: "s", MatchHash: claudeweb.AccountHash("s", "org-odl"), NextCreditAt: &next}); err != nil {
+		t.Fatal(err)
+	}
+	p := New([]provider.Provider{linkedClaudeSource{id: "odl", org: "org-odl"}, linkedClaudeSource{id: "spare", org: "org-spare"}})
+	if got := p.nextCreditAt("claude:odl"); !got.Equal(next) {
+		t.Fatalf("nextCreditAt = %v, want %v", got, next)
+	}
+	if got := p.nextCreditAt("claude:spare"); !got.IsZero() {
+		t.Fatalf("source without a reading = %v", got)
+	}
+	if got := p.nextCreditAt(""); !got.IsZero() {
+		t.Fatalf("unlinked pool = %v", got)
+	}
+	moved := New([]provider.Provider{linkedClaudeSource{id: "odl", org: "org-new"}})
+	if got := moved.nextCreditAt("claude:odl"); !got.IsZero() {
+		t.Fatalf("a date read for the source's previous organization = %v", got)
+	}
+}
+
+func TestPoolActionIsChosenWhenTheReadingIsDrawn(t *testing.T) {
+	observed := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	extension := claudeweb.APICreditPool{Pool: strings.Repeat("a", 64), Name: "Org", Currency: "USD", Source: "extension", Balance: 5753,
+		ObservedAt: observed, MonthResetsAt: observed.Add(24 * time.Hour)}
+	bookmark := extension
+	bookmark.Source = "bookmark"
+	stale := observed.Add(6 * time.Minute)
+	at := observed.Local().Format("15:04")
+	signedOut := claudeweb.ExtensionState{Status: "signed_out", At: observed.Add(time.Second)}
+	for _, tc := range []struct {
+		name    string
+		saved   claudeweb.APICreditPool
+		now     time.Time
+		state   claudeweb.ExtensionState
+		contact time.Time
+		action  string
+		line    string
+	}{
+		{"live", extension, observed, claudeweb.ExtensionState{}, observed, "", "$57.53 left"},
+		{"stale, browser contacted recently", extension, stale, claudeweb.ExtensionState{}, stale.Add(-time.Minute), "sign in to the Claude Console",
+			"$57.53 left · not updated since " + at + " · sign in to the Claude Console"},
+		{"stale, browser not contacted", extension, stale, claudeweb.ExtensionState{}, observed.Add(-time.Hour), "open your browser to update",
+			"$57.53 left · not updated since " + at + " · open your browser to update"},
+		{"stale, contact just outside the window", extension, stale, claudeweb.ExtensionState{}, stale.Add(-3*time.Minute - time.Second), "open your browser to update",
+			"$57.53 left · not updated since " + at + " · open your browser to update"},
+		{"signed out", extension, observed.Add(time.Minute), signedOut, time.Time{}, "sign in to the Claude Console",
+			"$57.53 left · sign in to the Claude Console"},
+		{"bookmark, not expired", bookmark, observed, claudeweb.ExtensionState{}, time.Time{}, "", "$57.53 left · checked " + at},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := poolWithState(tc.saved, tc.now, tc.state, tc.contact)
+			if action := got.Action(tc.now); action != tc.action {
+				t.Fatalf("Action = %q, want %q", action, tc.action)
+			}
+			if line := got.TrayLine(tc.now); !strings.HasPrefix(line, tc.line) {
+				t.Fatalf("TrayLine() = %q, want prefix %q", line, tc.line)
+			}
+		})
+	}
+	expired := bookmark
+	expired.Grants = []claudeweb.APICreditGrant{{Remaining: 5753, ExpiresAt: observed.Add(-time.Minute)}}
+	if got := poolWithState(expired, observed, claudeweb.ExtensionState{}, time.Time{}); got.Action(observed) != "open the Claude Console" || !strings.HasSuffix(got.TrayLine(observed), "after the last check · open the Claude Console") {
+		t.Fatalf("expired bookmark = %q, action %q", got.TrayLine(observed), got.Action(observed))
 	}
 }

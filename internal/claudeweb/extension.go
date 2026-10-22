@@ -149,6 +149,8 @@ type extensionResetsPayload struct {
 	ObservedAt   string         `json:"observed_at"`
 	Organization string         `json:"organization"`
 	Grants       []grantPayload `json:"grants"`
+	// NextCreditAt is optional; a value that is not an RFC 3339 string is ignored.
+	NextCreditAt any `json:"next_credit_at"`
 }
 
 // ExtensionHandler serves the extension's readings. It admits only the
@@ -237,7 +239,8 @@ func ExtensionHandler(accounts func() []Account, saved func(Result), token func(
 				http.Error(w, msgSaveFailed, http.StatusInternalServerError)
 				return
 			}
-			summary := GrantSummary{Credits: credits, ObservedAt: observedAt, ResetCreditsTarget: matches[0].Key, MatchSalt: salt, MatchHash: AccountHash(salt, payload.Organization)}
+			summary := GrantSummary{Credits: credits, ObservedAt: observedAt, ResetCreditsTarget: matches[0].Key, MatchSalt: salt, MatchHash: AccountHash(salt, payload.Organization),
+				NextCreditAt: parseNextCreditAt(payload.NextCreditAt)}
 			if WriteSummary(summary) != nil {
 				http.Error(w, msgSaveFailed, http.StatusInternalServerError)
 				return
@@ -304,6 +307,18 @@ func ExtensionHandler(accounts func() []Account, saved func(Result), token func(
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+func parseNextCreditAt(value any) *time.Time {
+	text, ok := value.(string)
+	if !ok {
+		return nil
+	}
+	next, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return nil
+	}
+	return &next
 }
 
 func extensionObservedAt(value string, now time.Time) (time.Time, error) {

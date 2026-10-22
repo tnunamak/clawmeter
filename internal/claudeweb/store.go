@@ -20,6 +20,9 @@ type GrantSummary struct {
 	ResetCreditsTarget string      `json:"reset_credits_target"`
 	MatchSalt          string      `json:"match_salt"`
 	MatchHash          string      `json:"match_hash"`
+	// NextCreditAt is when the plan's monthly API credit next grants, as the
+	// organization reported it with these grants; nil when it did not.
+	NextCreditAt *time.Time `json:"next_credit_at,omitempty"`
 }
 
 // MatchesOrg reports whether the snapshot was taken for orgUUID.
@@ -51,6 +54,17 @@ func ReadSummaryFor(target string) (GrantSummary, error) {
 		}
 	}
 	return summary, nil
+}
+
+// NextCreditAt returns when the plan behind a Claude source next grants its
+// monthly API credit, if that is still ahead and was read for orgUUID, the
+// source's current organization.
+func NextCreditAt(target, orgUUID string) (time.Time, bool) {
+	summary, err := ReadSummaryFor(target)
+	if err != nil || !summary.MatchesOrg(orgUUID) || summary.NextCreditAt == nil || !summary.NextCreditAt.After(time.Now()) {
+		return time.Time{}, false
+	}
+	return *summary.NextCreditAt, true
 }
 
 // WriteSummary stores a summary under its own ResetCreditsTarget.

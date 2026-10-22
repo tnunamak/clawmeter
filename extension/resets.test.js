@@ -31,7 +31,7 @@ test("posts each organization's grants with its ID and observation time", async 
   const result = await readResets(getJSON, () => now, async payload => posts.push(payload));
   assert.equal(result.status, "ok");
   assert.deepEqual(calls, ["/api/organizations", "/api/organizations/org-max/usage?at_wall=1&skip_spend=1",
-    "/api/organizations/org-api/usage?at_wall=1&skip_spend=1"]);
+    "/api/quirky-lollipop/link-state?organization_uuid=org-max", "/api/organizations/org-api/usage?at_wall=1&skip_spend=1"]);
   assert.deepEqual(posts, [{
     observed_at: "2026-10-13T12:00:00.000Z", organization: "org-max",
     grants: [grant, { resets_left: 0, starts_at: undefined, ends_at: undefined, paused: undefined }],
@@ -89,7 +89,7 @@ test("each organization is dated by its own read", async () => {
     "/api/organizations/org-b/usage?at_wall=1&skip_spend=1": { cedar_ember: { grants: [] } },
   });
   let clock = now;
-  const slow = async url => { clock += 60000; return getJSON(url); };
+  const slow = async url => { if (!url.includes("link-state")) clock += 60000; return getJSON(url); };
   const posts = [];
   await readResets(slow, () => clock, async payload => posts.push(payload));
   assert.deepEqual(posts.map(payload => payload.observed_at), ["2026-10-13T12:02:00.000Z", "2026-10-13T12:03:00.000Z"]);
@@ -136,4 +136,72 @@ test("an organization one session cannot read is read by the next", async () => 
   await readResets(healthy.getJSON, now, async payload => posts.push(payload), read);
   await readResets(healthy.getJSON, now, async payload => posts.push(payload), read);
   assert.equal(posts.length, 1);
+});
+
+const linkedState = { status: "linked", link: { console_org: { id: "console-org", name: "Example" }, linked_at: "2026-01-01T00:00:00Z" },
+  monthly_credit_usd: "200.00", next_grant_at: "2026-10-24T05:50:06Z", granted_total_usd: "200.00", grant_count: 1 };
+const usagePath = "/api/organizations/org-max/usage?at_wall=1&skip_spend=1";
+const linkPath = "/api/quirky-lollipop/link-state?organization_uuid=org-max";
+
+test("a linked organization's posted payload carries its next credit date", async () => {
+  const { calls, getJSON } = fixture({
+    "/api/organizations": [{ uuid: "org-max" }],
+    [usagePath]: { cedar_ember: { eligible: true, grants: [grant] } },
+    [linkPath]: linkedState,
+  });
+  const posts = [];
+  await readResets(getJSON, now, async payload => posts.push(payload));
+  assert.equal(calls.includes(linkPath), true);
+  assert.equal(posts[0].next_credit_at, "2026-10-24T05:50:06.000Z");
+});
+
+test("unlinked, missing or garbage link state adds no field and fails no read", async () => {
+  const cases = [
+    { [linkPath]: { ...linkedState, status: "unlinked" } },
+    { [linkPath]: 404 },
+    { [linkPath]: 403 },
+    { [linkPath]: 500 },
+    { [linkPath]: { ...linkedState, next_grant_at: "soon" } },
+    { [linkPath]: { ...linkedState, next_grant_at: undefined } },
+    { [linkPath]: "garbage" },
+  ];
+  for (const links of cases) {
+    const { getJSON } = fixture({
+      "/api/organizations": [{ uuid: "org-max" }],
+      [usagePath]: { cedar_ember: { eligible: true, grants: [grant] } },
+      ...links,
+    });
+    const posts = [];
+    const result = await readResets(getJSON, now, async payload => posts.push(payload));
+    assert.equal(result.status, "ok");
+    assert.equal(posts.length, 1);
+    assert.equal("next_credit_at" in posts[0], false);
+    assert.equal(posts[0].grants.length, 1);
+  }
+  const broken = async url => {
+    if (url.includes("link-state")) throw new Error("network down");
+    return fixture({ "/api/organizations": [{ uuid: "org-max" }], [usagePath]: { cedar_ember: { grants: [grant] } } }).getJSON(url);
+  };
+  const posts = [];
+  await readResets(broken, now, async payload => posts.push(payload));
+  assert.equal(posts.length, 1);
+  assert.equal("next_credit_at" in posts[0], false);
+});
+
+test("the link state is read at most once an hour per organization", async () => {
+  const { calls, getJSON } = fixture({
+    "/api/organizations": [{ uuid: "org-max" }],
+    [usagePath]: { cedar_ember: { eligible: true, grants: [grant] } },
+    [linkPath]: linkedState,
+  });
+  const links = new Map();
+  const posts = [];
+  const post = async payload => posts.push(payload);
+  await readResets(getJSON, now, post, new Set(), links);
+  await readResets(getJSON, now + 59 * 60 * 1000, post, new Set(), links);
+  assert.equal(calls.filter(path => path === linkPath).length, 1);
+  await readResets(getJSON, now + 61 * 60 * 1000, post, new Set(), links);
+  assert.equal(calls.filter(path => path === linkPath).length, 2);
+  assert.equal(posts.length, 3);
+  assert.equal(posts[1].next_credit_at, "2026-10-24T05:50:06.000Z");
 });
