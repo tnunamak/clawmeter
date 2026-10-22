@@ -475,11 +475,7 @@ func onReadyWithConfig(loaded *config.Config) {
 			mUpdate.SetTitle(fmt.Sprintf("• Update to %s", rel.Version))
 			mUpdate.Show()
 		}
-		s.mu.Lock()
-		results := provider.PresentResetCreditSources(s.lastResults)
-		feed := s.feedReading
-		s.mu.Unlock()
-		results = resetfeed.AnnounceAll(results, feed, time.Now())
+		results := presentedResults(lastResults())
 		if results != nil {
 			displayNames := providerDisplayNames(providerMenus)
 			updateTrayIcon(results)
@@ -1085,8 +1081,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	results, statuses = lockLatestTrayState(&trayRenderMu)
 	defer trayRenderMu.Unlock()
 	fetched := results
-	results = provider.PresentResetCreditSources(results)
-	results = resetfeed.AnnounceAll(results, latestFeedReading(), time.Now())
+	results = presentedResults(results)
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 
@@ -1316,6 +1311,22 @@ func latestFeedReading() resetfeed.Reading {
 	return s.feedReading
 }
 
+// lastResults returns the last fetched results. Callers must not hold s.mu.
+func lastResults() map[string]*provider.UsageData {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastResults
+}
+
+// presentedResults is the one path from stored results to what the tray
+// renders: reset-credit folding, then the announced-reset annotation with the
+// feed reading current at this render. Every render path calls it, so an
+// announcement cannot drop out of the tooltip or the menu on one of them.
+// Callers must not hold s.mu.
+func presentedResults(results map[string]*provider.UsageData) map[string]*provider.UsageData {
+	return resetfeed.AnnounceAll(provider.PresentResetCreditSources(results), latestFeedReading(), time.Now())
+}
+
 // refreshResetAnnouncements reads the codex-resets.com feed when the user
 // opted in and a Codex source is configured. Otherwise it makes no request.
 func refreshResetAnnouncements(current *config.Config, configured []provider.Provider) resetfeed.Reading {
@@ -1508,9 +1519,9 @@ func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, t
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
 	s.mu.Lock()
-	results := provider.PresentResetCreditSources(s.lastResults)
 	s.iconTargetOverride = target
 	s.mu.Unlock()
+	results := presentedResults(lastResults())
 
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
@@ -2508,7 +2519,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		if generation != apiCreditsTimerGeneration {
 			return
 		}
-		results := provider.PresentResetCreditSources(latest)
+		results := presentedResults(latest)
 		systray.BeginMenuUpdate()
 		defer systray.EndMenuUpdate()
 		for name, menu := range menus {

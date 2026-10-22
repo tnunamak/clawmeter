@@ -141,3 +141,44 @@ func TestTrayAnnouncementIsCleanOnStaleOrErroredReadings(t *testing.T) {
 		}
 	}
 }
+
+// Selecting the Codex icon target re-renders the tooltip from stored results.
+// The announcement is added at render time, so it must survive that path.
+func TestIconTargetSelectionKeepsTheAnnouncement(t *testing.T) {
+	defer systray.ResetMenu()
+	now := time.Now()
+	stored := &provider.UsageData{
+		Provider: "openai", SourceID: "default", FetchedAt: now,
+		Windows: []provider.UsageWindow{{Name: "7d", Utilization: 100, ResetsAt: now.Add(72 * time.Hour), Length: 7 * 24 * time.Hour}},
+	}
+	reading := resetfeed.Reading{
+		CheckedAt:    now,
+		Announcement: &resetfeed.Announcement{ID: "evt_1", ScheduledFor: now.Add(2 * time.Hour), AnnouncedAt: now.Add(-time.Hour), SourceURL: "https://x.com/example/status/1"},
+	}
+
+	s.mu.Lock()
+	previousResults, previousReading := s.lastResults, s.feedReading
+	previousOverride, previousTooltip := s.iconTargetOverride, s.currentTooltip
+	s.lastResults = map[string]*provider.UsageData{"openai": stored}
+	s.feedReading = reading
+	s.mu.Unlock()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.lastResults, s.feedReading = previousResults, previousReading
+		s.iconTargetOverride, s.currentTooltip = previousOverride, previousTooltip
+		s.mu.Unlock()
+	})
+
+	menus := map[string]*providerMenuItems{
+		"openai": createProviderMenuItems(sourceMenuTestProvider{name: "openai"}, false, nil, false),
+	}
+	picker := newIconPicker(systray.AddMenuItem("Settings", ""))
+	selectIconTarget(menus, picker, iconTarget{Provider: "openai", Window: "7d"})
+
+	s.mu.Lock()
+	tooltip := s.currentTooltip
+	s.mu.Unlock()
+	if !strings.Contains(tooltip, "\nReset announced for ~") {
+		t.Fatalf("selecting the Codex target dropped the announcement; tooltip = %q", tooltip)
+	}
+}

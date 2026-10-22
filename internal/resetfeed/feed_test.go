@@ -408,8 +408,12 @@ func TestStoredStateIsPrivateAndAtomic(t *testing.T) {
 		}
 	}
 	entries, _ := os.ReadDir(filepath.Dir(client.Path))
-	if len(entries) != 1 {
-		t.Fatalf("temp files left behind: %d entries", len(entries))
+	names := map[string]bool{}
+	for _, e := range entries {
+		names[e.Name()] = true
+	}
+	if len(entries) != 2 || !names[CacheFileName] || !names["codex-reset-feed.lock"] {
+		t.Fatalf("cache dir entries = %v, want the state file and its lock only", names)
 	}
 }
 

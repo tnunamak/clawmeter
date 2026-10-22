@@ -76,6 +76,9 @@ type Client struct {
 	// Path is the cache file. It is required; use Default for the real one.
 	Path string
 	Now  func() time.Time
+	// LockWait bounds how long Read waits for the cross-process lock before
+	// it returns the saved reading without requesting. Zero means 10 seconds.
+	LockWait time.Duration
 }
 
 // Default returns a client for the production feed and the Clawmeter cache.
@@ -92,6 +95,56 @@ func (c *Client) now() time.Time {
 		return c.Now()
 	}
 	return time.Now()
+}
+
+const (
+	defaultLockWait = 10 * time.Second
+	lockPoll        = 25 * time.Millisecond
+)
+
+// lockPath is the lock file beside the cache file: codex-reset-feed.lock.
+func lockPath(cachePath string) string {
+	return strings.TrimSuffix(cachePath, filepath.Ext(cachePath)) + ".lock"
+}
+
+// lock takes the exclusive cross-process lock that serializes reads, requests
+// and saves. It returns (nil, nil) when the lock is still held after
+// LockWait. The lock is held by an open file, and closing the file releases
+// it on every platform.
+func (c *Client) lock() (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(c.Path), 0o755); err != nil {
+		return nil, fmt.Errorf("create feed cache dir: %w", err)
+	}
+	f, err := os.OpenFile(lockPath(c.Path), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	wait := c.LockWait
+	if wait <= 0 {
+		wait = defaultLockWait
+	}
+	// The wait uses the real clock: a test clock that does not advance must
+	// not turn a held lock into an endless loop.
+	deadline := time.Now().Add(wait)
+	for {
+		ok, err := tryLock(f)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		if ok {
+			return f, nil
+		}
+		if time.Now().After(deadline) {
+			f.Close()
+			return nil, nil
+		}
+		time.Sleep(lockPoll)
+	}
+}
+
+func unlock(f *os.File) {
+	f.Close()
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -115,16 +168,29 @@ func Wanted(enabled bool, configured []provider.Provider) bool {
 	return false
 }
 
-// Read returns the feed reading, making at most one request. It reuses a
-// read younger than 15 minutes, revalidates an older one with If-None-Match,
-// and honours the backoff after a failure. A failed request returns the last
-// good reading with the error for diagnostics only; callers show nothing
-// special to the user.
+// Read returns the feed reading, making at most one request. It takes the
+// cross-process lock first, so a second process waits and then reuses the
+// first one's result instead of asking the feed again. It reuses a read
+// younger than 15 minutes, revalidates an older one with If-None-Match, and
+// honours the backoff after a failure. If the lock cannot be taken within
+// LockWait, it returns what is saved and makes no request. A failed request
+// returns the last good reading with the error for diagnostics only; callers
+// show nothing special to the user.
 func (c *Client) Read(ctx context.Context) (Reading, error) {
 	if c.Path == "" {
 		return Reading{}, errors.New("no feed cache path")
 	}
+	lock, err := c.lock()
+	if err != nil {
+		return c.savedReading(), fmt.Errorf("feed lock: %w", err)
+	}
+	if lock == nil {
+		return c.savedReading(), errors.New("feed cache is busy; showing the saved reading")
+	}
+	defer unlock(lock)
+
 	now := c.now()
+	// Reload after taking the lock: another process may have just saved.
 	st, _ := load(c.Path)
 	reading := st.reading()
 
@@ -147,8 +213,7 @@ func (c *Client) Read(ctx context.Context) (Reading, error) {
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		st.NextRequestAt = now.Add(failureBackoff)
-		return reading, c.save(st, fmt.Errorf("feed request failed: %w", err))
+		return c.commit(backoff(st, now), fmt.Errorf("feed request failed: %w", err))
 	}
 	defer resp.Body.Close()
 
@@ -156,36 +221,39 @@ func (c *Client) Read(ctx context.Context) (Reading, error) {
 	case resp.StatusCode == http.StatusNotModified && st.ETag != "":
 		st.CheckedAt = now
 		st.NextRequestAt = time.Time{}
-		return st.reading(), c.save(st, nil)
+		return c.commit(st, nil)
 	case resp.StatusCode == http.StatusOK:
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 		if err != nil {
-			return c.saveUnusable(st, now, fmt.Errorf("feed body: %w", err))
+			// A broken or truncated body says nothing about the feed's state:
+			// keep the last good reading and back off like any failure.
+			return c.commit(backoff(st, now), fmt.Errorf("feed body: %w", err))
 		}
 		if len(body) > maxBodyBytes {
-			return c.saveUnusable(st, now, errors.New("feed body exceeds 1 MiB"))
+			return c.commit(unusable(st, now), errors.New("feed body exceeds 1 MiB"))
 		}
 		announcement, ok := parseStatus(body)
 		if !ok {
-			return c.saveUnusable(st, now, errors.New("feed body has an unexpected shape"))
+			return c.commit(unusable(st, now), errors.New("feed body has an unexpected shape"))
 		}
 		st.Announcement = announcement
 		st.ETag = resp.Header.Get("ETag")
 		st.CheckedAt = now
 		st.NextRequestAt = time.Time{}
-		return st.reading(), c.save(st, nil)
+		return c.commit(st, nil)
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable:
 		st.NextRequestAt = now.Add(retryAfter(resp.Header.Get("Retry-After"), now))
-		return reading, c.save(st, fmt.Errorf("feed answered %d", resp.StatusCode))
+		return c.commit(st, fmt.Errorf("feed answered %d", resp.StatusCode))
 	default:
-		st.NextRequestAt = now.Add(failureBackoff)
-		return reading, c.save(st, fmt.Errorf("feed answered %d", resp.StatusCode))
+		return c.commit(backoff(st, now), fmt.Errorf("feed answered %d", resp.StatusCode))
 	}
 }
 
-func (c *Client) saveUnusable(st stored, now time.Time, cause error) (Reading, error) {
-	next := unusable(st, now)
-	return next.reading(), c.save(next, cause)
+// savedReading is what is on disk, without any request. It is used when the
+// lock cannot be taken in time.
+func (c *Client) savedReading() Reading {
+	st, _ := load(c.Path)
+	return st.reading()
 }
 
 func (c *Client) baseURL() string {
@@ -195,8 +263,15 @@ func (c *Client) baseURL() string {
 	return DefaultBaseURL
 }
 
-// unusable records a response whose shape Clawmeter does not understand: it
-// shows nothing, is not counted as a successful read, and backs off.
+// backoff keeps the saved reading and waits before the next request.
+func backoff(st stored, now time.Time) stored {
+	st.NextRequestAt = now.Add(failureBackoff)
+	return st
+}
+
+// unusable records a response whose shape Clawmeter does not understand, or a
+// body over the size limit: it shows nothing, is not counted as a successful
+// read, and backs off.
 func unusable(st stored, now time.Time) stored {
 	st.Announcement = nil
 	st.ETag = ""
@@ -205,22 +280,44 @@ func unusable(st stored, now time.Time) stored {
 }
 
 // retryAfter reads a Retry-After header in seconds or as an HTTP date. A
-// missing, zero, or past value falls back to the default backoff, and a wait
+// missing, zero, or past value falls back to the default backoff. A wait
 // longer than LastGoodLimit is cut to it, so a bad header cannot switch the
-// feed off for good.
+// feed off for good. Seconds are clamped before they become a duration, so a
+// huge value cannot overflow.
 func retryAfter(header string, now time.Time) time.Duration {
 	header = strings.TrimSpace(header)
-	wait := failureBackoff
-	if secs, err := strconv.Atoi(header); err == nil {
-		if secs > 0 {
-			wait = time.Duration(secs) * time.Second
+	if isDigits(header) {
+		secs, err := strconv.ParseInt(header, 10, 64)
+		if err != nil {
+			// Out of int64 range: far beyond any usable wait.
+			return LastGoodLimit
 		}
-	} else if at, err := http.ParseTime(header); err == nil {
+		if secs <= 0 {
+			return failureBackoff
+		}
+		if secs >= int64(LastGoodLimit/time.Second) {
+			return LastGoodLimit
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if at, err := http.ParseTime(header); err == nil {
 		if d := at.Sub(now); d > 0 {
-			wait = d
+			return min(d, LastGoodLimit)
 		}
 	}
-	return min(wait, LastGoodLimit)
+	return failureBackoff
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (st stored) reading() Reading {
@@ -298,15 +395,33 @@ func load(path string) (stored, error) {
 	return st, nil
 }
 
-// save writes the state with a temp file and rename, so a concurrent reader
-// sees either the old or the new file. Concurrent writers are last-wins.
-func (c *Client) save(st stored, cause error) error {
+// commit writes the state with a temp file and rename, while the lock is
+// held. A stale answer never overwrites a newer successful read: if the saved
+// state has a later CheckedAt, it is kept and returned instead. The error is
+// cause, or the write error if that is what failed.
+func (c *Client) commit(st stored, cause error) (Reading, error) {
+	current, _ := load(c.Path)
+	if current.CheckedAt.After(st.CheckedAt) {
+		return current.reading(), cause
+	}
 	st.Version = storeVersion
+	if err := writeAtomic(c.Path, st); err != nil {
+		if cause != nil {
+			return st.reading(), fmt.Errorf("%w (and %v)", cause, err)
+		}
+		return st.reading(), err
+	}
+	return st.reading(), cause
+}
+
+// writeAtomic writes the state with a temp file and rename, so a concurrent
+// reader sees either the old or the new file.
+func writeAtomic(path string, st stored) error {
 	data, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(c.Path)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create feed cache dir: %w", err)
 	}
@@ -325,8 +440,8 @@ func (c *Client) save(st stored, cause error) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close feed temp: %w", err)
 	}
-	if err := os.Rename(tmp.Name(), c.Path); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("replace feed cache: %w", err)
 	}
-	return cause
+	return nil
 }
