@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	aead.dev/minisign v0.3.0
 	github.com/gen2brain/beeep v0.11.2
-	github.com/godbus/dbus/v5 v5.2.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
