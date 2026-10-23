@@ -44,25 +44,33 @@ func accountNamed(snap view.Snapshot, key string) *view.Account {
 	return nil
 }
 
-// IconState is the provider whose logo the icon shows, and the meter it draws.
-// A stale or errored reading draws an empty meter: it is not a current reading.
-// An expired credential draws a full meter, as a warning.
 func IconState(snap view.Snapshot) (string, icons.MeterState) {
 	acct, w, ok := selectedWindow(snap)
 	if !ok {
-		// No quota window to draw. The logo still names the first account with data.
-		for i := range snap.Accounts {
-			if snap.Accounts[i].Provider != "" {
-				return snap.Accounts[i].Provider, icons.MeterState{}
-			}
+		// No quota window to draw: the logo names the account the tray falls
+		// back to, and an expired credential still draws its warning meter.
+		if acct := fallbackAccount(snap); acct != nil {
+			return acct.Provider, readingMeter(acct, view.Window{})
 		}
 		return "", icons.MeterState{}
 	}
+	return acct.Provider, readingMeter(acct, w)
+}
+
+// readingMeter is the meter of one window of an account, or of the account
+// alone when w is zero. A stale or errored reading draws an empty meter: it is
+// not a current reading. An expired credential draws a full meter, as a warning.
+func readingMeter(acct *view.Account, w view.Window) icons.MeterState {
 	switch acct.Reading.State {
 	case view.ReadingExpired:
-		return acct.Provider, icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
+		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
 	case view.ReadingFresh:
-		return acct.Provider, icons.MeterState{
+		// A window whose reset has passed is not the current window: its usage
+		// is the last period's, so the meter stays empty.
+		if w.Name == "" || (w.Reset.Known && w.Reset.In <= 0) {
+			return icons.MeterState{}
+		}
+		return icons.MeterState{
 			UsagePct:     w.Used,
 			ExpectedPct:  w.Pace,
 			RiskPct:      riskPct(w),
@@ -70,7 +78,35 @@ func IconState(snap view.Snapshot) (string, icons.MeterState) {
 			Label:        windowBadgeLabel(w.Label),
 		}
 	}
-	return acct.Provider, icons.MeterState{}
+	return icons.MeterState{}
+}
+
+// fallbackAccount is the account the tray shows when no account has a quota
+// window: an expired credential first, then an errored reading, then the first
+// account with any reading. It is nil when no account has a reading.
+func fallbackAccount(snap view.Snapshot) *view.Account {
+	rank := func(a *view.Account) int {
+		switch a.Reading.State {
+		case view.ReadingExpired:
+			return 0
+		case view.ReadingError:
+			return 1
+		case view.ReadingUnavailable:
+			return 3
+		}
+		return 2
+	}
+	var best *view.Account
+	for i := range snap.Accounts {
+		a := &snap.Accounts[i]
+		if best == nil || rank(a) < rank(best) {
+			best = a
+		}
+	}
+	if best == nil || rank(best) == 3 {
+		return nil
+	}
+	return best
 }
 
 // riskPct is the projected use the icon's risk channel draws. An exhausted
@@ -92,18 +128,11 @@ func AtRisk(w view.Window) bool {
 	return w.Exhaustion.State == view.ExhaustionOut || w.Exhaustion.State == view.ExhaustionRunsOut
 }
 
-// Tooltip is the icon's tooltip for the snapshot's selected quota, with the
-// reset credits and announcement of its account. data holds each source's
-// reading by key, for those two lines only. The update line is added by the
-// caller.
 func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 	acct, w, ok := selectedWindow(snap)
 	if !ok {
-		for i := range snap.Accounts {
-			a := &snap.Accounts[i]
-			if raw := data[a.Key]; raw != nil {
-				return appendResetCreditTooltip(accountHead(a), raw, snap.At)
-			}
+		if fb := fallbackAccount(snap); fb != nil {
+			return appendResetCreditTooltip(accountHead(fb), data[fb.Key], snap.At)
 		}
 		return ""
 	}
@@ -125,6 +154,19 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 		lines = append(lines, line)
 	}
 	return appendResetCreditTooltip(strings.Join(lines, "\n"), raw, snap.At)
+}
+
+// AppendUpdateLine adds the pending-update line to a tooltip. An empty version
+// adds nothing.
+func AppendUpdateLine(tooltip, version string) string {
+	if version == "" {
+		return tooltip
+	}
+	line := fmt.Sprintf("Update available: %s", version)
+	if strings.TrimSpace(tooltip) == "" {
+		return line
+	}
+	return tooltip + "\n" + line
 }
 
 // accountHead is an account's one-line state when it has no quota to show:
@@ -174,7 +216,7 @@ func resetLine(w view.Window) string {
 	case w.Reset.Known:
 		return "Resets in " + format.FormatDuration(w.Reset.In)
 	case w.Reset.Policy != "":
-		return w.Reset.Policy
+		return upperFirst(w.Reset.Policy)
 	}
 	return "Reset not reported"
 }
@@ -192,16 +234,12 @@ func forecastLine(w view.Window) string {
 	return words
 }
 
-// MenuRows returns the quota row text of each account's shown windows, at most
-// limit per account. Rows are laid out to one shared column width. An expired
-// or errored account has no rows: the menu shows its problem instead.
 func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 	byAccount := make(map[string][]meter.Row, len(snap.Accounts))
 	var shown []meter.Row
 	for i := range snap.Accounts {
 		acct := &snap.Accounts[i]
-		switch acct.Reading.State {
-		case view.ReadingUnavailable, view.ReadingExpired, view.ReadingError:
+		if !menuShowsRows(acct) {
 			continue
 		}
 		rows := acct.Rows()
@@ -219,6 +257,39 @@ func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 		}
 	}
 	return out
+}
+
+// MenuMore counts, per account, the windows the menu does not draw as rows:
+// idle windows that list surfaces hide, and windows past the menu's limit. The
+// menu says "+N more" for each, so no window is dropped without a trace.
+func MenuMore(snap view.Snapshot, limit int) map[string]int {
+	more := make(map[string]int)
+	for i := range snap.Accounts {
+		acct := &snap.Accounts[i]
+		if !menuShowsRows(acct) {
+			continue
+		}
+		drawn := min(len(acct.ShownWindows()), limit)
+		if n := len(acct.Windows) - drawn; n > 0 {
+			more[acct.Key] = n
+		}
+	}
+	return more
+}
+
+// menuShowsRows reports whether a reading's quota rows show in the menu. An
+// expired, errored or missing reading shows its problem instead.
+func menuShowsRows(acct *view.Account) bool {
+	switch acct.Reading.State {
+	case view.ReadingUnavailable, view.ReadingExpired, view.ReadingError:
+		return false
+	}
+	return true
+}
+
+// MoreText is the menu's text for windows it does not draw.
+func MoreText(n int) string {
+	return fmt.Sprintf("+%d more", n)
 }
 
 // figureSpace is as wide as a digit, so padded numbers line up in the

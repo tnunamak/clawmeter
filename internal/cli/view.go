@@ -32,6 +32,12 @@ func (m *MultiProviderOutput) buildView(now time.Time) outputView {
 // buildViewPinned is buildView with the user's pinned quota, which only the
 // tray knows. A matrix test passes one to render the pinned case.
 func (m *MultiProviderOutput) buildViewPinned(now time.Time, pin *view.Target) outputView {
+	return m.buildViewTuned(now, func(in *view.Inputs) { in.Pin = pin })
+}
+
+// buildViewTuned is buildView with its inputs adjusted by tune. The tray's
+// run-out record and extension contact are the inputs a matrix test sets.
+func (m *MultiProviderOutput) buildViewTuned(now time.Time, tune func(*view.Inputs)) outputView {
 	keys := m.sourceKeys()
 	in := view.Inputs{
 		Results:            make(map[string]*provider.UsageData, len(keys)),
@@ -58,7 +64,7 @@ func (m *MultiProviderOutput) buildViewPinned(now time.Time, pin *view.Target) o
 			in.FamilySourceCounts[family] = pf.SourceCount
 		}
 	}
-	in.Pin = pin
+	tune(&in)
 	v.snap = view.Build(in, now)
 	return v
 }

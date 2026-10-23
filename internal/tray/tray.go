@@ -672,16 +672,18 @@ func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Co
 
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
-	provider          provider.Provider
-	displayName       string
-	headerItem        *systray.MenuItem
-	statusItem        *systray.MenuItem
-	resetItem         *systray.MenuItem
-	announceItem      *systray.MenuItem
-	connectable       bool // the name row can run the quota connection
-	headerAction      string
-	headerConnects    atomic.Bool
-	windowItems       []*systray.MenuItem
+	provider       provider.Provider
+	displayName    string
+	headerItem     *systray.MenuItem
+	statusItem     *systray.MenuItem
+	resetItem      *systray.MenuItem
+	announceItem   *systray.MenuItem
+	connectable    bool // the name row can run the quota connection
+	headerAction   string
+	headerConnects atomic.Bool
+	windowItems    []*systray.MenuItem
+	// moreItem says how many windows the rows above leave out.
+	moreItem          *systray.MenuItem
 	balanceItems      []*systray.MenuItem
 	separator         *systray.MenuItem
 	order             int // position in the menu, top first
@@ -697,6 +699,7 @@ type providerMenuItems struct {
 	announceURL       string // source post of the shown announcement; guarded by trayRenderMu
 	windowStates      []menuItemState
 	windowAtRisk      []bool
+	moreState         menuItemState
 	balanceStates     []menuItemState
 	balanceActions    []string // per balance row; guarded by trayRenderMu
 	separatorState    menuItemState
@@ -752,6 +755,10 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	for i := range windowStates {
 		windowStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
 	}
+	moreItem := systray.AddMenuItem("", "")
+	moreItem.Disable()
+	moreItem.Hide()
+	setMenuItemIcon(moreItem, icons.MenuBlank())
 	balanceItems := make([]*systray.MenuItem, maxWindowItems)
 	for i := range balanceItems {
 		item := systray.AddMenuItem("", "")
@@ -787,6 +794,8 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		announceItem:      announceItem,
 		connectable:       connectable,
 		windowItems:       windowItems,
+		moreItem:          moreItem,
+		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
 		balanceItems:      balanceItems,
 		separator:         separator,
 		opensDashboard:    opensDashboard,
@@ -905,6 +914,7 @@ func hideProviderWindows(menu *providerMenuItems) {
 	for i, w := range menu.windowItems {
 		setMenuItemVisible(w, &menu.windowStates[i], false)
 	}
+	setMenuItemVisible(menu.moreItem, &menu.moreState, false)
 	for i, b := range menu.balanceItems {
 		setMenuItemVisible(b, &menu.balanceStates[i], false)
 		setMenuItemEnabled(b, &menu.balanceStates[i], false)
@@ -1077,10 +1087,11 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setups[name] = provider.GetSetupStatus(menu.provider)
 		}
 	}
-	// The one piece of I/O the snapshot reads, the extension contact, is read
-	// before the render lock. The pin is in memory and is read here too.
+	// The extension contact is the one piece of I/O the snapshot reads, so it is
+	// read before the render lock. The pin decides what the icon and tooltip
+	// show, so it is read under the lock: a pin set by a click that takes the
+	// lock first must be the one this render draws.
 	contact := lastExtensionContact()
-	pin := currentIconPin()
 
 	results, statuses = lockLatestTrayState(&trayRenderMu)
 	defer trayRenderMu.Unlock()
@@ -1092,7 +1103,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	// One snapshot serves the whole render: every row, the icon and the tooltip.
 	now := time.Now()
 	shown := trayShown(results, fetched, menus, setups)
-	snap := view.Build(trayViewInputs(shown, menus, now, contact, pin), now)
+	snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 
 	hasExpiredClaude := false
 	hasClaude := false
@@ -1100,6 +1111,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
 	windowRows := MenuRows(snap, maxWindowItems)
+	windowMore := MenuMore(snap, maxWindowItems)
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
@@ -1210,6 +1222,12 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		for i := len(windows); i < len(menu.windowItems); i++ {
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
+		}
+		if n := windowMore[name]; n > 0 {
+			setMenuItemTitle(menu.moreItem, &menu.moreState, MoreText(n))
+			setMenuItemVisible(menu.moreItem, &menu.moreState, true)
+		} else {
+			setMenuItemVisible(menu.moreItem, &menu.moreState, false)
 		}
 		balanceRows := showBalanceRows(menu, acct, data.Balances, now)
 		if len(windows) == 0 && balanceRows == 0 && len(statusParts) == 0 && !menu.resetState.visible {
@@ -1737,15 +1755,11 @@ func trayTitleForPlatform(goos string, hasUpdate bool) string {
 }
 
 func updateTrayTooltip(snap view.Snapshot, data map[string]*provider.UsageData) {
-	tooltip := Tooltip(snap, data)
+	version := ""
 	if rel := currentPendingRelease(); rel != nil {
-		line := fmt.Sprintf("Update available: %s", rel.Version)
-		if strings.TrimSpace(tooltip) == "" {
-			tooltip = line
-		} else {
-			tooltip += "\n" + line
-		}
+		version = rel.Version
 	}
+	tooltip := AppendUpdateLine(Tooltip(snap, data), version)
 	s.mu.Lock()
 	changed := tooltip != s.currentTooltip
 	if changed {

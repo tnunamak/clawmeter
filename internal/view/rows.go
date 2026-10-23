@@ -35,11 +35,18 @@ func (a Account) ShownWindows() []Window {
 // Row lays out one window for a list. codeShared is true when another shown
 // window has the same code, so the qualifier must tell them apart.
 //
-// A reading that is not fresh has no forecast and no run-out: its forecast is
-// stale or unknown, and its exhaustion is unknown.
+// Every window's state is read from the snapshot before any layout choice, so a
+// window with no reset or only money reads the same exhaustion and forecast
+// states as any other. A reading that is not fresh has no forecast and no
+// run-out: its forecast is stale or unknown, and its exhaustion is unknown.
 func (w Window) Row(codeShared bool) meter.Row {
+	out := w.Exhaustion.State == ExhaustionOut
 	if w.Money != "" && !w.Reset.Known && w.Reset.Policy == "" {
-		return meter.Row{Line: w.Label + ": " + w.Money}
+		line := w.Label + ": " + w.Money
+		if out {
+			line += " · out now"
+		}
+		return meter.Row{Line: line}
 	}
 	row := meter.Row{Code: w.Code, Money: w.Money, Used: meter.Percent(w.Used)}
 	if w.Qualifier != "" && (codeShared || w.Qualifier != "all models") {
@@ -54,10 +61,22 @@ func (w Window) Row(codeShared bool) meter.Row {
 			row.Resets = "reset not reported"
 		}
 		row.Bar = bar(w.Used)
+		if w.Forecast.State == ForecastStale {
+			row.ForecastState = "stale"
+		}
+		if out {
+			row.RunsOut = "now"
+			row.RanOutAt = w.Exhaustion.OutSince
+		}
 		return row
 	}
 
-	row.Resets = meter.Duration(w.Reset.In)
+	if w.Reset.In <= 0 {
+		// The reset has passed: the reading says nothing about the window now.
+		row.Resets, row.ResetPolicy = "reset passed", true
+	} else {
+		row.Resets = meter.Duration(w.Reset.In)
+	}
 	if w.Forecast.State == ForecastKnown {
 		row.Bar = bar(w.Forecast.Pct)
 		row.Forecast = meter.Percent(w.Forecast.Pct)

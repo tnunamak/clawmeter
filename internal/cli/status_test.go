@@ -340,7 +340,9 @@ func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
 	}
 }
 
-func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
+// Changed on purpose: a window at 100% is out now whether or not it has a
+// reset, so the plain line says so. It still does not say "resets unknown".
+func TestFormatPlainStatesResetlessExtraUsageIsOutNow(t *testing.T) {
 	pf := ProviderFormatter{
 		Display: "Claude",
 		Data: &provider.UsageData{Windows: []provider.UsageWindow{{
@@ -349,8 +351,8 @@ func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
 	}
 
 	got := pf.FormatPlain()
-	if !strings.Contains(got, "Extra usage: 100% (reset not reported)") {
-		t.Fatalf("FormatPlain() = %q, want clear resetless extra-usage fact", got)
+	if !strings.Contains(got, "Extra usage: 100% (reset not reported, out now)") {
+		t.Fatalf("FormatPlain() = %q, want the resetless extra-usage fact and out now", got)
 	}
 	if strings.Contains(got, "reset unknown") || strings.Contains(got, "resets unknown") {
 		t.Fatalf("FormatPlain() = %q, should not present resetless usage as a warning", got)

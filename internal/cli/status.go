@@ -190,7 +190,8 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		addSpan(red + format.HumanizeError(pf.Data.Error) + reset)
 		lines = appendSnapshotLines(lines, pf.Data, layout, now)
 	default:
-		for _, row := range shownRows(acct) {
+		rows := shownRows(acct)
+		for _, row := range rows {
 			if row.Line != "" {
 				addSpan(row.Line)
 				continue
@@ -211,6 +212,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 				line += tableGutter + dim + row.Money + reset
 			}
 			lines = append(lines, line)
+		}
+		if more := len(acct.Windows) - len(rows); more > 0 {
+			addSpan(fmt.Sprintf("%s+%d more%s", dim, more, reset))
 		}
 		for _, balance := range pf.Data.Balances {
 			name := balance.DisplayName
@@ -291,9 +295,15 @@ func (v outputView) plainLine(i int) string {
 		return appendSnapshotsPlain(fmt.Sprintf("%s: error - %s%s", display, format.HumanizeError(pf.Data.Error), suffix), pf.Data, now)
 	}
 
-	parts := make([]string, 0, len(acct.Windows))
-	for _, window := range acct.Windows {
+	// People see the shown windows; the rest are named by a count, so none is
+	// dropped without a trace. Machine output keeps every window.
+	shown := acct.ShownWindows()
+	parts := make([]string, 0, len(shown)+1)
+	for _, window := range shown {
 		parts = append(parts, plainWindow(window))
+	}
+	if more := len(acct.Windows) - len(shown); more > 0 {
+		parts = append(parts, fmt.Sprintf("+%d more", more))
 	}
 
 	prefix := ""
@@ -319,21 +329,39 @@ func (v outputView) plainLine(i int) string {
 	return fmt.Sprintf("%s: %s%s%s", display, prefix, strings.Join(parts, "  "), suffix)
 }
 
-// plainWindow is one window of the plain line.
+// plainWindow is one window of the plain line. Its states come from the
+// snapshot, including for a window with no reset or only money.
 func plainWindow(w view.Window) string {
 	label := plainWindowLabel(w)
-	if !w.Reset.Known && w.Reset.Policy == "" {
+	out := w.Exhaustion.State == view.ExhaustionOut
+	if w.Money != "" && !w.Reset.Known && w.Reset.Policy == "" {
 		// A money cap reads best as money; the percentage only repeats it.
-		if w.Money != "" {
-			return fmt.Sprintf("%s: %s", label, w.Money)
+		line := label + ": " + w.Money
+		if out {
+			line += " · out now"
 		}
-		return fmt.Sprintf("%s: %.0f%% (reset not reported)", label, w.Used)
+		return line
 	}
-	resetStr, indicator := "unknown", w.Reset.Policy
-	if w.Reset.Known {
-		resetStr, indicator = format.FormatDuration(w.Reset.In), plainIndicator(w)
+	var detail string
+	switch {
+	case w.Reset.Known && w.Reset.In > 0:
+		detail = fmt.Sprintf("resets %s, %s", format.FormatDuration(w.Reset.In), plainIndicator(w))
+	case w.Reset.Known:
+		detail = "reset passed, " + plainIndicator(w)
+	case w.Reset.Policy != "":
+		detail = w.Reset.Policy
+	default:
+		detail = "reset not reported"
 	}
-	return fmt.Sprintf("%s: %.0f%% (resets %s, %s)%s", label, w.Used, resetStr, indicator, moneySuffix(w.Money))
+	if !w.Reset.Known {
+		if w.Forecast.State == view.ForecastStale {
+			detail += ", stale"
+		}
+		if out {
+			detail += ", out now"
+		}
+	}
+	return fmt.Sprintf("%s: %.0f%% (%s)%s", label, w.Used, detail, moneySuffix(w.Money))
 }
 
 // plainIndicator is a window's forecast, with its run-out note when it has one.
@@ -417,7 +445,14 @@ func (m *MultiProviderOutput) HideUnavailable() {
 }
 
 func (m *MultiProviderOutput) PrintColor() {
-	v := m.buildView(time.Now())
+	for _, line := range m.buildView(time.Now()).colorTable() {
+		fmt.Println(line)
+	}
+}
+
+// colorTable is the status table of one snapshot, one line per output line.
+// Columns are sized to the widest row of every source, so the table lines up.
+func (v outputView) colorTable() []string {
 	layout := newTableLayout()
 	hasRows := false
 	for _, e := range v.entries {
@@ -429,18 +464,18 @@ func (m *MultiProviderOutput) PrintColor() {
 			}
 		}
 	}
+	var out []string
 	if hasRows {
-		fmt.Println(dim + layout.line(tableHeader, cellWidth(tableHeader[2]), nil) + reset)
+		out = append(out, dim+layout.line(tableHeader, cellWidth(tableHeader[2]), nil)+reset)
 	}
 	for i := range v.entries {
 		lines := v.colorLines(i, layout)
-		for _, line := range lines {
-			fmt.Println(line)
-		}
+		out = append(out, lines...)
 		if i < len(v.entries)-1 && len(lines) > 0 {
-			fmt.Println()
+			out = append(out, "")
 		}
 	}
+	return out
 }
 
 func (m *MultiProviderOutput) PrintPlain() {
@@ -450,11 +485,12 @@ func (m *MultiProviderOutput) PrintPlain() {
 	}
 }
 
-// StatusLineSummary returns a compact, human-facing status segment for shell,
-// tmux, terminal title, and harness statusline integrations. It names the
-// snapshot's most at-risk window and reads its states from the snapshot.
 func (m *MultiProviderOutput) StatusLineSummary() string {
-	v := m.buildView(time.Now())
+	return m.buildView(time.Now()).statusLine()
+}
+
+// statusLine is the statusline of one snapshot.
+func (v outputView) statusLine() string {
 	acct, window, ok := v.worst()
 	if !ok {
 		return "CM no quota data"
