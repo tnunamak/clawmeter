@@ -1469,6 +1469,10 @@ func saveIconPin(target iconTarget) error {
 	return os.Rename(file.Name(), path)
 }
 
+// windowTargetsMu guards writes to windowTargets and the reads of row clicks,
+// which must not wait for trayRenderMu. Renders write under both locks.
+var windowTargetsMu sync.Mutex
+
 // setWindowTarget records exactly what a row renders. The caller holds trayRenderMu.
 func setWindowTarget(menu *providerMenuItems, row int, target iconTarget) {
 	if menu.windowTargets[row] != target {
@@ -1477,15 +1481,17 @@ func setWindowTarget(menu *providerMenuItems, row int, target iconTarget) {
 			tooltip = "Show this quota in the tray icon"
 		}
 		menu.windowItems[row].SetTooltip(tooltip)
+		windowTargetsMu.Lock()
 		menu.windowTargets[row] = target
+		windowTargetsMu.Unlock()
 	}
 	setMenuItemEnabled(menu.windowItems[row], &menu.windowStates[row], target.Provider != "")
 }
 
 // setWindowIcon shows a check on the row the tray icon is pinned to, red when
 // that quota runs out before it resets, else the risk dot or nothing. Native
-// check marks are not used: they draw an empty box on every row on KDE and
-// compete with the row icon on Windows. The caller holds trayRenderMu.
+// check marks are used only on Windows, which has no menu row icons: on KDE
+// they draw an empty box on every row. The caller holds trayRenderMu.
 func setWindowIcon(menu *providerMenuItems, row int, pinned bool) {
 	atRisk := menu.windowAtRisk[row]
 	key := ""
@@ -1501,6 +1507,9 @@ func setWindowIcon(menu *providerMenuItems, row int, pinned bool) {
 		return
 	}
 	menu.windowIcons[row] = key
+	if runtime.GOOS == "windows" {
+		setMenuItemChecked(menu.windowItems[row], pinned)
+	}
 	icon := icons.MenuBlank()
 	switch key {
 	case "pinned", "pinned-risk":
@@ -1520,9 +1529,11 @@ func (p *iconPicker) forwardRows(menu *providerMenuItems) {
 	for row, item := range menu.windowItems {
 		go func() {
 			for range item.ClickedCh {
-				trayRenderMu.Lock()
+				// Read the row's quota now, not after waiting for a render
+				// that may give the row another quota.
+				windowTargetsMu.Lock()
 				target := menu.windowTargets[row]
-				trayRenderMu.Unlock()
+				windowTargetsMu.Unlock()
 				if target.Provider != "" {
 					select {
 					case p.picked <- iconSelection{target: target, toggle: true}:
@@ -1742,7 +1753,11 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 		FamilySourceCounts: make(map[string]int),
 		OutSince:           make(map[string]map[string]time.Time),
 		ExtensionContact:   contact,
-		Pin:                pin,
+	}
+	// A saved pin applies only while its quota can be pinned, as the picker
+	// shows; otherwise the icon follows Automatic.
+	if pin != nil && targetInChoices(iconTarget{Provider: pin.AccountKey, Window: pin.Window}, manualIconTargets(shown)) {
+		in.Pin = pin
 	}
 	for key, menu := range menus {
 		family := provider.FamilyName(menu.provider)

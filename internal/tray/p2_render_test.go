@@ -374,6 +374,23 @@ func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
 	if s.currentIconMeter.Label == autoMeter.Label {
 		t.Fatal("returned quota did not restore pinned icon")
 	}
+	// The pinned quota stays listed but loses its reset, so it cannot be
+	// pinned: the icon follows Automatic, as the picker shows.
+	noReset := data.Windows[1]
+	noReset.ResetsAt = time.Time{}
+	s.mu.Lock()
+	s.lastResults = map[string]*provider.UsageData{"openai": {Provider: "openai", FetchedAt: now, Windows: []provider.UsageWindow{data.Windows[0], noReset, data.Windows[2]}}}
+	s.mu.Unlock()
+	render()
+	assertChecks(iconTarget{})
+	if s.currentIconMeter.Label != autoMeter.Label || loadIconPin() != pin {
+		t.Fatalf("pin without a reset still drives the icon: %+v", s.currentIconMeter)
+	}
+	s.mu.Lock()
+	s.lastResults = map[string]*provider.UsageData{"openai": data}
+	s.mu.Unlock()
+	render()
+	assertChecks(pin)
 	click(picker.auto)
 	assertChecks(iconTarget{})
 	if loadIconPin() != (iconTarget{}) {
