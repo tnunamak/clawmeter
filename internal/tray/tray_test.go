@@ -18,8 +18,8 @@ import (
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
-	"github.com/tnunamak/clawmeter/internal/systray"
 	"github.com/tnunamak/clawmeter/internal/update"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 type sourceMenuTestProvider struct{ name, id, revision string }
@@ -295,41 +295,33 @@ func TestTrayTitleForPlatform(t *testing.T) {
 	}
 }
 
-func TestCompactIconTooltipShowsBlockedGap(t *testing.T) {
-	got := compactIconTooltip("Codex 7-Day", provider.UsageWindow{
-		Name:     "7d",
-		ResetsAt: time.Now().Add(3 * time.Hour),
-	}, forecast.Projection{
-		ProjectedPct:    124,
-		WillLastToReset: false,
-		RunsOutIn:       90 * time.Minute,
-		RunsOutEarlyBy:  time.Hour,
-	}, time.Time{})
+func TestTooltipShowsBlockedGap(t *testing.T) {
+	// 99% used three hours before a reset runs out an hour and a half in,
+	// well before the reset.
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 99, ResetsAt: time.Now().Add(3 * time.Hour)}
+	snap := viewOf(map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	got := Tooltip(snap, nil)
 
 	for _, want := range []string{
 		"Codex 7-Day",
-		"Runs out in 1h30m (1h00m before reset)",
+		"Current 99%",
+		"Runs out in ",
+		"(",
+		"before reset)",
 		"Resets in",
-		"Est. 124% at reset",
+		"Est. ",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("compactIconTooltip() = %q, missing %q", got, want)
+			t.Fatalf("Tooltip() = %q, missing %q", got, want)
 		}
 	}
 }
 
-func TestCompactIconTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
-	got := compactIconTooltip("Codex 7-Day", provider.UsageWindow{
-		Name:     "7d",
-		ResetsAt: time.Now().Add(2 * time.Hour),
-	}, forecast.Projection{
-		ProjectedPct:    180,
-		WillLastToReset: false,
-		RunsOutEarlyBy:  2 * time.Hour,
-	}, time.Time{})
-
-	if !strings.Contains(got, "Out now (2h00m until reset)") {
-		t.Fatalf("compactIconTooltip() = %q, want already-out wait", got)
+func TestTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(2 * time.Hour)}
+	snap := viewOf(map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	if got := Tooltip(snap, nil); !strings.Contains(got, "Out now (2h00m until reset)") {
+		t.Fatalf("Tooltip() = %q, want already-out wait", got)
 	}
 }
 
@@ -351,7 +343,7 @@ func TestIconMeterStateUsesSoonestBlockingWindowForProviderDefault(t *testing.T)
 		},
 	}
 
-	meter := iconMeterState(data, "")
+	_, meter := IconState(viewOf(map[string]*provider.UsageData{"openai": data}, now))
 	if !meter.ShowExpected {
 		t.Fatal("meter should show expected pace for healthy usage windows")
 	}
@@ -371,10 +363,10 @@ func TestIconMeterStateUsesSoonestBlockingWindowForProviderDefault(t *testing.T)
 }
 
 func TestIconMeterStateKeepsUnavailableDataNeutral(t *testing.T) {
-	meter := iconMeterState(&provider.UsageData{
+	_, meter := IconState(viewOf(map[string]*provider.UsageData{"claude": {
 		Provider: "claude",
 		Error:    "usage unavailable",
-	}, "")
+	}}, time.Now()))
 
 	if meter.UsagePct != 0 || meter.ExpectedPct != 0 || meter.RiskPct != 0 || meter.ShowExpected {
 		t.Fatalf("meter = %+v, want neutral provider icon without red failure gauge", meter)
@@ -382,21 +374,21 @@ func TestIconMeterStateKeepsUnavailableDataNeutral(t *testing.T) {
 }
 
 func TestIconMeterStateKeepsStaleDataNeutral(t *testing.T) {
-	meter := iconMeterState(&provider.UsageData{
+	_, meter := IconState(viewOf(map[string]*provider.UsageData{"openai": {
 		Provider: "openai",
 		Stale:    true,
 		Warning:  "failed to fetch codex rate limits",
 		Windows: []provider.UsageWindow{
 			{Name: "7d", Utilization: 99, ResetsAt: time.Now().Add(24 * time.Hour)},
 		},
-	}, "")
+	}}, time.Now()))
 
 	if meter.UsagePct != 0 || meter.ExpectedPct != 0 || meter.RiskPct != 0 || meter.ShowExpected {
 		t.Fatalf("meter = %+v, want neutral provider icon for stale data", meter)
 	}
 }
 
-func TestProviderSeverityUsesRiskUrgency(t *testing.T) {
+func TestWorstUsesTheSoonerRunOut(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -413,16 +405,13 @@ func TestProviderSeverityUsesRiskUrgency(t *testing.T) {
 		},
 	}
 
-	keys := sortedKeys(results)
-	if len(keys) == 0 {
-		t.Fatal("sortedKeys() returned no providers")
-	}
-	if keys[0] != "claude" {
-		t.Fatalf("sortedKeys()[0] = %q, want claude because it runs out sooner; keys=%v", keys[0], keys)
+	snap := viewOf(results, now)
+	if snap.Worst == nil || snap.Worst.AccountKey != "claude" {
+		t.Fatalf("worst = %+v, want claude because it runs out sooner", snap.Worst)
 	}
 }
 
-func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T) {
+func TestSelectedPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -441,23 +430,20 @@ func TestSelectedTrayTargetPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T)
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
-	name, _, windowName, ok := selectedTrayTarget(results)
-	if !ok {
-		t.Fatal("selectedTrayTarget returned no provider")
-	}
-	if name != "claude" || windowName != "5h" {
-		t.Fatalf("selected target = %s/%s, want claude/5h", name, windowName)
+	snap := viewOf(results, now)
+	if snap.Selected == nil || snap.Selected.AccountKey != "claude" || snap.Selected.Window != "5h" {
+		t.Fatalf("selected = %+v, want claude/5h", snap.Selected)
 	}
 }
 
 func TestIconProviderNameUsesProviderFamilyNotSourceKey(t *testing.T) {
 	data := &provider.UsageData{Provider: "claude", SourceID: "odl"}
-	if got := iconProviderName(data); got != "claude" {
-		t.Fatalf("iconProviderName() = %q, want claude", got)
+	if got, _ := IconState(viewOf(map[string]*provider.UsageData{"claude:odl": data}, time.Now())); got != "claude" {
+		t.Fatalf("IconState() provider = %q, want claude", got)
 	}
 }
 
-func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
+func TestRiskOrderRanksEveryProviderWindowByUrgency(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -477,7 +463,7 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
 		},
 	}
 
-	got := activeIconTargets(results)
+	got := riskOrderOf(viewOf(results, now))
 	want := []iconTarget{
 		{Provider: "claude", Window: "5h"},
 		{Provider: "claude", Window: "7d Sonnet"},
@@ -486,22 +472,22 @@ func TestActiveIconTargetsOrdersEveryProviderWindowByRiskUrgency(t *testing.T) {
 		{Provider: "claude", Window: "7d All"},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
+		t.Fatalf("risk order len = %d, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
+			t.Fatalf("risk order[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
 		}
 	}
 }
 
-func TestActiveIconTargetsIncludesEveryWindowFromMultiSourceFamily(t *testing.T) {
+func TestManualIconTargetsIncludeEveryWindowFromMultiSourceFamily(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude:a": {Provider: "claude", SourceID: "a", Windows: []provider.UsageWindow{{Name: "low", Utilization: 10, ResetsAt: now.Add(12 * time.Hour)}, {Name: "high", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
 		"claude:b": {Provider: "claude", SourceID: "b", Windows: []provider.UsageWindow{{Name: "only", Utilization: 30, ResetsAt: now.Add(2 * time.Hour)}}},
 	}
-	got := activeIconTargets(results)
+	got := manualIconTargets(results)
 	if len(got) != 3 {
 		t.Fatalf("targets = %+v, want every source window", got)
 	}
@@ -514,7 +500,7 @@ func TestActiveIconTargetsIncludesEveryWindowFromMultiSourceFamily(t *testing.T)
 	}
 }
 
-func TestActiveIconTargetsRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testing.T) {
+func TestRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -533,17 +519,17 @@ func TestActiveIconTargetsRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testi
 		},
 	}
 
-	got := activeIconTargets(results)
+	got := riskOrderOf(viewOf(results, now))
 	want := []iconTarget{
 		{Provider: "claude", Window: "7d"},
 		{Provider: "openai", Window: "7d"},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("activeIconTargets len = %d, want %d: %+v", len(got), len(want), got)
+		t.Fatalf("risk order len = %d, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("activeIconTargets[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
+			t.Fatalf("risk order[%d] = %+v, want %+v; got=%+v", i, got[i], want[i], got)
 		}
 	}
 }
@@ -583,30 +569,41 @@ func TestManualIconTargetsIncludesFreshAndStaleWindows(t *testing.T) {
 	}
 }
 
-func TestActiveIconTargetsStillPrefersFreshForAutoSelection(t *testing.T) {
+func TestAutoSelectionStillPrefersFreshOverStale(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {Provider: "claude", Stale: true, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
 		"openai": {Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)}}},
 	}
-	got := activeIconTargets(results)
-	want := iconTarget{Provider: "openai", Window: "7d"}
-	if len(got) != 1 || got[0] != want {
-		t.Fatalf("activeIconTargets = %+v, want only fresh auto target %+v", got, want)
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+	snap := viewOf(results, now)
+	if snap.Selected == nil || snap.Selected.AccountKey != "openai" || snap.Selected.Window != "7d" {
+		t.Fatalf("selected = %+v, want the fresh openai/7d", snap.Selected)
 	}
 }
 
-func TestActiveIconTargetsExcludesNonForecastableFacts(t *testing.T) {
+func TestNoResetWindowIsSelectedOnlyWhenNothingElseIs(t *testing.T) {
+	// Changed on purpose: the view ranks every window, reset or not, after the
+	// fresh reset-backed ones. A used-up window with no reset is still usage now.
 	results := map[string]*provider.UsageData{
 		"balance-only":  {Balances: []provider.UsageBalance{{Name: "credits", Remaining: 1}}},
 		"unknown-reset": {Windows: []provider.UsageWindow{{Name: "daily", Utilization: 99}}},
 	}
-	if got := activeIconTargets(results); len(got) != 0 {
-		t.Fatalf("activeIconTargets() = %+v, want no non-forecastable targets", got)
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+	snap := viewOf(results, time.Now())
+	if snap.Selected == nil || snap.Selected.AccountKey != "unknown-reset" || snap.Selected.Window != "daily" {
+		t.Fatalf("selected = %+v, want the only window", snap.Selected)
+	}
+	if _, meter := IconState(snap); meter.UsagePct != 99 || meter.ShowExpected {
+		t.Fatalf("meter = %+v, want 99%% used with no pace", meter)
 	}
 }
 
-func TestActiveIconTargetsKeepsStaleFallbackWhenNoFreshWindows(t *testing.T) {
+func TestStaleFallbackIsSelectedWhenNoFreshWindows(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {
@@ -619,15 +616,16 @@ func TestActiveIconTargetsKeepsStaleFallbackWhenNoFreshWindows(t *testing.T) {
 			},
 		},
 	}
-
-	got := activeIconTargets(results)
-	want := []iconTarget{{Provider: "claude", Window: "5h"}}
-	if len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("activeIconTargets = %+v, want stale fallback target %+v", got, want)
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+	snap := viewOf(results, now)
+	if snap.Selected == nil || snap.Selected.AccountKey != "claude" || snap.Selected.Window != "5h" {
+		t.Fatalf("selected = %+v, want the stale claude/5h fallback", snap.Selected)
 	}
 }
 
-func TestSelectedTrayTargetHonorsManualStaleOverride(t *testing.T) {
+func TestSelectedHonorsManualStaleOverride(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {
@@ -655,12 +653,9 @@ func TestSelectedTrayTargetHonorsManualStaleOverride(t *testing.T) {
 		s.mu.Unlock()
 	}()
 
-	name, _, windowName, ok := selectedTrayTarget(results)
-	if !ok {
-		t.Fatal("selectedTrayTarget returned no provider")
-	}
-	if name != "claude" || windowName != "5h" {
-		t.Fatalf("selected target = %s/%s, want manually selected stale claude/5h", name, windowName)
+	snap := viewOf(results, now)
+	if snap.Selected == nil || snap.Selected.AccountKey != "claude" || snap.Selected.Window != "5h" || snap.Selected.Reason != "pinned" {
+		t.Fatalf("selected = %+v, want the pinned stale claude/5h", snap.Selected)
 	}
 }
 
@@ -740,25 +735,25 @@ func TestForceRefreshIgnoresBackoff(t *testing.T) {
 	}
 }
 
-func TestSelectedTrayTargetHonorsQuotaOverride(t *testing.T) {
+func TestSelectedHonorsQuotaOverride(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
 			Provider: "openai",
 			Windows: []provider.UsageWindow{
-				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
+				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
 			},
 		},
 		"claude": {
 			Provider: "claude",
 			Windows: []provider.UsageWindow{
-				{Name: "5h", Utilization: 77, ResetsAt: now.Add(87 * time.Minute)},
+				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
 			},
 		},
 	}
 
 	s.mu.Lock()
-	s.iconTargetOverride = iconTarget{Provider: "claude", Window: "5h"}
+	s.iconTargetOverride = iconTarget{Provider: "claude", Window: "7d Sonnet"}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -766,12 +761,9 @@ func TestSelectedTrayTargetHonorsQuotaOverride(t *testing.T) {
 		s.mu.Unlock()
 	}()
 
-	name, _, windowName, ok := selectedTrayTarget(results)
-	if !ok {
-		t.Fatal("selectedTrayTarget returned no provider")
-	}
-	if name != "claude" || windowName != "5h" {
-		t.Fatalf("selected target = %s/%s, want claude/5h", name, windowName)
+	snap := viewOf(results, now)
+	if snap.Selected == nil || snap.Selected.AccountKey != "claude" || snap.Selected.Window != "7d Sonnet" {
+		t.Fatalf("selected = %+v, want the pinned claude/7d Sonnet", snap.Selected)
 	}
 }
 
@@ -795,16 +787,18 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
-	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "Codex"})
+	names := map[string]string{"claude": "Claude", "openai": "Codex"}
+	got := Tooltip(viewNamed(results, names, now), results)
 
-	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nRuns out in ") {
-		t.Fatalf("trayTooltip() = %q, want full title followed by run-out line", got)
+	// Changed on purpose: the used percentage is always stated, before the run-out.
+	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nCurrent 90%\nRuns out in ") {
+		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out line", got)
 	}
 	if strings.Contains(got, "7S") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
-		t.Fatalf("trayTooltip() = %q, want run-out, reset, and estimate", got)
+		t.Fatalf("Tooltip() = %q, want run-out, reset, and estimate", got)
 	}
-	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 3 {
-		t.Fatalf("trayTooltip() = %q, want four newline-separated lines", got)
+	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 4 {
+		t.Fatalf("Tooltip() = %q, want five newline-separated lines", got)
 	}
 }
 
@@ -833,16 +827,18 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 		s.mu.Unlock()
 	}()
 
-	got := trayTooltip(results, map[string]string{"claude": "Claude", "openai": "Codex"})
+	names := map[string]string{"claude": "Claude", "openai": "Codex"}
+	got := Tooltip(viewNamed(results, names, now), results)
 
-	if !strings.HasPrefix(got, "Codex 5-Hour\nWon't run out") {
-		t.Fatalf("trayTooltip() = %q, want full title followed by run-out state", got)
+	// Changed on purpose: the used percentage is always stated, before the run-out.
+	if !strings.HasPrefix(got, "Codex 5-Hour\nCurrent 20%\nWon't run out") {
+		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out state", got)
 	}
 	if strings.Contains(got, "5H") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
-		t.Fatalf("trayTooltip() = %q, want run-out state, reset, and estimate", got)
+		t.Fatalf("Tooltip() = %q, want run-out state, reset, and estimate", got)
 	}
-	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 3 {
-		t.Fatalf("trayTooltip() = %q, want four newline-separated lines", got)
+	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 4 {
+		t.Fatalf("Tooltip() = %q, want five newline-separated lines", got)
 	}
 }
 
@@ -871,13 +867,13 @@ func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
 		s.mu.Unlock()
 	}()
 
-	got := trayTooltip(results, map[string]string{"openai": "Codex"})
+	got := Tooltip(viewNamed(results, map[string]string{"openai": "Codex"}, now), results)
 
 	if !strings.Contains(got, "\nResets: 2 · next expires ") {
-		t.Fatalf("trayTooltip() = %q, want reset-credit expiry line", got)
+		t.Fatalf("Tooltip() = %q, want reset-credit expiry line", got)
 	}
-	if strings.Count(got, "\n") != 4 {
-		t.Fatalf("trayTooltip() = %q, want five newline-separated lines with reset credits", got)
+	if strings.Count(got, "\n") != 5 {
+		t.Fatalf("Tooltip() = %q, want six newline-separated lines with reset credits", got)
 	}
 }
 
@@ -900,9 +896,11 @@ func TestTrayTooltipShowsClaudeResetSnapshotWhenUsageIsErroredAndNeverNamesTheSu
 			s.mu.Lock()
 			s.iconTargetOverride = iconTarget{}
 			s.mu.Unlock()
-			got := trayTooltip(provider.PresentResetCreditSources(raw), map[string]string{"claude": "Claude"})
+			presented := provider.PresentResetCreditSources(raw)
+			// Only the menus' sources are shown, so claude_web is never named.
+			got := Tooltip(viewNamed(presented, map[string]string{"claude": "Claude"}, now), presented)
 			if !strings.HasPrefix(got, "Claude") || !strings.Contains(got, "\nResets: 1 · expires ") || strings.Contains(got, "claude_web") {
-				t.Fatalf("trayTooltip() = %q, want the Claude account with its reset observation only", got)
+				t.Fatalf("Tooltip() = %q, want the Claude account with its reset observation only", got)
 			}
 		})
 	}
@@ -925,16 +923,18 @@ func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.
 	s.iconTargetOverride = iconTarget{}
 	s.mu.Unlock()
 
-	got := trayTooltip(results, map[string]string{"claude": "Claude"})
+	got := Tooltip(viewNamed(results, map[string]string{"claude": "Claude"}, now), results)
 
-	if !strings.HasPrefix(got, "Claude: stale - showing last good data from ") {
-		t.Fatalf("trayTooltip() = %q, want stale fallback summary", got)
+	// Changed on purpose: the stale window is named, with its freshness on the
+	// line after its title. It is not forecast.
+	if !strings.HasPrefix(got, "Claude 5-Hour\nstale - showing last good data from ") {
+		t.Fatalf("Tooltip() = %q, want the window title then the stale line", got)
 	}
-	if !strings.Contains(got, "rate limited") {
-		t.Fatalf("trayTooltip() = %q, want stale reason", got)
+	if !strings.Contains(got, "rate limited") || !strings.Contains(got, "Current 11%") {
+		t.Fatalf("Tooltip() = %q, want the stale reason and the last used percentage", got)
 	}
-	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est.") {
-		t.Fatalf("trayTooltip() = %q, should not forecast stale data like live usage", got)
+	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est.") || strings.Contains(got, "Runs out") {
+		t.Fatalf("Tooltip() = %q, should not forecast stale data like live usage", got)
 	}
 }
 
@@ -1018,17 +1018,17 @@ func TestWindowBadgeLabelForWindowPrefersProviderDisplayCode(t *testing.T) {
 		{window: provider.UsageWindow{Name: "7d Sonnet"}, want: "7S"},
 	}
 	for _, tt := range tests {
-		if got := windowBadgeLabelForWindow(tt.window); got != tt.want {
-			t.Fatalf("windowBadgeLabelForWindow(%+v) = %q, want %q", tt.window, got, tt.want)
+		if got := windowBadgeLabel(meter.Label(tt.window)); got != tt.want {
+			t.Fatalf("windowBadgeLabel(meter.Label(%+v)) = %q, want %q", tt.window, got, tt.want)
 		}
 	}
 }
 
 func TestExpectedUsagePctClampsToResetWindow(t *testing.T) {
-	if got := meter.ExpectedPct(time.Now().Add(forecast.SevenDayWindow+time.Hour), forecast.SevenDayWindow); got != 0 {
+	if got := meter.ExpectedPctAt(time.Now().Add(forecast.SevenDayWindow+time.Hour), forecast.SevenDayWindow, time.Now()); got != 0 {
 		t.Fatalf("future-before-window expected usage = %.1f, want 0", got)
 	}
-	if got := meter.ExpectedPct(time.Now().Add(-time.Hour), forecast.SevenDayWindow); got != 100 {
+	if got := meter.ExpectedPctAt(time.Now().Add(-time.Hour), forecast.SevenDayWindow, time.Now()); got != 100 {
 		t.Fatalf("past-reset expected usage = %.1f, want 100", got)
 	}
 }
@@ -1301,11 +1301,12 @@ func TestNewResetPeriodIgnoresJitter(t *testing.T) {
 func TestTrayTypedMonthlyPresentation(t *testing.T) {
 	window := provider.UsageWindow{Name: "premium", Length: 30 * 24 * time.Hour, Utilization: 60, ResetsAt: time.Now().Add(12 * time.Hour)}
 	data := &provider.UsageData{Windows: []provider.UsageWindow{window}}
-	_, proj, ok := selectedIconWindow(data, window.Name)
-	if !ok || proj.Unknown || proj.ProjectedPct < 60 || proj.ProjectedPct > 62 {
-		t.Fatalf("selected projection = %+v, ok=%t", proj, ok)
+	snap := viewOf(map[string]*provider.UsageData{"a": data}, time.Now())
+	w := snap.Accounts[0].Windows[0]
+	if w.Forecast.State != view.ForecastKnown || w.Forecast.Pct < 60 || w.Forecast.Pct > 62 {
+		t.Fatalf("selected forecast = %+v", w.Forecast)
 	}
-	meter := iconMeterState(data, window.Name)
+	_, meter := IconState(snap)
 	if meter.RiskPct < 60 || meter.RiskPct > 62 || meter.ExpectedPct < 98 || meter.ExpectedPct > 99 {
 		t.Fatalf("monthly meter = %+v", meter)
 	}
@@ -1315,19 +1316,30 @@ func TestTrayTypedMonthlyPresentation(t *testing.T) {
 }
 
 func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
+	now := time.Now()
+	// A fresh window used up in warm-up has no forecast, but is out now.
+	warming := provider.UsageWindow{Utilization: 100, ResetsAt: now.Add(time.Hour)}
+	stale := &provider.UsageData{Stale: true, Warning: "rate limited", FetchedAt: now.Add(-time.Hour), Windows: []provider.UsageWindow{warming}}
 	for _, tc := range []struct {
 		name string
-		proj forecast.Projection
-		want string
+		data *provider.UsageData
+		want []string
+		ban  []string
 	}{
-		{"unknown", forecast.Projection{Unknown: true, WillLastToReset: true}, "projection unknown"},
-		{"stale", forecast.Projection{Unknown: true, Stale: true, WillLastToReset: true}, "stale"},
+		{"unknown", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Out now", "projection unknown"}, []string{"Won't run out", "Est. 0%"}},
+		{"stale", stale, []string{"Current 100%", "Run-out unknown", "stale"}, []string{"Won't run out", "Est.", "Out now"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			window := provider.UsageWindow{Utilization: 100, ResetsAt: time.Now().Add(time.Hour)}
-			got := compactIconTooltip("Test", window, tc.proj, time.Time{})
-			if !strings.Contains(got, "Current 100%") || !strings.Contains(got, tc.want) || strings.Contains(got, "Won't run out") || strings.Contains(got, "Est. 0%") {
-				t.Fatalf("tooltip = %q", got)
+			got := Tooltip(viewNamed(map[string]*provider.UsageData{"t": tc.data}, map[string]string{"t": "Test"}, now), nil)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("tooltip = %q, missing %q", got, want)
+				}
+			}
+			for _, banned := range tc.ban {
+				if strings.Contains(got, banned) {
+					t.Fatalf("tooltip = %q, must not contain %q", got, banned)
+				}
 			}
 		})
 	}
@@ -1338,24 +1350,38 @@ func TestTrayRiskSelectionPrefersExhaustedUnknownWindow(t *testing.T) {
 	exhausted := provider.UsageWindow{Name: "5h", Utilization: 100, ResetsAt: now.Add(299 * time.Minute)}
 	projected := provider.UsageWindow{Name: "7d", Utilization: 50, ResetsAt: now.Add(6 * 24 * time.Hour)}
 	data := &provider.UsageData{Windows: []provider.UsageWindow{projected, exhausted}}
-	window, proj, ok := selectedIconWindow(data, "")
-	if !ok || window.Name != exhausted.Name || !proj.Unknown {
-		t.Fatalf("selected %q, projection=%+v, ok=%t", window.Name, proj, ok)
-	}
 	results := map[string]*provider.UsageData{
 		"projected": {Windows: []provider.UsageWindow{projected}},
 		"exhausted": data,
 	}
-	targets := activeIconTargets(results)
-	if len(targets) != 3 || targets[0] != (iconTarget{Provider: "exhausted", Window: "5h"}) {
-		t.Fatalf("risk targets = %+v", targets)
+	s.mu.Lock()
+	s.iconTargetOverride = iconTarget{}
+	s.mu.Unlock()
+
+	snap := viewOf(results, now)
+	if snap.Selected == nil || snap.Selected.AccountKey != "exhausted" || snap.Selected.Window != exhausted.Name {
+		t.Fatalf("selected = %+v, want the exhausted window", snap.Selected)
 	}
-	if keys := sortedKeys(results); len(keys) != 2 || keys[0] != "exhausted" {
-		t.Fatalf("provider order = %v", keys)
+	for _, w := range snap.Accounts[indexOfAccount(snap, "exhausted")].Windows {
+		if w.Name == exhausted.Name && w.Forecast.State != view.ForecastWarming {
+			t.Fatalf("exhausted forecast = %+v, want warming up", w.Forecast)
+		}
 	}
-	if meter := iconMeterState(data, ""); meter.RiskPct < 100 || meter.UsagePct != 100 {
+	if targets := riskOrderOf(snap); len(targets) != 3 || targets[0] != (iconTarget{Provider: "exhausted", Window: "5h"}) {
+		t.Fatalf("risk order = %+v", targets)
+	}
+	if _, meter := IconState(snap); meter.RiskPct < 100 || meter.UsagePct != 100 {
 		t.Fatalf("default exhausted meter = %+v", meter)
 	}
+}
+
+func indexOfAccount(snap view.Snapshot, key string) int {
+	for i, a := range snap.Accounts {
+		if a.Key == key {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestNewResetPeriodRequiresForwardMovement(t *testing.T) {
@@ -1519,16 +1545,16 @@ func TestTrayRowLaysLabeledValuesOutInGutteredColumns(t *testing.T) {
 func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	window := provider.UsageWindow{Name: "seven_day", Length: 7 * 24 * time.Hour, Utilization: 86, ResetsAt: time.Now().Add(34 * time.Hour)}
 	got := trayWindowText(window)
-	if !windowRunsOutBeforeReset(window) || !strings.Contains(got, "    runs out in ") || strings.Contains(got, "before reset") {
+	if !AtRisk(viewWindowOf(t, window)) || !strings.Contains(got, "    runs out in ") || strings.Contains(got, "before reset") {
 		t.Fatalf("at-risk row = %q", got)
 	}
 	window.Utilization = 10
-	if got := trayWindowText(window); windowRunsOutBeforeReset(window) || strings.Contains(got, "runs out") {
+	if got := trayWindowText(window); AtRisk(viewWindowOf(t, window)) || strings.Contains(got, "runs out") {
 		t.Fatalf("safe row = %q", got)
 	}
 	// Used up minutes into a window: no forecast yet, but already out.
 	spent := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(299 * time.Minute)}
-	if got := trayWindowText(spent); !windowRunsOutBeforeReset(spent) || !strings.Contains(got, "forecast unknown") || !strings.HasSuffix(got, "    out now") {
+	if got := trayWindowText(spent); !AtRisk(viewWindowOf(t, spent)) || !strings.Contains(got, "forecast unknown") || !strings.HasSuffix(got, "    out now") {
 		t.Fatalf("exhausted row without a forecast = %q", got)
 	}
 }
@@ -1546,22 +1572,18 @@ func TestTrayWindowRowStatesForecastUseAtReset(t *testing.T) {
 }
 
 func trayWindowText(window provider.UsageWindow) string {
-	row := meter.NewRow(window, windowProjection(window), false)
-	return trayRowText(row, trayColumnWidths([]meter.Row{row}))
+	snap := viewOf(map[string]*provider.UsageData{"a": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	return MenuRows(snap, maxWindowItems)["a"][0]
 }
 
 func TestTrayForecastColumnWidensForAnEarlyForecastItShows(t *testing.T) {
 	// 20% used two hours into a week projects about 1680%.
 	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 20, ResetsAt: time.Now().Add(7*24*time.Hour - 2*time.Hour)}
 	steady := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: time.Now().Add(3 * time.Hour)}
-	menus := map[string]*providerMenuItems{
-		"a": {windowItems: make([]*systray.MenuItem, maxWindowItems)},
-		"b": {windowItems: make([]*systray.MenuItem, maxWindowItems)},
-	}
-	rows := trayMenuRows(map[string]*provider.UsageData{
+	rows := MenuRows(viewOf(map[string]*provider.UsageData{
 		"a": {Windows: []provider.UsageWindow{early}},
 		"b": {Windows: []provider.UsageWindow{steady}},
-	}, menus)
+	}, time.Now()), maxWindowItems)
 	forecastEnd := func(row string) int { return len([]rune(row[:strings.Index(row, " at reset")])) }
 	if forecastEnd(rows["a"][0]) != forecastEnd(rows["b"][0]) || !strings.Contains(rows["b"][0], "\u2007100% at reset") {
 		t.Fatalf("forecasts do not line up:\n%q\n%q", rows["a"][0], rows["b"][0])
@@ -1572,7 +1594,7 @@ func TestTrayForecastColumnWidensForAnEarlyForecastItShows(t *testing.T) {
 	for i := range windows {
 		windows[i] = steady
 	}
-	rows = trayMenuRows(map[string]*provider.UsageData{"b": {Windows: append(windows, early)}}, menus)
+	rows = MenuRows(viewOf(map[string]*provider.UsageData{"b": {Windows: append(windows, early)}}, time.Now()), maxWindowItems)
 	if len(rows["b"]) != maxWindowItems || strings.Contains(rows["b"][0], "\u2007100% at reset") {
 		t.Fatalf("a hidden window widened the column: %q", rows["b"])
 	}

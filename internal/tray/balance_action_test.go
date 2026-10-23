@@ -11,19 +11,18 @@ import (
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/systray"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
-// drawBalanceRows draws pools as the render path does, with the browser's
-// last contact stubbed to contact.
 func drawBalanceRows(t *testing.T, menu *providerMenuItems, contact time.Time, pools ...provider.UsageCreditPool) int {
 	t.Helper()
-	previous := lastExtensionContact
-	lastExtensionContact = func() time.Time { return contact }
-	t.Cleanup(func() { lastExtensionContact = previous })
 	data := &provider.UsageData{Provider: provider.ClaudeAPISourceName, CreditPools: pools}
+	// The snapshot carries the contact the render reads, as updateUI does.
+	now := time.Now()
+	snap := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"api": data}, ExtensionContact: contact}, now)
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
-	return showBalanceRows(menu, data, nil)
+	return showBalanceRows(menu, accountNamed(snap, "api"), nil, now)
 }
 
 func TestBalanceRowsChooseTheirStepWhenDrawn(t *testing.T) {

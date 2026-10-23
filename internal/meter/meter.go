@@ -96,12 +96,12 @@ func cells(pct float64) int {
 	return int(math.Round(math.Max(0, math.Min(100, pct)) / (100 / BarCells)))
 }
 
-// ExpectedPct is how much an even pace would have used by now.
-func ExpectedPct(resetsAt time.Time, length time.Duration) float64 {
+// ExpectedPctAt is how much an even pace would have used by the given time.
+func ExpectedPctAt(resetsAt time.Time, length time.Duration, at time.Time) float64 {
 	if length <= 0 {
 		return 0
 	}
-	elapsed := length - time.Until(resetsAt)
+	elapsed := length - resetsAt.Sub(at)
 	if elapsed <= 0 {
 		return 0
 	}
@@ -109,26 +109,6 @@ func ExpectedPct(resetsAt time.Time, length time.Duration) float64 {
 		return 100
 	}
 	return elapsed.Seconds() / length.Seconds() * 100
-}
-
-// Shown drops windows with nothing used and nothing projected, unless that
-// would leave no window to show.
-func Shown(windows []provider.UsageWindow) []provider.UsageWindow {
-	return ShownAt(windows, time.Now())
-}
-
-// ShownAt is Shown judged at the given time.
-func ShownAt(windows []provider.UsageWindow, at time.Time) []provider.UsageWindow {
-	active := make([]provider.UsageWindow, 0, len(windows))
-	for _, window := range windows {
-		if !IdleAt(window, at) {
-			active = append(active, window)
-		}
-	}
-	if len(active) == 0 {
-		return windows
-	}
-	return active
 }
 
 // IdleAt reports whether a window has nothing used and nothing projected at
@@ -141,6 +121,7 @@ func IdleAt(window provider.UsageWindow, at time.Time) bool {
 // Row is one quota window ready to display. Values are unpadded; each
 // renderer lays them out: the tray menu as labeled phrases, the CLI as a
 // table. A row with Line set is a money-only window and has nothing else.
+// internal/view builds rows from a snapshot; this package only draws them.
 type Row struct {
 	Line string
 
@@ -174,71 +155,6 @@ type Row struct {
 // HasPace reports whether the bar carries a pace mark.
 func (r Row) HasPace() bool {
 	return len(r.Bar) > BarCells
-}
-
-// Rows lays out an account's windows, each with its projection. A window's
-// qualifier, such as "all models", shows only when it is needed: "all
-// models" on an account's only seven-day row says nothing.
-func Rows(windows []provider.UsageWindow, projections []forecast.Projection) []Row {
-	codes := make(map[string]int, len(windows))
-	for _, window := range windows {
-		codes[Code(window)]++
-	}
-	rows := make([]Row, len(windows))
-	for i, window := range windows {
-		rows[i] = NewRow(window, projections[i], codes[Code(window)] > 1)
-	}
-	return rows
-}
-
-// NewRow lays out one window. proj must come from the window; it is ignored
-// when the window has no reset.
-func NewRow(window provider.UsageWindow, proj forecast.Projection, codeShared bool) Row {
-	label := Label(window)
-	money := window.MoneyDetail()
-	if money != "" && window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-		return Row{Line: label + ": " + money}
-	}
-	row := Row{Code: Code(window), Money: money, Used: Percent(window.Utilization)}
-	if qualifier := Qualifier(window); qualifier != "" && (codeShared || qualifier != "all models") {
-		row.Qualifier = qualifier
-	}
-	length := forecast.WindowLength(window)
-	hasPace := length > 0 && !window.ResetsAt.IsZero()
-	pace := 0.0
-	if hasPace {
-		pace = ExpectedPct(window.ResetsAt, length)
-	}
-	if window.ResetsAt.IsZero() {
-		row.Resets, row.ResetPolicy = window.ResetPolicy, true
-		if row.Resets == "" {
-			row.Resets = "reset not reported"
-		}
-		row.Bar = Bar(window.Utilization, window.Utilization, pace, hasPace)
-		return row
-	}
-	row.Resets = Duration(time.Until(window.ResetsAt))
-	if proj.Unknown || proj.Stale {
-		row.ForecastState = "unknown"
-		if proj.Stale {
-			row.ForecastState = "stale"
-		} else if window.Utilization >= 100 {
-			// A fresh window can be used up before its forecast warms up.
-			row.RunsOut = "now"
-		}
-		row.Bar = Bar(window.Utilization, window.Utilization, pace, hasPace)
-		return row
-	}
-	row.Bar = Bar(window.Utilization, proj.ProjectedPct, pace, hasPace)
-	row.Forecast = Percent(proj.ProjectedPct)
-	row.Over = proj.ProjectedPct > 100
-	if !proj.WillLastToReset {
-		row.RunsOut = "now"
-		if proj.RunsOutIn > 0 {
-			row.RunsOut = Duration(proj.RunsOutIn)
-		}
-	}
-	return row
 }
 
 // Percent writes a whole percentage.

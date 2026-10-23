@@ -37,6 +37,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/status"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 	"github.com/tnunamak/clawmeter/internal/update"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 const (
@@ -476,6 +477,7 @@ func onReadyWithConfig(loaded *config.Config) {
 			return
 		}
 		setPendingRelease(rel)
+		contact := lastExtensionContact()
 		trayRenderMu.Lock()
 		if rel == nil {
 			mUpdate.Hide()
@@ -483,13 +485,7 @@ func onReadyWithConfig(loaded *config.Config) {
 			mUpdate.SetTitle(fmt.Sprintf("• Update to %s", rel.Version))
 			mUpdate.Show()
 		}
-		results := presentedResults(lastResults())
-		if results != nil {
-			displayNames := providerDisplayNames(providerMenus)
-			updateTrayIcon(results)
-			updateTrayTitle(results)
-			updateTrayTooltip(results, displayNames)
-		}
+		renderIconAndTooltip(providerMenus, contact)
 		trayRenderMu.Unlock()
 	}
 
@@ -868,10 +864,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setProviderSeparatorVisible(menu, false)
 }
 
-// showBalanceRows fills the balance rows with balances, then API credit
-// pools, and hides the rest. Pools are browser-checked snapshots, so they
-// stay visible even when the row's usage reading failed.
-func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances []provider.UsageBalance) int {
+func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []provider.UsageBalance, now time.Time) int {
 	rows := 0
 	show := func(title, action string) {
 		if rows < len(menu.balanceItems) {
@@ -889,19 +882,16 @@ func showBalanceRows(menu *providerMenuItems, data *provider.UsageData, balances
 		}
 		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
-	now := time.Now()
-	contact := lastExtensionContact()
-	for _, pool := range data.CreditPools {
-		if pool.ObservationSource == "extension" {
-			pool.ExtensionContactAt = contact
+	if acct != nil {
+		for _, pool := range acct.Pools {
+			title := pool.TrayLine(now)
+			// A lone pool on the Claude API row needs no label; anywhere else it
+			// sits among other rows.
+			if acct.Provider != provider.ClaudeAPISourceName || len(acct.Pools) > 1 {
+				title = pool.Name + ": " + title
+			}
+			show(title, pool.Action(now))
 		}
-		title := pool.TrayLine(now)
-		// A lone pool on the Claude API row needs no label; anywhere else it
-		// sits among other rows.
-		if data.Provider != provider.ClaudeAPISourceName || len(data.CreditPools) > 1 {
-			title = pool.Name + ": " + title
-		}
-		show(title, pool.Action(now))
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
@@ -1087,6 +1077,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setups[name] = provider.GetSetupStatus(menu.provider)
 		}
 	}
+	// The one piece of I/O the snapshot reads, the extension contact, is read
+	// before the render lock. The pin is in memory and is read here too.
+	contact := lastExtensionContact()
+	pin := currentIconPin()
 
 	results, statuses = lockLatestTrayState(&trayRenderMu)
 	defer trayRenderMu.Unlock()
@@ -1095,45 +1089,39 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
 
+	// One snapshot serves the whole render: every row, the icon and the tooltip.
+	now := time.Now()
+	shown := trayShown(results, fetched, menus, setups)
+	snap := view.Build(trayViewInputs(shown, menus, now, contact, pin), now)
+
 	hasExpiredClaude := false
 	hasClaude := false
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
 	visibleProviderCount := 0
-	windowRows := trayMenuRows(results, menus)
+	windowRows := MenuRows(snap, maxWindowItems)
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
-		data := results[name]
-		if data == nil && fetched[name] != nil {
-			// Folded under another row, like linked API credit pools.
+		data, ok := shown[name]
+		if !ok {
 			hideProviderMenu(menu)
 			continue
 		}
-
-		if data != nil && data.EstablishesPrimaryUIHistory() {
-			menu.everHealthy = true
-		}
+		acct := accountNamed(snap, name)
 
 		setup := setups[name]
-		// Like the CLI, an auto-detected provider shows only with something
-		// to show. The Token Plan also shows when it can be connected.
-		detected := name == tokenPlanProviderName && setup.State != provider.SetupUnavailable
-		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) && !detected {
-			hideProviderMenu(menu)
-			continue
-		}
-		updateResetCreditRow(menu, data, time.Now())
-		updateAnnouncementRow(menu, data, time.Now())
-		if provider.FamilyName(menu.provider) == "claude" {
-			hasClaude = true
-		}
 		setupReady := setup.IsReady()
 		connectionStatus, connectionAction, showConnection := providerConnectionMenuState(name, data, menu.explicitlyEnabled, setupReady)
 		if !showConnection {
 			menu.connectFailed.Store(false)
 		} else if menu.connectFailed.Load() {
 			connectionAction = retryConnectionAction
+		}
+		updateResetCreditRow(menu, data, now)
+		updateAnnouncementRow(menu, data, now)
+		if provider.FamilyName(menu.provider) == "claude" {
+			hasClaude = true
 		}
 		setProviderConnectionItemLocked(menu, connectionAction, showConnection)
 		visibleProviderCount++
@@ -1172,7 +1160,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 				}
 			}
 			showProviderProblem(menu, expiredMsg)
-			showBalanceRows(menu, data, nil)
+			showBalanceRows(menu, acct, nil, now)
 			setProviderSeparatorVisible(menu, true)
 			continue
 		}
@@ -1180,7 +1168,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		if data.Error != "" {
 			hideProviderWindows(menu)
 			showProviderProblem(menu, format.HumanizeError(data.Error))
-			showBalanceRows(menu, data, nil)
+			showBalanceRows(menu, acct, nil, now)
 			setProviderSeparatorVisible(menu, true)
 			continue
 		}
@@ -1200,7 +1188,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
-		windows := meter.Shown(data.PresentationWindows())
+		windows := acct.ShownWindows()
 		rows := windowRows[name]
 		for i, window := range windows {
 			if i >= len(menu.windowItems) {
@@ -1208,7 +1196,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			}
 
 			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], rows[i])
-			if atRisk := windowRunsOutBeforeReset(window); atRisk != menu.windowAtRisk[i] {
+			if atRisk := AtRisk(window); atRisk != menu.windowAtRisk[i] {
 				menu.windowAtRisk[i] = atRisk
 				icon := icons.MenuBlank()
 				if atRisk {
@@ -1223,7 +1211,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		for i := len(windows); i < len(menu.windowItems); i++ {
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
 		}
-		balanceRows := showBalanceRows(menu, data, data.Balances)
+		balanceRows := showBalanceRows(menu, acct, data.Balances, now)
 		if len(windows) == 0 && balanceRows == 0 && len(statusParts) == 0 && !menu.resetState.visible {
 			showProviderProblem(menu, "no usage reported")
 		}
@@ -1246,7 +1234,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	// Show/hide reauth button (only for Claude expired tokens)
 	setSharedMenuItemVisible(mReauth, hasExpiredClaude, &s.reauthVisible, &s.reauthVisibleKnown)
 	if mExtension != nil {
-		setSharedMenuItemVisible(mExtension, hasClaude && offerExtension(extensionFolderExists(), claudeweb.LastExtensionContact(), time.Now()),
+		setSharedMenuItemVisible(mExtension, hasClaude && offerExtension(extensionFolderExists(), contact, now),
 			&s.extensionVisible, &s.extensionVisibleKnown)
 	}
 
@@ -1264,13 +1252,13 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 	iconPick.update(activeResults, menus)
 
-	// Update icon and title based on worst usage (only active providers)
-	updateTrayIcon(activeResults)
+	// Update icon, title and tooltip from the snapshot's selected quota.
+	updateTrayIcon(snap)
 	updateTrayTitle(activeResults)
-	updateTrayTooltip(activeResults, displayNames)
+	updateTrayTooltip(snap, activeResults)
 
 	// Reset the independent deadline whenever API credit rows are rendered.
-	scheduleAPICreditRows(results, menus, time.Now())
+	scheduleAPICreditRows(results, menus, now)
 
 	// Check notification thresholds
 	checkThresholds(activeResults, displayNames)
@@ -1473,12 +1461,13 @@ func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[st
 	}
 }
 
-// pickerTargetLabel names a quota the way its menu row does, for example
-// "Codex: Weekly".
 func pickerTargetLabel(data *provider.UsageData, target iconTarget, displayNames map[string]string) string {
 	label := target.Window
-	if window, _, ok := selectedIconWindow(data, target.Window); ok {
-		label = meter.Label(window)
+	for _, window := range data.UsableWindows() {
+		if window.Name == target.Window {
+			label = meter.Label(window)
+			break
+		}
 	}
 	return providerDisplayName(target.Provider, displayNames) + ": " + label
 }
@@ -1527,21 +1516,110 @@ func pickerIconTargets(results map[string]*provider.UsageData, menus map[string]
 }
 
 func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, target iconTarget) {
-	displayNames := providerDisplayNames(menus)
+	contact := lastExtensionContact()
 
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
 	s.mu.Lock()
 	s.iconTargetOverride = target
 	s.mu.Unlock()
-	results := presentedResults(lastResults())
 
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
-	picker.update(results, menus)
-	updateTrayIcon(results)
+	picker.update(presentedResults(lastResults()), menus)
+	renderIconAndTooltip(menus, contact)
+}
+
+// renderIconAndTooltip redraws the icon, title and tooltip from one snapshot of
+// the last results. contact is the extension contact, read before the caller
+// took the render lock. The caller holds trayRenderMu.
+func renderIconAndTooltip(menus map[string]*providerMenuItems, contact time.Time) {
+	raw := lastResults()
+	results := presentedResults(raw)
+	shown := trayShown(results, raw, menus, nil)
+	now := time.Now()
+	snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
+	updateTrayIcon(snap)
 	updateTrayTitle(results)
-	updateTrayTooltip(results, displayNames)
+	updateTrayTooltip(snap, shown)
+}
+
+// trayShown decides which menus the tray shows and returns each shown menu's
+// reading, nil included. A provider folded under another row is not shown.
+// Like the CLI, an auto-detected provider shows only with something to show;
+// the Token Plan also shows when it can be connected. It also records that a
+// provider has been healthy, which keeps it visible through a later failure.
+func trayShown(results, fetched map[string]*provider.UsageData, menus map[string]*providerMenuItems, setups map[string]provider.SetupStatus) map[string]*provider.UsageData {
+	shown := make(map[string]*provider.UsageData, len(menus))
+	for name, menu := range menus {
+		data := results[name]
+		if data == nil && fetched[name] != nil {
+			continue
+		}
+		if data != nil && data.EstablishesPrimaryUIHistory() {
+			menu.everHealthy = true
+		}
+		setup := setups[name]
+		detected := name == tokenPlanProviderName && setup.State != provider.SetupUnavailable
+		if !provider.ShouldShowInPrimaryUI(data, menu.everHealthy, menu.explicitlyEnabled) && !detected {
+			continue
+		}
+		shown[name] = data
+	}
+	return shown
+}
+
+// trayViewInputs is what the snapshot reads for one render. Its inputs are the
+// shown readings, the menus' names, labels and families, every configured
+// source of a family for the labels, the run-out record, the extension contact
+// and the user's pin.
+func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*providerMenuItems, now, contact time.Time, pin *view.Target) view.Inputs {
+	in := view.Inputs{
+		Results:            make(map[string]*provider.UsageData, len(shown)),
+		DisplayNames:       make(map[string]string, len(menus)),
+		SourceLabels:       make(map[string]string, len(menus)),
+		Families:           make(map[string]string, len(menus)),
+		FamilySourceCounts: make(map[string]int),
+		OutSince:           make(map[string]map[string]time.Time),
+		ExtensionContact:   contact,
+		Pin:                pin,
+	}
+	for key, menu := range menus {
+		family := provider.FamilyName(menu.provider)
+		in.DisplayNames[key] = menu.provider.DisplayName()
+		in.SourceLabels[key] = provider.SourceLabel(menu.provider)
+		in.Families[key] = family
+		in.FamilySourceCounts[family]++
+	}
+	for key, data := range shown {
+		in.Results[key] = data
+		if data == nil {
+			continue
+		}
+		for _, w := range data.PresentationWindows() {
+			if w.Utilization < 100 {
+				continue
+			}
+			if at := windowExhaustion.ranOutAt(key, w, now); !at.IsZero() {
+				if in.OutSince[key] == nil {
+					in.OutSince[key] = make(map[string]time.Time)
+				}
+				in.OutSince[key][w.Name] = at
+			}
+		}
+	}
+	return in
+}
+
+// currentIconPin is the quota the user pinned to the icon, or nil when the
+// icon is automatic.
+func currentIconPin() *view.Target {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iconTargetOverride.Provider == "" {
+		return nil
+	}
+	return &view.Target{AccountKey: s.iconTargetOverride.Provider, Window: s.iconTargetOverride.Window}
 }
 
 func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string {
@@ -1552,102 +1630,21 @@ func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string
 	return displayNames
 }
 
-func activeIconTargets(results map[string]*provider.UsageData) []iconTarget {
-	choices := activeIconTargetsAllowingStale(results, false)
-	if len(choices) > 0 {
-		return choices
-	}
-	return activeIconTargetsAllowingStale(results, true)
-}
-
+// manualIconTargets lists the quotas a user can pin: each reset-backed window
+// of each source, in source key order.
 func manualIconTargets(results map[string]*provider.UsageData) []iconTarget {
-	return activeIconTargetsAllowingStale(results, true)
-}
-
-func activeIconTargetsAllowingStale(results map[string]*provider.UsageData, allowStale bool) []iconTarget {
-	if len(results) == 0 {
-		return nil
-	}
-	type rankedTarget struct {
-		target        iconTarget
-		window        provider.UsageWindow
-		projection    forecast.Projection
-		hasProjection bool
-		score         float64
-	}
-
-	providerNames := make([]string, 0, len(results))
+	names := make([]string, 0, len(results))
 	for name := range results {
-		providerNames = append(providerNames, name)
+		names = append(names, name)
 	}
-	sort.Strings(providerNames)
-	ranked := make([]rankedTarget, 0, len(results))
-	for _, name := range providerNames {
-		data := results[name]
-		if data == nil {
-			continue
+	sort.Strings(names)
+	var choices []iconTarget
+	for _, name := range names {
+		for _, window := range results[name].UsableWindows() {
+			choices = append(choices, iconTarget{Provider: name, Window: window.Name})
 		}
-		if data.Stale && !allowStale {
-			continue
-		}
-		windows := data.UsableWindows()
-		if len(windows) == 0 {
-			continue
-		}
-		for _, window := range windows {
-			target := iconTarget{Provider: name, Window: window.Name}
-			proj := windowProjection(window)
-			score := proj.ProjectedPct
-			ranked = append(ranked, rankedTarget{
-				target:        target,
-				window:        window,
-				projection:    proj,
-				hasProjection: true,
-				score:         score,
-			})
-		}
-	}
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if ranked[i].hasProjection && ranked[j].hasProjection {
-			if cmp := forecast.CompareWindowRisk(ranked[i].window, ranked[i].projection, ranked[j].window, ranked[j].projection); cmp != 0 {
-				return cmp < 0
-			}
-		}
-		return ranked[i].score > ranked[j].score
-	})
-
-	choices := make([]iconTarget, 0, len(ranked))
-	for _, choice := range ranked {
-		choices = append(choices, choice.target)
 	}
 	return choices
-}
-
-func iconTargetRisk(data *provider.UsageData, target iconTarget) float64 {
-	if data == nil {
-		return -1
-	}
-	if data.IsExpired {
-		return 10000
-	}
-	if data.Error != "" && !data.HasPresentableUsage() {
-		return 9000
-	}
-	if target.Window == "" {
-		return providerProjectedPct(data)
-	}
-	if window, _, ok := selectedIconWindow(data, target.Window); ok {
-		return windowProjectedPct(window)
-	}
-	return -1
-}
-
-func windowProjectedPct(window provider.UsageWindow) float64 {
-	return windowProjection(window).ProjectedPct
-}
-
-func windowProjection(window provider.UsageWindow) forecast.Projection {
-	return forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
 }
 
 func targetInChoices(target iconTarget, choices []iconTarget) bool {
@@ -1662,14 +1659,6 @@ func targetInChoices(target iconTarget, choices []iconTarget) bool {
 	return false
 }
 
-func iconTargetDisplayName(target iconTarget, displayNames map[string]string) string {
-	display := providerDisplayName(target.Provider, displayNames)
-	if target.Window == "" {
-		return display
-	}
-	return display + " " + windowBadgeLabel(target.Window)
-}
-
 func providerDisplayName(name string, displayNames map[string]string) string {
 	if displayNames != nil && displayNames[name] != "" {
 		return displayNames[name]
@@ -1678,40 +1667,6 @@ func providerDisplayName(name string, displayNames map[string]string) string {
 		return "clawmeter"
 	}
 	return strings.ToUpper(name[:1]) + name[1:]
-}
-
-func selectedTrayTarget(results map[string]*provider.UsageData) (string, *provider.UsageData, string, bool) {
-	s.mu.Lock()
-	override := s.iconTargetOverride
-	s.mu.Unlock()
-	autoChoices := activeIconTargets(results)
-
-	if override.Provider != "" {
-		if targetInChoices(override, manualIconTargets(results)) {
-			if data := results[override.Provider]; data != nil {
-				return override.Provider, data, override.Window, true
-			}
-		}
-	}
-
-	for _, target := range autoChoices {
-		data := results[target.Provider]
-		if data == nil {
-			continue
-		}
-		window, _, ok := selectedIconWindow(data, target.Window)
-		if ok {
-			return target.Provider, data, window.Name, true
-		}
-	}
-
-	for _, name := range sortedKeys(results) {
-		data := results[name]
-		if data != nil {
-			return name, data, "", true
-		}
-	}
-	return "", nil, "", false
 }
 
 func setPendingRelease(rel *update.Release) {
@@ -1730,18 +1685,11 @@ func updateAvailable() bool {
 	return currentPendingRelease() != nil
 }
 
-func updateTrayIcon(results map[string]*provider.UsageData) {
-	// Pick the icon's provider using the same severity ordering as the title
-	// and tooltip, but prefer providers with usable quota windows. Setup and
-	// fetch errors are actionable in the menu; they should not steal the tray
-	// icon from real quota telemetry.
-	worstProvider := ""
-	meter := icons.MeterState{}
-
-	if _, data, windowName, ok := selectedTrayTarget(results); ok {
-		meter = iconMeterState(data, windowName)
-		worstProvider = iconProviderName(data)
-	}
+func updateTrayIcon(snap view.Snapshot) {
+	// The icon follows the snapshot's selected quota: the user's pin when set
+	// and present, else the most at-risk one. Setup and fetch errors are in the
+	// menu; they never steal the icon from quota telemetry.
+	worstProvider, meter := IconState(snap)
 	meter.UpdateAvailable = updateAvailable()
 
 	s.mu.Lock()
@@ -1758,53 +1706,6 @@ func updateTrayIcon(results map[string]*provider.UsageData) {
 	// the 22px and 32px forms as SNI pixmaps; Windows and macOS receive the
 	// closest source form for their own final compositor scaling.
 	setIconDynamic(worstProvider, meter, nil)
-}
-
-func iconProviderName(data *provider.UsageData) string {
-	if data == nil {
-		return ""
-	}
-	return data.Provider
-}
-
-// iconMeterState maps provider usage into the tray icon's three visual
-// channels: actual usage, expected usage by this point in the reset window, and
-// projected urgency. The popup keeps exact text; the icon carries the comparison.
-func iconMeterState(data *provider.UsageData, windowName string) icons.MeterState {
-	if data == nil {
-		return icons.MeterState{}
-	}
-	if data.IsExpired {
-		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
-	}
-	if data.Stale {
-		return icons.MeterState{}
-	}
-	if data.Error != "" && !data.HasPresentableUsage() {
-		return icons.MeterState{}
-	}
-
-	window, proj, ok := selectedIconWindow(data, windowName)
-	if !ok {
-		return icons.MeterState{}
-	}
-	windowLen := forecast.WindowLength(window)
-	return icons.MeterState{
-		UsagePct:     window.Utilization,
-		ExpectedPct:  meter.ExpectedPct(window.ResetsAt, windowLen),
-		RiskPct:      windowRiskPct(window, proj),
-		ShowExpected: true,
-		Label:        windowBadgeLabelForWindow(window),
-	}
-}
-
-// windowRiskPct keeps an exhausted current window at risk even when there
-// is not enough elapsed time to project its usage.
-func windowRiskPct(window provider.UsageWindow, proj forecast.Projection) float64 {
-	if !proj.Stale && window.Utilization >= 100 && window.Utilization > proj.ProjectedPct {
-		return window.Utilization
-	}
-	return proj.ProjectedPct
 }
 
 func updateTrayTitle(results map[string]*provider.UsageData) {
@@ -1835,81 +1736,8 @@ func trayTitleForPlatform(goos string, hasUpdate bool) string {
 	return "Clawmeter"
 }
 
-func selectedIconWindow(data *provider.UsageData, windowName string) (provider.UsageWindow, forecast.Projection, bool) {
-	var selected provider.UsageWindow
-	var selectedProj forecast.Projection
-	if data == nil {
-		return selected, selectedProj, false
-	}
-	if windowName != "" {
-		for _, window := range data.UsableWindows() {
-			if window.Name != windowName {
-				continue
-			}
-			windowLen := forecast.WindowLength(window)
-			return window, forecast.Project(window.Utilization, window.ResetsAt, windowLen), true
-		}
-		return selected, selectedProj, false
-	}
-	hasSelected := false
-	for _, window := range data.UsableWindows() {
-		proj := windowProjection(window)
-		if !hasSelected || forecast.CompareWindowRisk(window, proj, selected, selectedProj) < 0 {
-			selected = window
-			selectedProj = proj
-			hasSelected = true
-		}
-	}
-	return selected, selectedProj, hasSelected
-}
-
-func providerProjectedPct(data *provider.UsageData) float64 {
-	_, proj, ok := selectedIconWindow(data, "")
-	if !ok {
-		return 0
-	}
-	return proj.ProjectedPct
-}
-
-func windowBadgeLabel(name string) string {
-	label := strings.ToUpper(strings.TrimSpace(name))
-	// A two-character badge cannot safely abbreviate a multi-digit duration.
-	if len(label) > 1 && label[0] >= '0' && label[0] <= '9' && label[1] >= '0' && label[1] <= '9' {
-		return "--"
-	}
-	parts := strings.FieldsFunc(label, func(r rune) bool {
-		return !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
-	})
-	if len(parts) > 0 && len(parts[0]) >= 2 && parts[0][0] >= '0' && parts[0][0] <= '9' {
-		if len(parts) > 1 && len(parts[1]) > 0 {
-			return string([]byte{parts[0][0], parts[1][0]})
-		}
-		return parts[0][:2]
-	}
-	var b strings.Builder
-	for _, r := range label {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			if b.Len() >= 2 {
-				break
-			}
-		}
-	}
-	if b.Len() == 0 {
-		return "--"
-	}
-	return b.String()
-}
-
-func windowBadgeLabelForWindow(window provider.UsageWindow) string {
-	if label := strings.TrimSpace(window.DisplayName); label != "" {
-		return windowBadgeLabel(label)
-	}
-	return windowBadgeLabel(window.Name)
-}
-
-func updateTrayTooltip(results map[string]*provider.UsageData, displayNames map[string]string) {
-	tooltip := trayTooltip(results, displayNames)
+func updateTrayTooltip(snap view.Snapshot, data map[string]*provider.UsageData) {
+	tooltip := Tooltip(snap, data)
 	if rel := currentPendingRelease(); rel != nil {
 		line := fmt.Sprintf("Update available: %s", rel.Version)
 		if strings.TrimSpace(tooltip) == "" {
@@ -1927,286 +1755,6 @@ func updateTrayTooltip(results map[string]*provider.UsageData, displayNames map[
 	if changed {
 		systray.SetTooltip(tooltip)
 	}
-}
-
-func trayTooltip(results map[string]*provider.UsageData, displayNames map[string]string) string {
-	name, data, windowName, ok := selectedTrayTarget(results)
-	if !ok || data == nil {
-		return ""
-	}
-	display := providerDisplayName(name, displayNames)
-	if data.IsExpired {
-		msg := "token expired"
-		if data.Error != "" {
-			msg = format.HumanizeError(data.Error)
-		}
-		return appendResetCreditTooltip(fmt.Sprintf("%s: %s", display, msg), data)
-	}
-	if data.Error != "" && !data.HasPresentableUsage() {
-		return appendResetCreditTooltip(fmt.Sprintf("%s: %s", display, format.HumanizeError(data.Error)), data)
-	}
-	if data.Stale {
-		reason := staleTooltipReason(data)
-		if !data.FetchedAt.IsZero() {
-			return appendResetCreditTooltip(fmt.Sprintf("%s: stale - showing last good data from %s (%s)", display, data.FetchedAt.Local().Format("Jan 2, 2006 3:04 PM"), reason), data)
-		}
-		return appendResetCreditTooltip(fmt.Sprintf("%s: stale - showing last good data (%s)", display, reason), data)
-	}
-
-	window, proj, ok := selectedIconWindow(data, windowName)
-	if !ok {
-		return appendResetCreditTooltip(display, data)
-	}
-	title := iconTooltipTitle(display, window)
-	tooltip := compactIconTooltip(title, window, proj, windowExhaustion.ranOutAt(name, window, time.Now()))
-	return appendResetCreditTooltip(tooltip, data)
-}
-
-func appendResetCreditTooltip(tooltip string, data *provider.UsageData) string {
-	if resetLine := resetCreditTraySummary(data, time.Now()); resetLine != "" {
-		tooltip += "\n" + resetLine
-	}
-	if announced := announcementSummary(data, time.Now()); announced != "" {
-		tooltip += "\n" + announced
-	}
-	return tooltip
-}
-
-// announcementSummary is the tray form of an announced reset, empty when none
-// bears on the account.
-func announcementSummary(data *provider.UsageData, now time.Time) string {
-	if data == nil {
-		return ""
-	}
-	return data.AnnouncedReset.Summary(now)
-}
-
-func resetCreditTraySummary(data *provider.UsageData, now time.Time) string {
-	if data == nil || data.ResetCredits == nil || (data.Stale && !data.ResetCredits.Snapshot) {
-		return ""
-	}
-	return data.ResetCredits.Summary(now)
-}
-
-func staleTooltipReason(data *provider.UsageData) string {
-	if data == nil || data.Warning == "" {
-		return "usage unavailable"
-	}
-	return format.HumanizeError(data.Warning)
-}
-
-// compactIconTooltip lines up the title, run-out state, reset, and estimate.
-// ranOutAt is when the tray saw the window run out, or zero if it cannot say.
-func compactIconTooltip(title string, window provider.UsageWindow, proj forecast.Projection, ranOutAt time.Time) string {
-	parts := make([]string, 0, 4)
-	if title != "" {
-		parts = append(parts, title)
-	}
-	switch {
-	case proj.Unknown || proj.Stale:
-		parts = append(parts, fmt.Sprintf("Current %.0f%%", window.Utilization))
-	case proj.RunOutNote() != "":
-		parts = append(parts, upperFirst(ranOutNote(proj.RunOutNote(), ranOutAt, time.Now())))
-	case !proj.WillLastToReset:
-		parts = append(parts, "Out now")
-	default:
-		parts = append(parts, "Won't run out")
-	}
-	parts = append(parts, "Resets in "+format.FormatDuration(time.Until(window.ResetsAt)))
-	parts = append(parts, compactProjectionEstimate(proj))
-	return strings.Join(parts, "\n")
-}
-
-func upperFirst(s string) string {
-	if s == "" {
-		return ""
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-func iconTooltipTitle(display string, window provider.UsageWindow) string {
-	windowLabel := humanWindowLabel(window)
-	if windowLabel == "" {
-		return display
-	}
-	if display == "" {
-		return windowLabel
-	}
-	return display + " " + windowLabel
-}
-
-func humanWindowLabel(window provider.UsageWindow) string {
-	switch strings.TrimSpace(window.Name) {
-	case "5h":
-		return "5-Hour"
-	case "7d":
-		return "7-Day"
-	case "7d All":
-		return "7-Day All Models"
-	case "7d OAuth":
-		return "7-Day OAuth Apps"
-	case "7d Opus":
-		return "7-Day Opus"
-	case "7d Sonnet":
-		return "7-Day Sonnet"
-	}
-
-	label := strings.TrimSpace(window.DisplayName)
-	if label == "" {
-		label = strings.TrimSpace(window.Name)
-	}
-	switch strings.ToLower(label) {
-	case "5 hours":
-		return "5-Hour"
-	case "7 days":
-		return "7-Day"
-	case "7 days (all models)":
-		return "7-Day All Models"
-	case "7 days (oauth apps)":
-		return "7-Day OAuth Apps"
-	case "7 days (opus)":
-		return "7-Day Opus"
-	case "7 days (sonnet)":
-		return "7-Day Sonnet"
-	}
-	return label
-}
-
-// trayMenuRows formats the quota rows of every account in one pass over the
-// windows the menu shows. Each window is projected once, so the width of the
-// margin column and the rows agree.
-func trayMenuRows(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) map[string][]string {
-	type account struct {
-		windows     []provider.UsageWindow
-		projections []forecast.Projection
-	}
-	accounts := make(map[string]account, len(menus))
-	var all []forecast.Projection
-	for name, menu := range menus {
-		data := results[name]
-		if data == nil || data.Error != "" || data.IsExpired {
-			continue
-		}
-		windows := meter.Shown(data.PresentationWindows())
-		windows = windows[:min(len(windows), len(menu.windowItems))]
-		projections := make([]forecast.Projection, len(windows))
-		for i, window := range windows {
-			if !window.ResetsAt.IsZero() {
-				projections[i] = windowProjection(window)
-			}
-		}
-		all = append(all, projections...)
-		accounts[name] = account{windows, projections}
-	}
-	var shown []meter.Row
-	byAccount := make(map[string][]meter.Row, len(accounts))
-	for name, a := range accounts {
-		accountRows := meter.Rows(a.windows, a.projections)
-		for i := range accountRows {
-			if accountRows[i].RunsOut == "now" {
-				accountRows[i].RanOutAt = windowExhaustion.ranOutAt(name, a.windows[i], time.Now())
-			}
-		}
-		byAccount[name] = accountRows
-		shown = append(shown, byAccount[name]...)
-	}
-	widths := trayColumnWidths(shown)
-	rows := make(map[string][]string, len(accounts))
-	for name, accountRows := range byAccount {
-		for _, row := range accountRows {
-			rows[name] = append(rows[name], trayRowText(row, widths))
-		}
-	}
-	return rows
-}
-
-// figureSpace is as wide as a digit, so padded numbers line up in the
-// menu's proportional font.
-const figureSpace = "\u2007"
-
-// trayGutter separates a row's columns. Columns line up, so they need space
-// between them, not punctuation.
-const trayGutter = "    "
-
-// trayWidths are the widest values in the menu, in runes, so each column
-// starts at the same place on every row: an early forecast such as "3360%"
-// widens its column instead of pushing its own row out of line. Times are
-// not padded: their letters are not as wide as digits, and they come last.
-type trayWidths struct {
-	used, forecast int
-}
-
-func trayColumnWidths(rows []meter.Row) trayWidths {
-	widths := trayWidths{used: len("100%"), forecast: len("100%")}
-	for _, row := range rows {
-		widths.forecast = max(widths.forecast, len([]rune(row.Forecast)))
-		widths.used = max(widths.used, len([]rune(row.Used)))
-	}
-	return widths
-}
-
-// trayRowText writes a row for a native menu, which has no color and no
-// columns: labeled values padded with figure spaces and separated by
-// gutters. Research: divan ai-quota-monitoring/compact-quota-row-
-// typography-for-menus-and-terminal-tables.md.
-func trayRowText(row meter.Row, widths trayWidths) string {
-	if row.Line != "" {
-		return row.Line
-	}
-	bar := meter.BarText(row.Bar)
-	if !row.HasPace() {
-		bar += figureSpace // as wide as the pace mark, so the columns still line up
-	}
-	forecast := "no forecast"
-	switch {
-	case row.Forecast != "":
-		forecast = meter.Pad(row.Forecast, widths.forecast, figureSpace) + " at reset"
-	case row.ForecastState != "":
-		forecast = "forecast " + row.ForecastState
-	}
-	resets := row.Resets
-	if !row.ResetPolicy {
-		resets = "resets in " + row.Resets
-	}
-	columns := []string{row.Code, bar, meter.Pad(row.Used, widths.used, figureSpace) + " used", forecast, resets}
-	switch row.RunsOut {
-	case "":
-	case "now":
-		columns = append(columns, ranOutLabel(row.RanOutAt, time.Now()))
-	default:
-		columns = append(columns, "runs out in "+row.RunsOut)
-	}
-	for _, detail := range []string{row.Qualifier, row.Money} {
-		if detail != "" {
-			columns = append(columns, detail)
-		}
-	}
-	return strings.Join(columns, trayGutter)
-}
-
-// windowRunsOutBeforeReset reports whether a window is projected to run out
-// before it resets; its row gets the red risk mark.
-func windowRunsOutBeforeReset(window provider.UsageWindow) bool {
-	if window.ResetsAt.IsZero() {
-		return false
-	}
-	proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-	if proj.Stale {
-		return false
-	}
-	// A window used up before its forecast warms up has already run out.
-	return window.Utilization >= 100 || !proj.Unknown && !proj.WillLastToReset
-}
-
-func compactProjectionEstimate(proj forecast.Projection) string {
-	if proj.Unknown || proj.Stale {
-		return proj.PaceIndicator()
-	}
-	estimate := forecast.PaceLabel(proj.ProjectedPct)
-	if strings.HasPrefix(estimate, "est.") {
-		return "Est." + strings.TrimPrefix(estimate, "est.")
-	}
-	return estimate
 }
 
 var sendThresholdNotification = notify
@@ -2441,51 +1989,6 @@ func splitProvidersForRefresh(providers []provider.Provider, gate *provider.Fail
 	return toFetch, skipped
 }
 
-// sortedKeys returns provider names sorted by severity (worst first).
-// Expired > error > risk-window urgency > alphabetical.
-func sortedKeys(m map[string]*provider.UsageData) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		di, dj := m[keys[i]], m[keys[j]]
-		si, sj := providerSeverity(di), providerSeverity(dj)
-		if si.tier != sj.tier {
-			return si.tier < sj.tier
-		}
-		if si.hasProjection && sj.hasProjection {
-			if cmp := forecast.CompareWindowRisk(si.window, si.projection, sj.window, sj.projection); cmp != 0 {
-				return cmp < 0
-			}
-		}
-		return keys[i] < keys[j] // alphabetical tiebreak
-	})
-	return keys
-}
-
-type providerSeverityRank struct {
-	tier          int
-	window        provider.UsageWindow
-	projection    forecast.Projection
-	hasProjection bool
-}
-
-// providerSeverity returns a sortable severity rank.
-func providerSeverity(data *provider.UsageData) providerSeverityRank {
-	if data == nil {
-		return providerSeverityRank{tier: 3}
-	}
-	if data.IsExpired {
-		return providerSeverityRank{tier: 0}
-	}
-	if data.Error != "" && !data.HasPresentableUsage() {
-		return providerSeverityRank{tier: 1}
-	}
-	window, proj, ok := selectedIconWindow(data, "")
-	return providerSeverityRank{tier: 2, window: window, projection: proj, hasProjection: ok}
-}
-
 // newResetPeriod reports whether a window's reset time starts a new period.
 // Providers that derive the reset from time remaining move it by a few
 // seconds between polls, so only a later reset after the previous one passed
@@ -2520,8 +2023,6 @@ func nextAPICreditDeadline(results map[string]*provider.UsageData, now time.Time
 	return earliest
 }
 
-// Called under trayRenderMu. The callback only redraws the displayed credit
-// rows from local snapshots. It never takes refreshing or probes providers.
 func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[string]*providerMenuItems, now time.Time) {
 	apiCreditsTimerGeneration++
 	generation := apiCreditsTimerGeneration
@@ -2533,6 +2034,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		return
 	}
 	apiCreditsTimer = time.AfterFunc(time.Until(deadline), func() {
+		contact := lastExtensionContact()
 		latest, _ := lockLatestTrayState(&trayRenderMu)
 		defer trayRenderMu.Unlock()
 		if generation != apiCreditsTimerGeneration {
@@ -2541,6 +2043,9 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		results := presentedResults(latest)
 		systray.BeginMenuUpdate()
 		defer systray.EndMenuUpdate()
+		now := time.Now()
+		shown := trayShown(results, latest, menus, nil)
+		snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 		for name, menu := range menus {
 			data := results[name]
 			if !menu.headerState.visible || data == nil || len(data.CreditPools) == 0 {
@@ -2550,7 +2055,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 			if data.IsExpired || data.Error != "" {
 				balances = nil
 			}
-			showBalanceRows(menu, data, balances)
+			showBalanceRows(menu, accountNamed(snap, name), balances, now)
 		}
 		scheduleAPICreditRows(results, menus, time.Now())
 	})

@@ -122,19 +122,13 @@ func (l tableLayout) span(providerCell, text string) string {
 	return providerCell + strings.Repeat(" ", max(0, l.provider-cellWidth(providerCell))) + tableGutter + text
 }
 
-// shownRows are the rows the status table and the tray menu show.
-func (pf *ProviderFormatter) shownRows() []meter.Row {
-	if pf.Data == nil || pf.Data.IsExpired || pf.Data.Error != "" {
+// shownRows are the rows the status table shows for one source, read from its
+// snapshot account. A reading that is expired, errored or missing has none.
+func shownRows(acct *view.Account) []meter.Row {
+	if acct == nil || acct.Reading.State == view.ReadingUnavailable || acct.Reading.State == view.ReadingExpired || acct.Reading.State == view.ReadingError {
 		return nil
 	}
-	windows := meter.Shown(pf.Data.PresentationWindows())
-	projections := make([]forecast.Projection, len(windows))
-	for i, window := range windows {
-		if !window.ResetsAt.IsZero() {
-			projections[i] = forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-		}
-	}
-	return meter.Rows(windows, projections)
+	return acct.Rows()
 }
 
 // rowCells are a quota row's table cells, the bar left uncolored.
@@ -157,10 +151,19 @@ func rowCells(row meter.Row) tableCells {
 	return tableCells{"", window, meter.BarText(row.Bar), row.Used, forecast, resets, row.RunsOut}
 }
 
-// FormatColorAligned returns the provider's rows of the status table. Bars
-// take the tray icon's colors: usage past an even pace is red, the gap short
-// of it green.
+// FormatColorAligned returns the provider's rows of the status table, read from
+// a snapshot of this provider alone. PrintColor reads one snapshot for all.
 func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
+	m := &MultiProviderOutput{Providers: []ProviderFormatter{*pf}}
+	return m.buildView(time.Now()).colorLines(0, layout)
+}
+
+// colorLines returns the status table rows of the i-th source. Bars take the
+// tray icon's colors: usage past an even pace is red, the gap short of it green.
+func (v outputView) colorLines(i int, layout tableLayout) []string {
+	pf := v.entries[i].pf
+	acct := v.account(v.entries[i].key)
+	now := v.snap.At
 	var note string
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
 		note = pf.Status.FormatCLI()
@@ -171,7 +174,7 @@ func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
 	var lines []string
 	providerCell := func() string {
 		if len(lines) == 0 {
-			return pf.Display
+			return v.display(v.entries[i].key)
 		}
 		return ""
 	}
@@ -180,14 +183,14 @@ func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
 	switch {
 	case pf.Data == nil:
 		addSpan(dim + "no data" + reset)
-	case pf.Data.IsExpired:
+	case acct.Reading.State == view.ReadingExpired:
 		addSpan(red + expiredMessage(pf.Data.Error) + reset)
-		lines = appendSnapshotLines(lines, pf.Data, layout)
-	case pf.Data.Error != "":
+		lines = appendSnapshotLines(lines, pf.Data, layout, now)
+	case acct.Reading.State == view.ReadingError:
 		addSpan(red + format.HumanizeError(pf.Data.Error) + reset)
-		lines = appendSnapshotLines(lines, pf.Data, layout)
+		lines = appendSnapshotLines(lines, pf.Data, layout, now)
 	default:
-		for _, row := range pf.shownRows() {
+		for _, row := range shownRows(acct) {
 			if row.Line != "" {
 				addSpan(row.Line)
 				continue
@@ -217,12 +220,12 @@ func (pf *ProviderFormatter) FormatColorAligned(layout tableLayout) []string {
 			addSpan(fmt.Sprintf("%s %.2f remaining", name, balance.Remaining))
 		}
 		for _, pool := range pf.Data.CreditPools {
-			addSpan(pool.Name + ": " + pool.Summary(time.Now()))
+			addSpan(pool.Name + ": " + pool.Summary(now))
 		}
-		if summary := resetCreditSummary(pf.Data, time.Now()); summary != "" {
+		if summary := resetCreditSummary(pf.Data, now); summary != "" {
 			addSpan(summary)
 		}
-		if announced := announcementSummary(pf.Data, time.Now()); announced != "" {
+		if announced := announcementSummary(pf.Data, now); announced != "" {
 			addSpan(announced)
 		}
 	}
@@ -256,56 +259,51 @@ func colorBar(bar []meter.Cell) string {
 	return b.String()
 }
 
-// FormatPlain returns plain text output for a provider.
+// FormatPlain returns plain text output for a provider, read from a snapshot of
+// this provider alone. PrintPlain reads one snapshot for all of them.
 func (pf *ProviderFormatter) FormatPlain() string {
+	m := &MultiProviderOutput{Providers: []ProviderFormatter{*pf}}
+	return m.buildView(time.Now()).plainLine(0)
+}
+
+// plainNoteWidth is the column before a run-out note. It must hold the longest
+// forecast wording, "est. 100% at reset".
+const plainNoteWidth = 18
+
+// plainLine is the one-line status of the i-th source.
+func (v outputView) plainLine(i int) string {
+	pf := v.entries[i].pf
+	acct := v.account(v.entries[i].key)
+	display := v.display(v.entries[i].key)
+	now := v.snap.At
 	var suffix string
 	if pf.Status != nil && pf.Status.Indicator.HasIssue() {
 		suffix = " [" + pf.Status.Indicator.Label() + "]"
 	}
 
 	if pf.Data == nil {
-		return fmt.Sprintf("%s: no data%s", pf.Display, suffix)
+		return fmt.Sprintf("%s: no data%s", display, suffix)
+	}
+	if acct.Reading.State == view.ReadingExpired {
+		return appendSnapshotsPlain(fmt.Sprintf("%s: %s%s", display, expiredMessage(pf.Data.Error), suffix), pf.Data, now)
+	}
+	if acct.Reading.State == view.ReadingError {
+		return appendSnapshotsPlain(fmt.Sprintf("%s: error - %s%s", display, format.HumanizeError(pf.Data.Error), suffix), pf.Data, now)
 	}
 
-	if pf.Data.IsExpired {
-		expiredMsg := expiredMessage(pf.Data.Error)
-		return appendSnapshotsPlain(fmt.Sprintf("%s: %s%s", pf.Display, expiredMsg, suffix), pf.Data)
-	}
-
-	if pf.Data.Error != "" {
-		return appendSnapshotsPlain(fmt.Sprintf("%s: error - %s%s", pf.Display, format.HumanizeError(pf.Data.Error), suffix), pf.Data)
-	}
-
-	windows := pf.Data.PresentationWindows()
-	parts := make([]string, 0, len(windows))
-	for _, window := range windows {
-		if window.ResetsAt.IsZero() && window.ResetPolicy == "" {
-			// A money cap reads best as money; the percentage only repeats it.
-			if money := window.MoneyDetail(); money != "" {
-				parts = append(parts, fmt.Sprintf("%s: %s", plainWindowLabel(window), money))
-				continue
-			}
-			parts = append(parts, fmt.Sprintf("%s: %.0f%% (reset not reported)", plainWindowLabel(window), window.Utilization))
-			continue
-		}
-		resetStr, indicator := "unknown", "reset unknown"
-		if !window.ResetsAt.IsZero() {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			resetStr, indicator = format.FormatDuration(time.Until(window.ResetsAt)), proj.PaceIndicator()
-		} else if window.ResetPolicy != "" {
-			indicator = window.ResetPolicy
-		}
-		parts = append(parts, fmt.Sprintf("%s: %.0f%% (resets %s, %s)%s", plainWindowLabel(window), window.Utilization, resetStr, indicator, moneySuffix(window)))
+	parts := make([]string, 0, len(acct.Windows))
+	for _, window := range acct.Windows {
+		parts = append(parts, plainWindow(window))
 	}
 
 	prefix := ""
-	if pf.Data.Stale {
+	if acct.Reading.State == view.ReadingStale {
 		prefix = fmt.Sprintf("stale (updated %s) - ", pf.Data.FetchedAt.Format("15:04"))
 	}
-	if resetSummary := resetCreditSummary(pf.Data, time.Now()); resetSummary != "" {
+	if resetSummary := resetCreditSummary(pf.Data, now); resetSummary != "" {
 		parts = append(parts, resetSummary)
 	}
-	if announced := announcementSummary(pf.Data, time.Now()); announced != "" {
+	if announced := announcementSummary(pf.Data, now); announced != "" {
 		parts = append(parts, announced)
 	}
 	for _, balance := range pf.Data.Balances {
@@ -316,24 +314,49 @@ func (pf *ProviderFormatter) FormatPlain() string {
 		parts = append(parts, fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining))
 	}
 	for _, pool := range pf.Data.CreditPools {
-		parts = append(parts, fmt.Sprintf("%s: %s", pool.Name, pool.Summary(time.Now())))
+		parts = append(parts, fmt.Sprintf("%s: %s", pool.Name, pool.Summary(now)))
 	}
-	return fmt.Sprintf("%s: %s%s%s", pf.Display, prefix, strings.Join(parts, "  "), suffix)
+	return fmt.Sprintf("%s: %s%s%s", display, prefix, strings.Join(parts, "  "), suffix)
 }
 
-func moneySuffix(window provider.UsageWindow) string {
-	if money := window.MoneyDetail(); money != "" {
+// plainWindow is one window of the plain line.
+func plainWindow(w view.Window) string {
+	label := plainWindowLabel(w)
+	if !w.Reset.Known && w.Reset.Policy == "" {
+		// A money cap reads best as money; the percentage only repeats it.
+		if w.Money != "" {
+			return fmt.Sprintf("%s: %s", label, w.Money)
+		}
+		return fmt.Sprintf("%s: %.0f%% (reset not reported)", label, w.Used)
+	}
+	resetStr, indicator := "unknown", w.Reset.Policy
+	if w.Reset.Known {
+		resetStr, indicator = format.FormatDuration(w.Reset.In), plainIndicator(w)
+	}
+	return fmt.Sprintf("%s: %.0f%% (resets %s, %s)%s", label, w.Used, resetStr, indicator, moneySuffix(w.Money))
+}
+
+// plainIndicator is a window's forecast, with its run-out note when it has one.
+func plainIndicator(w view.Window) string {
+	base, note := w.ForecastWords(), w.ExhaustionWords()
+	if note == "" {
+		return base
+	}
+	return fmt.Sprintf("%-*s · %s", plainNoteWidth, base, note)
+}
+
+func moneySuffix(money string) string {
+	if money != "" {
 		return " [" + money + "]"
 	}
 	return ""
 }
 
-func plainWindowLabel(window provider.UsageWindow) string {
-	display := strings.TrimSpace(window.DisplayName)
-	if display != "" && (window.Name == "extra" || (window.Name == "weekly" && display == "7d")) {
-		return display
+func plainWindowLabel(w view.Window) string {
+	if w.Name == "extra" || (w.Name == "weekly" && w.Label == "7d") {
+		return w.Label
 	}
-	return window.Name
+	return w.Name
 }
 
 // resetCreditSummary is the shared reset row. A stale live inventory is
@@ -354,25 +377,22 @@ func announcementSummary(data *provider.UsageData, now time.Time) string {
 	return data.AnnouncedReset.Summary(now)
 }
 
-// appendSnapshotLines keeps browser-checked facts (reset grants, API credit
-// pools) visible on a row whose usage reading failed or expired.
-func appendSnapshotLines(lines []string, data *provider.UsageData, layout tableLayout) []string {
-	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
+func appendSnapshotLines(lines []string, data *provider.UsageData, layout tableLayout, now time.Time) []string {
+	if summary := resetCreditSummary(data, now); summary != "" && data.ResetCredits.Snapshot {
 		lines = append(lines, layout.span("", summary))
 	}
 	for _, pool := range data.CreditPools {
-		lines = append(lines, layout.span("", pool.Name+": "+pool.Summary(time.Now())))
+		lines = append(lines, layout.span("", pool.Name+": "+pool.Summary(now)))
 	}
 	return lines
 }
 
-// appendSnapshotsPlain is appendSnapshotLines for one-line output.
-func appendSnapshotsPlain(line string, data *provider.UsageData) string {
-	if summary := resetCreditSummary(data, time.Now()); summary != "" && data.ResetCredits.Snapshot {
+func appendSnapshotsPlain(line string, data *provider.UsageData, now time.Time) string {
+	if summary := resetCreditSummary(data, now); summary != "" && data.ResetCredits.Snapshot {
 		line += "  " + summary
 	}
 	for _, pool := range data.CreditPools {
-		line += "  " + pool.Name + ": " + pool.Summary(time.Now())
+		line += "  " + pool.Name + ": " + pool.Summary(now)
 	}
 	return line
 }
@@ -396,14 +416,13 @@ func (m *MultiProviderOutput) HideUnavailable() {
 	m.Providers = filtered
 }
 
-// PrintColor prints the status table. Its rows hold the same values as the
-// tray menu's.
 func (m *MultiProviderOutput) PrintColor() {
+	v := m.buildView(time.Now())
 	layout := newTableLayout()
 	hasRows := false
-	for _, pf := range m.Providers {
-		layout.provider = max(layout.provider, cellWidth(pf.Display))
-		for _, row := range pf.shownRows() {
+	for _, e := range v.entries {
+		layout.provider = max(layout.provider, cellWidth(v.display(e.key)))
+		for _, row := range shownRows(v.account(e.key)) {
 			if row.Line == "" {
 				hasRows = true
 				layout.fit(rowCells(row))
@@ -413,21 +432,21 @@ func (m *MultiProviderOutput) PrintColor() {
 	if hasRows {
 		fmt.Println(dim + layout.line(tableHeader, cellWidth(tableHeader[2]), nil) + reset)
 	}
-	for i, pf := range m.Providers {
-		lines := pf.FormatColorAligned(layout)
+	for i := range v.entries {
+		lines := v.colorLines(i, layout)
 		for _, line := range lines {
 			fmt.Println(line)
 		}
-		if i < len(m.Providers)-1 && len(lines) > 0 {
+		if i < len(v.entries)-1 && len(lines) > 0 {
 			fmt.Println()
 		}
 	}
 }
 
-// PrintPlain prints plain text output for all providers, one per line.
 func (m *MultiProviderOutput) PrintPlain() {
-	for _, pf := range m.Providers {
-		fmt.Println(pf.FormatPlain())
+	v := m.buildView(time.Now())
+	for i := range v.entries {
+		fmt.Println(v.plainLine(i))
 	}
 }
 
@@ -482,16 +501,20 @@ func (m *MultiProviderOutput) StatusLineSummary() string {
 // It keeps exact seconds near boundaries so a tiny slice of a 7-day window is
 // still visible to the agent. Its states come from the shared snapshot.
 func (m *MultiProviderOutput) AgentSummary() string {
-	v := m.buildView(time.Now())
+	return m.buildView(time.Now()).agentLine()
+}
+
+// agentLine is the agent status of one snapshot.
+func (v outputView) agentLine() string {
 	acct, window, ok := v.worst()
 	if !ok {
 		// Reset observations are independent of Claude usage: keep them visible
 		// when usage is unavailable.
 		extra := ""
-		if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
+		if resets := v.agentResetCreditSummaries(); len(resets) > 0 {
 			extra += "; reset_credits=[" + strings.Join(resets, " | ") + "]"
 		}
-		if pools := m.agentCreditPoolSummaries(); len(pools) > 0 {
+		if pools := v.agentCreditPoolSummaries(); len(pools) > 0 {
 			extra += "; api_credits=[" + strings.Join(pools, " | ") + "]"
 		}
 		if extra != "" {
@@ -501,21 +524,21 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	}
 
 	parts := []string{fmt.Sprintf("Quota: worst=%s %s", v.display(acct.Key), window.Name)}
-	parts = append(parts, agentWindowFields(acct, window, v.snap.At, true)...)
+	parts = append(parts, agentWindowFields(acct, window, true)...)
 	if quotas := v.agentQuotaSummaries(); len(quotas) > 0 {
 		parts = append(parts, "quotas=["+strings.Join(quotas, " | ")+"]")
 	}
-	if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
+	if resets := v.agentResetCreditSummaries(); len(resets) > 0 {
 		parts = append(parts, "reset_credits=["+strings.Join(resets, " | ")+"]")
 	}
-	if pools := m.agentCreditPoolSummaries(); len(pools) > 0 {
+	if pools := v.agentCreditPoolSummaries(); len(pools) > 0 {
 		parts = append(parts, "api_credits=["+strings.Join(pools, " | ")+"]")
 	}
 
 	return strings.Join(parts, "; ") + "."
 }
 
-func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
+func (v outputView) agentResetCreditSummaries() []string {
 	type resetSummary struct {
 		text      string
 		expiresAt time.Time
@@ -523,10 +546,10 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 		provider  string
 		count     int
 	}
-	now := time.Now()
+	now := v.snap.At
 	summaries := make([]resetSummary, 0)
-	for i := range m.Providers {
-		pf := &m.Providers[i]
+	for _, e := range v.entries {
+		pf := e.pf
 		if pf.Data == nil || pf.Data.ResetCredits == nil || (pf.Data.Stale && !pf.Data.ResetCredits.Snapshot) {
 			continue
 		}
@@ -538,7 +561,8 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 		if pf.Data.ResetCredits.Snapshot {
 			countField = fmt.Sprintf("observed_count=%d snapshot=true", count)
 		}
-		fields := []string{pf.Display, countField}
+		display := v.display(e.key)
+		fields := []string{display, countField}
 		expiresAt, hasExpiry := pf.Data.ResetCredits.EarliestExpiry(now)
 		if hasExpiry {
 			fields = append(fields,
@@ -557,7 +581,7 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 			text:      strings.Join(fields, " "),
 			expiresAt: expiresAt,
 			hasExpiry: hasExpiry,
-			provider:  pf.Display,
+			provider:  display,
 			count:     count,
 		})
 	}
@@ -583,11 +607,12 @@ func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
 
 // agentCreditPoolSummaries lists prepaid API credit pools with exact amounts
 // in major currency units, so agents can budget API spend.
-func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
-	now := time.Now()
+func (v outputView) agentCreditPoolSummaries() []string {
+	now := v.snap.At
 	out := make([]string, 0)
-	for i := range m.Providers {
-		pf := &m.Providers[i]
+	for _, e := range v.entries {
+		pf := e.pf
+		display := v.display(e.key)
 		if pf.Data == nil {
 			continue
 		}
@@ -600,7 +625,7 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 			if !pool.ExpiredSinceCheck.IsZero() {
 				// The saved balance no longer holds: never offer it as budget.
 				out = append(out, strings.Join(append([]string{
-					pf.Display + " · " + pool.Name,
+					display + " · " + pool.Name,
 					"status=expired_since_check",
 					"balance=unknown",
 					"expired_at=" + pool.ExpiredSinceCheck.Local().Format(time.RFC3339),
@@ -610,7 +635,7 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 				continue
 			}
 			fields := []string{
-				pf.Display + " · " + pool.Name,
+				display + " · " + pool.Name,
 				"currency=" + pool.Currency,
 				"balance=" + money(float64(pool.Balance)),
 			}
@@ -749,7 +774,11 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 // JSON returns the --json document for m, with every state read from the
 // snapshot as of now.
 func (m *MultiProviderOutput) JSON(cacheEntry *cache.Entry, now time.Time) ([]byte, error) {
-	v := m.buildView(now)
+	return m.buildView(now).jsonDocument(cacheEntry, now)
+}
+
+// jsonDocument is the --json document of one snapshot.
+func (v outputView) jsonDocument(cacheEntry *cache.Entry, now time.Time) ([]byte, error) {
 	out := JSONOutput{
 		SchemaVersion: JSONSchemaVersion,
 		Providers:     make(map[string]*ProviderJSONOutput),
@@ -764,18 +793,18 @@ func (m *MultiProviderOutput) JSON(cacheEntry *cache.Entry, now time.Time) ([]by
 	}
 
 	grouped := make(map[string][]int)
-	for i := range m.Providers {
-		family := familyOf(&m.Providers[i])
+	for i := range v.entries {
+		family := familyOf(v.entries[i].pf)
 		grouped[family] = append(grouped[family], i)
 	}
 	for family, group := range grouped {
 		sort.SliceStable(group, func(a, b int) bool {
-			return m.Providers[group[a]].SourceID < m.Providers[group[b]].SourceID
+			return v.entries[group[a]].pf.SourceID < v.entries[group[b]].pf.SourceID
 		})
 		if len(group) > 1 {
 			base := &ProviderJSONOutput{Maturity: provider.GetMaturity(family)}
 			for _, i := range group {
-				pf := m.Providers[i]
+				pf := *v.entries[i].pf
 				src := makeJSONSource(pf)
 				src.View = v.jsonAccount(v.entries[i].key)
 				base.Sources = append(base.Sources, src)
@@ -788,8 +817,11 @@ func (m *MultiProviderOutput) JSON(cacheEntry *cache.Entry, now time.Time) ([]by
 			continue
 		}
 		i := group[0]
-		pf := m.Providers[i]
+		pf := *v.entries[i].pf
 		if pf.Data == nil {
+			// No reading yet: the object carries only the view, whose reading
+			// state is unavailable, so the account is not mistaken for zero use.
+			out.Providers[family] = &ProviderJSONOutput{Maturity: provider.GetMaturity(family), View: v.jsonAccount(v.entries[i].key)}
 			continue
 		}
 
@@ -1282,13 +1314,17 @@ func sourceRevisions(providers []provider.Provider) map[string]string {
 	}
 	return revisions
 }
+
+// sourceDisplay is the name a provider shows people. It is the rule the shared
+// view applies to every surface: the display name, plus the source label when
+// the provider has more than one configured source.
 func sourceDisplay(p provider.Provider, counts map[string]int) string {
+	if counts[p.Name()] <= 1 {
+		return p.DisplayName()
+	}
 	label := provider.SourceLabel(p)
 	if label == "" {
 		label = provider.SourceID(p)
-	}
-	if (counts[p.Name()] <= 1 && provider.SourceID(p) == "default") || label == "" {
-		return p.DisplayName()
 	}
 	return p.DisplayName() + " · " + label
 }

@@ -158,7 +158,7 @@ func TestForecastValuesAndRunOutTiming(t *testing.T) {
 	if w.Forecast.Pct < 49.9 || w.Forecast.Pct > 50.1 {
 		t.Errorf("projected = %v, want about 50", w.Forecast.Pct)
 	}
-	if w.Exhaustion.RunsOutIn != 0 || w.Exhaustion.EarlyBy != 0 {
+	if w.Exhaustion.RunsOutIn != 0 || w.Exhaustion.BlockedFor != 0 {
 		t.Errorf("lasts carries run-out times: %+v", w.Exhaustion)
 	}
 
@@ -168,8 +168,8 @@ func TestForecastValuesAndRunOutTiming(t *testing.T) {
 	if w.Exhaustion.RunsOutIn != 30*time.Minute {
 		t.Errorf("runs out in %v, want 30m", w.Exhaustion.RunsOutIn)
 	}
-	if w.Exhaustion.EarlyBy != 2*time.Hour+30*time.Minute {
-		t.Errorf("early by %v, want 2h30m", w.Exhaustion.EarlyBy)
+	if w.Exhaustion.BlockedFor != 2*time.Hour+30*time.Minute {
+		t.Errorf("early by %v, want 2h30m", w.Exhaustion.BlockedFor)
 	}
 }
 

@@ -153,7 +153,8 @@ func burnRate(daily []DailySpend, observedAt time.Time) (float64, int) {
 }
 
 // Summary is the one-line pool status, for example
-// "$199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 24 19:00 · checked 12:01".
+// "$199.88 left · spent $0.11 this month · est. $1.84 more spent before it expires Oct 24 19:00 · checked 12:01".
+// A projected amount is an estimate and says so; an observed amount does not.
 func (p UsageCreditPool) Summary(now time.Time) string {
 	if !p.ExpiredSinceCheck.IsZero() {
 		return p.expiredLine(now)
@@ -172,7 +173,7 @@ func (p UsageCreditPool) Summary(now time.Time) string {
 	case !p.RunsOutAt.IsZero():
 		parts = append(parts, "runs out "+shortDate(p.RunsOutAt, now)+", before it expires "+expiryTime(p.ExpiresAt, now))
 	default:
-		parts = append(parts, "on pace to spend "+formatMinorUnits(int(p.ProjectedSpend), p.Currency)+" more before it expires "+expiryTime(p.ExpiresAt, now))
+		parts = append(parts, "est. "+formatMinorUnits(int(p.ProjectedSpend), p.Currency)+" more spent before it expires "+expiryTime(p.ExpiresAt, now))
 	}
 	if next := p.nextCreditText(now); next != "" {
 		parts = append(parts, next)
@@ -184,7 +185,7 @@ func (p UsageCreditPool) Summary(now time.Time) string {
 }
 
 // TrayLine is the short pool status for a menu row, for example
-// "$199.88 left · $198.04 expires Oct 24 19:00 · checked 12:01".
+// "$199.88 left · est. $198.04 unused at expiry Oct 24 19:00 · checked 12:01".
 func (p UsageCreditPool) TrayLine(now time.Time) string {
 	if !p.ExpiredSinceCheck.IsZero() {
 		return p.expiredLine(now)
@@ -194,7 +195,7 @@ func (p UsageCreditPool) TrayLine(now time.Time) string {
 	case !p.RunsOutAt.IsZero():
 		parts = append(parts, "runs out "+shortDate(p.RunsOutAt, now))
 	case !p.ExpiresAt.IsZero():
-		parts = append(parts, formatMinorUnits(int(p.ProjectedUnused), p.Currency)+" expires "+expiryTime(p.ExpiresAt, now))
+		parts = append(parts, "est. "+formatMinorUnits(int(p.ProjectedUnused), p.Currency)+" unused at expiry "+expiryTime(p.ExpiresAt, now))
 	}
 	if next := p.nextCreditText(now); next != "" {
 		parts = append(parts, next)

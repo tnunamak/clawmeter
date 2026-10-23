@@ -565,8 +565,11 @@ func TestSourceCommandShowsEnrolledSourceWhenCredentialsBecomeUnavailable(t *tes
 	if strings.Contains(stderr, "is not configured") {
 		t.Fatalf("enrolled source was rejected before rendering its source-local error: %s", stderr)
 	}
-	if !strings.Contains(stdout, "Claude") || !strings.Contains(stdout, "Work") {
-		t.Fatalf("source-local output missing enrolled source identity: %q", stdout)
+	// Changed on purpose: the shared view labels an account by the provider
+	// alone when it is the only configured source of that provider. The source
+	// label is named only when a second source needs telling apart.
+	if !strings.HasPrefix(stdout, "Claude: ") || strings.Contains(stdout, "Work") {
+		t.Fatalf("source-local output = %q, want the view's label for a lone source", stdout)
 	}
 }
 

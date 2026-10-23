@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +26,12 @@ type viewEntry struct {
 // buildView builds the snapshot of m as of now from the formatters' data,
 // display names, source labels, families and family source counts.
 func (m *MultiProviderOutput) buildView(now time.Time) outputView {
+	return m.buildViewPinned(now, nil)
+}
+
+// buildViewPinned is buildView with the user's pinned quota, which only the
+// tray knows. A matrix test passes one to render the pinned case.
+func (m *MultiProviderOutput) buildViewPinned(now time.Time, pin *view.Target) outputView {
 	keys := m.sourceKeys()
 	in := view.Inputs{
 		Results:            make(map[string]*provider.UsageData, len(keys)),
@@ -53,6 +58,7 @@ func (m *MultiProviderOutput) buildView(now time.Time) outputView {
 			in.FamilySourceCounts[family] = pf.SourceCount
 		}
 	}
+	in.Pin = pin
 	v.snap = view.Build(in, now)
 	return v
 }
@@ -94,14 +100,21 @@ func (v outputView) account(key string) *view.Account {
 	return nil
 }
 
-// display is the name a formatter shows people.
 func (v outputView) display(key string) string {
-	for _, e := range v.entries {
-		if e.key == key {
-			return e.pf.Display
-		}
+	if acct := v.account(key); acct != nil {
+		return acct.Label
 	}
 	return key
+}
+
+// formatter returns the provider formatter a source key was built from, or nil.
+func (v outputView) formatter(key string) *ProviderFormatter {
+	for _, e := range v.entries {
+		if e.key == key {
+			return e.pf
+		}
+	}
+	return nil
 }
 
 // worst returns the account and window the snapshot names as most at risk.
@@ -149,35 +162,14 @@ func projectionPct(w view.Window) string {
 	return formatPrecisePct(w.Forecast.Pct)
 }
 
-// untilReset is the time from at to the window's reset. It is false when the
-// reset is unknown, so no caller can mistake an unknown reset for zero.
-func untilReset(w view.Window, at time.Time) (time.Duration, bool) {
+func untilReset(w view.Window) (time.Duration, bool) {
 	if !w.Reset.Known {
 		return 0, false
 	}
-	return clampDuration(w.Reset.At.Sub(at)), true
+	return clampDuration(w.Reset.In), true
 }
 
-// blockedFor is how long before the reset the window is, or will be, used up.
-// The view gives it for runs_out. For out, it is the time left until the reset.
-func blockedFor(w view.Window, at time.Time) (time.Duration, bool) {
-	switch w.Exhaustion.State {
-	case view.ExhaustionRunsOut:
-		if w.Exhaustion.EarlyBy > 0 {
-			return clampDuration(w.Exhaustion.EarlyBy), true
-		}
-	case view.ExhaustionOut:
-		if d, ok := untilReset(w, at); ok && d > 0 {
-			return d, true
-		}
-	}
-	return 0, false
-}
-
-// runsOutFields are a window's run-out fields: runs_out=now when it is used
-// up, otherwise the time until it runs out, when the current rate exhausts it
-// before the reset.
-func runsOutFields(w view.Window, at time.Time) []string {
+func runsOutFields(w view.Window) []string {
 	var fields []string
 	switch w.Exhaustion.State {
 	case view.ExhaustionOut:
@@ -189,7 +181,8 @@ func runsOutFields(w view.Window, at time.Time) []string {
 			"runs_out_in="+formatExactDuration(in),
 		)
 	}
-	if early, ok := blockedFor(w, at); ok {
+	if w.Exhaustion.BlockedFor > 0 {
+		early := clampDuration(w.Exhaustion.BlockedFor)
 		fields = append(fields,
 			fmt.Sprintf("runs_out_early_by_seconds=%d", int64(early.Seconds())),
 			"runs_out_early_by="+formatExactDuration(early),
@@ -198,14 +191,12 @@ func runsOutFields(w view.Window, at time.Time) []string {
 	return fields
 }
 
-// agentWindowFields are the fields of one window for agents. seconds adds
-// reset_in_seconds, which the headline keeps for exact boundary math.
-func agentWindowFields(acct *view.Account, w view.Window, at time.Time, seconds bool) []string {
+func agentWindowFields(acct *view.Account, w view.Window, seconds bool) []string {
 	fields := []string{
 		"current=" + formatPrecisePct(w.Used),
 		"projected_at_reset=" + projectionPct(w),
 	}
-	if d, ok := untilReset(w, at); ok {
+	if d, ok := untilReset(w); ok {
 		if seconds {
 			fields = append(fields, fmt.Sprintf("reset_in_seconds=%d", int64(d.Seconds())))
 		}
@@ -214,58 +205,30 @@ func agentWindowFields(acct *view.Account, w view.Window, at time.Time, seconds 
 		fields = append(fields, "reset_in=unknown")
 	}
 	fields = append(fields, "status="+agentStatus(acct, w))
-	fields = append(fields, runsOutFields(w, at)...)
+	fields = append(fields, runsOutFields(w)...)
 	if acct.Reading.State != view.ReadingFresh {
 		fields = append(fields, "data="+string(acct.Reading.State))
 	}
 	return fields
 }
 
-// agentQuotaSummaries lists every window of every source. Providers are ordered
-// by the existing urgency tier, then by the snapshot's risk rank.
 func (v outputView) agentQuotaSummaries() []string {
-	type quota struct {
-		pf     *ProviderFormatter
-		acct   *view.Account
-		window view.Window
-		tier   int
-	}
-	quotas := make([]quota, 0)
-	for _, e := range v.entries {
-		acct := v.account(e.key)
-		if acct == nil {
-			continue
-		}
-		tier := classifyProvider(e.pf).tier
+	var out []string
+	// Accounts are in the snapshot's display order and windows in provider
+	// order. Urgency is the separate worst= fact, not the order of this list.
+	for i := range v.snap.Accounts {
+		acct := &v.snap.Accounts[i]
+		pf := v.formatter(acct.Key)
 		for _, w := range acct.Windows {
-			quotas = append(quotas, quota{pf: e.pf, acct: acct, window: w, tier: tier})
-		}
-	}
-
-	sort.SliceStable(quotas, func(i, j int) bool {
-		a, b := quotas[i], quotas[j]
-		if a.tier != b.tier {
-			return a.tier < b.tier
-		}
-		if a.window.Risk != b.window.Risk {
-			return a.window.Risk < b.window.Risk
-		}
-		if a.pf.Display != b.pf.Display {
-			return a.pf.Display < b.pf.Display
-		}
-		return a.window.Name < b.window.Name
-	})
-
-	out := make([]string, 0, len(quotas))
-	for _, q := range quotas {
-		fields := agentWindowFields(q.acct, q.window, v.snap.At, false)
-		// The announcement is printed once per account, on its first qualifying window.
-		if q.pf.Data != nil {
-			if announced := q.pf.Data.AnnouncedReset; announced != nil && len(announced.Windows) > 0 && q.window.Name == announced.Windows[0] {
-				fields = append(fields, announced.AgentField())
+			fields := agentWindowFields(acct, w, false)
+			// The announcement is printed once per account, on its first qualifying window.
+			if pf != nil && pf.Data != nil {
+				if announced := pf.Data.AnnouncedReset; announced != nil && len(announced.Windows) > 0 && w.Name == announced.Windows[0] {
+					fields = append(fields, announced.AgentField())
+				}
 			}
+			out = append(out, fmt.Sprintf("%s %s(%s)", acct.Label, w.Name, strings.Join(fields, ",")))
 		}
-		out = append(out, fmt.Sprintf("%s %s(%s)", q.pf.Display, q.window.Name, strings.Join(fields, ",")))
 	}
 	return out
 }
@@ -364,12 +327,12 @@ func (v outputView) jsonAccount(key string) *JSONAccountView {
 		out.Reading.ObservedAt = acct.Reading.ObservedAt.Format(time.RFC3339)
 	}
 	for _, w := range acct.Windows {
-		out.Windows = append(out.Windows, jsonWindowView(w, shown[w.Name], v.snap.At))
+		out.Windows = append(out.Windows, jsonWindowView(w, shown[w.Name]))
 	}
 	return out
 }
 
-func jsonWindowView(w view.Window, shown bool, at time.Time) JSONViewWindow {
+func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 	out := JSONViewWindow{
 		Name:       w.Name,
 		Code:       w.Code,
@@ -391,8 +354,8 @@ func jsonWindowView(w view.Window, shown bool, at time.Time) JSONViewWindow {
 		secs := int64(clampDuration(w.Exhaustion.RunsOutIn).Seconds())
 		out.Exhaustion.RunsOutInSeconds = &secs
 	}
-	if early, ok := blockedFor(w, at); ok {
-		secs := int64(early.Seconds())
+	if w.Exhaustion.BlockedFor > 0 {
+		secs := int64(clampDuration(w.Exhaustion.BlockedFor).Seconds())
 		out.Exhaustion.EarlyBySeconds = &secs
 	}
 	if !w.Exhaustion.OutSince.IsZero() {

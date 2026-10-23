@@ -81,7 +81,13 @@ type Window struct {
 	Qualifier string
 	Label     string
 	// Used is the utilization in percent.
-	Used       float64
+	Used float64
+	// Money is the window's money detail, or "" when it has none.
+	Money string
+	// Pace is how far an even pace would have used by the snapshot time. It is
+	// meaningful only when HasPace, which needs a known reset and a length.
+	Pace       float64
+	HasPace    bool
 	Forecast   Forecast
 	Exhaustion Exhaustion
 	Reset      Reset
@@ -124,19 +130,23 @@ const (
 	ExhaustionUnknown ExhaustionState = "unknown"
 )
 
-// Exhaustion is when a window is used up. RunsOutIn and EarlyBy are set for
-// runs_out. OutSince is set for out when the tray saw the window run out.
+// Exhaustion is when a window is used up. RunsOutIn is set for runs_out.
+// BlockedFor is set for runs_out and out: for runs_out, how long before the
+// reset the window runs out; for out, how long until the reset. OutSince is
+// set for out when the tray saw the window run out.
 type Exhaustion struct {
-	State     ExhaustionState
-	RunsOutIn time.Duration
-	EarlyBy   time.Duration
-	OutSince  time.Time
+	State      ExhaustionState
+	RunsOutIn  time.Duration
+	BlockedFor time.Duration
+	OutSince   time.Time
 }
 
-// Reset is when a window resets. Known is true only when At is set. A window
-// can have a Policy text without a time.
+// Reset is when a window resets. Known is true only when At is set, and In is
+// then the time from the snapshot to At. A window can have a Policy text
+// without a time.
 type Reset struct {
 	At     time.Time
+	In     time.Duration
 	Policy string
 	Known  bool
 }
@@ -313,16 +323,18 @@ func label(in Inputs, key string, data *provider.UsageData) string {
 	return name + " · " + suffix
 }
 
+// reading classifies data as the tray and the CLI always have: an expired
+// credential is expired even when its error text is also set.
 func reading(data *provider.UsageData) Reading {
 	r := Reading{ObservedAt: data.FetchedAt}
 	switch {
-	case data.Error != "":
-		r.State, r.Reason = ReadingError, format.HumanizeError(data.Error)
 	case data.IsExpired:
 		r.State = ReadingExpired
 		if data.Error != "" {
 			r.Reason = format.HumanizeError(data.Error)
 		}
+	case data.Error != "":
+		r.State, r.Reason = ReadingError, format.HumanizeError(data.Error)
 	case data.Stale:
 		r.State, r.Reason = ReadingStale, "usage unavailable"
 		if data.Warning != "" {
@@ -354,9 +366,15 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 	}
 	if !w.ResetsAt.IsZero() {
 		out.Reset.At, out.Reset.Known = w.ResetsAt, true
+		out.Reset.In = w.ResetsAt.Sub(at)
 	}
+	out.Money = w.MoneyDetail()
 
 	length := forecast.WindowLength(w)
+	if out.Reset.Known && length > 0 {
+		out.HasPace = true
+		out.Pace = meter.ExpectedPctAt(w.ResetsAt, length, at)
+	}
 	var proj forecast.Projection
 	switch {
 	case !fresh:
@@ -387,12 +405,17 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 		if since, ok := in.OutSince[key][w.Name]; ok {
 			out.Exhaustion.OutSince = since
 		}
+		if out.Reset.Known && out.Reset.In > 0 {
+			out.Exhaustion.BlockedFor = out.Reset.In
+		}
 	case known && proj.WillLastToReset:
 		out.Exhaustion.State = ExhaustionLasts
 	case known:
 		out.Exhaustion.State = ExhaustionRunsOut
 		out.Exhaustion.RunsOutIn = proj.RunsOutIn
-		out.Exhaustion.EarlyBy = proj.RunsOutEarlyBy
+		if proj.RunsOutEarlyBy > 0 {
+			out.Exhaustion.BlockedFor = proj.RunsOutEarlyBy
+		}
 	default:
 		out.Exhaustion.State = ExhaustionUnknown
 	}

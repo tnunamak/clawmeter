@@ -19,6 +19,14 @@ diagnostic command below when sharing troubleshooting output.
 
 Source enrollment changes apply after restarting a running tray.
 
+The top-level `view` object names every source in display order, and its
+`accounts` keys are source keys. A single source with no reading yet has a
+provider object that carries only `maturity` and a `view` whose reading state is
+`unavailable`, so `view.accounts` never names a source that `providers` omits.
+Its `usage` is absent, which means no reading, not zero use. `view.worst` names the
+most at-risk window. Urgency is that one fact; `accounts` and each account's
+`windows` stay in display order.
+
 When a family has more than one enrolled source, its provider object keeps the legacy
 family key and adds a `sources` array. Each array item contains only the configured
 source `id` and optional `label`, plus that source's usage, forecast, and status. The
