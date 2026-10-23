@@ -224,6 +224,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	// appears on the next refresh without needing a restart.
 	providerMenus := make(map[string]*providerMenuItems)
 	providerConnectActions := make(chan string, 1)
+	providerHideRequests := make(chan string, 1)
 	familyCounts := make(map[string]int)
 	for _, p := range registry.GetAll() {
 		familyCounts[p.Name()]++
@@ -292,11 +293,17 @@ func onReadyWithConfig(loaded *config.Config) {
 	iconPick := newIconPicker()
 	for _, menu := range providerMenus {
 		iconPick.forwardRows(menu)
+		forwardHide(menu, providerHideRequests)
 	}
 	mAutostart := mSettings.AddSubMenuItemCheckbox("Launch at login", "", false)
 	updateAutostartLabel(mAutostart)
 	mSetupExtension := mSettings.AddSubMenuItem("Set up the browser extension…", "")
 	mReport := mSettings.AddSubMenuItem("Report a problem…", "")
+	// Pre-created and hidden: the fork cannot insert it later.
+	mShowHidden := mSettings.AddSubMenuItem("Show hidden providers", "")
+	mShowHidden.Hide()
+	showHiddenState := menuItemState{visible: false, enabled: true, initialized: true}
+	updateShowHidden(mShowHidden, &showHiddenState, providerMenus)
 	mSettings.AddSubMenuItem(fmt.Sprintf("Clawmeter %s", version), "").Disable()
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
@@ -312,16 +319,27 @@ func onReadyWithConfig(loaded *config.Config) {
 	// to the registry filter and per-provider menu state. This is what
 	// makes `clawmeter config enable <provider>` (or any other out-of-band
 	// edit) reflect in the running tray without a restart.
-	reloadConfig := func() {
-		newCfg, err := config.Load(all.SourceValidator())
-		if err != nil {
-			return
-		}
+	// enablementMu keeps a reload from applying a config read before a
+	// Hide or Show click saved its change.
+	var enablementMu sync.Mutex
+	applyConfig := func(newCfg *config.Config) {
 		s.mu.Lock()
 		cfg = newCfg
 		s.mu.Unlock()
 		registry.SetEnabledFilter(newCfg)
 		applyProviderEnablement(providerMenus, newCfg)
+		trayRenderMu.Lock()
+		updateShowHidden(mShowHidden, &showHiddenState, providerMenus)
+		trayRenderMu.Unlock()
+	}
+	reloadConfig := func() {
+		enablementMu.Lock()
+		defer enablementMu.Unlock()
+		newCfg, err := config.Load(all.SourceValidator())
+		if err != nil {
+			return
+		}
+		applyConfig(newCfg)
 		pollIntervalSeconds = resetPollIntervalIfChanged(pollIntervalSeconds, newCfg.Settings.PollInterval, ticker.Reset)
 	}
 
@@ -595,6 +613,14 @@ func onReadyWithConfig(loaded *config.Config) {
 			}
 		}
 	}()
+	// changeEnablement saves a provider on/off change, then redraws at once
+	// instead of waiting for the next poll.
+	changeEnablement := func(save func() (*config.Config, error)) bool {
+		return changeProviderEnablement(&enablementMu, save, applyConfig, func() {
+			updateUI(nil, nil, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		})
+	}
+
 	// Event loop (never blocks on network I/O)
 	go func() {
 		for {
@@ -612,6 +638,19 @@ func onReadyWithConfig(loaded *config.Config) {
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
 				go checkUpdate()
+			case family := <-providerHideRequests:
+				go changeEnablement(func() (*config.Config, error) {
+					return saveHidden(family)
+				})
+			case <-mShowHidden.ClickedCh:
+				go func() {
+					if changeEnablement(func() (*config.Config, error) {
+						return saveShowHidden()
+					}) {
+						// A hidden provider was not polled; read it now.
+						refresh(true)
+					}
+				}()
 			case target := <-iconPick.picked:
 				selectIconTarget(providerMenus, iconPick, target)
 			case providerName := <-providerConnectActions:
@@ -667,6 +706,92 @@ func onReadyWithConfig(loaded *config.Config) {
 	}()
 }
 
+// hasProblem reports whether a shown reading is an error, an expired login, or
+// no reading at all (the provider needs sign-in or setup).
+func hasProblem(data *provider.UsageData) bool {
+	return data == nil || data.IsExpired || data.Error != ""
+}
+
+// hideOffered reports whether the block for source key gets a Hide item: it
+// has a problem, and no other shown source of its family is healthy.
+// Hiding writes `enabled: false` for the whole family, so on a row of a family
+// with a healthy sibling (one of several Claude accounts failing while the
+// others work) it would also hide the working accounts. No Hide is offered
+// there; the user can fix or remove the failing account instead.
+func hideOffered(key string, data *provider.UsageData, menus map[string]*providerMenuItems, shown map[string]*provider.UsageData) bool {
+	if !hasProblem(data) {
+		return false
+	}
+	family := provider.FamilyName(menus[key].provider)
+	for other, menu := range menus {
+		if other == key || provider.FamilyName(menu.provider) != family {
+			continue
+		}
+		if sibling, ok := shown[other]; ok && !hasProblem(sibling) {
+			return false
+		}
+	}
+	return true
+}
+
+// forwardHide sends the family of a provider block to requests when its Hide
+// item is clicked.
+func forwardHide(menu *providerMenuItems, requests chan<- string) {
+	family := provider.FamilyName(menu.provider)
+	go func() {
+		for range menu.hideItem.ClickedCh {
+			select {
+			case requests <- family:
+			default:
+			}
+		}
+	}()
+}
+
+// saveHidden writes the change `clawmeter providers disable <family>` makes.
+func saveHidden(family string) (*config.Config, error) {
+	return config.SetProviderEnabled(family, false, all.SourceValidator())
+}
+
+// saveShowHidden writes the change `clawmeter providers enable` makes for
+// each provider turned off in config.
+func saveShowHidden() (*config.Config, error) {
+	return config.EnableDisabledProviders(all.SourceValidator())
+}
+
+// changeProviderEnablement saves a provider on/off change, applies the saved
+// config and redraws at once instead of waiting for the next poll.
+func changeProviderEnablement(mu sync.Locker, save func() (*config.Config, error), apply func(*config.Config), render func()) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	newCfg, err := save()
+	if err != nil {
+		log.Printf("save provider setting: %v", err)
+		notify("Clawmeter", "Could not save the change. Try again.", "normal")
+		return false
+	}
+	apply(newCfg)
+	render()
+	return true
+}
+
+// anyProviderHidden reports whether config turns off a provider that has a
+// menu. The caller holds trayRenderMu.
+func anyProviderHidden(menus map[string]*providerMenuItems) bool {
+	for _, menu := range menus {
+		if menu.disabled {
+			return true
+		}
+	}
+	return false
+}
+
+// updateShowHidden shows the "Show hidden providers" item only while a
+// provider is turned off in config. The caller holds trayRenderMu.
+func updateShowHidden(item *systray.MenuItem, state *menuItemState, menus map[string]*providerMenuItems) {
+	setMenuItemVisible(item, state, anyProviderHidden(menus))
+}
+
 func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Config) {
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
@@ -678,12 +803,15 @@ func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Co
 
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
-	provider       provider.Provider
-	displayName    string
-	headerItem     *systray.MenuItem
-	statusItem     *systray.MenuItem
-	resetItem      *systray.MenuItem
-	announceItem   *systray.MenuItem
+	provider     provider.Provider
+	displayName  string
+	headerItem   *systray.MenuItem
+	statusItem   *systray.MenuItem
+	resetItem    *systray.MenuItem
+	announceItem *systray.MenuItem
+	// hideItem turns the provider off in config. It is shown only while the
+	// block reports a problem and no healthy account shares the family.
+	hideItem       *systray.MenuItem
 	connectable    bool // the name row can run the quota connection
 	headerAction   string
 	headerConnects atomic.Bool
@@ -703,6 +831,7 @@ type providerMenuItems struct {
 	statusState       menuItemState
 	resetState        menuItemState
 	announceState     menuItemState
+	hideState         menuItemState
 	announceURL       string // source post of the shown announcement; guarded by trayRenderMu
 	windowStates      []menuItemState
 	windowAtRisk      []bool
@@ -794,6 +923,12 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(announceItem, icons.MenuBlank())
 	announceItem.Hide()
 
+	// "Hide <name>" ends the block. It acts on the whole provider family, as
+	// `clawmeter providers disable` does.
+	hideItem := systray.AddMenuItem("Hide "+p.DisplayName(), "")
+	setMenuItemIcon(hideItem, icons.MenuBlank())
+	hideItem.Hide()
+
 	menu := &providerMenuItems{
 		provider:          p,
 		displayName:       displayName,
@@ -801,6 +936,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		statusItem:        statusItem,
 		resetItem:         resetItem,
 		announceItem:      announceItem,
+		hideItem:          hideItem,
 		connectable:       connectable,
 		windowItems:       windowItems,
 		moreItem:          moreItem,
@@ -813,6 +949,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
 		resetState:        resetState,
 		announceState:     menuItemState{visible: false, enabled: true, initialized: true},
+		hideState:         menuItemState{title: "Hide " + p.DisplayName(), visible: false, enabled: true, initialized: true},
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
 		windowIcons:       make([]string, len(windowItems)),
@@ -880,6 +1017,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
 	setMenuItemVisible(menu.announceItem, &menu.announceState, false)
+	setMenuItemVisible(menu.hideItem, &menu.hideState, false)
 	hideProviderWindows(menu)
 	setProviderSeparatorVisible(menu, false)
 }
@@ -1133,6 +1271,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			continue
 		}
 		acct := accountNamed(snap, name)
+		setMenuItemVisible(menu.hideItem, &menu.hideState, hideOffered(name, data, menus, shown))
 
 		setup := setups[name]
 		setupReady := setup.IsReady()

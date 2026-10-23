@@ -441,3 +441,30 @@ func TestSourceConfigValidationAndRoundtrip(t *testing.T) {
 		t.Fatal("duplicate source id should fail")
 	}
 }
+
+func TestSetProviderEnabledAndEnableDisabledProviders(t *testing.T) {
+	scopeHome(t)
+	if _, err := SetProviderEnabled("codex", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SetProviderEnabled("kimi", false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsProviderDisabled("codex") || !got.IsProviderDisabled("kimi") {
+		t.Fatalf("providers not disabled: %+v", got.Providers)
+	}
+	if _, err := EnableDisabledProviders(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsProviderExplicitlyEnabled("codex") || !got.IsProviderExplicitlyEnabled("kimi") {
+		t.Fatalf("providers not enabled: %+v", got.Providers)
+	}
+}

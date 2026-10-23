@@ -569,15 +569,8 @@ func configEnableCmd(args []string, enable bool) int {
 		return 1
 	}
 
-	cfg, err := config.Load(all.SourceValidator())
+	cfg, err := config.SetProviderEnabled(providerName, enable, all.SourceValidator())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
-		return 1
-	}
-
-	cfg.EnsureProvider(providerName, enable)
-
-	if err := cfg.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
 	}
