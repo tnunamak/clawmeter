@@ -202,7 +202,10 @@ func agentWindowFields(acct *view.Account, w view.Window, seconds bool) []string
 		"current=" + formatPrecisePct(w.Used),
 		"projected_at_reset=" + projectionPct(w),
 	}
-	if d, ok := untilReset(w); ok {
+	if d, ok := untilReset(w); ok && d <= 0 {
+		// The reading predates its own reset, as the tray says "reset passed".
+		fields = append(fields, "reset_in=passed")
+	} else if ok {
 		if seconds {
 			fields = append(fields, fmt.Sprintf("reset_in_seconds=%d", int64(d.Seconds())))
 		}

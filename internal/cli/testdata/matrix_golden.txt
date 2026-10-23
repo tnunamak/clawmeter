@@ -74,7 +74,7 @@ color: "PROVIDER  WINDOW  USAGE        USED  AT RESET     RESETS IN  RUNS OUT IN
 color: "Claude    5h      ████░░░░░░┃   40%     stale  reset passed"
 plain[claude]: Claude: 5h: 40% (reset passed, stale)
 statusline: CM~ Claude 5h current 40% stale
-agent: Quota: worst=Claude 5h; current=40%; projected_at_reset=unknown; reset_in_seconds=0; reset_in=0s; status=stale; quotas=[Claude 5h(current=40%,projected_at_reset=unknown,reset_in=0s,status=stale)].
+agent: Quota: worst=Claude 5h; current=40%; projected_at_reset=unknown; reset_in=passed; status=stale; quotas=[Claude 5h(current=40%,projected_at_reset=unknown,reset_in=passed,status=stale)].
 json[claude]: reading=fresh window=5h[forecast=stale exhaustion=unknown reset_known=true shown=true]
 
 ## two sources of one provider
