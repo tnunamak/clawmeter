@@ -172,7 +172,7 @@ func TestIconTargetSelectionKeepsTheAnnouncement(t *testing.T) {
 	menus := map[string]*providerMenuItems{
 		"openai": createProviderMenuItems(sourceMenuTestProvider{name: "openai"}, false, nil, false),
 	}
-	picker := newIconPicker(systray.AddMenuItem("Settings", ""))
+	picker := newIconPicker()
 	selectIconTarget(menus, picker, iconTarget{Provider: "openai", Window: "7d"})
 
 	s.mu.Lock()

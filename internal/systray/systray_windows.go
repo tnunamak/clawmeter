@@ -1346,6 +1346,11 @@ func SetTooltip(tooltip string) {
 }
 
 func addOrUpdateMenuItem(item *MenuItem) {
+	// Windows inserts an absent item on update; a hidden item stays out of
+	// the menu until Show adds it with its current state.
+	if item.hidden {
+		return
+	}
 	err := wt.addOrUpdateMenuItem(uint32(item.id), item.parentId(), item.title, item.disabled, item.checked)
 	if err != nil {
 		log.Printf("systray error: unable to addOrUpdateMenuItem: %s\n", err)
