@@ -2,14 +2,12 @@ package icons
 
 import _ "embed"
 
-//go:embed green.png
-var Green []byte
+// App is the extension's gauge logo, shared by the desktop app.
+//
+//go:embed app.png
+var App []byte
 
-//go:embed yellow.png
-var Yellow []byte
-
-//go:embed red.png
-var Red []byte
-
-//go:embed gray.png
-var Gray []byte
+// AppOff is the dimmed logo for an unavailable or errored app.
+//
+//go:embed app-off.png
+var AppOff []byte

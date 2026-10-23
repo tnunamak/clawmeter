@@ -206,7 +206,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	// Launch at login is opt-in: the user enables it from the tray menu.
 	// Do not silently persist anything on first run.
 
-	setIconByName("gray", icons.Gray)
+	setIconByName("logo", icons.App)
 	systray.SetTitle(trayTitleForPlatform(runtime.GOOS, false))
 	systray.SetTooltip("")
 
@@ -1827,7 +1827,7 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 }
 
 func setErrorState(msg string) {
-	setIconByName("gray", icons.Gray)
+	setIconByName("logo-off", icons.AppOff)
 	systray.SetTitle(trayTitleForPlatform(runtime.GOOS, false))
 	systray.SetTooltip("")
 }

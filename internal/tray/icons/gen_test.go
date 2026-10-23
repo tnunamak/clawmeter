@@ -352,11 +352,24 @@ func TestClawmeterOverlayChangesBetweenLowAndHighUsage(t *testing.T) {
 	}
 }
 
-func TestPlainCrawfishFallback(t *testing.T) {
-	for _, pct := range []float64{0, 25, 60, 90} {
-		img := decodePNG(t, GenerateProviderIcon("jetbrains", pct, 64))
-		if alphaBounds(img).Empty() {
-			t.Fatalf("fallback crawfish at %.0f%% is blank", pct)
+func TestAppLogoFallback(t *testing.T) {
+	for _, size := range []int{16, 22, 32, 64, 128} {
+		want := decodePNG(t, appLogo(size))
+		if want.Bounds() != image.Rect(0, 0, size, size) || alphaBounds(want).Empty() {
+			t.Fatalf("app logo at %dpx has invalid or empty bounds", size)
+		}
+		for _, pct := range []float64{0, 25, 60, 90} {
+			for _, data := range [][]byte{
+				GenerateProviderIcon("unknown-provider", pct, size),
+				GenerateProviderIconWithMeterPalette("unknown-provider", MeterState{UsagePct: pct}, size, TrayPaletteLight),
+				GenerateIcon(nil, pct, size),
+				GenerateIcon([]byte("invalid PNG"), pct, size),
+			} {
+				got := decodePNG(t, data)
+				if got.Bounds() != want.Bounds() || countVisiblyDifferentPixels(got, want) != 0 {
+					t.Fatalf("fallback at %.0f%%/%dpx differs from app logo", pct, size)
+				}
+			}
 		}
 	}
 }
