@@ -95,7 +95,8 @@ Machine output carries every window, each flagged with whether people see it,
 because an orchestrator routing work needs the idle ones most.
 
 Worst is chosen among fresh windows with a reset first, then stale ones, by
-exhaustion (out, then runs out soonest), then forecast, then display order,
+exhaustion (out, then runs out soonest), then forecast, then current use,
+then display order,
 so ties always break the same way.
 
 ## What each surface shows

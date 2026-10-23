@@ -359,9 +359,11 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 	length := forecast.WindowLength(w)
 	var proj forecast.Projection
 	switch {
+	case !fresh:
+		out.Forecast.State = ForecastStale
 	case w.ResetsAt.IsZero():
 		out.Forecast.State = ForecastNone
-	case !fresh || !w.ResetsAt.After(at):
+	case !w.ResetsAt.After(at):
 		out.Forecast.State = ForecastStale
 	case length <= 0:
 		out.Forecast.State = ForecastNone

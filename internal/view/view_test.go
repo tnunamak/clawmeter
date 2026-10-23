@@ -551,3 +551,28 @@ func TestASourceWithoutALabelIsNamedByItsID(t *testing.T) {
 		t.Fatalf("label = %q", got)
 	}
 }
+
+func TestANotFreshReadingWithoutAResetIsStale(t *testing.T) {
+	for _, mark := range []func(*provider.UsageData){
+		func(d *provider.UsageData) { d.Stale = true },
+		func(d *provider.UsageData) { d.Error = "authentication failed" },
+		func(d *provider.UsageData) { d.IsExpired = true },
+	} {
+		data := fresh("zai", provider.UsageWindow{Name: "daily", Utilization: 20})
+		mark(data)
+		w := findWindow(t, account(t, Build(inputs(map[string]*provider.UsageData{"zai": data}), at), "zai"), "daily")
+		if w.Forecast.State != ForecastStale || w.Exhaustion.State != ExhaustionUnknown {
+			t.Fatalf("forecast %v, exhaustion %v; want stale and unknown", w.Forecast.State, w.Exhaustion.State)
+		}
+	}
+}
+
+func TestEqualForecastsRankByCurrentUse(t *testing.T) {
+	snap := Build(inputs(map[string]*provider.UsageData{
+		"a": fresh("a", fiveHour(10, 4*time.Hour)),
+		"b": fresh("b", fiveHour(20, 3*time.Hour)),
+	}), at)
+	if snap.Worst == nil || snap.Worst.AccountKey != "b" {
+		t.Fatalf("worst = %+v; with equal forecasts the higher current use ranks first", snap.Worst)
+	}
+}
