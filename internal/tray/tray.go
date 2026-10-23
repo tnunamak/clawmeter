@@ -28,7 +28,6 @@ import (
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/config"
-	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
@@ -1643,7 +1642,14 @@ func trayShown(results, fetched map[string]*provider.UsageData, menus map[string
 // source of a family for the labels, the run-out record, the extension contact
 // and the user's pin.
 func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*providerMenuItems, now, contact time.Time, pin *view.Target) view.Inputs {
+	s.mu.Lock()
+	pollSeconds := 0
+	if cfg != nil {
+		pollSeconds = cfg.Settings.PollInterval
+	}
+	s.mu.Unlock()
 	in := view.Inputs{
+		MaxReadingAge:      config.ReadingMaxAge(pollSeconds),
 		Results:            make(map[string]*provider.UsageData, len(shown)),
 		DisplayNames:       make(map[string]string, len(menus)),
 		SourceLabels:       make(map[string]string, len(menus)),
@@ -1834,32 +1840,38 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 		s.thresholdUtilization = make(map[iconTarget]thresholdSample)
 	}
 	warningThreshold, criticalThreshold := 80.0, 95.0
+	pollSeconds := 0
 	if cfg != nil {
+		pollSeconds = cfg.Settings.PollInterval
 		warningThreshold = cfg.Settings.NotificationThresholds.Warning
 		criticalThreshold = cfg.Settings.NotificationThresholds.Critical
 	}
+	snap := view.Build(view.Inputs{Results: results, MaxReadingAge: config.ReadingMaxAge(pollSeconds)}, now)
 	for name, data := range results {
 		if data == nil || data.Error != "" || data.Stale || data.IsExpired {
 			continue
 		}
-		for _, window := range data.UsableWindows() {
-			if !window.ResetsAt.IsZero() && !window.ResetsAt.After(now) {
+		for _, window := range accountNamed(snap, name).Windows {
+			if !window.Reset.Known || !window.Reset.At.After(now) {
 				continue // A passed reset is stale data, not a new threshold crossing.
 			}
 			key := iconTarget{Provider: name, Window: window.Name}
 			previous := s.thresholdUtilization[key]
-			pct, oldPct := window.Utilization, previous.Utilization
+			pct, oldPct := window.Used, previous.Utilization
 			// A new reset period rearms thresholds even if low samples were missed.
-			if newResetPeriod(previous.ResetsAt, window.ResetsAt, now) {
+			if newResetPeriod(previous.ResetsAt, window.Reset.At, now) {
 				oldPct = 0
 			}
-			s.thresholdUtilization[key] = thresholdSample{Utilization: pct, ResetsAt: window.ResetsAt}
+			s.thresholdUtilization[key] = thresholdSample{Utilization: pct, ResetsAt: window.Reset.At}
 			display := displayNames[name]
 			if display == "" {
 				display = name
 			}
-			proj := forecast.Project(pct, window.ResetsAt, forecast.WindowLength(window))
-			message := fmt.Sprintf("%s window at %.0f%% — %s", window.Name, pct, proj.PaceIndicator())
+			words := window.ForecastWords()
+			if note := window.ExhaustionWords(); note != "" {
+				words += " · " + note
+			}
+			message := fmt.Sprintf("%s window at %.0f%% — %s", window.Name, pct, words)
 			if pct >= criticalThreshold && oldPct < criticalThreshold {
 				pending = append(pending, notification{fmt.Sprintf("%s usage critical", display), message, "critical"})
 			} else if pct >= warningThreshold && oldPct < warningThreshold {

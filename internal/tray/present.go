@@ -221,12 +221,8 @@ func resetLine(w view.Window) string {
 	return "Reset not reported"
 }
 
-// forecastLine is the forecast at reset, or its state. It is empty for a
-// window with no reset and no known length, which has no forecast to state.
+// forecastLine is the forecast at reset, or why it is unavailable.
 func forecastLine(w view.Window) string {
-	if w.Forecast.State == view.ForecastNone && !w.Reset.Known {
-		return ""
-	}
 	words := w.ForecastWords()
 	if w.Forecast.State == view.ForecastKnown {
 		return upperFirst(words)
@@ -311,7 +307,7 @@ type trayWidths struct {
 func trayColumnWidths(rows []meter.Row) trayWidths {
 	widths := trayWidths{used: len("100%"), forecast: len("100%")}
 	for _, row := range rows {
-		widths.forecast = max(widths.forecast, len([]rune(row.Forecast)))
+		widths.forecast = max(widths.forecast, len([]rune(row.Forecast)), len([]rune(row.ForecastState))-len(" at reset"))
 		widths.used = max(widths.used, len([]rune(row.Used)))
 	}
 	return widths
@@ -335,7 +331,7 @@ func trayRowText(row meter.Row, widths trayWidths, now time.Time) string {
 	case row.Forecast != "":
 		forecast = meter.Pad(row.Forecast, widths.forecast, figureSpace) + " at reset"
 	case row.ForecastState != "":
-		forecast = "forecast " + row.ForecastState
+		forecast = meter.Pad(row.ForecastState, widths.forecast+len(" at reset"), figureSpace)
 	}
 	resets := row.Resets
 	if !row.ResetPolicy {

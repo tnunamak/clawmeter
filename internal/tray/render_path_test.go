@@ -66,7 +66,7 @@ func TestRenderPathPinnedStaleWindowStaysStaleOnTheIcon(t *testing.T) {
 	}()
 
 	snap := productionView(results, menus, now)
-	const wantTooltip = "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 100%\nRun-out unknown\nResets in 1h00m\nstale"
+	const wantTooltip = "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 100%\nRun-out unknown\nResets in 1h00m\nforecast stale"
 	if got := Tooltip(snap, results); got != wantTooltip {
 		t.Fatalf("tooltip = %q\nwant      %q", got, wantTooltip)
 	}

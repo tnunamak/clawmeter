@@ -348,9 +348,7 @@ func plainWindow(w view.Window) string {
 		detail = "reset not reported"
 	}
 	if !w.Reset.Known {
-		if w.Forecast.State == view.ForecastStale {
-			detail += ", stale"
-		}
+		detail += ", " + w.ForecastWords()
 		if out {
 			detail += ", out now"
 		}
@@ -421,7 +419,8 @@ func appendSnapshotsPlain(line string, data *provider.UsageData, now time.Time) 
 
 // MultiProviderOutput handles displaying data from multiple providers.
 type MultiProviderOutput struct {
-	Providers []ProviderFormatter
+	PollInterval int
+	Providers    []ProviderFormatter
 }
 
 // HideUnavailable removes auto-detected providers that have not produced
@@ -491,8 +490,13 @@ func (v outputView) statusLine() string {
 	}
 	display := v.display(acct.Key)
 
-	if acct.Reading.State != view.ReadingFresh {
+	if acct.Reading.State != view.ReadingFresh && window.Forecast.State == view.ForecastStale {
 		return fmt.Sprintf("CM~ %s %s last %.0f%% %s", display, window.Name, window.Used, acct.Reading.State)
+	}
+
+	readingNote := ""
+	if acct.Reading.State == view.ReadingStale {
+		readingNote = " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
 	}
 
 	known := window.Forecast.State == view.ForecastKnown
@@ -506,15 +510,12 @@ func (v outputView) statusLine() string {
 	}
 
 	if !known {
-		indicator := "projection unknown"
-		if window.Forecast.State == view.ForecastStale {
-			indicator = "stale"
-		}
+		indicator := window.ForecastWords()
 		line := fmt.Sprintf("%s %s %s current %.0f%% %s", prefix, display, window.Name, window.Used, indicator)
 		if outNow {
 			line += " out now"
 		}
-		return line
+		return line + readingNote
 	}
 	resetIn := format.FormatDuration(window.Reset.At.Sub(v.snap.At))
 	line := fmt.Sprintf("%s %s %s est. %.0f%% reset %s", prefix, display, window.Name, window.Forecast.Pct, resetIn)
@@ -524,7 +525,7 @@ func (v outputView) statusLine() string {
 	case view.ExhaustionRunsOut:
 		line += " out " + format.FormatDuration(window.Exhaustion.RunsOutIn)
 	}
-	return line
+	return line + readingNote
 }
 
 // AgentSummary returns a token-efficient but precise status for AI agents.
@@ -1216,7 +1217,8 @@ func statusCheckExitCode(output *MultiProviderOutput) int {
 // buildOutputFromCache creates output from cached data.
 func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cacheEntry *cache.Entry) *MultiProviderOutput {
 	output := &MultiProviderOutput{
-		Providers: make([]ProviderFormatter, 0),
+		PollInterval: cfg.Settings.PollInterval,
+		Providers:    make([]ProviderFormatter, 0),
 	}
 	// Only show configured providers
 	configured := registry.GetConfigured()
@@ -1263,7 +1265,8 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 // buildOutputFromResult creates output from fetch results.
 func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, result *provider.MultiFetchResult, statuses map[string]*status.ProviderStatus) *MultiProviderOutput {
 	output := &MultiProviderOutput{
-		Providers: make([]ProviderFormatter, 0),
+		PollInterval: cfg.Settings.PollInterval,
+		Providers:    make([]ProviderFormatter, 0),
 	}
 	// Only show configured providers that have data
 	configured := registry.GetConfigured()
@@ -1359,7 +1362,7 @@ func sourceDisplay(p provider.Provider, counts map[string]int) string {
 	return p.DisplayName() + " · " + label
 }
 
-// providerUrgency classifies a provider for sorting and summary.
+// providerUrgency classifies a provider for ordering and check exit codes.
 type providerUrgency struct {
 	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
 	maxProjectedPct float64
@@ -1456,20 +1459,68 @@ func sortProvidersByUrgency(providers []ProviderFormatter) {
 	})
 }
 
+// summaryState is the snapshot-based state of one account in the summary.
+type summaryState struct {
+	tier   int
+	window view.Window
+}
+
+// summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
+func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
+	u := summaryState{tier: 4}
+	switch {
+	case pf.Data == nil:
+		u.tier = 5
+		if pf.ExplicitlyEnabled {
+			u.tier = 1
+		}
+		return u
+	case pf.Data.IsExpired:
+		return summaryState{tier: 0}
+	case pf.Data.Error != "" && !pf.Data.HasPresentableUsage():
+		return summaryState{tier: 1}
+	}
+	var maxPct float64
+	stale := acct.Reading.State != view.ReadingFresh
+	for _, w := range acct.Windows {
+		stale = stale || w.Forecast.State == view.ForecastStale
+		if w.Forecast.State == view.ForecastKnown {
+			maxPct = max(maxPct, w.Forecast.Pct)
+		}
+		if w.Exhaustion.State == view.ExhaustionOut {
+			maxPct = max(maxPct, w.Used)
+		}
+		if u.window.Risk == 0 || w.Risk < u.window.Risk {
+			u.window = w
+		}
+	}
+	switch {
+	case maxPct >= 100:
+		u.tier = 2
+	case maxPct >= 90 || stale:
+		u.tier = 3
+	}
+	return u
+}
+
 // printSummary prints a one-line summary before the per-provider details.
 // Only shown when there are 2+ providers.
 func printSummary(output *MultiProviderOutput, colorMode bool) {
-	if len(output.Providers) < 2 {
+	output.buildView(time.Now()).printSummary(colorMode)
+}
+
+func (v outputView) printSummary(colorMode bool) {
+	if len(v.entries) < 2 {
 		return
 	}
 
 	var healthy, warning, critical, errored, expired int
 	var worstIdx int
-	var worstU providerUrgency
+	var worstU summaryState
 	worstU.tier = 5 // sentinel
 
-	for i := range output.Providers {
-		u := classifyProvider(&output.Providers[i])
+	for i, e := range v.entries {
+		u := summaryUrgency(e.pf, v.account(e.key))
 		switch u.tier {
 		case 0:
 			expired++
@@ -1482,7 +1533,7 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 		case 4:
 			healthy++
 		}
-		if u.tier < worstU.tier || (u.tier == worstU.tier && forecast.CompareWindowRisk(u.worstUsage, u.worstProjection, worstU.worstUsage, worstU.worstProjection) < 0) {
+		if u.tier < worstU.tier || (u.tier == worstU.tier && u.window.Risk > 0 && (worstU.window.Risk == 0 || u.window.Risk < worstU.window.Risk)) {
 			worstIdx = i
 			worstU = u
 		}
@@ -1500,28 +1551,29 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 
 	case worstU.tier == 0:
 		rest := summaryCounts(healthy, warning, critical, errored, expired-1)
-		line = fmt.Sprintf("✗ %s expired", output.Providers[worstIdx].Display)
+		line = fmt.Sprintf("✗ %s expired", v.entries[worstIdx].pf.Display)
 		if rest != "" {
 			line += " — " + rest
 		}
 
 	case worstU.tier == 1:
 		rest := summaryCounts(healthy, warning, critical, errored-1, expired)
-		line = fmt.Sprintf("✗ %s error", output.Providers[worstIdx].Display)
+		line = fmt.Sprintf("✗ %s error", v.entries[worstIdx].pf.Display)
 		if rest != "" {
 			line += " — " + rest
 		}
 
 	default:
 		// Warning or critical — show the worst window
-		windowLabel := output.Providers[worstIdx].Display
-		if worstU.worstWindow != "" {
-			windowLabel += " " + worstU.worstWindow
+		windowLabel := v.entries[worstIdx].pf.Display
+		if worstU.window.Name != "" {
+			windowLabel += " " + worstU.window.Name
 		}
 		etaStr := ""
-		if worstU.runsOutIn > 0 {
-			etaStr = fmt.Sprintf(" (runs out in %s)", format.FormatDuration(worstU.runsOutIn))
-		} else if worstU.runsOutEarlyBy > 0 {
+		switch worstU.window.Exhaustion.State {
+		case view.ExhaustionRunsOut:
+			etaStr = fmt.Sprintf(" (runs out in %s)", format.FormatDuration(worstU.window.Exhaustion.RunsOutIn))
+		case view.ExhaustionOut:
 			etaStr = " (out now)"
 		}
 
@@ -1536,14 +1588,18 @@ func printSummary(output *MultiProviderOutput, colorMode bool) {
 			rest = summaryCounts(healthy-1, warning, critical, errored, expired)
 		}
 
-		paceWord := worstU.worstProjection.PaceIndicator()
-		if worstU.worstWindow != "" && worstU.worstProjection.Unknown {
-			paceWord = fmt.Sprintf("current %.0f%% %s", worstU.worstUsage.Utilization, paceWord)
+		paceWord := worstU.window.ForecastWords()
+		if worstU.window.Forecast.State != view.ForecastKnown && worstU.window.Name != "" {
+			paceWord = fmt.Sprintf("current %.0f%% %s", worstU.window.Used, paceWord)
 		}
-		if worstU.tier == 3 && worstU.worstWindow == "" {
-			paceWord = "stale"
+		if worstU.tier == 3 && worstU.window.Name == "" {
+			paceWord = "forecast stale"
 		}
 		line = fmt.Sprintf("⚠ %s %s%s", windowLabel, paceWord, etaStr)
+		acct := v.account(v.entries[worstIdx].key)
+		if acct.Reading.State == view.ReadingStale && worstU.window.Forecast.State != view.ForecastStale {
+			line += " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
+		}
 		if rest != "" {
 			line += " — " + rest
 		}
@@ -1697,7 +1753,7 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 		done <- struct{}{}
 	}()
 	<-done
-	output := &MultiProviderOutput{Providers: make([]ProviderFormatter, 0, len(display))}
+	output := &MultiProviderOutput{PollInterval: cfg.Settings.PollInterval, Providers: make([]ProviderFormatter, 0, len(display))}
 	for _, p := range display {
 		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), DisplayName: p.DisplayName(), SourceCount: counts[p.Name()], Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}

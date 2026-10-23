@@ -21,16 +21,16 @@ func TestRowStatesFollowTheSnapshot(t *testing.T) {
 		t.Fatalf("under-limit row = %+v", row)
 	}
 	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 1, ResetsAt: at.Add(7*24*time.Hour - time.Minute)}
-	if row := rowFor(t, early); row.Forecast != "" || row.ForecastState != "unknown" {
+	if row := rowFor(t, early); row.Forecast != "" || row.ForecastState != "forecast soon" {
 		t.Fatalf("no forecast yet = %+v", row)
 	}
 	// Used up minutes into a window: no forecast yet, but out now.
 	spent := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: at.Add(299 * time.Minute)}
-	if row := rowFor(t, spent); row.ForecastState != "unknown" || row.RunsOut != "now" {
+	if row := rowFor(t, spent); row.ForecastState != "forecast soon" || row.RunsOut != "now" {
 		t.Fatalf("exhausted without a forecast = %+v", row)
 	}
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
-	if row := rowFor(t, policy); !row.ResetPolicy || row.Resets != "resets daily" || row.Forecast != "" || row.ForecastState != "" || row.HasPace() {
+	if row := rowFor(t, policy); !row.ResetPolicy || row.Resets != "resets daily" || row.Forecast != "" || row.ForecastState != "no forecast" || row.HasPace() {
 		t.Fatalf("policy row = %+v", row)
 	}
 	money := provider.UsageWindow{Name: "extra", DisplayName: "Extra usage", Utilization: 100, Limit: 2000, Used: 2004, Currency: "USD"}
@@ -39,7 +39,7 @@ func TestRowStatesFollowTheSnapshot(t *testing.T) {
 	}
 }
 
-// A stale reading keeps its windows but makes no forecast and no run-out,
+// An old stale reading keeps its windows but makes no forecast and no run-out,
 // even when the last reading was at 100%.
 func TestStaleReadingHasNoForecastOrRunOut(t *testing.T) {
 	data := &provider.UsageData{
@@ -49,7 +49,7 @@ func TestStaleReadingHasNoForecastOrRunOut(t *testing.T) {
 	snap := Build(inputs(map[string]*provider.UsageData{"a": data}), at)
 	acct := account(t, snap, "a")
 	row := acct.Rows()[0]
-	if row.ForecastState != "stale" || row.Forecast != "" || row.RunsOut != "" {
+	if row.ForecastState != "forecast stale" || row.Forecast != "" || row.RunsOut != "" {
 		t.Fatalf("stale row = %+v; a stale reading must not forecast or run out", row)
 	}
 	if row.Used != "100%" || row.Resets != "1h" {

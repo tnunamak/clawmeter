@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/view"
 )
@@ -61,5 +62,26 @@ func TestMenuMoreCountsOnlyShownWindowsPastTheLimit(t *testing.T) {
 	}
 	if got := MenuMore(snap, 20)["codex"]; got != 0 {
 		t.Fatalf("more = %d with room for every row", got)
+	}
+}
+
+func TestForecastWordsKeepResetColumnsAligned(t *testing.T) {
+	rows := []meter.Row{
+		{Forecast: "99%", Resets: "1h"},
+		{ForecastState: "forecast soon", Resets: "1h"},
+		{ForecastState: "forecast stale", Resets: "1h"},
+		{ForecastState: "no forecast", Resets: "1h"},
+	}
+	widths := trayColumnWidths(rows)
+	want := -1
+	for _, row := range rows {
+		text := trayRowText(row, widths, time.Now())
+		pos := len([]rune(strings.Split(text, "resets in")[0]))
+		if want < 0 {
+			want = pos
+		}
+		if pos != want {
+			t.Fatalf("reset column at %d, want %d: %q", pos, want, text)
+		}
 	}
 }

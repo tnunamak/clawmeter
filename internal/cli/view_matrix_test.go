@@ -78,6 +78,14 @@ func matrixCases(now time.Time) []matrixCase {
 			forbidden: []string{"est.", "Est.", "Won't run out", "Run-out unknown"},
 		},
 		{
+			name: "young reading kept after a 429",
+			providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
+				Provider: "claude", Stale: true, Warning: "rate limited", FetchedAt: now.Add(-2 * time.Minute),
+				Windows: claude5h(80, 3*time.Hour),
+			})},
+			forbidden: []string{"forecast stale", "forecast soon", "no forecast", "out now", "Out now"},
+		},
+		{
 			name: "stale critical",
 			providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
 				Provider: "claude", Stale: true, Warning: "rate limited", FetchedAt: now.Add(-time.Hour),

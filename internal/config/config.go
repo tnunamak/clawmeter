@@ -19,6 +19,12 @@ import (
 // remain available when the user needs an immediate reading.
 const MinimumPollIntervalSeconds = 300
 
+// ReadingMaxAge is the maximum age of a retained reading served as current
+// by the hub or used for a forecast after a failed poll.
+func ReadingMaxAge(pollSeconds int) time.Duration {
+	return 2 * PollInterval(pollSeconds)
+}
+
 // PollInterval is how often the tray polls for a configured number of
 // seconds, which is never below the minimum.
 func PollInterval(seconds int) time.Duration {

@@ -1318,7 +1318,7 @@ func TestTrayTypedMonthlyPresentation(t *testing.T) {
 func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
 	now := time.Now()
 	// A fresh window used up in warm-up has no forecast, but is out now.
-	warming := provider.UsageWindow{Utilization: 100, ResetsAt: now.Add(time.Hour)}
+	warming := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: now.Add(299 * time.Minute)}
 	stale := &provider.UsageData{Stale: true, Warning: "rate limited", FetchedAt: now.Add(-time.Hour), Windows: []provider.UsageWindow{warming}}
 	for _, tc := range []struct {
 		name string
@@ -1326,7 +1326,7 @@ func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
 		want []string
 		ban  []string
 	}{
-		{"unknown", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Out now", "projection unknown"}, []string{"Won't run out", "Est. 0%"}},
+		{"unknown", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Out now", "forecast soon"}, []string{"Won't run out", "Est. 0%"}},
 		{"stale", stale, []string{"Current 100%", "Run-out unknown", "stale"}, []string{"Won't run out", "Est.", "Out now"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1533,11 +1533,11 @@ func TestTrayRowLaysLabeledValuesOutInGutteredColumns(t *testing.T) {
 		t.Fatalf("row = %q", got)
 	}
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
-	if got := trayWindowText(policy); !strings.HasSuffix(got, "    \u200740% used    no forecast    resets daily") {
+	if got := trayWindowText(policy); !strings.HasSuffix(got, "    \u200740% used    \u2007\u2007no forecast    resets daily") {
 		t.Fatalf("policy row = %q", got)
 	}
 	unknown := provider.UsageWindow{Name: "daily", Utilization: 40}
-	if got := trayWindowText(unknown); !strings.HasSuffix(got, "    \u200740% used    no forecast    reset not reported") {
+	if got := trayWindowText(unknown); !strings.HasSuffix(got, "    \u200740% used    \u2007\u2007no forecast    reset not reported") {
 		t.Fatalf("unreported row = %q", got)
 	}
 }
@@ -1554,7 +1554,7 @@ func TestTrayWindowRowFlagsAWindowThatRunsOutBeforeReset(t *testing.T) {
 	}
 	// Used up minutes into a window: no forecast yet, but already out.
 	spent := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(299 * time.Minute)}
-	if got := trayWindowText(spent); !AtRisk(viewWindowOf(t, spent)) || !strings.Contains(got, "forecast unknown") || !strings.HasSuffix(got, "    out now") {
+	if got := trayWindowText(spent); !AtRisk(viewWindowOf(t, spent)) || !strings.Contains(got, "forecast soon") || !strings.HasSuffix(got, "    out now") {
 		t.Fatalf("exhausted row without a forecast = %q", got)
 	}
 }
@@ -1657,4 +1657,26 @@ func mustQuery(t *testing.T, raw string) string {
 		t.Fatal(err)
 	}
 	return parsed.Query().Get("body")
+}
+
+func TestThresholdNotificationsUseSharedForecastWords(t *testing.T) {
+	oldCfg, oldSend := cfg, sendThresholdNotification
+	cfg = config.DefaultConfig()
+	defer func() { cfg, sendThresholdNotification = oldCfg, oldSend; s.thresholdUtilization = nil }()
+	for _, tc := range []struct {
+		name            string
+		length, resetIn time.Duration
+		want            string
+	}{
+		{"5h", 5 * time.Hour, 299 * time.Minute, "forecast soon"},
+		{"custom", 0, time.Hour, "no forecast"},
+	} {
+		s.thresholdUtilization = nil
+		var got string
+		sendThresholdNotification = func(_, body, _ string) { got = body }
+		checkThresholds(map[string]*provider.UsageData{"test": {Windows: []provider.UsageWindow{{Name: tc.name, Length: tc.length, Utilization: 80, ResetsAt: time.Now().Add(tc.resetIn)}}}}, nil)
+		if !strings.Contains(got, tc.want) {
+			t.Fatalf("notification=%q, want %q", got, tc.want)
+		}
+	}
 }

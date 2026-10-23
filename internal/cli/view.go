@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/view"
 )
@@ -40,6 +41,7 @@ func (m *MultiProviderOutput) buildViewPinned(now time.Time, pin *view.Target) o
 func (m *MultiProviderOutput) buildViewTuned(now time.Time, tune func(*view.Inputs)) outputView {
 	keys := m.sourceKeys()
 	in := view.Inputs{
+		MaxReadingAge:      config.ReadingMaxAge(m.PollInterval),
 		Results:            make(map[string]*provider.UsageData, len(keys)),
 		DisplayNames:       make(map[string]string, len(keys)),
 		SourceLabels:       make(map[string]string, len(keys)),

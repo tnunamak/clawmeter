@@ -351,7 +351,7 @@ func TestFormatPlainStatesResetlessExtraUsageIsOutNow(t *testing.T) {
 	}
 
 	got := pf.FormatPlain()
-	if !strings.Contains(got, "Extra usage: 100% (reset not reported, out now)") {
+	if !strings.Contains(got, "Extra usage: 100% (reset not reported, no forecast, out now)") {
 		t.Fatalf("FormatPlain() = %q, want the resetless extra-usage fact and out now", got)
 	}
 	if strings.Contains(got, "reset unknown") || strings.Contains(got, "resets unknown") {
