@@ -8,6 +8,8 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/status"
 	"github.com/tnunamak/clawmeter/internal/systray"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -208,5 +210,173 @@ func TestIconPickerListsQuotasInMenuOrderAndChecksThePinnedOne(t *testing.T) {
 	picker.update(results, menus)
 	if !picker.auto.Checked() {
 		t.Fatal("a pinned quota that disappeared did not fall back to Automatic")
+	}
+}
+
+func testIconPinPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "clawmeter", "tray-icon-pin.json")
+	old := iconPinPath
+	iconPinPath = func() string { return path }
+	t.Cleanup(func() { iconPinPath = old })
+	return path
+}
+
+func TestIconPinPersistence(t *testing.T) {
+	path := testIconPinPath(t)
+	target := iconTarget{"claude:work", "7d All"}
+	if got := loadIconPin(); got != (iconTarget{}) {
+		t.Fatalf("missing file loaded %v", got)
+	}
+	if err := saveIconPin(target); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadIconPin(); got != target {
+		t.Fatalf("loaded %v, want %v", got, target)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("pin permissions: %v, %v", info, err)
+	}
+	target.Window = "5h"
+	if err := saveIconPin(target); err != nil || loadIconPin() != target {
+		t.Fatalf("replacing pin: %v", err)
+	}
+	files, err := os.ReadDir(filepath.Dir(path))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("temporary files left: %v, %v", files, err)
+	}
+	if err := saveIconPin(iconTarget{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pin file not deleted: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadIconPin(); got != (iconTarget{}) {
+		t.Fatalf("invalid file loaded %v", got)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	// A directory cannot be read as a JSON file, even when tests run as root.
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadIconPin(); got != (iconTarget{}) {
+		t.Fatalf("unreadable file loaded %v", got)
+	}
+}
+
+func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
+	path := testIconPinPath(t)
+	defer systray.ResetMenu()
+	now := time.Now()
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: "openai"}, false, nil, false)
+	menus := map[string]*providerMenuItems{"openai": menu}
+	picker := newIconPicker(systray.AddMenuItem("settings", ""))
+	picker.forwardRows(menu)
+	data := &provider.UsageData{Provider: "openai", FetchedAt: now, Windows: []provider.UsageWindow{
+		{Name: "5h", Length: 5 * time.Hour, Utilization: 75, ResetsAt: now.Add(4 * time.Hour)},
+		{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 5, ResetsAt: now.Add(6 * 24 * time.Hour)},
+		{Name: "no reset", Utilization: 10},
+	}}
+	s.mu.Lock()
+	oldResults, oldStatuses, oldPin := s.lastResults, s.statuses, s.iconTargetOverride
+	s.lastResults = map[string]*provider.UsageData{"openai": data}
+	s.statuses, s.iconTargetOverride = nil, iconTarget{}
+	s.mu.Unlock()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.lastResults, s.statuses, s.iconTargetOverride = oldResults, oldStatuses, oldPin
+		s.mu.Unlock()
+	})
+	reauth, empty, setup := systray.AddMenuItem("reauth", ""), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", "")
+	render := func() { updateUI(nil, nil, menus, reauth, picker, empty, setup) }
+	click := func(item *systray.MenuItem) {
+		t.Helper()
+		select {
+		case item.ClickedCh <- struct{}{}:
+		case <-time.After(time.Second):
+			t.Fatal("click was not received")
+		}
+		select {
+		case picked := <-picker.picked:
+			selectIconTarget(menus, picker, picked.target, picked.toggle)
+		case <-time.After(time.Second):
+			t.Fatal("click did not reach shared picker")
+		}
+	}
+	pin := iconTarget{"openai", "7d"}
+	assertChecks := func(want iconTarget) {
+		t.Helper()
+		if picker.auto.Checked() != (want.Provider == "") {
+			t.Fatal("Automatic check disagrees with selection")
+		}
+		for row, target := range menu.windowTargets {
+			pinned := target.Provider != "" && target == want
+			if strings.HasPrefix(menu.windowIcons[row], "pinned") != pinned {
+				t.Fatalf("row %d pin mark %q disagrees with %v", row, menu.windowIcons[row], want)
+			}
+			if pinned && menu.windowIcons[row] != "pinned" && menu.windowIcons[row] != "pinned-risk" {
+				t.Fatalf("row %d pin mark %q", row, menu.windowIcons[row])
+			}
+		}
+		for target, item := range picker.targets {
+			if picker.visible[target] && item.Checked() != (target == want) {
+				t.Fatalf("picker check disagrees with %v", want)
+			}
+		}
+	}
+	render()
+	if !menu.windowStates[1].enabled || menu.windowTargets[1] != pin {
+		t.Fatalf("quota row not pinnable: %+v", menu.windowTargets)
+	}
+	if menu.windowStates[2].enabled || menu.windowTargets[2] != (iconTarget{}) {
+		t.Fatal("window without a reset is pinnable")
+	}
+	for row, target := range menu.windowTargets {
+		if target.Provider == "" && menu.windowStates[row].enabled {
+			t.Fatalf("non-pinnable row %d enabled", row)
+		}
+	}
+	autoMeter, autoTooltip := s.currentIconMeter, s.currentTooltip
+	click(menu.windowItems[1])
+	assertChecks(pin)
+	if loadIconPin() != pin || s.currentIconMeter.Label == autoMeter.Label || s.currentTooltip == autoTooltip {
+		t.Fatal("row pin did not persist or change icon and tooltip")
+	}
+	click(menu.windowItems[1])
+	assertChecks(iconTarget{})
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("row unpin did not delete pin: %v", err)
+	}
+	click(picker.targets[pin])
+	assertChecks(pin)
+	s.mu.Lock()
+	s.lastResults = map[string]*provider.UsageData{"openai": {Provider: "openai", FetchedAt: now, Windows: []provider.UsageWindow{data.Windows[0], data.Windows[2]}}}
+	s.mu.Unlock()
+	render()
+	assertChecks(iconTarget{})
+	if loadIconPin() != pin || currentIconPin() == nil {
+		t.Fatal("missing quota erased the saved pin")
+	}
+	if s.currentIconMeter.Label != autoMeter.Label || s.currentIconMeter.UsagePct != autoMeter.UsagePct {
+		t.Fatalf("missing quota did not display Automatic: got %+v, initial %+v", s.currentIconMeter, autoMeter)
+	}
+	s.mu.Lock()
+	s.lastResults = map[string]*provider.UsageData{"openai": data}
+	s.mu.Unlock()
+	render()
+	assertChecks(pin)
+	if s.currentIconMeter.Label == autoMeter.Label {
+		t.Fatal("returned quota did not restore pinned icon")
+	}
+	click(picker.auto)
+	assertChecks(iconTarget{})
+	if loadIconPin() != (iconTarget{}) {
+		t.Fatal("Automatic did not clear saved pin")
 	}
 }

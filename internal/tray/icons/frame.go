@@ -519,6 +519,22 @@ func MenuRiskDot() []byte {
 	return encodePNG(dst)
 }
 
+// MenuCheck marks the quota row the tray icon is pinned to: a check in the
+// menu's text color, or in the over-pace red when that quota runs out first.
+func MenuCheck(palette TrayPalette, atRisk bool) []byte {
+	dst := image.NewRGBA(image.Rect(0, 0, MenuIconSize, MenuIconSize))
+	c := color.NRGBA{0x2b, 0x2b, 0x2b, 0xff}
+	if palette == TrayPaletteDark {
+		c = color.NRGBA{0xee, 0xee, 0xee, 0xff}
+	}
+	if atRisk {
+		c = frameRed
+	}
+	drawThickLine(dst, 3.5, 8.5, 6.5, 11.5, 1, c)
+	drawThickLine(dst, 6.5, 11.5, 12.5, 4.5, 1, c)
+	return encodePNG(dst)
+}
+
 // MenuBlank keeps a row's text aligned with rows that carry an icon.
 func MenuBlank() []byte {
 	return encodePNG(image.NewRGBA(image.Rect(0, 0, MenuIconSize, MenuIconSize)))

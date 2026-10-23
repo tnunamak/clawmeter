@@ -5,11 +5,13 @@ package tray
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -102,8 +104,8 @@ type state struct {
 }
 
 type iconTarget struct {
-	Provider string
-	Window   string
+	Provider string `json:"account_key"`
+	Window   string `json:"window"`
 }
 
 type thresholdSample struct {
@@ -194,6 +196,7 @@ func retryTrayConfig(ticks <-chan time.Time, quit <-chan struct{}, load func() (
 func onReadyWithConfig(loaded *config.Config) {
 	s.mu.Lock()
 	cfg = loaded
+	s.iconTargetOverride = loadIconPin()
 	s.mu.Unlock()
 	s.failureGate = provider.NewFailureGate()
 
@@ -288,6 +291,9 @@ func onReadyWithConfig(loaded *config.Config) {
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	mSettings := systray.AddMenuItem("Settings", "")
 	iconPick := newIconPicker(mSettings)
+	for _, menu := range providerMenus {
+		iconPick.forwardRows(menu)
+	}
 	mAutostart := mSettings.AddSubMenuItemCheckbox("Launch at login", "", false)
 	updateAutostartLabel(mAutostart)
 	mSetupExtension := mSettings.AddSubMenuItem("Set up the browser extension…", "")
@@ -608,7 +614,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				go refresh(true)
 				go checkUpdate()
 			case target := <-iconPick.picked:
-				selectIconTarget(providerMenus, iconPick, target)
+				selectIconTarget(providerMenus, iconPick, target.target, target.toggle)
 			case providerName := <-providerConnectActions:
 				menu := providerMenus[providerName]
 				if menu == nil || !menu.connectable {
@@ -699,6 +705,8 @@ type providerMenuItems struct {
 	announceURL       string // source post of the shown announcement; guarded by trayRenderMu
 	windowStates      []menuItemState
 	windowAtRisk      []bool
+	windowIcons       []string     // per quota row: the icon shown; guarded by trayRenderMu
+	windowTargets     []iconTarget // per quota row; guarded by trayRenderMu
 	moreState         menuItemState
 	balanceStates     []menuItemState
 	balanceActions    []string // per balance row; guarded by trayRenderMu
@@ -806,6 +814,8 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		announceState:     menuItemState{visible: false, enabled: true, initialized: true},
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
+		windowIcons:       make([]string, len(windowItems)),
+		windowTargets:     make([]iconTarget, len(windowItems)),
 		balanceStates:     balanceStates,
 		balanceActions:    make([]string, len(balanceItems)),
 		separatorState:    menuItemState{visible: true, initialized: true},
@@ -913,6 +923,7 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 func hideProviderWindows(menu *providerMenuItems) {
 	for i, w := range menu.windowItems {
 		setMenuItemVisible(w, &menu.windowStates[i], false)
+		setWindowTarget(menu, i, iconTarget{})
 	}
 	setMenuItemVisible(menu.moreItem, &menu.moreState, false)
 	for i, b := range menu.balanceItems {
@@ -1200,6 +1211,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
+		choices := manualIconTargets(map[string]*provider.UsageData{name: data})
 		windows := acct.ShownWindows()
 		rows := windowRows[name]
 		for i, window := range windows {
@@ -1207,20 +1219,20 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 				break
 			}
 
-			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], rows[i])
-			if atRisk := AtRisk(window); atRisk != menu.windowAtRisk[i] {
-				menu.windowAtRisk[i] = atRisk
-				icon := icons.MenuBlank()
-				if atRisk {
-					icon = icons.MenuRiskDot()
-				}
-				setMenuItemIcon(menu.windowItems[i], icon)
+			target := iconTarget{Provider: name, Window: window.Name}
+			if !targetInChoices(target, choices) {
+				target = iconTarget{}
 			}
+			setWindowTarget(menu, i, target)
+			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], rows[i])
+			// iconPick.update draws the row icon: the risk dot or the pin check.
+			menu.windowAtRisk[i] = AtRisk(window)
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], true)
 
 		}
 
 		for i := len(windows); i < len(menu.windowItems); i++ {
+			setWindowTarget(menu, i, iconTarget{})
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], false)
 		}
 		if n := windowMore[name]; n > 0 {
@@ -1405,6 +1417,123 @@ func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry
 	return true
 }
 
+// iconPinPath is replaceable in tests; only the account key and window are saved.
+var iconPinPath = func() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "clawmeter", "tray-icon-pin.json")
+}
+
+func loadIconPin() iconTarget {
+	var target iconTarget
+	data, err := os.ReadFile(iconPinPath())
+	if err != nil || json.Unmarshal(data, &target) != nil || target.Provider == "" || target.Window == "" {
+		return iconTarget{}
+	}
+	return target
+}
+
+func saveIconPin(target iconTarget) error {
+	path := iconPinPath()
+	if path == "" {
+		return fmt.Errorf("user cache directory is unavailable")
+	}
+	if target.Provider == "" {
+		err := os.Remove(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(target)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".tray-icon-pin-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
+}
+
+// setWindowTarget records exactly what a row renders. The caller holds trayRenderMu.
+func setWindowTarget(menu *providerMenuItems, row int, target iconTarget) {
+	if menu.windowTargets[row] != target {
+		tooltip := ""
+		if target.Provider != "" {
+			tooltip = "Show this quota in the tray icon"
+		}
+		menu.windowItems[row].SetTooltip(tooltip)
+		menu.windowTargets[row] = target
+	}
+	setMenuItemEnabled(menu.windowItems[row], &menu.windowStates[row], target.Provider != "")
+}
+
+// setWindowIcon shows a check on the row the tray icon is pinned to, red when
+// that quota runs out before it resets, else the risk dot or nothing. Native
+// check marks are not used: they draw an empty box on every row on KDE and
+// compete with the row icon on Windows. The caller holds trayRenderMu.
+func setWindowIcon(menu *providerMenuItems, row int, pinned bool) {
+	atRisk := menu.windowAtRisk[row]
+	key := ""
+	switch {
+	case pinned && atRisk:
+		key = "pinned-risk"
+	case pinned:
+		key = "pinned"
+	case atRisk:
+		key = "risk"
+	}
+	if menu.windowIcons[row] == key {
+		return
+	}
+	menu.windowIcons[row] = key
+	icon := icons.MenuBlank()
+	switch key {
+	case "pinned", "pinned-risk":
+		icon = icons.MenuCheck(resolveTrayPalette(), atRisk)
+	case "risk":
+		icon = icons.MenuRiskDot()
+	}
+	setMenuItemIcon(menu.windowItems[row], icon)
+}
+
+type iconSelection struct {
+	target iconTarget
+	toggle bool
+}
+
+func (p *iconPicker) forwardRows(menu *providerMenuItems) {
+	for row, item := range menu.windowItems {
+		go func() {
+			for range item.ClickedCh {
+				trayRenderMu.Lock()
+				target := menu.windowTargets[row]
+				trayRenderMu.Unlock()
+				if target.Provider != "" {
+					select {
+					case p.picked <- iconSelection{target: target, toggle: true}:
+					default:
+					}
+				}
+			}
+		}()
+	}
+}
+
 // iconPicker is the Settings → Tray icon submenu. Native menus cannot insert
 // an item between existing ones, so each quota keeps the item it got when it
 // first appeared, and the item is hidden while that quota has no data.
@@ -1413,7 +1542,7 @@ type iconPicker struct {
 	auto    *systray.MenuItem
 	targets map[iconTarget]*systray.MenuItem
 	visible map[iconTarget]bool
-	picked  chan iconTarget
+	picked  chan iconSelection
 }
 
 func newIconPicker(settings *systray.MenuItem) *iconPicker {
@@ -1423,7 +1552,7 @@ func newIconPicker(settings *systray.MenuItem) *iconPicker {
 		auto:    parent.AddSubMenuItemCheckbox("Automatic (most at risk)", "", true),
 		targets: map[iconTarget]*systray.MenuItem{},
 		visible: map[iconTarget]bool{},
-		picked:  make(chan iconTarget, 1),
+		picked:  make(chan iconSelection, 1),
 	}
 	go p.forward(p.auto, iconTarget{})
 	return p
@@ -1432,24 +1561,29 @@ func newIconPicker(settings *systray.MenuItem) *iconPicker {
 func (p *iconPicker) forward(item *systray.MenuItem, target iconTarget) {
 	for range item.ClickedCh {
 		select {
-		case p.picked <- target:
+		case p.picked <- iconSelection{target: target}:
 		default:
 		}
 	}
 }
 
 // update shows one checkable item per quota, in the provider menu's order, and
-// checks the quota the icon follows. A pinned quota that disappears falls back
-// to Automatic.
+// checks the quota the icon follows. An absent pin displays Automatic without
+// forgetting the saved choice, so it applies again when the quota returns.
 func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) {
 	choices := pickerIconTargets(results, menus)
 
 	s.mu.Lock()
-	if !targetInChoices(s.iconTargetOverride, choices) {
-		s.iconTargetOverride = iconTarget{}
-	}
 	override := s.iconTargetOverride
 	s.mu.Unlock()
+	if !targetInChoices(override, choices) {
+		override = iconTarget{}
+	}
+	for _, menu := range menus {
+		for row, target := range menu.windowTargets {
+			setWindowIcon(menu, row, target.Provider != "" && target == override)
+		}
+	}
 
 	if p == nil {
 		return
@@ -1533,14 +1667,22 @@ func pickerIconTargets(results map[string]*provider.UsageData, menus map[string]
 	return choices
 }
 
-func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, target iconTarget) {
+// selectIconTarget pins the icon to target, or to Automatic when target is
+// empty. With toggle, choosing the quota already pinned returns to Automatic.
+func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, target iconTarget, toggle bool) {
 	contact := lastExtensionContact()
 
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
 	s.mu.Lock()
+	if toggle && s.iconTargetOverride == target {
+		target = iconTarget{}
+	}
 	s.iconTargetOverride = target
 	s.mu.Unlock()
+	if err := saveIconPin(target); err != nil {
+		log.Printf("save tray icon pin: %v", err)
+	}
 
 	systray.BeginMenuUpdate()
 	defer systray.EndMenuUpdate()
