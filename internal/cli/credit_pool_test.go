@@ -32,7 +32,7 @@ func TestAgentSummaryListsAPICreditPools(t *testing.T) {
 			t.Errorf("AgentSummary() = %q, missing %q", got, want)
 		}
 	}
-	if line := creditPoolOutput(pool).Providers[0].FormatPlain(); !strings.HasPrefix(line, "Claude API: Family's Individual Organization: $199.88 left · spent $0.11 this month · on pace to spend $") {
+	if line := creditPoolOutput(pool).Providers[0].FormatPlain(); !strings.HasPrefix(line, "Claude API: Family's Individual Organization: $199.88 left · spent $0.11 this month · est. $") {
 		t.Errorf("FormatPlain() = %q", line)
 	}
 }

@@ -53,12 +53,12 @@ func TestWorstWindowPrefersExhaustedOverHealthySibling(t *testing.T) {
 	if got := statusCheckExitCode(output); got != 2 {
 		t.Fatalf("exit=%d want 2", got)
 	}
-	_, window, _, ok := output.worstReadableWindow()
-	if !ok || window.Name != "mystery" {
-		t.Fatalf("worst window = %q, want mystery", window.Name)
+	snap := output.buildView(time.Now()).snap
+	if snap.Worst == nil || snap.Worst.Window != "mystery" {
+		t.Fatalf("worst window = %+v, want mystery", snap.Worst)
 	}
 	agent := output.AgentSummary()
-	if !strings.Contains(agent, "worst=Test mystery;") || !strings.Contains(agent, "Test mystery(current=100%,projected_at_reset=unknown,reset_in=1h00m,status=at_risk)") || strings.Contains(agent, "; status=unknown;") {
+	if !strings.Contains(agent, "worst=Test mystery;") || !strings.Contains(agent, "Test mystery(current=100%,projected_at_reset=unknown,reset_in=1h00m,status=at_risk,runs_out=now,runs_out_early_by_seconds=3600,runs_out_early_by=1h00m)") || strings.Contains(agent, "; status=unknown;") {
 		t.Fatalf("agent summary = %q", agent)
 	}
 }

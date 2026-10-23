@@ -14,7 +14,9 @@ import (
 
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 func TestPrintJSONMultisourceKeepsDefaultLegacyFieldsAndSortsSources(t *testing.T) {
@@ -180,11 +182,16 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 		}
 	}
 
+	// Quotas list in display-label order, windows in provider order. Urgency
+	// is the separate worst= fact, not the order of the list.
 	claude7d := strings.Index(got, "Claude 7d All(")
 	claude5h := strings.Index(got, "Claude 5h Sonnet(")
 	openai7d := strings.Index(got, "Codex 7d(")
-	if !(claude7d >= 0 && claude7d < claude5h && claude5h < openai7d) {
-		t.Fatalf("AgentSummary() quota order = %q, want most-at-risk to least-at-risk", got)
+	if !(claude5h >= 0 && claude5h < claude7d && claude7d < openai7d) {
+		t.Fatalf("AgentSummary() quota order = %q, want display-label order", got)
+	}
+	if !strings.HasPrefix(got, "Quota: worst=Claude 7d All;") {
+		t.Fatalf("AgentSummary() = %q, want worst=Claude 7d All", got)
 	}
 }
 
@@ -333,7 +340,9 @@ func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
 	}
 }
 
-func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
+// Changed on purpose: a window at 100% is out now whether or not it has a
+// reset, so the plain line says so. It still does not say "resets unknown".
+func TestFormatPlainStatesResetlessExtraUsageIsOutNow(t *testing.T) {
 	pf := ProviderFormatter{
 		Display: "Claude",
 		Data: &provider.UsageData{Windows: []provider.UsageWindow{{
@@ -342,8 +351,8 @@ func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
 	}
 
 	got := pf.FormatPlain()
-	if !strings.Contains(got, "Extra usage: 100% (reset not reported)") {
-		t.Fatalf("FormatPlain() = %q, want clear resetless extra-usage fact", got)
+	if !strings.Contains(got, "Extra usage: 100% (reset not reported, out now)") {
+		t.Fatalf("FormatPlain() = %q, want the resetless extra-usage fact and out now", got)
 	}
 	if strings.Contains(got, "reset unknown") || strings.Contains(got, "resets unknown") {
 		t.Fatalf("FormatPlain() = %q, should not present resetless usage as a warning", got)
@@ -354,7 +363,7 @@ func TestFormatPlainDoesNotTreatResetlessExtraUsageAsRisk(t *testing.T) {
 }
 
 func TestPlainWindowLabelUsesCompactWeeklyDisplayName(t *testing.T) {
-	window := provider.UsageWindow{Name: "weekly", DisplayName: "7d"}
+	window := view.Window{Name: "weekly", Label: "7d"}
 	if got := plainWindowLabel(window); got != "7d" {
 		t.Fatalf("plainWindowLabel(%+v) = %q, want 7d", window, got)
 	}
@@ -409,7 +418,7 @@ func TestClaudeResetSnapshotRemainsExplicitWhenUsageIsStale(t *testing.T) {
 			t.Errorf("plain output %q missing %q", plain, want)
 		}
 	}
-	agent := (&MultiProviderOutput{Providers: []ProviderFormatter{pf}}).agentResetCreditSummaries()
+	agent := (&MultiProviderOutput{Providers: []ProviderFormatter{pf}}).buildView(time.Now()).agentResetCreditSummaries()
 	if len(agent) != 1 || !strings.Contains(agent[0], "observed_count=1 snapshot=true earliest_expires_at=") || !strings.Contains(agent[0], "last_observed_at=") || strings.Contains(agent[0], "available=1") {
 		t.Fatalf("agent reset snapshot = %v, want timestamped observation, not live availability", agent)
 	}
@@ -1061,7 +1070,7 @@ func TestStatusTableRowsUseTheTrayIconColors(t *testing.T) {
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
 	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}}
 	layout := newTableLayout()
-	for _, row := range pf.shownRows() {
+	for _, row := range shownRowsOf(pf) {
 		layout.fit(rowCells(row))
 	}
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -1114,7 +1123,7 @@ func TestStatusTableAlignsWideProviderNames(t *testing.T) {
 	layout := newTableLayout()
 	for _, pf := range providers {
 		layout.provider = max(layout.provider, cellWidth(pf.Display))
-		for _, row := range pf.shownRows() {
+		for _, row := range shownRowsOf(pf) {
 			layout.fit(rowCells(row))
 		}
 	}
@@ -1126,4 +1135,11 @@ func TestStatusTableAlignsWideProviderNames(t *testing.T) {
 	if windowAt(wide) != windowAt(narrow) || windowAt(wide) != cellWidth(header[:strings.Index(header, "WINDOW")]) {
 		t.Fatalf("WINDOW columns differ:\n%s\n%s\n%s", header, wide, narrow)
 	}
+}
+
+// shownRowsOf is the status table's rows for one provider, read from its snapshot.
+func shownRowsOf(pf ProviderFormatter) []meter.Row {
+	m := &MultiProviderOutput{Providers: []ProviderFormatter{pf}}
+	v := m.buildView(time.Now())
+	return shownRows(v.account(v.entries[0].key))
 }

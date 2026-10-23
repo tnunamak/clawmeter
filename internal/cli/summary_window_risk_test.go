@@ -27,7 +27,7 @@ func TestSummaryRanksExhaustedUnknownAcrossCriticalProviders(t *testing.T) {
 	if output.Providers[0].Display != "Exhausted" {
 		t.Fatalf("provider order = %+v", output.Providers)
 	}
-	quotas := output.agentQuotaSummaries()
+	quotas := output.buildView(now).agentQuotaSummaries()
 	if len(quotas) != 3 || !strings.HasPrefix(quotas[0], "Exhausted 5h(") {
 		t.Fatalf("agent quota order = %v", quotas)
 	}

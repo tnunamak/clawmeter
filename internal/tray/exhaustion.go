@@ -316,31 +316,3 @@ func exhaustionPath() string {
 	}
 	return path
 }
-
-// runOutSince writes when a window ran out: a time of day when it was today,
-// otherwise a date and time.
-func runOutSince(at, now time.Time) string {
-	at, now = at.Local(), now.Local()
-	clock := at.Format("15:04")
-	if at.Year() == now.Year() && at.YearDay() == now.YearDay() {
-		return clock
-	}
-	return at.Format("Jan 2") + " " + clock
-}
-
-// ranOutLabel is the menu's run-out column for a window that is already out.
-func ranOutLabel(ranOutAt, now time.Time) string {
-	if ranOutAt.IsZero() {
-		return "out now"
-	}
-	return "out since " + runOutSince(ranOutAt, now)
-}
-
-// ranOutNote replaces the forecast's leading "out now" with the time the
-// tray saw the window run out. Any wait after it is kept.
-func ranOutNote(note string, ranOutAt, now time.Time) string {
-	if ranOutAt.IsZero() || !strings.HasPrefix(note, "out now") {
-		return note
-	}
-	return "out since " + runOutSince(ranOutAt, now) + strings.TrimPrefix(note, "out now")
-}

@@ -121,7 +121,13 @@ func runOutRank(p Projection) (time.Duration, bool) {
 // currentPct is 0-100, resetsAt is when the window resets,
 // windowLen is the total window duration (5h or 7d).
 func Project(currentPct float64, resetsAt time.Time, windowLen time.Duration) Projection {
-	remaining := time.Until(resetsAt)
+	return ProjectAt(currentPct, resetsAt, windowLen, time.Now())
+}
+
+// ProjectAt is Project with the current time given, so a snapshot can be
+// built for one moment.
+func ProjectAt(currentPct float64, resetsAt time.Time, windowLen time.Duration, now time.Time) Projection {
+	remaining := resetsAt.Sub(now)
 	if !resetsAt.IsZero() && remaining <= 0 {
 		return Projection{Unknown: true, Stale: true, WillLastToReset: true}
 	}

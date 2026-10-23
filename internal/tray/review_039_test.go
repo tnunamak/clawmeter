@@ -8,27 +8,25 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
-	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 func TestReview039TrayUsesTypedMonthlyLength(t *testing.T) {
 	w := provider.UsageWindow{Name: "premium", Length: 30 * 24 * time.Hour,
 		Utilization: 60, ResetsAt: time.Now().Add(12 * time.Hour)}
-	want := forecast.Project(w.Utilization, w.ResetsAt, forecast.WindowLength(w))
-	got := windowProjection(w)
-	if got.Unknown || got.ProjectedPct < 60 || got.ProjectedPct > 62 {
-		t.Fatalf("tray=%+v; typed forecast=%+v; menu=%q", got, want, trayWindowText(w))
+	got := viewWindowOf(t, w)
+	if got.Forecast.State != view.ForecastKnown || got.Forecast.Pct < 60 || got.Forecast.Pct > 62 {
+		t.Fatalf("tray forecast=%+v; menu=%q", got.Forecast, trayWindowText(w))
 	}
 }
 
 func TestReview039TrayUnknownIsNotSafe(t *testing.T) {
 	w := provider.UsageWindow{Name: "5h", Utilization: 100,
 		ResetsAt: time.Now().Add(299 * time.Minute)}
-	data := &provider.UsageData{Windows: []provider.UsageWindow{w}}
-	proj := windowProjection(w)
-	got := compactIconTooltip("Claude", w, proj, time.Time{})
-	meter := iconMeterState(data, "5h")
+	snap := viewOf(map[string]*provider.UsageData{"claude": {Windows: []provider.UsageWindow{w}}}, time.Now())
+	got := Tooltip(snap, nil)
+	_, meter := IconState(snap)
 	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est. 0%") || meter.RiskPct < 100 {
 		t.Fatalf("exhausted quota presented as safe: tooltip=%q meter=%+v", got, meter)
 	}

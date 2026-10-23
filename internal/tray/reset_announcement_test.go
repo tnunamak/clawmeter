@@ -42,7 +42,7 @@ func TestAnnouncementTooltipLineFollowsResetLine(t *testing.T) {
 	data := announcedCodex(t, now)
 	data.ResetCredits = &provider.UsageResetCredits{AvailableCount: 1, EarliestExpiresAt: now.Add(9 * 24 * time.Hour), FetchedAt: now}
 
-	tooltip := appendResetCreditTooltip("Codex: out", data)
+	tooltip := appendResetCreditTooltip("Codex: out", data, time.Now())
 	lines := strings.Split(tooltip, "\n")
 	if len(lines) != 3 {
 		t.Fatalf("tooltip lines = %q", lines)
@@ -57,7 +57,7 @@ func TestAnnouncementTooltipLineFollowsResetLine(t *testing.T) {
 
 func TestAnnouncementTooltipAbsentWithoutAnnouncement(t *testing.T) {
 	data := &provider.UsageData{Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d", Utilization: 10}}}
-	if got := appendResetCreditTooltip("Codex: 10%", data); got != "Codex: 10%" {
+	if got := appendResetCreditTooltip("Codex: 10%", data, time.Now()); got != "Codex: 10%" {
 		t.Fatalf("tooltip = %q, want unchanged", got)
 	}
 }
@@ -136,7 +136,7 @@ func TestTrayAnnouncementIsCleanOnStaleOrErroredReadings(t *testing.T) {
 		if results["openai"].AnnouncedReset != nil {
 			t.Fatalf("%s reading carries an announcement", name)
 		}
-		if got := appendResetCreditTooltip("Codex", results["openai"]); strings.Contains(got, "Reset announced") {
+		if got := appendResetCreditTooltip("Codex", results["openai"], time.Now()); strings.Contains(got, "Reset announced") {
 			t.Fatalf("%s reading shows the announcement: %q", name, got)
 		}
 	}

@@ -5,6 +5,7 @@ package tray
 import (
 	"testing"
 
+	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/tray/icons"
 )
@@ -25,7 +26,7 @@ func TestCodexWindowLabelsYieldFrameLabel(t *testing.T) {
 					w.DisplayName = "7 days (" + scope + ")"
 				}
 			}
-			badge := windowBadgeLabelForWindow(w)
+			badge := windowBadgeLabel(meter.Label(w))
 			if got := icons.FrameDisplayLabel(badge); got == "" {
 				t.Errorf("window %q (display %q): badge %q renders no frame label", w.Name, w.DisplayName, badge)
 			}

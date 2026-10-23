@@ -9,10 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
-	"github.com/tnunamak/clawmeter/internal/systray"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 const (
@@ -479,11 +478,11 @@ func TestTrayRowShowsWhenAWindowRanOut(t *testing.T) {
 	at := time.Date(today.Year(), today.Month(), today.Day(), 9, 40, 0, 0, time.Local)
 	row := meter.Row{Code: "5h", Used: "100%", RunsOut: "now", RanOutAt: at}
 	widths := trayWidths{used: len("100%"), forecast: len("100%")}
-	if got := trayRowText(row, widths); !strings.Contains(got, "out since 09:40") || strings.Contains(got, "out now") {
+	if got := trayRowText(row, widths, time.Now()); !strings.Contains(got, "out since 09:40") || strings.Contains(got, "out now") {
 		t.Fatalf("row with a known time = %q", got)
 	}
 	row.RanOutAt = time.Time{}
-	if got := trayRowText(row, widths); !strings.Contains(got, "out now") {
+	if got := trayRowText(row, widths, time.Now()); !strings.Contains(got, "out now") {
 		t.Fatalf("row without a known time = %q", got)
 	}
 }
@@ -491,13 +490,21 @@ func TestTrayRowShowsWhenAWindowRanOut(t *testing.T) {
 func TestTooltipShowsWhenAWindowRanOut(t *testing.T) {
 	today := time.Now()
 	at := time.Date(today.Year(), today.Month(), today.Day(), 9, 40, 0, 0, time.Local)
-	window := provider.UsageWindow{Name: "7d", ResetsAt: time.Now().Add(2 * time.Hour)}
-	proj := forecast.Projection{ProjectedPct: 180, WillLastToReset: false, RunsOutEarlyBy: 2 * time.Hour}
+	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(2 * time.Hour)}
+	results := map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{window}}}
+	names := map[string]string{"codex": "Codex"}
+	tooltipWith := func(outSince time.Time) string {
+		in := view.Inputs{Results: results, DisplayNames: names, Families: map[string]string{"codex": "codex"}, FamilySourceCounts: map[string]int{"codex": 1}}
+		if !outSince.IsZero() {
+			in.OutSince = map[string]map[string]time.Time{"codex": {"7d": outSince}}
+		}
+		return Tooltip(view.Build(in, time.Now()), results)
+	}
 
-	if got := compactIconTooltip("Codex 7-Day", window, proj, at); !strings.Contains(got, "Out since 09:40 (2h00m until reset)") {
+	if got := tooltipWith(at); !strings.Contains(got, "Out since 09:40 (2h00m until reset)") {
 		t.Fatalf("tooltip with a known time = %q", got)
 	}
-	if got := compactIconTooltip("Codex 7-Day", window, proj, time.Time{}); !strings.Contains(got, "Out now (2h00m until reset)") {
+	if got := tooltipWith(time.Time{}); !strings.Contains(got, "Out now (2h00m until reset)") {
 		t.Fatalf("tooltip without a known time = %q", got)
 	}
 }
@@ -518,8 +525,7 @@ func TestTrayMenuRowsUsesTheObservedTransition(t *testing.T) {
 	}, nil, identities, before, testMaxGap)
 	windowExhaustion.observeFetched(full(after), nil, identities, after, testMaxGap)
 
-	menus := map[string]*providerMenuItems{"a": {windowItems: make([]*systray.MenuItem, maxWindowItems)}}
-	rows := trayMenuRows(full(after), menus)
+	rows := MenuRows(trayViewOf(full(after), testMenus("a"), now), maxWindowItems)
 	want := "out since " + runOutSince(after, now)
 	if len(rows["a"]) != 1 || !strings.Contains(rows["a"][0], want) {
 		t.Fatalf("menu rows = %q; want %q", rows["a"], want)
@@ -541,8 +547,7 @@ func TestTrayMenuRowsSaysOutNowUntilTheRunIsObserved(t *testing.T) {
 	results := map[string]*provider.UsageData{
 		"a": {FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: reset}}},
 	}
-	menus := map[string]*providerMenuItems{"a": {windowItems: make([]*systray.MenuItem, maxWindowItems)}}
-	if rows := trayMenuRows(results, menus); !strings.Contains(rows["a"][0], "out now") {
+	if rows := MenuRows(trayViewOf(results, testMenus("a"), now), maxWindowItems); !strings.Contains(rows["a"][0], "out now") {
 		t.Fatalf("row before this run observed the source = %q; want out now", rows["a"][0])
 	}
 }

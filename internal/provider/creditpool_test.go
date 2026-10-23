@@ -44,10 +44,10 @@ func TestCreditPoolProjectsTheLiveConsoleSnapshot(t *testing.T) {
 		t.Fatalf("projection = spend %d unused %d runs out %v", pool.ProjectedSpend, pool.ProjectedUnused, pool.RunsOutAt)
 	}
 	now := observed.Add(time.Hour)
-	if got, want := pool.Summary(now), "$199.88 left · spent $0.11 this month · on pace to spend $1.84 more before it expires Oct 25 00:00 · checked "; !strings.HasPrefix(got, want) {
+	if got, want := pool.Summary(now), "$199.88 left · spent $0.11 this month · est. $1.84 more spent before it expires Oct 25 00:00 · checked "; !strings.HasPrefix(got, want) {
 		t.Fatalf("Summary() = %q, want prefix %q", got, want)
 	}
-	if got, want := pool.TrayLine(now), "$199.88 left · $198.04 expires Oct 25 00:00 · checked "; !strings.HasPrefix(got, want) {
+	if got, want := pool.TrayLine(now), "$199.88 left · est. $198.04 unused at expiry Oct 25 00:00 · checked "; !strings.HasPrefix(got, want) {
 		t.Fatalf("TrayLine() = %q, want prefix %q", got, want)
 	}
 }

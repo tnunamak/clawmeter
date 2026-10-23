@@ -1,0 +1,202 @@
+## fresh at 100% in warm-up
+tooltip: "Claude 5-Hour\nCurrent 100%\nOut now (4h59m until reset)\nResets in 4h59m\nprojection unknown"
+icon: provider=claude usage=100 expected=0 risk=100 show_expected=true label="5H"
+menu[claude]: "5h    ┃██████████    100% used    forecast unknown    resets in 4h 59m    out now"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ┃██████████  100%   unknown     4h 59m          now"
+plain[claude]: Claude: 5h: 100% (resets 4h59m, projection unknown · out now (4h59m until reset))
+statusline: CM! Claude 5h current 100% projection unknown out now
+agent: Quota: worst=Claude 5h; current=100%; projected_at_reset=unknown; reset_in_seconds=17940; reset_in=4h59m; status=at_risk; runs_out=now; runs_out_early_by_seconds=17940; runs_out_early_by=4h59m; quotas=[Claude 5h(current=100%,projected_at_reset=unknown,reset_in=4h59m,status=at_risk,runs_out=now,runs_out_early_by_seconds=17940,runs_out_early_by=4h59m)].
+json[claude]: reading=fresh window=5h[forecast=warming exhaustion=out reset_known=true shown=true early_by_s=17940]
+
+## stale critical
+tooltip: "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 100%\nRun-out unknown\nResets in 1h00m\nstale"
+icon: provider=claude usage=0 expected=0 risk=0 show_expected=false label=""
+menu[claude]: "5h    ████████┃██    100% used    forecast stale    resets in 1h"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ████████┃██  100%     stale         1h"
+color: "          stale: showing last good data (rate limited)"
+plain[claude]: Claude: stale (updated 11:00) - 5h: 100% (resets 1h00m, stale)
+statusline: CM~ Claude 5h last 100% stale
+agent: Quota: worst=Claude 5h; current=100%; projected_at_reset=unknown; reset_in_seconds=3600; reset_in=1h00m; status=stale; data=stale; quotas=[Claude 5h(current=100%,projected_at_reset=unknown,reset_in=1h00m,status=stale,data=stale)].
+json[claude]: reading=stale window=5h[forecast=stale exhaustion=unknown reset_known=true shown=true]
+
+## fresh healthy with a known forecast
+tooltip: "Claude 5-Hour\nCurrent 30%\nWon't run out\nResets in 3h00m\nEst. 75% at reset"
+icon: provider=claude usage=30 expected=40 risk=75 show_expected=true label="5H"
+menu[claude]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u200775% at reset    resets in 3h"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ███▒┃▒▒▒▒░░   30%       75%         3h"
+plain[claude]: Claude: 5h: 30% (resets 3h00m, est. 75% at reset)
+statusline: CM Claude 5h est. 75% reset 3h00m
+agent: Quota: worst=Claude 5h; current=30%; projected_at_reset=75%; reset_in_seconds=10800; reset_in=3h00m; status=on_track; quotas=[Claude 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track)].
+json[claude]: reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=75]
+
+## unknown reset
+tooltip: "Codex 7-Day\nCurrent 40%\nRun-out unknown\nReset not reported"
+icon: provider=openai usage=40 expected=0 risk=0 show_expected=false label="7D"
+menu[openai]: "7d    ████░░░░░░\u2007    \u200740% used    no forecast    reset not reported"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET           RESETS IN  RUNS OUT IN"
+color: "Codex     7d      ████░░░░░░    40%         —  reset not reported"
+plain[openai]: Codex: 7d: 40% (reset not reported)
+statusline: CM Codex 7d current 40% projection unknown
+agent: Quota: worst=Codex 7d; current=40%; projected_at_reset=unknown; reset_in=unknown; status=unknown; quotas=[Codex 7d(current=40%,projected_at_reset=unknown,reset_in=unknown,status=unknown)].
+json[openai]: reading=fresh window=7d[forecast=none exhaustion=unknown reset_known=false shown=true]
+
+## reset-less at 100%
+tooltip: "Codex 7-Day\nCurrent 100%\nOut now\nReset not reported"
+icon: provider=openai usage=100 expected=0 risk=100 show_expected=false label="7D"
+menu[openai]: "7d    ██████████\u2007    100% used    no forecast    reset not reported    out now"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET           RESETS IN  RUNS OUT IN"
+color: "Codex     7d      ██████████   100%         —  reset not reported          now"
+plain[openai]: Codex: 7d: 100% (reset not reported, out now)
+statusline: CM! Codex 7d current 100% projection unknown out now
+agent: Quota: worst=Codex 7d; current=100%; projected_at_reset=unknown; reset_in=unknown; status=at_risk; runs_out=now; quotas=[Codex 7d(current=100%,projected_at_reset=unknown,reset_in=unknown,status=at_risk,runs_out=now)].
+json[openai]: reading=fresh window=7d[forecast=none exhaustion=out reset_known=false shown=true]
+
+## stale reset-less window
+tooltip: "Codex 7-Day\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 40%\nRun-out unknown\nReset not reported\nstale"
+icon: provider=openai usage=0 expected=0 risk=0 show_expected=false label=""
+menu[openai]: "7d    ████░░░░░░\u2007    \u200740% used    forecast stale    reset not reported"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET           RESETS IN  RUNS OUT IN"
+color: "Codex     7d      ████░░░░░░    40%     stale  reset not reported"
+color: "          stale: showing last good data (rate limited)"
+plain[openai]: Codex: stale (updated 11:00) - 7d: 40% (reset not reported, stale)
+statusline: CM~ Codex 7d last 40% stale
+agent: Quota: worst=Codex 7d; current=40%; projected_at_reset=unknown; reset_in=unknown; status=stale; data=stale; quotas=[Codex 7d(current=40%,projected_at_reset=unknown,reset_in=unknown,status=stale,data=stale)].
+json[openai]: reading=stale window=7d[forecast=stale exhaustion=unknown reset_known=false shown=true]
+
+## reset passed
+tooltip: "Claude 5-Hour\nCurrent 40%\nRun-out unknown\nReset passed\nstale"
+icon: provider=claude usage=0 expected=0 risk=0 show_expected=false label=""
+menu[claude]: "5h    ████░░░░░░┃    \u200740% used    forecast stale    reset passed"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET     RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ████░░░░░░┃   40%     stale  reset passed"
+plain[claude]: Claude: 5h: 40% (reset passed, stale)
+statusline: CM~ Claude 5h current 40% stale
+agent: Quota: worst=Claude 5h; current=40%; projected_at_reset=unknown; reset_in=passed; status=stale; quotas=[Claude 5h(current=40%,projected_at_reset=unknown,reset_in=passed,status=stale)].
+json[claude]: reading=fresh window=5h[forecast=stale exhaustion=unknown reset_known=true shown=true]
+
+## two sources of one provider
+tooltip: "Claude · ODL 5-Hour\nCurrent 60%\nWon't run out\nResets in 2h00m\nEst. 100% at reset"
+icon: provider=claude usage=60 expected=60 risk=100 show_expected=true label="5H"
+menu[claude:work]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u200775% at reset    resets in 3h"
+menu[claude:odl]: "5h    ██████┃▒▒▒▒    \u200760% used    100% at reset    resets in 2h"
+color: "PROVIDER       WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude · Work  5h      ███▒┃▒▒▒▒░░   30%       75%         3h"
+color: ""
+color: "Claude · ODL   5h      ██████┃▒▒▒▒   60%      100%         2h"
+plain[claude:work]: Claude · Work: 5h: 30% (resets 3h00m, est. 75% at reset)
+plain[claude:odl]: Claude · ODL: 5h: 60% (resets 2h00m, est. 100% at reset)
+statusline: CM! Claude · ODL 5h est. 100% reset 2h00m
+agent: Quota: worst=Claude · ODL 5h; current=60%; projected_at_reset=100%; reset_in_seconds=7200; reset_in=2h00m; status=at_risk; quotas=[Claude · ODL 5h(current=60%,projected_at_reset=100%,reset_in=2h00m,status=at_risk) | Claude · Work 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track)].
+json[claude]: source[odl] reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=100] ; source[work] reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=75]
+
+## idle window hidden from list surfaces
+tooltip: "Codex 5-Hour\nCurrent 40%\nWon't run out\nResets in 3h00m\nEst. 100% at reset"
+icon: provider=openai usage=40 expected=40 risk=100 show_expected=true label="5H"
+menu[openai]: "5h    ████┃▒▒▒▒▒▒    \u200740% used    100% at reset    resets in 3h"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Codex     5h      ████┃▒▒▒▒▒▒   40%      100%         3h"
+plain[openai]: Codex: 5h: 40% (resets 3h00m, est. 100% at reset)
+statusline: CM! Codex 5h est. 100% reset 3h00m
+agent: Quota: worst=Codex 5h; current=40%; projected_at_reset=100%; reset_in_seconds=10800; reset_in=3h00m; status=at_risk; quotas=[Codex 7d(current=0%,projected_at_reset=0%,reset_in=6d0h,status=on_track) | Codex 5h(current=40%,projected_at_reset=100%,reset_in=3h00m,status=at_risk)].
+json[openai]: reading=fresh window=7d[forecast=known exhaustion=lasts reset_known=true shown=false projected_pct=0] window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=100]
+
+## expired with no windows
+tooltip: "Claude: token expired"
+icon: provider=claude usage=100 expected=100 risk=100 show_expected=false label=""
+menu[claude]: no rows
+color: "Claude    expired"
+plain[claude]: Claude: expired
+statusline: CM no quota data
+agent: Quota: no active quota data. Run `clawmeter providers` if setup may be incomplete.
+json[claude]: reading=expired
+
+## out since the tray saw it
+tooltip: "Claude 5-Hour\nCurrent 100%\nOut since 10:00 (2h00m until reset)\nResets in 2h00m\nEst. 167% at reset"
+icon: provider=claude usage=100 expected=60 risk=167 show_expected=true label="5H"
+menu[claude]: "5h    ██████┃████    100% used    167% at reset    resets in 2h    out since 10:00"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ██████┃████  100%      167%         2h          now"
+plain[claude]: Claude: 5h: 100% (resets 2h00m, est. 167% at reset · out now (2h00m until reset))
+statusline: CM! Claude 5h est. 167% reset 2h00m out now
+agent: Quota: worst=Claude 5h; current=100%; projected_at_reset=166.7%; reset_in_seconds=7200; reset_in=2h00m; status=at_risk; runs_out=now; runs_out_early_by_seconds=7200; runs_out_early_by=2h00m; quotas=[Claude 5h(current=100%,projected_at_reset=166.7%,reset_in=2h00m,status=at_risk,runs_out=now,runs_out_early_by_seconds=7200,runs_out_early_by=2h00m)].
+json[claude]: reading=fresh window=5h[forecast=known exhaustion=out reset_known=true shown=true projected_pct=167 early_by_s=7200 out_since=2026-10-22T10:00:00-05:00]
+
+## reset credits, money and announcement
+tooltip: "Claude 5-Hour\nCurrent 30%\nWon't run out\nResets in 3h00m\nEst. 75% at reset\nResets: 2 · next expires Oct 31"
+icon: provider=claude usage=30 expected=40 risk=75 show_expected=true label="5H"
+menu[claude]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u200775% at reset    resets in 3h"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ███▒┃▒▒▒▒░░   30%       75%         3h"
+color: "          Org: $199.88 left · spent $0.11 this month · est. $9.37 more spent before it expires Nov 7 11:00 · checked 12:00"
+color: "          Resets: 2 · next expires Oct 31"
+plain[claude]: Claude: 5h: 30% (resets 3h00m, est. 75% at reset)  Resets: 2 · next expires Oct 31  Org: $199.88 left · spent $0.11 this month · est. $9.37 more spent before it expires Nov 7 11:00 · checked 12:00
+statusline: CM Claude 5h est. 75% reset 3h00m
+agent: Quota: worst=Claude 5h; current=30%; projected_at_reset=75%; reset_in_seconds=10800; reset_in=3h00m; status=on_track; quotas=[Claude 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track)]; reset_credits=[Claude available=2 earliest_expires_at=2026-10-31T12:00:00-05:00 earliest_expires_in=9d0h]; api_credits=[Claude · Org currency=USD balance=199.88 spent_this_month=0.11 burn_per_day=0.59 burn_basis_days=2 expires_at=2026-11-07T11:00:00-06:00 expires_in=16d0h expiring_amount=199.88 projected_spend_before_expiry=9.37 projected_unused_at_expiry=190.51 live=false updated_at=2026-10-22T12:00:00-05:00 last_observed_at=2026-10-22T12:00:00-05:00 snapshot=true].
+money row[claude]: Org: $199.88 left · est. $190.51 unused at expiry Nov 7 11:00 · checked 12:00
+json[claude]: reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=75]
+
+## announced reset
+tooltip: "Codex 7-Day\nCurrent 40%\nWon't run out\nResets in 4d0h\nEst. 93% at reset\nReset announced for ~16:00 · codex-resets.com"
+icon: provider=openai usage=40 expected=43 risk=93 show_expected=true label="7D"
+menu[openai]: "7d    ████┃▒▒▒▒▒░    \u200740% used    \u200793% at reset    resets in 4d"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Codex     7d      ████┃▒▒▒▒▒░   40%       93%         4d"
+color: "          Reset announced for ~16:00 · codex-resets.com"
+plain[openai]: Codex: 7d: 40% (resets 4d0h, est. 93% at reset)  Reset announced for ~16:00 · codex-resets.com
+statusline: CM~ Codex 7d est. 93% reset 4d0h
+agent: Quota: worst=Codex 7d; current=40%; projected_at_reset=93.3%; reset_in_seconds=345600; reset_in=4d0h; status=tight; quotas=[Codex 7d(current=40%,projected_at_reset=93.3%,reset_in=4d0h,status=tight,announced_reset=[~2026-10-22T16:00:00-05:00 unofficial source=codex-resets.com windows=7d])].
+announcement row[openai]: Reset announced for ~16:00 · codex-resets.com
+json[openai]: reading=fresh window=7d[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=93]
+
+## update available
+tooltip: "Claude 5-Hour\nCurrent 30%\nWon't run out\nResets in 3h00m\nEst. 75% at reset\nUpdate available: 0.42.0"
+icon: provider=claude usage=30 expected=40 risk=75 show_expected=true label="5H"
+menu[claude]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u200775% at reset    resets in 3h"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ███▒┃▒▒▒▒░░   30%       75%         3h"
+plain[claude]: Claude: 5h: 30% (resets 3h00m, est. 75% at reset)
+statusline: CM Claude 5h est. 75% reset 3h00m
+agent: Quota: worst=Claude 5h; current=30%; projected_at_reset=75%; reset_in_seconds=10800; reset_in=3h00m; status=on_track; quotas=[Claude 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track)].
+json[claude]: reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=75]
+
+## money-only window at 100%
+tooltip: "Codex Extra usage\nCurrent 100%\nOut now\nReset not reported"
+icon: provider=openai usage=100 expected=0 risk=100 show_expected=false label="EX"
+menu[openai]: "Extra usage: $20.04 / $20.00, over cap · out now"
+color: "Codex     Extra usage: $20.04 / $20.00, over cap · out now"
+plain[openai]: Codex: Extra usage: $20.04 / $20.00, over cap · out now
+statusline: CM! Codex extra current 100% projection unknown out now
+agent: Quota: worst=Codex extra; current=100%; projected_at_reset=unknown; reset_in=unknown; status=at_risk; runs_out=now; quotas=[Codex extra(current=100%,projected_at_reset=unknown,reset_in=unknown,status=at_risk,runs_out=now)].
+json[openai]: reading=fresh window=extra[forecast=none exhaustion=out reset_known=false shown=true]
+
+## policy-only window at 100%
+tooltip: "Codex daily\nCurrent 100%\nOut now\nResets daily"
+icon: provider=openai usage=100 expected=0 risk=100 show_expected=false label="DA"
+menu[openai]: "1d    ██████████\u2007    100% used    no forecast    resets daily    out now"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Codex     1d      ██████████   100%         —      daily          now"
+plain[openai]: Codex: daily: 100% (resets daily, out now)
+statusline: CM! Codex daily current 100% projection unknown out now
+agent: Quota: worst=Codex daily; current=100%; projected_at_reset=unknown; reset_in=unknown; status=at_risk; runs_out=now; quotas=[Codex daily(current=100%,projected_at_reset=unknown,reset_in=unknown,status=at_risk,runs_out=now)].
+json[openai]: reading=fresh window=daily[forecast=none exhaustion=out reset_known=false shown=true]
+
+## pinned stale window
+tooltip: "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 100%\nRun-out unknown\nResets in 1h00m\nstale"
+icon: provider=claude usage=0 expected=0 risk=0 show_expected=false label=""
+menu[claude]: "5h    ████████┃██    100% used    forecast stale    resets in 1h"
+menu[codex]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u200775% at reset    resets in 3h"
+color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude    5h      ████████┃██  100%     stale         1h"
+color: "          stale: showing last good data (rate limited)"
+color: ""
+color: "Codex     5h      ███▒┃▒▒▒▒░░   30%       75%         3h"
+plain[claude]: Claude: stale (updated 11:00) - 5h: 100% (resets 1h00m, stale)
+plain[codex]: Codex: 5h: 30% (resets 3h00m, est. 75% at reset)
+statusline: CM Codex 5h est. 75% reset 3h00m
+agent: Quota: worst=Codex 5h; current=30%; projected_at_reset=75%; reset_in_seconds=10800; reset_in=3h00m; status=on_track; quotas=[Claude 5h(current=100%,projected_at_reset=unknown,reset_in=1h00m,status=stale,data=stale) | Codex 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track)].
+json[claude]: reading=stale window=5h[forecast=stale exhaustion=unknown reset_known=true shown=true]
+json[codex]: reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=75]
+
