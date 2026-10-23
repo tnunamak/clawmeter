@@ -539,10 +539,12 @@ func onReadyWithConfig(loaded *config.Config) {
 		// providers recover PATH through a login shell. That work belongs to the
 		// background refresh; cached rendering only needs the registered names.
 		allProviders := registry.GetAll()
-		filtered := cachedResultsForCurrentSources(cached, allProviders)
+		filtered, accepted := cachedResultsForCurrentSources(cached, allProviders)
 		s.mu.Lock()
 		s.lastResults = filtered
-		s.lastSourceRevisions = providerSourceRevisions(allProviders)
+		// The revisions the cached readings were accepted under, not a second
+		// read: a login that changed in between must not relabel them.
+		s.lastSourceRevisions = accepted
 		s.lastRefreshAt = cached.FetchedAt
 		s.mu.Unlock()
 		updateUI(filtered, nil, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
@@ -2400,9 +2402,12 @@ func resultsMatchingSourceRevisions(results map[string]*provider.UsageData, prev
 	return matched
 }
 
-func cachedResultsForCurrentSources(entry *cache.Entry, providers []provider.Provider) map[string]*provider.UsageData {
+// cachedResultsForCurrentSources returns the cached readings that belong to
+// each provider's current login, and the revisions they were accepted under.
+func cachedResultsForCurrentSources(entry *cache.Entry, providers []provider.Provider) (map[string]*provider.UsageData, map[string]string) {
 	current := providerSourceRevisions(providers)
 	results := make(map[string]*provider.UsageData)
+	accepted := make(map[string]string)
 	for _, p := range providers {
 		name := provider.SourceKey(p)
 		if !cache.SourceRevisionMatches(entry.SourceRevisions, name, current[name]) {
@@ -2413,9 +2418,12 @@ func cachedResultsForCurrentSources(entry *cache.Entry, providers []provider.Pro
 				continue
 			}
 			results[name] = data
+			if revision := current[name]; revision != "" {
+				accepted[name] = revision
+			}
 		}
 	}
-	return results
+	return results, accepted
 }
 
 func splitProvidersForRefresh(providers []provider.Provider, gate *provider.FailureGate, lastResults map[string]*provider.UsageData, force bool) ([]provider.Provider, map[string]*provider.UsageData) {

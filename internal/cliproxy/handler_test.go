@@ -574,6 +574,16 @@ func TestCachedReadingFreshness(t *testing.T) {
 		}
 	})
 
+	t.Run("reading whose window reset since is 503", func(t *testing.T) {
+		h, source := setup(t)
+		data := freshClaudeReading(sourceID, time.Now().Add(-5*time.Minute))
+		data.Windows[0].ResetsAt = time.Now().Add(-time.Minute)
+		writeCache(t, "claude:"+sourceID, data, source.revision)
+		if env := call(t, h); env.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("status_code = %d, want 503; body = %s", env.StatusCode, env.Body)
+		}
+	})
+
 	t.Run("reading for another source is 503", func(t *testing.T) {
 		h, source := setup(t)
 		writeCache(t, "claude:"+sourceID, freshClaudeReading("someone-else", time.Now()), source.revision)

@@ -438,6 +438,15 @@ func cachedUsage(account account, listed string, maxAge time.Duration) (*provide
 	if data.IsExpired || data.Error != "" || data.FetchedAt.IsZero() || age < -time.Minute || age > maxAge {
 		return nil, false
 	}
+	// A used window whose reset has passed since the reading has new usage
+	// the reading cannot show; T3 would present the old numbers as current.
+	// An unused one reads the same before and after its reset.
+	now := time.Now()
+	for _, w := range data.Windows {
+		if w.Utilization > 0 && !w.ResetsAt.IsZero() && !w.ResetsAt.After(now) {
+			return nil, false
+		}
+	}
 	return data, true
 }
 

@@ -48,14 +48,18 @@ func TestTrayCacheAndPriorResultsRequireMatchingSourceRevision(t *testing.T) {
 		SourceRevisions: map[string]string{"claude": "old-profile"},
 	}
 
-	if got := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default", revision: "new-profile"}}); len(got) != 0 {
+	if got, _ := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default", revision: "new-profile"}}); len(got) != 0 {
 		t.Fatalf("startup cache crossed profile revisions: %#v", got)
 	}
-	if got := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default"}}); len(got) != 0 {
+	if got, _ := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default"}}); len(got) != 0 {
 		t.Fatalf("revisioned explicit cache survived switch to native default: %#v", got)
 	}
-	if got := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default", revision: "old-profile"}}); got["claude"] != data {
+	got, accepted := cachedResultsForCurrentSources(entry, []provider.Provider{sourceMenuTestProvider{id: "default", revision: "old-profile"}})
+	if got["claude"] != data {
 		t.Fatalf("matching source revision was not restored: %#v", got)
+	}
+	if accepted["claude"] != "old-profile" || len(accepted) != 1 {
+		t.Fatalf("accepted revisions = %v; want the one the reading was accepted under", accepted)
 	}
 
 	prior := map[string]*provider.UsageData{"claude": data}
@@ -71,7 +75,7 @@ func TestTrayCacheRejectsDataFromAnotherSource(t *testing.T) {
 		SourceRevisions: map[string]string{"claude:odl": "same-revision"},
 	}
 	current := sourceMenuTestProvider{id: "odl", revision: "same-revision"}
-	if got := cachedResultsForCurrentSources(entry, []provider.Provider{current}); len(got) != 0 {
+	if got, _ := cachedResultsForCurrentSources(entry, []provider.Provider{current}); len(got) != 0 {
 		t.Fatalf("startup cache relabeled another source: %#v", got)
 	}
 }
