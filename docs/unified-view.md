@@ -94,7 +94,8 @@ left out unless every window is idle. A surface that shows fewer than
 Machine output carries every window, each flagged with whether people see it,
 because an orchestrator routing work needs the idle ones most.
 
-Worst is chosen among fresh windows with a reset first, then stale ones, by
+Worst is chosen among fresh windows first, then stale ones, and in each a
+window with a reset before one without, by
 exhaustion (out, then runs out soonest), then forecast, then current use,
 then display order,
 so ties always break the same way.

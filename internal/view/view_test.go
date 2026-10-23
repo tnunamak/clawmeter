@@ -576,3 +576,12 @@ func TestEqualForecastsRankByCurrentUse(t *testing.T) {
 		t.Fatalf("worst = %+v; with equal forecasts the higher current use ranks first", snap.Worst)
 	}
 }
+
+func TestAStaleQuotaWindowRanksBeforeAStaleMoneyWindow(t *testing.T) {
+	data := fresh("claude", fiveHour(100, midWindow), provider.UsageWindow{Name: "extra", Utilization: 100.2})
+	data.Stale = true
+	snap := Build(inputs(map[string]*provider.UsageData{"claude:odl": data}), at)
+	if snap.Worst == nil || snap.Worst.Window != "5h" {
+		t.Fatalf("worst = %+v; a window with a reset ranks before one without", snap.Worst)
+	}
+}

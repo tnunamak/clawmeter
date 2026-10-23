@@ -425,14 +425,15 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 // candidate is a window's place in the snapshot, for ranking.
 type candidate struct {
 	account, window int
-	// class is 0 for a fresh window with a known reset, 1 for any other.
+	// class is 0 fresh with a reset, 1 fresh without, 2 not fresh with a
+	// reset, 3 not fresh without.
 	class int
 }
 
 // rankWindows orders every window of the accounts from most to least at risk.
 //
 // The order is, in turn:
-//  1. fresh windows with a known reset before all others;
+//  1. fresh before not fresh, and in each a window with a known reset first;
 //  2. out before runs_out before lasts or unknown;
 //  3. among runs_out, the soonest RunsOutIn first;
 //  4. a known forecast before an unknown one, then the higher Pct first;
@@ -444,9 +445,14 @@ func rankWindows(accounts []Account) []candidate {
 	var ranked []candidate
 	for a, account := range accounts {
 		for w, win := range account.Windows {
-			class := 1
-			if account.Reading.State == ReadingFresh && win.Reset.Known {
-				class = 0
+			// Fresh before not fresh, and within each, a quota window with
+			// a reset before a money or policy-only one.
+			class := 0
+			if account.Reading.State != ReadingFresh {
+				class += 2
+			}
+			if !win.Reset.Known {
+				class++
 			}
 			ranked = append(ranked, candidate{account: a, window: w, class: class})
 		}
