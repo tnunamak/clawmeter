@@ -403,7 +403,7 @@ func (h *handler) rememberFailure(account account, revision string) {
 
 // cachedUsage returns the source's cached reading when it belongs to the
 // login with the listed revision, which is still the source's current one,
-// and is at most maxAge old.
+// and was taken at most maxAge ago, even if a later poll failed.
 func cachedUsage(account account, listed string, maxAge time.Duration) (*provider.UsageData, bool) {
 	key := provider.SourceKey(account.source)
 	revisionBefore := provider.SourceRevision(account.source)
@@ -432,8 +432,22 @@ func cachedUsage(account account, listed string, maxAge time.Duration) (*provide
 		return nil, false
 	}
 	age := time.Since(data.FetchedAt)
-	if data.Stale || data.IsExpired || data.Error != "" || data.FetchedAt.IsZero() || age < -time.Minute || age > maxAge {
+	// A reading the tray kept because a later poll failed, for example on a
+	// rate limit, is still an observation of FetchedAt; it is served for as
+	// long as any other reading of that age.
+	// A reading up to a minute in the future is allowed for clock skew
+	// between the tray and the hub, which may run on different computers.
+	if data.IsExpired || data.Error != "" || data.FetchedAt.IsZero() || age < -time.Minute || age > maxAge {
 		return nil, false
+	}
+	// A window whose reset has passed since the reading is in a new period
+	// the reading cannot describe; T3 would present the old numbers as
+	// current.
+	now := time.Now()
+	for _, w := range data.Windows {
+		if !w.ResetsAt.IsZero() && !w.ResetsAt.After(now) {
+			return nil, false
+		}
 	}
 	return data, true
 }
