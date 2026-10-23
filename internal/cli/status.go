@@ -213,9 +213,6 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 			}
 			lines = append(lines, line)
 		}
-		if more := len(acct.Windows) - len(rows); more > 0 {
-			addSpan(fmt.Sprintf("%s+%d more%s", dim, more, reset))
-		}
 		for _, balance := range pf.Data.Balances {
 			name := balance.DisplayName
 			if name == "" {
@@ -295,15 +292,12 @@ func (v outputView) plainLine(i int) string {
 		return appendSnapshotsPlain(fmt.Sprintf("%s: error - %s%s", display, format.HumanizeError(pf.Data.Error), suffix), pf.Data, now)
 	}
 
-	// People see the shown windows; the rest are named by a count, so none is
-	// dropped without a trace. Machine output keeps every window.
+	// People see the shown windows: idle ones carry no information and stay
+	// out, as in the tray and the table. Machine output keeps every window.
 	shown := acct.ShownWindows()
-	parts := make([]string, 0, len(shown)+1)
+	parts := make([]string, 0, len(shown))
 	for _, window := range shown {
 		parts = append(parts, plainWindow(window))
-	}
-	if more := len(acct.Windows) - len(shown); more > 0 {
-		parts = append(parts, fmt.Sprintf("+%d more", more))
 	}
 
 	prefix := ""

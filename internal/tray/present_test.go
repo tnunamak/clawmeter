@@ -47,3 +47,19 @@ func TestUpdateLineIsAddedOnlyForAVersion(t *testing.T) {
 		t.Fatalf("AppendUpdateLine on an empty tooltip = %q", got)
 	}
 }
+
+func TestMenuMoreCountsOnlyShownWindowsPastTheLimit(t *testing.T) {
+	at := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	var windows []provider.UsageWindow
+	for i := 0; i < 10; i++ {
+		windows = append(windows, provider.UsageWindow{Name: "w" + string(rune('a'+i)), Utilization: 50, ResetsAt: at.Add(time.Hour), Length: 5 * time.Hour})
+	}
+	windows = append(windows, provider.UsageWindow{Name: "idle", Utilization: 0, ResetsAt: at.Add(time.Hour), Length: 5 * time.Hour})
+	snap := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"codex": {Provider: "openai", FetchedAt: at, Windows: windows}}}, at)
+	if got := MenuMore(snap, 8)["codex"]; got != 2 {
+		t.Fatalf("more = %d; want the two shown windows past eight rows, not the idle one", got)
+	}
+	if got := MenuMore(snap, 20)["codex"]; got != 0 {
+		t.Fatalf("more = %d with room for every row", got)
+	}
+}

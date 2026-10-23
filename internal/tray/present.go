@@ -259,9 +259,9 @@ func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 	return out
 }
 
-// MenuMore counts, per account, the windows the menu does not draw as rows:
-// idle windows that list surfaces hide, and windows past the menu's limit. The
-// menu says "+N more" for each, so no window is dropped without a trace.
+// MenuMore counts, per account, the shown windows past the menu's row limit.
+// The menu says "+N more" for them, so none is dropped without a trace. Idle
+// windows are not counted: no list surface shows them.
 func MenuMore(snap view.Snapshot, limit int) map[string]int {
 	more := make(map[string]int)
 	for i := range snap.Accounts {
@@ -269,8 +269,8 @@ func MenuMore(snap view.Snapshot, limit int) map[string]int {
 		if !menuShowsRows(acct) {
 			continue
 		}
-		drawn := min(len(acct.ShownWindows()), limit)
-		if n := len(acct.Windows) - drawn; n > 0 {
+		shown := len(acct.ShownWindows())
+		if n := shown - min(shown, limit); n > 0 {
 			more[acct.Key] = n
 		}
 	}

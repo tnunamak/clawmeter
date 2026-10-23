@@ -89,8 +89,9 @@ Target
 
 The snapshot keeps every window. List surfaces for people (tray menu, CLI
 plain and color) show `Shown`: idle windows (0% used, nothing projected) are
-left out unless every window is idle. A surface that shows fewer than
-`Shown`, such as the tray's fixed number of rows, ends with "+N more".
+left out unless every window is idle; they carry no information. A surface
+that shows fewer than `Shown`, such as the tray's fixed number of rows, ends
+with "+N more".
 Machine output carries every window, each flagged with whether people see it,
 because an orchestrator routing work needs the idle ones most.
 

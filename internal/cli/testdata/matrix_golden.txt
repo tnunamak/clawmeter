@@ -96,11 +96,9 @@ json[claude]: source[odl] reading=fresh window=5h[forecast=known exhaustion=last
 tooltip: "Codex 5-Hour\nCurrent 40%\nWon't run out\nResets in 3h00m\nEst. 100% at reset"
 icon: provider=openai usage=40 expected=40 risk=100 show_expected=true label="5H"
 menu[openai]: "5h    ████┃▒▒▒▒▒▒    \u200740% used    100% at reset    resets in 3h"
-menu more[openai]: +1 more
 color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
 color: "Codex     5h      ████┃▒▒▒▒▒▒   40%      100%         3h"
-color: "          +1 more"
-plain[openai]: Codex: 5h: 40% (resets 3h00m, est. 100% at reset)  +1 more
+plain[openai]: Codex: 5h: 40% (resets 3h00m, est. 100% at reset)
 statusline: CM! Codex 5h est. 100% reset 3h00m
 agent: Quota: worst=Codex 5h; current=40%; projected_at_reset=100%; reset_in_seconds=10800; reset_in=3h00m; status=at_risk; quotas=[Codex 7d(current=0%,projected_at_reset=0%,reset_in=6d0h,status=on_track) | Codex 5h(current=40%,projected_at_reset=100%,reset_in=3h00m,status=at_risk)].
 json[openai]: reading=fresh window=7d[forecast=known exhaustion=lasts reset_known=true shown=false projected_pct=0] window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=100]
