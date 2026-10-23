@@ -435,15 +435,17 @@ func cachedUsage(account account, listed string, maxAge time.Duration) (*provide
 	// A reading the tray kept because a later poll failed, for example on a
 	// rate limit, is still an observation of FetchedAt; it is served for as
 	// long as any other reading of that age.
+	// A reading up to a minute in the future is allowed for clock skew
+	// between the tray and the hub, which may run on different computers.
 	if data.IsExpired || data.Error != "" || data.FetchedAt.IsZero() || age < -time.Minute || age > maxAge {
 		return nil, false
 	}
-	// A used window whose reset has passed since the reading has new usage
-	// the reading cannot show; T3 would present the old numbers as current.
-	// An unused one reads the same before and after its reset.
+	// A window whose reset has passed since the reading is in a new period
+	// the reading cannot describe; T3 would present the old numbers as
+	// current.
 	now := time.Now()
 	for _, w := range data.Windows {
-		if w.Utilization > 0 && !w.ResetsAt.IsZero() && !w.ResetsAt.After(now) {
+		if !w.ResetsAt.IsZero() && !w.ResetsAt.After(now) {
 			return nil, false
 		}
 	}
