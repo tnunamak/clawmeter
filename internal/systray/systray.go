@@ -60,6 +60,10 @@ type MenuItem struct {
 	parent *MenuItem
 	// isSeparator marks an item made by AddSeparatorItem
 	isSeparator bool
+	// hidden is set by Hide and cleared by Show. Backends that rebuild a
+	// native item on update (Windows) skip hidden items, so an update does
+	// not show them again.
+	hidden bool
 }
 
 func (item *MenuItem) String() string {
@@ -255,6 +259,9 @@ func (item *MenuItem) Disable() {
 
 // Hide hides a menu item
 func (item *MenuItem) Hide() {
+	menuMutationLock.Lock()
+	defer menuMutationLock.Unlock()
+	item.hidden = true
 	hideMenuItem(item)
 }
 
@@ -293,6 +300,9 @@ func (item *MenuItem) remove() {
 
 // Show shows a previously hidden menu item
 func (item *MenuItem) Show() {
+	menuMutationLock.Lock()
+	defer menuMutationLock.Unlock()
+	item.hidden = false
 	showMenuItem(item)
 }
 
