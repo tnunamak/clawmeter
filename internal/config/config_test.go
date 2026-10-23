@@ -442,29 +442,21 @@ func TestSourceConfigValidationAndRoundtrip(t *testing.T) {
 	}
 }
 
-func TestSetProviderEnabledAndEnableDisabledProviders(t *testing.T) {
+func TestSetProviderEnabledChangesOnlyThatProvider(t *testing.T) {
 	scopeHome(t)
-	if _, err := SetProviderEnabled("codex", false); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"codex", "kimi"} {
+		if _, err := SetProviderEnabled(name, false); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := SetProviderEnabled("kimi", false); err != nil {
+	if _, err := SetProviderEnabled("codex", true); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.IsProviderDisabled("codex") || !got.IsProviderDisabled("kimi") {
-		t.Fatalf("providers not disabled: %+v", got.Providers)
-	}
-	if _, err := EnableDisabledProviders(); err != nil {
-		t.Fatal(err)
-	}
-	got, err = Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.IsProviderExplicitlyEnabled("codex") || !got.IsProviderExplicitlyEnabled("kimi") {
-		t.Fatalf("providers not enabled: %+v", got.Providers)
+	if !got.IsProviderExplicitlyEnabled("codex") || !got.IsProviderDisabled("kimi") {
+		t.Fatalf("one provider changed the other: %+v", got.Providers)
 	}
 }

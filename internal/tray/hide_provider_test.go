@@ -28,8 +28,8 @@ type hideFixture struct {
 	empty      *systray.MenuItem
 	setup      *systray.MenuItem
 	picker     *iconPicker
-	showHidden *systray.MenuItem
-	showState  menuItemState
+	showHidden *showHiddenMenu
+	showReqs   chan string
 	requests   chan string
 	mu         sync.Mutex
 }
@@ -38,7 +38,7 @@ func newHideFixture(t *testing.T, explicit bool, sources ...hideTestProvider) *h
 	t.Helper()
 	// Each test has its own empty config and cache directories.
 	scopeUserDirs(t.TempDir(), func(key, value string) error { t.Setenv(key, value); return nil })
-	f := &hideFixture{t: t, menus: map[string]*providerMenuItems{}, picker: newIconPicker(), requests: make(chan string, 1)}
+	f := &hideFixture{t: t, menus: map[string]*providerMenuItems{}, picker: newIconPicker(), requests: make(chan string, 1), showReqs: make(chan string, 1)}
 	for _, p := range sources {
 		menu := createProviderMenuItems(p, explicit, nil, len(sources) > 1)
 		menu.order = len(f.menus)
@@ -48,9 +48,8 @@ func newHideFixture(t *testing.T, explicit bool, sources ...hideTestProvider) *h
 	f.reauth = systray.AddMenuItem("reauth", "")
 	f.empty = systray.AddMenuItem("empty", "")
 	f.setup = systray.AddMenuItem("setup", "")
-	f.showHidden = systray.AddMenuItem("Show hidden providers", "")
-	f.showHidden.Hide()
-	f.showState = menuItemState{visible: false, enabled: true, initialized: true}
+	f.showHidden = newShowHiddenMenu(systray.AddMenuItem("Settings", ""), f.menus)
+	f.showHidden.forward(f.showReqs)
 	s.mu.Lock()
 	oldResults, oldStatuses, oldCfg := s.lastResults, s.statuses, cfg
 	s.statuses = nil
@@ -82,7 +81,7 @@ func (f *hideFixture) apply(newCfg *config.Config) {
 	s.mu.Unlock()
 	applyProviderEnablement(f.menus, newCfg)
 	trayRenderMu.Lock()
-	updateShowHidden(f.showHidden, &f.showState, f.menus)
+	f.showHidden.update(f.menus)
 	trayRenderMu.Unlock()
 }
 
@@ -103,6 +102,35 @@ func (f *hideFixture) clickHide(menu *providerMenuItems) string {
 	select {
 	case family := <-f.requests:
 		return family
+	case <-time.After(time.Second):
+		f.t.Fatal("click did not reach the request channel")
+	}
+	return ""
+}
+
+// showItem is the Show hidden providers entry of a family.
+func (f *hideFixture) showItem(family string) *hiddenFamilyItem {
+	for _, entry := range f.showHidden.items {
+		if entry.family == family {
+			return entry
+		}
+	}
+	f.t.Fatalf("no Show hidden entry for %q", family)
+	return nil
+}
+
+// clickShow presses a family's Show hidden entry and returns the family its
+// handler sent to the main loop.
+func (f *hideFixture) clickShow(family string) string {
+	f.t.Helper()
+	select {
+	case f.showItem(family).item.ClickedCh <- struct{}{}:
+	case <-time.After(time.Second):
+		f.t.Fatal("click was not received")
+	}
+	select {
+	case got := <-f.showReqs:
+		return got
 	case <-time.After(time.Second):
 		f.t.Fatal("click did not reach the request channel")
 	}
@@ -133,7 +161,6 @@ func TestHideItemAppearsOnlyForAProblem(t *testing.T) {
 		{"healthy", healthyReading("openai"), false},
 		{"error", &provider.UsageData{Provider: "openai", FetchedAt: time.Now(), Error: "HTTP 500"}, true},
 		{"expired login", &provider.UsageData{Provider: "openai", FetchedAt: time.Now(), IsExpired: true}, true},
-		{"needs sign-in", nil, true},
 		{"healthy again", healthyReading("openai"), false},
 	}
 	for _, c := range cases {
@@ -159,7 +186,7 @@ func TestHideClickWritesConfigAndHidesTheBlock(t *testing.T) {
 	if !menu.hideState.visible || !menu.headerState.visible {
 		t.Fatalf("setup: Hide %+v header %+v", menu.hideState, menu.headerState)
 	}
-	if f.showState.visible {
+	if f.showHidden.parentState.visible {
 		t.Fatal("Show hidden providers is visible with nothing hidden")
 	}
 
@@ -181,36 +208,85 @@ func TestHideClickWritesConfigAndHidesTheBlock(t *testing.T) {
 	if menu.headerState.visible || menu.statusState.visible || menu.hideState.visible {
 		t.Fatalf("block still shown: header %+v status %+v hide %+v", menu.headerState, menu.statusState, menu.hideState)
 	}
-	if !f.showState.visible {
+	if !f.showHidden.parentState.visible || !f.showItem("openai").state.visible {
 		t.Fatal("Show hidden providers is not offered after a provider is hidden")
+	}
+	if f.showItem("openai").state.title != "Codex" {
+		t.Fatalf("entry title = %q", f.showItem("openai").state.title)
 	}
 }
 
-func TestShowHiddenProvidersRestoresThem(t *testing.T) {
-	f := newHideFixture(t, true, codexSource())
-	key := provider.SourceKey(codexSource())
-	menu := f.menus[key]
-	f.draw(map[string]*provider.UsageData{key: {Provider: "openai", FetchedAt: time.Now(), Error: "HTTP 500"}})
+func TestShowHiddenRestoresOnlyTheClickedProvider(t *testing.T) {
+	kimi := hideTestProvider{sourceMenuTestProvider{name: "kimi", id: "default"}, "Kimi"}
+	f := newHideFixture(t, true, codexSource(), kimi)
+	codexKey, kimiKey := provider.SourceKey(codexSource()), provider.SourceKey(kimi)
+	broken := func(name string) *provider.UsageData {
+		return &provider.UsageData{Provider: name, FetchedAt: time.Now(), Error: "HTTP 500"}
+	}
+	f.draw(map[string]*provider.UsageData{codexKey: broken("openai"), kimiKey: broken("kimi")})
+	// Config also turns off a provider with no menu; nothing may restore it.
+	if _, err := config.SetProviderEnabled("ghost", false); err != nil {
+		t.Fatal(err)
+	}
 	f.change(func() (*config.Config, error) { return saveHidden("openai") })
-	if menu.headerState.visible || !f.showState.visible {
-		t.Fatalf("setup: header %+v, show hidden %+v", menu.headerState, f.showState)
+	f.change(func() (*config.Config, error) { return saveHidden("kimi") })
+	if f.menus[codexKey].headerState.visible || f.menus[kimiKey].headerState.visible {
+		t.Fatal("setup: both providers should be hidden")
+	}
+	if len(f.showHidden.items) != 2 || !f.showItem("openai").state.visible || !f.showItem("kimi").state.visible {
+		t.Fatalf("entries: %+v", f.showHidden.items)
 	}
 
-	if !f.change(saveShowHidden) {
+	family := f.clickShow("openai")
+	if !f.change(func() (*config.Config, error) { return saveShown(family) }) {
 		t.Fatal("change failed")
 	}
 	saved, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.IsProviderDisabled("openai") || !saved.IsProviderExplicitlyEnabled("openai") {
-		t.Fatalf("config still disables the provider: %+v", saved.Providers)
+	if !saved.IsProviderExplicitlyEnabled("openai") || !saved.IsProviderDisabled("kimi") || !saved.IsProviderDisabled("ghost") {
+		t.Fatalf("one click changed other providers: %+v", saved.Providers)
 	}
-	if !menu.headerState.visible || !menu.hideState.visible {
-		t.Fatalf("block did not return: header %+v hide %+v", menu.headerState, menu.hideState)
+	if !f.menus[codexKey].headerState.visible || !f.menus[codexKey].hideState.visible {
+		t.Fatalf("block did not return: header %+v hide %+v", f.menus[codexKey].headerState, f.menus[codexKey].hideState)
 	}
-	if f.showState.visible {
-		t.Fatal("Show hidden providers stays visible with nothing hidden")
+	if f.menus[kimiKey].headerState.visible {
+		t.Fatal("the other hidden provider came back")
+	}
+	if f.showItem("openai").state.visible || !f.showItem("kimi").state.visible || !f.showHidden.parentState.visible {
+		t.Fatalf("entries after click: codex %+v kimi %+v parent %+v", f.showItem("openai").state, f.showItem("kimi").state, f.showHidden.parentState)
+	}
+
+	f.change(func() (*config.Config, error) { return saveShown("kimi") })
+	if f.showHidden.parentState.visible {
+		t.Fatal("submenu stays visible with no provider hidden (ghost has no menu)")
+	}
+}
+
+// Before the first poll ends there is no reading; the block must not offer to
+// hide a provider that has not failed.
+func TestNoHideItemBeforeTheFirstPollEnds(t *testing.T) {
+	f := newHideFixture(t, true, codexSource())
+	menu := f.menus[provider.SourceKey(codexSource())]
+	f.draw(nil)
+	if !menu.headerState.visible {
+		t.Fatal("setup: the explicitly enabled provider should be shown while it loads")
+	}
+	if menu.hideState.visible {
+		t.Fatal("Hide offered before any check finished")
+	}
+}
+
+func TestSignInSetupStatusOffersHide(t *testing.T) {
+	menus := testMenus("tokenplan")
+	needsAuth := map[string]provider.SetupStatus{"tokenplan": {State: provider.SetupNeedsAuth}}
+	shown := map[string]*provider.UsageData{"tokenplan": nil}
+	if !hideOffered("tokenplan", nil, menus, shown, needsAuth) {
+		t.Fatal("no Hide for a provider that needs sign-in")
+	}
+	if hideOffered("tokenplan", nil, menus, shown, nil) {
+		t.Fatal("Hide offered with no reading and no setup status")
 	}
 }
 

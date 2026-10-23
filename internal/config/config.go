@@ -413,22 +413,3 @@ func SetProviderEnabled(name string, enabled bool, validators ...SourceValidator
 	}
 	return cfg, nil
 }
-
-// EnableDisabledProviders turns every provider the user disabled back on, as
-// `clawmeter providers enable` does for each, and saves the config. It
-// returns the saved config.
-func EnableDisabledProviders(validators ...SourceValidator) (*Config, error) {
-	cfg, err := Load(validators...)
-	if err != nil {
-		return nil, err
-	}
-	for name, pc := range cfg.Providers {
-		if !pc.Enabled {
-			cfg.EnsureProvider(name, true)
-		}
-	}
-	if err := cfg.Save(); err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
