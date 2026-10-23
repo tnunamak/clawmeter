@@ -1194,11 +1194,13 @@ func Check() int {
 	return statusCheckExitCode(output)
 }
 
+// statusCheckExitCode grades the same snapshot the display shows, so a
+// retained reading's forecast decides the exit code as it decides the words.
 func statusCheckExitCode(output *MultiProviderOutput) int {
 	worstTier := 4
-	for i := range output.Providers {
-		u := classifyProvider(&output.Providers[i])
-		if u.tier < worstTier {
+	v := output.buildView(time.Now())
+	for _, e := range v.entries {
+		if u := summaryUrgency(e.pf, v.account(e.key)); u.tier < worstTier {
 			worstTier = u.tier
 		}
 	}
@@ -1461,8 +1463,9 @@ func sortProvidersByUrgency(providers []ProviderFormatter) {
 
 // summaryState is the snapshot-based state of one account in the summary.
 type summaryState struct {
-	tier   int
-	window view.Window
+	tier      int
+	window    view.Window
+	exhausted bool
 }
 
 // summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
@@ -1487,11 +1490,16 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 		if w.Forecast.State == view.ForecastKnown {
 			maxPct = max(maxPct, w.Forecast.Pct)
 		}
-		if w.Exhaustion.State == view.ExhaustionOut {
+		// Use cannot fall before a reset, so a quota seen used up stays used
+		// up until its reset, however old the reading.
+		exhausted := w.Used >= 100 && (!w.Reset.Known || w.Reset.In > 0)
+		if exhausted {
 			maxPct = max(maxPct, w.Used)
 		}
-		if u.window.Risk == 0 || w.Risk < u.window.Risk {
-			u.window = w
+		// An exhausted window explains a critical account, so it is named
+		// before any other.
+		if u.window.Name == "" || exhausted && !u.exhausted || exhausted == u.exhausted && w.Risk < u.window.Risk {
+			u.window, u.exhausted = w, exhausted
 		}
 	}
 	switch {
