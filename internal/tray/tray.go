@@ -1652,8 +1652,8 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 		OutSince:           make(map[string]map[string]time.Time),
 		ExtensionContact:   contact,
 	}
-	// A saved pin applies only while its quota can be pinned, as the row marks
-	// shows; otherwise the icon follows Automatic.
+	// A saved pin applies only while its quota can be pinned, as the rows
+	// show; otherwise the icon follows Automatic.
 	if pin != nil && targetInChoices(iconTarget{Provider: pin.AccountKey, Window: pin.Window}, manualIconTargets(shown)) {
 		in.Pin = pin
 	}
