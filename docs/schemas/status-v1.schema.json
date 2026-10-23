@@ -16,7 +16,8 @@
         "fetched_at": { "type": "string", "format": "date-time" }
       },
       "additionalProperties": true
-    }
+    },
+    "view": { "$ref": "#/$defs/view" }
   },
   "additionalProperties": true,
   "$defs": {
@@ -57,7 +58,8 @@
           },
           "additionalProperties": true
         },
-        "status": { "type": "object" }
+        "status": { "type": "object" },
+        "view": { "$ref": "#/$defs/account_view" }
       },
       "additionalProperties": true
     },
@@ -73,7 +75,8 @@
         },
         "usage": { "$ref": "#/$defs/usage" },
         "forecast": { "$ref": "#/$defs/provider/properties/forecast" },
-        "status": { "type": "object" }
+        "status": { "type": "object" },
+        "view": { "$ref": "#/$defs/account_view" }
       },
       "additionalProperties": true
     },
@@ -111,6 +114,102 @@
             "available_count": { "type": "integer", "minimum": 0 },
             "fetched_at": { "type": "string", "format": "date-time" }
           },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "view": {
+      "description": "Added in v1 as an optional field. The snapshot the output was built from: one clock, the account order, and the most at-risk window.",
+      "type": "object",
+      "required": ["at"],
+      "properties": {
+        "at": { "type": "string", "format": "date-time" },
+        "accounts": {
+          "type": "array",
+          "description": "Source keys in snapshot display order.",
+          "items": { "type": "string" }
+        },
+        "worst": {
+          "type": "object",
+          "required": ["account", "window"],
+          "properties": {
+            "account": { "type": "string" },
+            "window": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "account_view": {
+      "description": "One source's snapshot. Keys are absent when their value is unknown; they are never zero.",
+      "type": "object",
+      "required": ["reading", "windows"],
+      "properties": {
+        "reading": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["fresh", "stale", "error", "expired", "unavailable"] },
+            "observed_at": { "type": "string", "format": "date-time" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "windows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/window_view" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "window_view": {
+      "type": "object",
+      "required": ["name", "used", "shown", "forecast", "exhaustion", "reset"],
+      "properties": {
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "label": { "type": "string" },
+        "used": { "type": "number" },
+        "shown": { "type": "boolean", "description": "Whether list surfaces show this window to people." },
+        "forecast": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["known", "warming", "stale", "none"] },
+            "pct": { "type": "number" }
+          },
+          "if": { "properties": { "state": { "const": "known" } }, "required": ["state"] },
+          "then": { "required": ["pct"] },
+          "else": { "not": { "required": ["pct"] } },
+          "additionalProperties": true
+        },
+        "exhaustion": {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["out", "runs_out", "lasts", "unknown"] },
+            "runs_out_in_seconds": { "type": "integer", "minimum": 0 },
+            "early_by_seconds": { "type": "integer", "minimum": 0 },
+            "out_since": { "type": "string", "format": "date-time" }
+          },
+          "if": { "properties": { "state": { "const": "runs_out" } }, "required": ["state"] },
+          "then": { "required": ["runs_out_in_seconds"] },
+          "else": { "not": { "required": ["runs_out_in_seconds"] } },
+          "additionalProperties": true
+        },
+        "reset": {
+          "type": "object",
+          "required": ["known"],
+          "properties": {
+            "known": { "type": "boolean" },
+            "at": { "type": "string", "format": "date-time" },
+            "policy": { "type": "string" }
+          },
+          "if": { "properties": { "known": { "const": true } }, "required": ["known"] },
+          "then": { "required": ["at"] },
+          "else": { "not": { "required": ["at"] } },
           "additionalProperties": true
         }
       },

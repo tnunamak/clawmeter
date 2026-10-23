@@ -23,6 +23,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	"github.com/tnunamak/clawmeter/internal/resetfeed"
 	"github.com/tnunamak/clawmeter/internal/status"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 func isTTY() bool {
@@ -39,8 +40,16 @@ const (
 
 // ProviderFormatter handles formatting for a single provider's output.
 type ProviderFormatter struct {
-	Name              string
-	Display           string
+	Name string
+	// Display is the name the human surfaces show: the provider's display
+	// name, plus the source label when the family has several sources.
+	Display string
+	// DisplayName is the provider's display name alone. The shared view
+	// adds the source label itself.
+	DisplayName string
+	// SourceCount is how many sources of this formatter's family were
+	// configured when Display was made.
+	SourceCount       int
 	Family            string
 	SourceID          string
 	SourceLabel       string
@@ -423,46 +432,58 @@ func (m *MultiProviderOutput) PrintPlain() {
 }
 
 // StatusLineSummary returns a compact, human-facing status segment for shell,
-// tmux, terminal title, and harness statusline integrations.
+// tmux, terminal title, and harness statusline integrations. It names the
+// snapshot's most at-risk window and reads its states from the snapshot.
 func (m *MultiProviderOutput) StatusLineSummary() string {
-	pf, window, proj, ok := m.worstReadableWindow()
+	v := m.buildView(time.Now())
+	acct, window, ok := v.worst()
 	if !ok {
 		return "CM no quota data"
 	}
+	display := v.display(acct.Key)
 
-	if pf.Data.Stale {
-		return fmt.Sprintf("CM~ %s %s last %.0f%% stale", pf.Display, window.Name, window.Utilization)
+	if acct.Reading.State != view.ReadingFresh {
+		return fmt.Sprintf("CM~ %s %s last %.0f%% %s", display, window.Name, window.Used, acct.Reading.State)
 	}
 
+	known := window.Forecast.State == view.ForecastKnown
+	outNow := window.Exhaustion.State == view.ExhaustionOut
 	prefix := "CM"
-	if proj.ProjectedPct >= 100 {
+	switch {
+	case outNow || (known && window.Forecast.Pct >= 100):
 		prefix = "CM!"
-	} else if proj.ProjectedPct >= 90 {
+	case (known && window.Forecast.Pct >= 90) || window.Forecast.State == view.ForecastStale:
 		prefix = "CM~"
 	}
 
-	resetIn := time.Until(window.ResetsAt)
-	if proj.Unknown || proj.Stale {
-		if proj.Stale {
-			prefix = "CM~"
-		} else if window.Utilization >= 100 {
-			prefix = "CM!"
+	if !known {
+		indicator := "projection unknown"
+		if window.Forecast.State == view.ForecastStale {
+			indicator = "stale"
 		}
-		return fmt.Sprintf("%s %s %s current %.0f%% %s", prefix, pf.Display, window.Name, window.Utilization, proj.PaceIndicator())
+		line := fmt.Sprintf("%s %s %s current %.0f%% %s", prefix, display, window.Name, window.Used, indicator)
+		if outNow {
+			line += " out now"
+		}
+		return line
 	}
-	line := fmt.Sprintf("%s %s %s est. %.0f%% reset %s",
-		prefix, pf.Display, window.Name, proj.ProjectedPct, format.FormatDuration(resetIn))
-	if !proj.WillLastToReset && proj.RunsOutIn > 0 {
-		line += " out " + format.FormatDuration(proj.RunsOutIn)
+	resetIn := format.FormatDuration(window.Reset.At.Sub(v.snap.At))
+	line := fmt.Sprintf("%s %s %s est. %.0f%% reset %s", prefix, display, window.Name, window.Forecast.Pct, resetIn)
+	switch window.Exhaustion.State {
+	case view.ExhaustionOut:
+		line += " out now"
+	case view.ExhaustionRunsOut:
+		line += " out " + format.FormatDuration(window.Exhaustion.RunsOutIn)
 	}
 	return line
 }
 
 // AgentSummary returns a token-efficient but precise status for AI agents.
 // It keeps exact seconds near boundaries so a tiny slice of a 7-day window is
-// still visible to the agent.
+// still visible to the agent. Its states come from the shared snapshot.
 func (m *MultiProviderOutput) AgentSummary() string {
-	pf, window, proj, ok := m.worstReadableWindow()
+	v := m.buildView(time.Now())
+	acct, window, ok := v.worst()
 	if !ok {
 		// Reset observations are independent of Claude usage: keep them visible
 		// when usage is unavailable.
@@ -479,39 +500,9 @@ func (m *MultiProviderOutput) AgentSummary() string {
 		return "Quota: no active quota data. Run `clawmeter providers` if setup may be incomplete."
 	}
 
-	resetIn := clampDuration(time.Until(window.ResetsAt))
-	status := agentStatus(window, proj)
-
-	parts := []string{
-		fmt.Sprintf("Quota: worst=%s %s", pf.Display, window.Name),
-		fmt.Sprintf("current=%s", formatPrecisePct(window.Utilization)),
-		fmt.Sprintf("projected_at_reset=%s", projectionPct(proj)),
-		fmt.Sprintf("reset_in_seconds=%d", int64(resetIn.Seconds())),
-		fmt.Sprintf("reset_in=%s", formatExactDuration(resetIn)),
-		"status=" + status,
-	}
-	if !proj.WillLastToReset {
-		if proj.RunsOutIn > 0 {
-			runsOutIn := clampDuration(proj.RunsOutIn)
-			parts = append(parts,
-				fmt.Sprintf("runs_out_in_seconds=%d", int64(runsOutIn.Seconds())),
-				"runs_out_in="+formatExactDuration(runsOutIn),
-			)
-		} else {
-			parts = append(parts, "runs_out=now")
-		}
-		if proj.RunsOutEarlyBy > 0 {
-			runsOutEarlyBy := clampDuration(proj.RunsOutEarlyBy)
-			parts = append(parts,
-				fmt.Sprintf("runs_out_early_by_seconds=%d", int64(runsOutEarlyBy.Seconds())),
-				"runs_out_early_by="+formatExactDuration(runsOutEarlyBy),
-			)
-		}
-	}
-	if pf.Data != nil && pf.Data.Stale {
-		parts = append(parts, "data=stale")
-	}
-	if quotas := m.agentQuotaSummaries(); len(quotas) > 0 {
+	parts := []string{fmt.Sprintf("Quota: worst=%s %s", v.display(acct.Key), window.Name)}
+	parts = append(parts, agentWindowFields(acct, window, v.snap.At, true)...)
+	if quotas := v.agentQuotaSummaries(); len(quotas) > 0 {
 		parts = append(parts, "quotas=["+strings.Join(quotas, " | ")+"]")
 	}
 	if resets := m.agentResetCreditSummaries(); len(resets) > 0 {
@@ -522,98 +513,6 @@ func (m *MultiProviderOutput) AgentSummary() string {
 	}
 
 	return strings.Join(parts, "; ") + "."
-}
-
-type agentQuotaSummary struct {
-	Provider string
-	Window   provider.UsageWindow
-	Proj     forecast.Projection
-	Status   string
-	Tier     int
-	Stale    bool
-	// Announced is set on the account's first qualifying window, so the
-	// announcement is printed once per account inside its quota summary.
-	Announced *provider.ResetAnnouncement
-}
-
-func (m *MultiProviderOutput) agentQuotaSummaries() []string {
-	quotas := make([]agentQuotaSummary, 0)
-	for i := range m.Providers {
-		pf := &m.Providers[i]
-		if pf.Data == nil || pf.Data.IsExpired || (pf.Data.Error != "" && !pf.Data.HasUsageWindows()) {
-			continue
-		}
-		tier := classifyProvider(pf).tier
-		for _, window := range pf.Data.PresentationWindows() {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			if pf.Data.Stale {
-				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
-			}
-			quota := agentQuotaSummary{
-				Provider: pf.Display,
-				Window:   window,
-				Proj:     proj,
-				Status:   agentStatus(window, proj),
-				Tier:     tier,
-				Stale:    pf.Data.Stale,
-			}
-			if announced := pf.Data.AnnouncedReset; announced != nil && len(announced.Windows) > 0 && window.Name == announced.Windows[0] {
-				quota.Announced = announced
-			}
-			quotas = append(quotas, quota)
-		}
-	}
-
-	sort.SliceStable(quotas, func(i, j int) bool {
-		a, b := quotas[i], quotas[j]
-		if a.Tier != b.Tier {
-			return a.Tier < b.Tier
-		}
-		if cmp := forecast.CompareWindowRisk(a.Window, a.Proj, b.Window, b.Proj); cmp != 0 {
-			return cmp < 0
-		}
-		if a.Provider != b.Provider {
-			return a.Provider < b.Provider
-		}
-		return a.Window.Name < b.Window.Name
-	})
-
-	out := make([]string, 0, len(quotas))
-	for _, quota := range quotas {
-		resetIn := clampDuration(time.Until(quota.Window.ResetsAt))
-		fields := []string{
-			fmt.Sprintf("current=%s", formatPrecisePct(quota.Window.Utilization)),
-			fmt.Sprintf("projected_at_reset=%s", projectionPct(quota.Proj)),
-			fmt.Sprintf("reset_in=%s", formatExactDuration(resetIn)),
-			"status=" + quota.Status,
-		}
-		if !quota.Proj.WillLastToReset {
-			if quota.Proj.RunsOutIn > 0 {
-				runsOutIn := clampDuration(quota.Proj.RunsOutIn)
-				fields = append(fields,
-					fmt.Sprintf("runs_out_in_seconds=%d", int64(runsOutIn.Seconds())),
-					"runs_out_in="+formatExactDuration(runsOutIn),
-				)
-			} else {
-				fields = append(fields, "runs_out=now")
-			}
-			if quota.Proj.RunsOutEarlyBy > 0 {
-				runsOutEarlyBy := clampDuration(quota.Proj.RunsOutEarlyBy)
-				fields = append(fields,
-					fmt.Sprintf("runs_out_early_by_seconds=%d", int64(runsOutEarlyBy.Seconds())),
-					"runs_out_early_by="+formatExactDuration(runsOutEarlyBy),
-				)
-			}
-		}
-		if quota.Stale {
-			fields = append(fields, "data=stale")
-		}
-		if quota.Announced != nil {
-			fields = append(fields, quota.Announced.AgentField())
-		}
-		out = append(out, fmt.Sprintf("%s %s(%s)", quota.Provider, quota.Window.Name, strings.Join(fields, ",")))
-	}
-	return out
 }
 
 func (m *MultiProviderOutput) agentResetCreditSummaries() []string {
@@ -746,69 +645,6 @@ func (m *MultiProviderOutput) agentCreditPoolSummaries() []string {
 	return out
 }
 
-func projectionPct(proj forecast.Projection) string {
-	if proj.Unknown || proj.Stale {
-		return "unknown"
-	}
-	return formatPrecisePct(proj.ProjectedPct)
-}
-
-func agentStatus(window provider.UsageWindow, proj forecast.Projection) string {
-	if proj.Stale {
-		return "stale"
-	}
-	if window.Utilization >= 100 {
-		return "at_risk" // used up now, whatever the projection
-	}
-	if proj.Unknown {
-		return "unknown"
-	}
-	if proj.ProjectedPct >= 100 {
-		return "at_risk"
-	}
-	if proj.ProjectedPct >= 90 {
-		return "tight"
-	}
-	return "on_track"
-}
-
-func (m *MultiProviderOutput) worstReadableWindow() (*ProviderFormatter, provider.UsageWindow, forecast.Projection, bool) {
-	if len(m.Providers) == 0 {
-		return nil, provider.UsageWindow{}, forecast.Projection{}, false
-	}
-	sortProvidersByUrgency(m.Providers)
-
-	var bestPF *ProviderFormatter
-	var bestWindow provider.UsageWindow
-	var bestProj forecast.Projection
-	var bestTier = 5
-
-	for i := range m.Providers {
-		pf := &m.Providers[i]
-		if pf.Data == nil || pf.Data.IsExpired || (pf.Data.Error != "" && !pf.Data.HasUsageWindows()) {
-			continue
-		}
-		tier := classifyProvider(pf).tier
-		for _, window := range pf.Data.PresentationWindows() {
-			proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-			if pf.Data.Stale {
-				proj = forecast.Projection{Stale: true, Unknown: true, WillLastToReset: true}
-			}
-			if bestPF == nil || tier < bestTier || (tier == bestTier && forecast.CompareWindowRisk(window, proj, bestWindow, bestProj) < 0) {
-				bestPF = pf
-				bestWindow = window
-				bestProj = proj
-				bestTier = tier
-			}
-		}
-	}
-
-	if bestPF == nil {
-		return nil, provider.UsageWindow{}, forecast.Projection{}, false
-	}
-	return bestPF, bestWindow, bestProj, true
-}
-
 func clampDuration(d time.Duration) time.Duration {
 	if d < 0 {
 		return 0
@@ -855,6 +691,8 @@ type JSONOutput struct {
 	Providers     map[string]*ProviderJSONOutput `json:"providers"`
 	FetchedAt     time.Time                      `json:"fetched_at,omitempty"`
 	Cache         *CacheInfo                     `json:"cache,omitempty"`
+	// View is the shared snapshot this output was built from. Added in v1.
+	View *JSONView `json:"view,omitempty"`
 }
 
 // ProviderJSONOutput is the JSON representation for a single provider.
@@ -864,6 +702,9 @@ type ProviderJSONOutput struct {
 	Forecast *JSONForecast             `json:"forecast,omitempty"`
 	Status   *status.ProviderStatus    `json:"status,omitempty"`
 	Maturity provider.ProviderMaturity `json:"maturity"`
+	// View is the snapshot of the source that Usage describes. It is absent
+	// for a family with several sources and no default source.
+	View *JSONAccountView `json:"view,omitempty"`
 }
 
 type JSONSourceOutput struct {
@@ -871,6 +712,7 @@ type JSONSourceOutput struct {
 	Usage    *provider.UsageData    `json:"usage,omitempty"`
 	Forecast *JSONForecast          `json:"forecast,omitempty"`
 	Status   *status.ProviderStatus `json:"status,omitempty"`
+	View     *JSONAccountView       `json:"view,omitempty"`
 }
 type JSONSourceIdentity struct {
 	ID    string `json:"id"`
@@ -896,43 +738,57 @@ type CacheInfo struct {
 
 // PrintJSON prints JSON output for all providers.
 func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
+	data, err := m.JSON(cacheEntry, time.Now())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: json error: %v\n", err)
+		return
+	}
+	fmt.Println(string(data))
+}
+
+// JSON returns the --json document for m, with every state read from the
+// snapshot as of now.
+func (m *MultiProviderOutput) JSON(cacheEntry *cache.Entry, now time.Time) ([]byte, error) {
+	v := m.buildView(now)
 	out := JSONOutput{
 		SchemaVersion: JSONSchemaVersion,
 		Providers:     make(map[string]*ProviderJSONOutput),
+		View:          v.jsonView(),
 	}
 
 	if cacheEntry != nil {
 		out.FetchedAt = cacheEntry.FetchedAt
 		out.Cache = &CacheInfo{Hit: true, FetchedAt: cacheEntry.FetchedAt}
 	} else {
-		out.FetchedAt = time.Now()
+		out.FetchedAt = now
 	}
 
-	grouped := make(map[string][]ProviderFormatter)
-	for _, pf := range m.Providers {
-		family := pf.Family
-		if family == "" && pf.Data != nil {
-			family = pf.Data.Provider
-		}
-		if family == "" {
-			family = pf.Name
-		}
-		grouped[family] = append(grouped[family], pf)
+	grouped := make(map[string][]int)
+	for i := range m.Providers {
+		family := familyOf(&m.Providers[i])
+		grouped[family] = append(grouped[family], i)
 	}
 	for family, group := range grouped {
-		sort.SliceStable(group, func(i, j int) bool { return group[i].SourceID < group[j].SourceID })
+		sort.SliceStable(group, func(a, b int) bool {
+			return m.Providers[group[a]].SourceID < m.Providers[group[b]].SourceID
+		})
 		if len(group) > 1 {
 			base := &ProviderJSONOutput{Maturity: provider.GetMaturity(family)}
-			for _, pf := range group {
-				base.Sources = append(base.Sources, makeJSONSource(pf))
+			for _, i := range group {
+				pf := m.Providers[i]
+				src := makeJSONSource(pf)
+				src.View = v.jsonAccount(v.entries[i].key)
+				base.Sources = append(base.Sources, src)
 				if pf.SourceID == "default" {
 					base.Usage, base.Forecast, base.Status = legacyUsage(pf.Data), forecastFor(pf.Data), pf.Status
+					base.View = src.View
 				}
 			}
 			out.Providers[family] = base
 			continue
 		}
-		pf := group[0]
+		i := group[0]
+		pf := m.Providers[i]
 		if pf.Data == nil {
 			continue
 		}
@@ -940,6 +796,7 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 		providerOut := &ProviderJSONOutput{
 			Usage:    legacyUsage(pf.Data),
 			Maturity: provider.GetMaturity(family),
+			View:     v.jsonAccount(v.entries[i].key),
 		}
 
 		// Add forecasts for each window
@@ -964,12 +821,7 @@ func (m *MultiProviderOutput) PrintJSON(cacheEntry *cache.Entry) {
 		out.Providers[family] = providerOut
 	}
 
-	data, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clawmeter: json error: %v\n", err)
-		return
-	}
-	fmt.Println(string(data))
+	return json.MarshalIndent(out, "", "  ")
 }
 
 func makeJSONSource(pf ProviderFormatter) JSONSourceOutput {
@@ -1171,6 +1023,7 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 	for _, pf := range m.Providers {
 		seen[pf.Name] = struct{}{}
 	}
+	counts := familyCounts(registry.GetAll())
 	for _, p := range registry.GetAll() {
 		if !isUserFacingProviderSource(p) {
 			continue
@@ -1180,9 +1033,10 @@ func (m *MultiProviderOutput) IncludeAllProviders(registry *provider.Registry, c
 			continue
 		}
 		m.Providers = append(m.Providers, ProviderFormatter{
-			Name:    key,
-			Display: sourceDisplay(p, familyCounts(registry.GetAll())),
-			Family:  provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
+			Name:        key,
+			Display:     sourceDisplay(p, counts),
+			DisplayName: p.DisplayName(), SourceCount: counts[p.Name()],
+			Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
 		})
 	}
@@ -1333,7 +1187,8 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 		}
 		output.Providers = append(output.Providers, ProviderFormatter{
 			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
-			Display:           sourceDisplay(p, counts),
+			Display:     sourceDisplay(p, counts),
+			DisplayName: p.DisplayName(), SourceCount: counts[p.Name()],
 			Data:              data,
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
 		})
@@ -1374,7 +1229,8 @@ func buildOutputFromResult(registry *provider.Registry, cfg *config.Config, resu
 		}
 		output.Providers = append(output.Providers, ProviderFormatter{
 			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
-			Display:           sourceDisplay(p, counts),
+			Display:     sourceDisplay(p, counts),
+			DisplayName: p.DisplayName(), SourceCount: counts[p.Name()],
 			Data:              data,
 			Status:            statuses[p.Name()],
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
@@ -1400,7 +1256,8 @@ func appendPresentedTargetRows(output *MultiProviderOutput, registry *provider.R
 		}
 		output.Providers = append(output.Providers, ProviderFormatter{
 			Name: key, Family: provider.FamilyName(p), SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p),
-			Display:           sourceDisplay(p, counts),
+			Display:     sourceDisplay(p, counts),
+			DisplayName: p.DisplayName(), SourceCount: counts[p.Name()],
 			Data:              data,
 			Status:            statuses[p.Name()],
 			ExplicitlyEnabled: cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p)),
@@ -1776,7 +1633,7 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 	<-done
 	output := &MultiProviderOutput{Providers: make([]ProviderFormatter, 0, len(display))}
 	for _, p := range display {
-		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), Data: result.Results[provider.SourceKey(p)], Status: ps})
+		output.Providers = append(output.Providers, ProviderFormatter{Name: provider.SourceKey(p), Family: family, SourceID: provider.SourceID(p), SourceLabel: provider.SourceLabel(p), Display: sourceDisplay(p, counts), DisplayName: p.DisplayName(), SourceCount: counts[p.Name()], Data: result.Results[provider.SourceKey(p)], Status: ps})
 	}
 	attachResetAnnouncements(output, registry, cfg, time.Now())
 

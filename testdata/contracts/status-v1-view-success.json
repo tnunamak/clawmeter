@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "fetched_at": "2026-07-16T18:00:00Z",
+  "providers": {
+    "claude": {
+      "usage": {
+        "provider": "claude",
+        "fetched_at": "2026-07-16T18:00:00Z",
+        "windows": [
+          { "name": "5h", "utilization": 30, "resets_at": "2026-07-16T20:00:00Z" }
+        ]
+      },
+      "forecast": {
+        "windows": {
+          "5h": { "projected_pct": 50, "indicator": "50%" }
+        }
+      },
+      "maturity": { "experimental": false },
+      "view": {
+        "reading": { "state": "fresh", "observed_at": "2026-07-16T18:00:00Z" },
+        "windows": [
+          {
+            "name": "5h",
+            "code": "5h",
+            "label": "5h",
+            "used": 30,
+            "forecast": { "state": "known", "pct": 50 },
+            "exhaustion": { "state": "lasts" },
+            "reset": { "known": true, "at": "2026-07-16T20:00:00Z" },
+            "shown": true
+          }
+        ]
+      },
+      "sources": [
+        {
+          "source": { "id": "default", "label": "Default" },
+          "usage": {
+            "provider": "claude",
+            "source_id": "default",
+            "source_label": "Default",
+            "fetched_at": "2026-07-16T18:00:00Z",
+            "windows": [
+              { "name": "5h", "utilization": 30, "resets_at": "2026-07-16T20:00:00Z" }
+            ]
+          },
+          "view": {
+            "reading": { "state": "fresh", "observed_at": "2026-07-16T18:00:00Z" },
+            "windows": [
+              {
+                "name": "5h",
+                "code": "5h",
+                "label": "5h",
+                "used": 30,
+                "forecast": { "state": "known", "pct": 50 },
+                "exhaustion": { "state": "lasts" },
+                "reset": { "known": true, "at": "2026-07-16T20:00:00Z" },
+                "shown": true
+              }
+            ]
+          }
+        },
+        {
+          "source": { "id": "odl", "label": "ODL" },
+          "usage": {
+            "provider": "claude",
+            "source_id": "odl",
+            "source_label": "ODL",
+            "fetched_at": "2026-07-16T17:00:00Z",
+            "stale": true,
+            "warning": "rate limited",
+            "windows": [
+              { "name": "5h", "utilization": 100, "resets_at": "2026-07-16T19:00:00Z" }
+            ]
+          },
+          "view": {
+            "reading": { "state": "stale", "observed_at": "2026-07-16T17:00:00Z", "reason": "rate limited" },
+            "windows": [
+              {
+                "name": "5h",
+                "code": "5h",
+                "label": "5h",
+                "used": 100,
+                "forecast": { "state": "stale" },
+                "exhaustion": { "state": "unknown" },
+                "reset": { "known": true, "at": "2026-07-16T19:00:00Z" },
+                "shown": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "openai": {
+      "usage": {
+        "provider": "openai",
+        "fetched_at": "2026-07-16T18:00:00Z",
+        "windows": [
+          {
+            "name": "7d",
+            "display_name": "7 days",
+            "utilization": 58,
+            "resets_at": "2026-07-22T23:16:04Z"
+          }
+        ]
+      },
+      "forecast": {
+        "windows": {
+          "7d": { "projected_pct": 520.17, "indicator": "520%" }
+        }
+      },
+      "maturity": { "experimental": false },
+      "view": {
+        "reading": { "state": "fresh", "observed_at": "2026-07-16T18:00:00Z" },
+        "windows": [
+          {
+            "name": "7d",
+            "code": "7d",
+            "label": "7 days",
+            "used": 58,
+            "forecast": { "state": "known", "pct": 520.17 },
+            "exhaustion": { "state": "runs_out", "runs_out_in_seconds": 48833, "early_by_seconds": 488531 },
+            "reset": { "known": true, "at": "2026-07-22T23:16:04Z" },
+            "shown": true
+          }
+        ]
+      }
+    }
+  },
+  "view": {
+    "at": "2026-07-16T18:00:00Z",
+    "accounts": ["claude", "claude:odl", "openai"],
+    "worst": { "account": "openai", "window": "7d" }
+  }
+}
