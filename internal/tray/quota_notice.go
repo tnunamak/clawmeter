@@ -39,16 +39,25 @@ func (r *recoveryWatch) observe(results, cached map[string]*provider.UsageData, 
 	if r.episodes == nil {
 		r.episodes = make(map[string]blockedEpisode)
 	}
+	// A source no longer read, for example one removed from the config,
+	// keeps no episode.
+	for source := range r.episodes {
+		if _, ok := results[source]; !ok {
+			delete(r.episodes, source)
+		}
+	}
 	var recovered []string
 	for source, data := range results {
 		account := identities[source]
-		if _, wasCached := cached[source]; wasCached || account == "" || !freshReading(data) {
-			continue
-		}
 		episode, open := r.episodes[source]
-		if open && (episode.account != account || now.Sub(episode.lastSeen) > maxGap || !now.After(episode.lastSeen)) {
+		// Another identity ends the episode whatever its reading says, so a
+		// failed read of another login cannot carry the episode across.
+		if open && (account == "" || episode.account != account || now.Sub(episode.lastSeen) > maxGap || !now.After(episode.lastSeen)) {
 			delete(r.episodes, source)
 			open = false
+		}
+		if _, wasCached := cached[source]; wasCached || account == "" || !freshReading(data) {
+			continue
 		}
 		full := make(map[string]bool)
 		present := make(map[string]bool)
@@ -79,8 +88,9 @@ func (r *recoveryWatch) observe(results, cached map[string]*provider.UsageData, 
 			}
 		}
 		if !complete {
-			episode.lastSeen = now
-			r.episodes[source] = episode
+			// Not renewed: if the window never comes back, for example
+			// because the provider renamed it, the episode lapses after
+			// maxGap and nothing is reported.
 			continue
 		}
 		delete(r.episodes, source)

@@ -117,3 +117,34 @@ func TestQuotaAvailableNoticeStatesTheReadings(t *testing.T) {
 		t.Fatalf("two accounts: title = %q", title)
 	}
 }
+
+func TestAFailedReadOfAnotherLoginEndsTheEpisode(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("5h", 100)), nil, watchIDs, testBase, testMaxGap)
+	failed := watchReading(win("5h", 100))
+	failed["codex"].Error = "authentication failed"
+	r.observe(failed, nil, map[string]string{"codex": otherAcct}, testBase.Add(2*time.Minute), testMaxGap)
+	if got := r.observe(watchReading(win("5h", 10)), nil, watchIDs, testBase.Add(4*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v after a switch to another login and back", got)
+	}
+}
+
+func TestARemovedSourceKeepsNoEpisode(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("5h", 100)), nil, watchIDs, testBase, testMaxGap)
+	r.observe(map[string]*provider.UsageData{}, nil, watchIDs, testBase.Add(time.Minute), testMaxGap)
+	if got := r.observe(watchReading(win("5h", 10)), nil, watchIDs, testBase.Add(2*time.Minute), testMaxGap); len(got) != 0 {
+		t.Fatalf("recovered = %v for a source that was removed in between", got)
+	}
+}
+
+func TestARenamedWindowLetsTheEpisodeLapse(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("weekly", 100)), nil, watchIDs, testBase, testMaxGap)
+	r.observe(watchReading(win("7d", 10)), nil, watchIDs, testBase.Add(5*time.Minute), testMaxGap)
+	r.observe(watchReading(win("7d", 10)), nil, watchIDs, testBase.Add(10*time.Minute), testMaxGap)
+	r.observe(watchReading(win("7d", 100)), nil, watchIDs, testBase.Add(15*time.Minute), testMaxGap)
+	if got := r.observe(watchReading(win("7d", 20)), nil, watchIDs, testBase.Add(20*time.Minute), testMaxGap); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("recovered = %v; the renamed window's own episode should report", got)
+	}
+}
