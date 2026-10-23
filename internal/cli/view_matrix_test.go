@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/tray"
@@ -28,8 +29,18 @@ import (
 //
 //	MATRIX_UPDATE=1 go test ./internal/cli/ -run TestSurfacesAgreeFromOneSnapshot
 
+// matrixZone is the time zone the golden file was written in. Local times on
+// every surface are rendered in it, whatever the machine running the test.
+var matrixZone = func() *time.Location {
+	loc, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		panic(err)
+	}
+	return loc
+}()
+
 // matrixNow is the frozen clock every case is built and rendered at.
-var matrixNow = time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
+var matrixNow = time.Date(2026, 10, 22, 12, 0, 0, 0, matrixZone)
 
 const matrixGoldenPath = "testdata/matrix_golden.txt"
 
@@ -381,6 +392,9 @@ func goldenDumps(t *testing.T) map[string]string {
 }
 
 func TestSurfacesAgreeFromOneSnapshot(t *testing.T) {
+	local := time.Local
+	time.Local = matrixZone
+	t.Cleanup(func() { time.Local = local })
 	cases := matrixCases(matrixNow)
 	if os.Getenv("MATRIX_UPDATE") != "" {
 		var b strings.Builder

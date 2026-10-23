@@ -1771,7 +1771,12 @@ func updateTrayTooltip(snap view.Snapshot, data map[string]*provider.UsageData) 
 	}
 }
 
-var sendThresholdNotification = notify
+// sendThresholdNotification delivers off the caller's goroutine: thresholds
+// are checked under the render lock, and a slow notification service must not
+// hold up the menu. Tests replace it to capture notices.
+var sendThresholdNotification = func(title, body, urgency string) {
+	go notify(title, body, urgency)
+}
 
 func checkThresholds(results map[string]*provider.UsageData, displayNames map[string]string) {
 	type notification struct{ title, body, urgency string }
