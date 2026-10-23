@@ -20,11 +20,11 @@ type recoveryWatch struct {
 	episodes map[string]blockedEpisode
 }
 
-// blockedEpisode is one account's time out of quota: the windows seen full,
-// and when the account was last read.
+// blockedEpisode is one account's time out of quota: each window seen full,
+// with when it was last in a reading, and when the account was last read.
 type blockedEpisode struct {
 	account  string
-	windows  map[string]bool
+	windows  map[string]time.Time
 	lastSeen time.Time
 }
 
@@ -67,12 +67,28 @@ func (r *recoveryWatch) observe(results, cached map[string]*provider.UsageData, 
 				full[w.Name] = true
 			}
 		}
+		if open {
+			// A window gone from readings for longer than maxGap, for
+			// example one the provider renamed, leaves the episode without
+			// a word; the others still decide it.
+			for name, seen := range episode.windows {
+				if present[name] {
+					episode.windows[name] = now
+				} else if now.Sub(seen) > maxGap {
+					delete(episode.windows, name)
+				}
+			}
+			if len(episode.windows) == 0 && len(full) == 0 {
+				delete(r.episodes, source)
+				continue
+			}
+		}
 		if len(full) > 0 {
 			if !open {
-				episode = blockedEpisode{account: account, windows: make(map[string]bool)}
+				episode = blockedEpisode{account: account, windows: make(map[string]time.Time)}
 			}
 			for name := range full {
-				episode.windows[name] = true
+				episode.windows[name] = now
 			}
 			episode.lastSeen = now
 			r.episodes[source] = episode
@@ -88,9 +104,7 @@ func (r *recoveryWatch) observe(results, cached map[string]*provider.UsageData, 
 			}
 		}
 		if !complete {
-			// Not renewed: if the window never comes back, for example
-			// because the provider renamed it, the episode lapses after
-			// maxGap and nothing is reported.
+			// Not renewed: the missing window either returns or lapses.
 			continue
 		}
 		delete(r.episodes, source)

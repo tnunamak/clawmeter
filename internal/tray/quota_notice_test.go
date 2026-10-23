@@ -148,3 +148,14 @@ func TestARenamedWindowLetsTheEpisodeLapse(t *testing.T) {
 		t.Fatalf("recovered = %v; the renamed window's own episode should report", got)
 	}
 }
+
+func TestARenamedWindowLapsesWhileAnotherIsStillFull(t *testing.T) {
+	var r recoveryWatch
+	r.observe(watchReading(win("weekly", 100)), nil, watchIDs, testBase, testMaxGap)
+	for _, m := range []time.Duration{5, 10, 15} {
+		r.observe(watchReading(win("7d", 100)), nil, watchIDs, testBase.Add(m*time.Minute), testMaxGap)
+	}
+	if got := r.observe(watchReading(win("7d", 20)), nil, watchIDs, testBase.Add(20*time.Minute), testMaxGap); !reflect.DeepEqual(got, []string{"codex"}) {
+		t.Fatalf("recovered = %v; the old window name must lapse, not block the recovery", got)
+	}
+}
