@@ -18,9 +18,9 @@ func TestResetAnnouncementSummaryStrings(t *testing.T) {
 		at   time.Time
 		want string
 	}{
-		{"today", today, "Reset announced for ~10:00 · codex-resets.com"},
+		{"today", today, "Reset announced for ~10:00 · unconfirmed · codex-resets.com"},
 		{"another day", tomorrow, "Reset announced for ~Oct 23 10:00 · codex-resets.com"},
-		{"another year", lastYear, "Reset announced for ~Oct 23, 2025 10:00 · codex-resets.com"},
+		{"another year", lastYear, "Reset announced for ~Oct 23, 2025 10:00 · unconfirmed · codex-resets.com"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

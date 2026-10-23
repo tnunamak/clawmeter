@@ -301,6 +301,8 @@ things like "before 10am PST". The line carries no claim about whether the
 reset reached the account; the window rows above it already say whether the
 account is still out. It sits after the reset-credit row, the last line of the
 account. In the tray it opens the announcement's source post.
+Once the announced time has passed the line reads `Reset announced for ~10:00 ·
+unconfirmed · codex-resets.com`: the feed cannot say the reset arrived.
 
 Every surface shows the same fact: the tray row and tooltip, `clawmeter
 status`, `--json` and `--agent`. JSON adds to the Codex source an
@@ -311,6 +313,15 @@ status`, `--json` and `--agent`. JSON adds to the Codex source an
 agent line adds `announced_reset=[~<time> unofficial source=codex-resets.com
 windows=7d]`. The announcement never changes quota values, projections,
 natural reset times, risk status, icon choice or exit codes.
+
+No notification and no tray-icon mark accompany the line. Research filed in
+divan (`ai-quota-monitoring/quota-trays-should-not-toast-or-mark-the-icon-for-unofficial-reset-announcements-but-may-offer-an-opt-in-observed-quota-return-notice.md`)
+found no case for interrupting with an unofficial, approximate announcement,
+and the icon's small dot already means an update is available. The opt-in
+notification Clawmeter does offer comes from the account itself: when the tray
+saw an account run out and a later reading, within two poll intervals of the
+last full one, shows room in every window, it says `Codex quota available
+again`, once per episode.
 
 Not shown: AI forecasts and percentages, banked or mixed posts, the latest
 executed reset, a feed list, notifications of any kind, and advice.

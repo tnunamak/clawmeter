@@ -113,7 +113,27 @@ The time is approximate and the source is unofficial. Clawmeter cannot tell
 whether the reset reached your account. The line opens the post when you click
 it in the tray. It never changes usage numbers, projections, or exit codes, and
 OpenAI decides which accounts get a reset. Check the account's Usage page to
-confirm. See [Privacy Policy](PRIVACY.md) for the request this makes.
+confirm. Once the announced time has passed, the line adds `unconfirmed`. See
+[Privacy Policy](PRIVACY.md) for the request this makes.
+
+### Quota Available Again (opt-in)
+
+Off by default. Turn it on with:
+
+```bash
+clawmeter config set notify_quota_available true
+```
+
+When the tray has seen an account run out and a later reading of the same
+account, within two poll intervals, shows room in every window that was out,
+it sends one desktop notification, for
+example `Codex quota available again` with `Codex: 5h 0% used, 7d 4% used` and
+the time of the reading. It comes from the account's own reading, never from an
+announcement, and once per time the account ran out. The tray keeps this in
+memory, so starting it, a long gap between readings (the computer slept) or a
+different account on the same source sets a new baseline instead of
+notifying. A window missing from a reading keeps waiting for it. Quota on the meter does not prove a request
+will succeed.
 
 ### Claude API Credits
 

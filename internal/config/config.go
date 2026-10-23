@@ -180,6 +180,10 @@ type GlobalSettings struct {
 	// CodexResetAnnouncements opts into reading the third-party
 	// codex-resets.com feed. Off by default; when off, no request is made.
 	CodexResetAnnouncements bool `yaml:"codex_reset_announcements,omitempty"`
+
+	// NotifyQuotaAvailable opts into a desktop notification when an account
+	// the tray saw run out has quota again. Off by default.
+	NotifyQuotaAvailable bool `yaml:"notify_quota_available,omitempty"`
 }
 
 // NotificationConfig holds notification settings.

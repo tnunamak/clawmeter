@@ -398,7 +398,10 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 		s.mu.Unlock()
 
-		windowExhaustion.observeFetched(result.Results, skipped, sourceIdentities(configured, result.SourceRevisions), time.Now(), 2*config.PollInterval(pollIntervalSeconds))
+		identities := sourceIdentities(configured, result.SourceRevisions)
+		maxGap := 2 * config.PollInterval(pollIntervalSeconds)
+		windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
+		available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
 		_ = cache.Write(result)
 
 		// The feed is read after the usage cache is written: announcements
@@ -406,6 +409,11 @@ func onReadyWithConfig(loaded *config.Config) {
 		s.mu.Lock()
 		currentCfg := cfg
 		s.mu.Unlock()
+		if currentCfg.Settings.NotifyQuotaAvailable && len(available) > 0 {
+			if title, body := quotaAvailableNotice(available, result.Results, providerMenus, time.Now()); title != "" {
+				go notify(title, body, "low")
+			}
+		}
 		feed := refreshResetAnnouncements(currentCfg, configured)
 		s.mu.Lock()
 		s.feedReading = feed
@@ -1346,6 +1354,9 @@ func refreshResetAnnouncements(current *config.Config, configured []provider.Pro
 	}
 	return reading
 }
+
+// quotaRecovery finds accounts that have quota again after running out.
+var quotaRecovery recoveryWatch
 
 // resetFeedClient is replaced by tests so that no request leaves the process.
 var resetFeedClient = resetfeed.Default
