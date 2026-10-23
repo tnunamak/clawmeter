@@ -92,7 +92,7 @@ func TestP2OutageRemainsVisibleWithUsage(t *testing.T) {
 		s.mu.Unlock()
 		systray.ResetMenu()
 	}()
-	updateUI(nil, nil, map[string]*providerMenuItems{"openai": menu}, systray.AddMenuItem("reauth", ""), newIconPicker(systray.AddMenuItem("settings", "")), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
+	updateUI(nil, nil, map[string]*providerMenuItems{"openai": menu}, systray.AddMenuItem("reauth", ""), newIconPicker(), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
 	if !menu.statusState.visible || !strings.Contains(strings.ToLower(menu.statusState.title), "outage") {
 		t.Fatalf("outage hidden despite good usage: %+v", menu.statusState)
 	}
@@ -117,7 +117,7 @@ func TestP2FailedProviderConnectionSurvivesRender(t *testing.T) {
 		systray.ResetMenu()
 	}()
 	render := func() {
-		updateUI(nil, nil, map[string]*providerMenuItems{tokenPlanProviderName: menu}, systray.AddMenuItem("reauth", ""), newIconPicker(systray.AddMenuItem("settings", "")), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
+		updateUI(nil, nil, map[string]*providerMenuItems{tokenPlanProviderName: menu}, systray.AddMenuItem("reauth", ""), newIconPicker(), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
 	}
 
 	menu.connecting.Store(true)
@@ -150,66 +150,10 @@ func TestP2OutageRemainsVisibleWithStaleUsage(t *testing.T) {
 		s.mu.Unlock()
 		systray.ResetMenu()
 	}()
-	updateUI(nil, nil, map[string]*providerMenuItems{"openai": menu}, systray.AddMenuItem("reauth", ""), newIconPicker(systray.AddMenuItem("settings", "")), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
+	updateUI(nil, nil, map[string]*providerMenuItems{"openai": menu}, systray.AddMenuItem("reauth", ""), newIconPicker(), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
 	title := strings.ToLower(menu.statusState.title)
 	if !menu.statusState.visible || !strings.Contains(title, "outage") || !strings.Contains(title, "last good data") {
 		t.Fatalf("stale usage hid the outage: %+v", menu.statusState)
-	}
-}
-
-func TestIconPickerListsQuotasInMenuOrderAndChecksThePinnedOne(t *testing.T) {
-	now := time.Now()
-	results := map[string]*provider.UsageData{
-		"openai": {Provider: "openai", Windows: []provider.UsageWindow{
-			{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
-		}},
-		"claude": {Provider: "claude", Windows: []provider.UsageWindow{
-			{Name: "5h", Utilization: 10, ResetsAt: now.Add(2 * time.Hour)},
-			{Name: "7d All", Utilization: 20, ResetsAt: now.Add(48 * time.Hour)},
-		}},
-	}
-	menus := map[string]*providerMenuItems{
-		"claude": {displayName: "Claude", order: 0},
-		"openai": {displayName: "Codex", order: 1},
-	}
-	s.mu.Lock()
-	s.iconTargetOverride = iconTarget{}
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.iconTargetOverride = iconTarget{}
-		s.mu.Unlock()
-	}()
-
-	want := []iconTarget{{"claude", "5h"}, {"claude", "7d All"}, {"openai", "5h"}}
-	got := pickerIconTargets(results, menus)
-	if len(got) != len(want) {
-		t.Fatalf("picker targets = %+v, want %+v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("picker targets = %+v, want %+v", got, want)
-		}
-	}
-
-	picker := newIconPicker(systray.AddMenuItem("settings", ""))
-	picker.update(results, menus)
-	if !picker.auto.Checked() {
-		t.Fatal("Automatic is not checked by default")
-	}
-
-	s.mu.Lock()
-	s.iconTargetOverride = iconTarget{"claude", "7d All"}
-	s.mu.Unlock()
-	picker.update(results, menus)
-	if picker.auto.Checked() || !picker.targets[iconTarget{"claude", "7d All"}].Checked() || picker.targets[iconTarget{"claude", "5h"}].Checked() {
-		t.Fatal("pinning Claude 7d All did not move the checkmark")
-	}
-
-	delete(results, "claude")
-	picker.update(results, menus)
-	if !picker.auto.Checked() {
-		t.Fatal("a pinned quota that disappeared did not fall back to Automatic")
 	}
 }
 
@@ -270,13 +214,13 @@ func TestIconPinPersistence(t *testing.T) {
 	}
 }
 
-func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
+func TestQuotaRowsPinTheIconPersistently(t *testing.T) {
 	path := testIconPinPath(t)
 	defer systray.ResetMenu()
 	now := time.Now()
 	menu := createProviderMenuItems(sourceMenuTestProvider{name: "openai"}, false, nil, false)
 	menus := map[string]*providerMenuItems{"openai": menu}
-	picker := newIconPicker(systray.AddMenuItem("settings", ""))
+	picker := newIconPicker()
 	picker.forwardRows(menu)
 	data := &provider.UsageData{Provider: "openai", FetchedAt: now, Windows: []provider.UsageWindow{
 		{Name: "5h", Length: 5 * time.Hour, Utilization: 75, ResetsAt: now.Add(4 * time.Hour)},
@@ -304,7 +248,7 @@ func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
 		}
 		select {
 		case picked := <-picker.picked:
-			selectIconTarget(menus, picker, picked.target, picked.toggle)
+			selectIconTarget(menus, picker, picked)
 		case <-time.After(time.Second):
 			t.Fatal("click did not reach shared picker")
 		}
@@ -312,9 +256,6 @@ func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
 	pin := iconTarget{"openai", "7d"}
 	assertChecks := func(want iconTarget) {
 		t.Helper()
-		if picker.auto.Checked() != (want.Provider == "") {
-			t.Fatal("Automatic check disagrees with selection")
-		}
 		for row, target := range menu.windowTargets {
 			pinned := target.Provider != "" && target == want
 			if strings.HasPrefix(menu.windowIcons[row], "pinned") != pinned {
@@ -322,11 +263,6 @@ func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
 			}
 			if pinned && menu.windowIcons[row] != "pinned" && menu.windowIcons[row] != "pinned-risk" {
 				t.Fatalf("row %d pin mark %q", row, menu.windowIcons[row])
-			}
-		}
-		for target, item := range picker.targets {
-			if picker.visible[target] && item.Checked() != (target == want) {
-				t.Fatalf("picker check disagrees with %v", want)
 			}
 		}
 	}
@@ -353,7 +289,7 @@ func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("row unpin did not delete pin: %v", err)
 	}
-	click(picker.targets[pin])
+	click(menu.windowItems[1])
 	assertChecks(pin)
 	s.mu.Lock()
 	s.lastResults = map[string]*provider.UsageData{"openai": {Provider: "openai", FetchedAt: now, Windows: []provider.UsageWindow{data.Windows[0], data.Windows[2]}}}
@@ -391,9 +327,9 @@ func TestQuotaRowsAndPickerSharePersistentPin(t *testing.T) {
 	s.mu.Unlock()
 	render()
 	assertChecks(pin)
-	click(picker.auto)
+	click(menu.windowItems[1])
 	assertChecks(iconTarget{})
 	if loadIconPin() != (iconTarget{}) {
-		t.Fatal("Automatic did not clear saved pin")
+		t.Fatal("unpinning did not clear saved pin")
 	}
 }

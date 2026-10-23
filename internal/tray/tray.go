@@ -30,7 +30,6 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
-	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
@@ -290,7 +289,7 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	mRefresh := systray.AddMenuItem("Refresh Now", "")
 	mSettings := systray.AddMenuItem("Settings", "")
-	iconPick := newIconPicker(mSettings)
+	iconPick := newIconPicker()
 	for _, menu := range providerMenus {
 		iconPick.forwardRows(menu)
 	}
@@ -614,7 +613,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				go refresh(true)
 				go checkUpdate()
 			case target := <-iconPick.picked:
-				selectIconTarget(providerMenus, iconPick, target.target, target.toggle)
+				selectIconTarget(providerMenus, iconPick, target)
 			case providerName := <-providerConnectActions:
 				menu := providerMenus[providerName]
 				if menu == nil || !menu.connectable {
@@ -1520,11 +1519,6 @@ func setWindowIcon(menu *providerMenuItems, row int, pinned bool) {
 	setMenuItemIcon(menu.windowItems[row], icon)
 }
 
-type iconSelection struct {
-	target iconTarget
-	toggle bool
-}
-
 func (p *iconPicker) forwardRows(menu *providerMenuItems) {
 	for row, item := range menu.windowItems {
 		go func() {
@@ -1536,7 +1530,7 @@ func (p *iconPicker) forwardRows(menu *providerMenuItems) {
 				windowTargetsMu.Unlock()
 				if target.Provider != "" {
 					select {
-					case p.picked <- iconSelection{target: target, toggle: true}:
+					case p.picked <- target:
 					default:
 					}
 				}
@@ -1545,49 +1539,23 @@ func (p *iconPicker) forwardRows(menu *providerMenuItems) {
 	}
 }
 
-// iconPicker is the Settings → Tray icon submenu. Native menus cannot insert
-// an item between existing ones, so each quota keeps the item it got when it
-// first appeared, and the item is hidden while that quota has no data.
+// iconPicker carries quota-row clicks to the main loop, which pins the icon.
 type iconPicker struct {
-	parent  *systray.MenuItem
-	auto    *systray.MenuItem
-	targets map[iconTarget]*systray.MenuItem
-	visible map[iconTarget]bool
-	picked  chan iconSelection
+	picked chan iconTarget
 }
 
-func newIconPicker(settings *systray.MenuItem) *iconPicker {
-	parent := settings.AddSubMenuItem("Tray icon", "")
-	p := &iconPicker{
-		parent:  parent,
-		auto:    parent.AddSubMenuItemCheckbox("Automatic (most at risk)", "", true),
-		targets: map[iconTarget]*systray.MenuItem{},
-		visible: map[iconTarget]bool{},
-		picked:  make(chan iconSelection, 1),
-	}
-	go p.forward(p.auto, iconTarget{})
-	return p
+func newIconPicker() *iconPicker {
+	return &iconPicker{picked: make(chan iconTarget, 1)}
 }
 
-func (p *iconPicker) forward(item *systray.MenuItem, target iconTarget) {
-	for range item.ClickedCh {
-		select {
-		case p.picked <- iconSelection{target: target}:
-		default:
-		}
-	}
-}
-
-// update shows one checkable item per quota, in the provider menu's order, and
-// checks the quota the icon follows. An absent pin displays Automatic without
-// forgetting the saved choice, so it applies again when the quota returns.
+// update marks the quota row the icon follows. An absent pin displays
+// Automatic without forgetting the saved choice, so it applies again when the
+// quota returns.
 func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) {
-	choices := pickerIconTargets(results, menus)
-
 	s.mu.Lock()
 	override := s.iconTargetOverride
 	s.mu.Unlock()
-	if !targetInChoices(override, choices) {
+	if !targetInChoices(override, manualIconTargets(results)) {
 		override = iconTarget{}
 	}
 	for _, menu := range menus {
@@ -1595,44 +1563,6 @@ func (p *iconPicker) update(results map[string]*provider.UsageData, menus map[st
 			setWindowIcon(menu, row, target.Provider != "" && target == override)
 		}
 	}
-
-	if p == nil {
-		return
-	}
-	displayNames := providerDisplayNames(menus)
-	setMenuItemChecked(p.auto, override.Provider == "")
-	shown := make(map[iconTarget]bool, len(choices))
-	for _, target := range choices {
-		shown[target] = true
-		item := p.targets[target]
-		if item == nil {
-			item = p.parent.AddSubMenuItemCheckbox(pickerTargetLabel(results[target.Provider], target, displayNames), "", false)
-			p.targets[target] = item
-			go p.forward(item, target)
-		}
-		if !p.visible[target] {
-			item.Show()
-			p.visible[target] = true
-		}
-		setMenuItemChecked(item, target == override)
-	}
-	for target, item := range p.targets {
-		if p.visible[target] && !shown[target] {
-			item.Hide()
-			p.visible[target] = false
-		}
-	}
-}
-
-func pickerTargetLabel(data *provider.UsageData, target iconTarget, displayNames map[string]string) string {
-	label := target.Window
-	for _, window := range data.UsableWindows() {
-		if window.Name == target.Window {
-			label = meter.Label(window)
-			break
-		}
-	}
-	return providerDisplayName(target.Provider, displayNames) + ": " + label
 }
 
 func setMenuItemChecked(item *systray.MenuItem, checked bool) {
@@ -1646,47 +1576,15 @@ func setMenuItemChecked(item *systray.MenuItem, checked bool) {
 	}
 }
 
-// pickerIconTargets lists the quotas a user can pin, ordered like the menu:
-// providers in menu order, then each provider's windows in data order.
-func pickerIconTargets(results map[string]*provider.UsageData, menus map[string]*providerMenuItems) []iconTarget {
-	choices := manualIconTargets(results)
-	rank := func(target iconTarget) (int, int) {
-		order := len(menus)
-		if menu := menus[target.Provider]; menu != nil {
-			order = menu.order
-		}
-		if data := results[target.Provider]; data != nil {
-			for i, window := range data.UsableWindows() {
-				if window.Name == target.Window {
-					return order, i
-				}
-			}
-		}
-		return order, 0
-	}
-	sort.SliceStable(choices, func(i, j int) bool {
-		oi, wi := rank(choices[i])
-		oj, wj := rank(choices[j])
-		if oi != oj {
-			return oi < oj
-		}
-		if choices[i].Provider != choices[j].Provider {
-			return choices[i].Provider < choices[j].Provider
-		}
-		return wi < wj
-	})
-	return choices
-}
-
-// selectIconTarget pins the icon to target, or to Automatic when target is
-// empty. With toggle, choosing the quota already pinned returns to Automatic.
-func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, target iconTarget, toggle bool) {
+// selectIconTarget pins the icon to target. Choosing the quota already pinned
+// returns the icon to Automatic.
+func selectIconTarget(menus map[string]*providerMenuItems, picker *iconPicker, target iconTarget) {
 	contact := lastExtensionContact()
 
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
 	s.mu.Lock()
-	if toggle && s.iconTargetOverride == target {
+	if s.iconTargetOverride == target {
 		target = iconTarget{}
 	}
 	s.iconTargetOverride = target
@@ -1754,7 +1652,7 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 		OutSince:           make(map[string]map[string]time.Time),
 		ExtensionContact:   contact,
 	}
-	// A saved pin applies only while its quota can be pinned, as the picker
+	// A saved pin applies only while its quota can be pinned, as the row marks
 	// shows; otherwise the icon follows Automatic.
 	if pin != nil && targetInChoices(iconTarget{Provider: pin.AccountKey, Window: pin.Window}, manualIconTargets(shown)) {
 		in.Pin = pin
@@ -1795,14 +1693,6 @@ func currentIconPin() *view.Target {
 		return nil
 	}
 	return &view.Target{AccountKey: s.iconTargetOverride.Provider, Window: s.iconTargetOverride.Window}
-}
-
-func providerDisplayNames(menus map[string]*providerMenuItems) map[string]string {
-	displayNames := make(map[string]string, len(menus))
-	for name, menu := range menus {
-		displayNames[name] = menu.displayName
-	}
-	return displayNames
 }
 
 // manualIconTargets lists the quotas a user can pin: each reset-backed window

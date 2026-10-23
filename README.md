@@ -190,7 +190,7 @@ The provider logo stays in the circular center chip. The text names the quota wi
 The radial meter compares actual burn with expected pace. Gray shows the shared baseline; a solid green segment means you are under pace, and a solid red segment means you are over pace.
 
 - Click the tray icon for details, refresh, and update. Click a provider's name to open its dashboard.
-- By default the icon follows the quota projected to block you soonest. Click a quota row to pin it and click it again to return to Automatic, or use Settings → Tray icon.
+- By default the icon follows the quota projected to block you soonest. Click a quota row to keep the icon on that quota; a check marks it. Click the row again to go back.
 - A small blue dot on the tray icon means an update is available.
 - Use `Refresh Now` when you want an immediate quota/update check.
 
