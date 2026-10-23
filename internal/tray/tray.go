@@ -1489,16 +1489,14 @@ func setWindowTarget(menu *providerMenuItems, row int, target iconTarget) {
 	setMenuItemEnabled(menu.windowItems[row], &menu.windowStates[row], target.Provider != "")
 }
 
-// setWindowIcon shows a check on the row the tray icon is pinned to, red when
-// that quota runs out before it resets, else the risk dot or nothing. Native
-// check marks are used only on Windows, which has no menu row icons: on KDE
-// they draw an empty box on every row. The caller holds trayRenderMu.
+// setWindowIcon shows a neutral pin on the pinned quota row, otherwise a
+// risk dot or nothing. The tray icon itself shows the pinned quota's risk.
+// Windows keeps its native check because it has no menu row icons; on KDE
+// native checks draw an empty box on every row. The caller holds trayRenderMu.
 func setWindowIcon(menu *providerMenuItems, row int, pinned bool) {
 	atRisk := menu.windowAtRisk[row]
 	key := ""
 	switch {
-	case pinned && atRisk:
-		key = "pinned-risk"
 	case pinned:
 		key = "pinned"
 	case atRisk:
@@ -1513,8 +1511,8 @@ func setWindowIcon(menu *providerMenuItems, row int, pinned bool) {
 	}
 	icon := icons.MenuBlank()
 	switch key {
-	case "pinned", "pinned-risk":
-		icon = icons.MenuCheck(resolveTrayPalette(), atRisk)
+	case "pinned":
+		icon = icons.MenuPin(resolveTrayPalette())
 	case "risk":
 		icon = icons.MenuRiskDot()
 	}

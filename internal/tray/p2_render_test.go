@@ -258,11 +258,8 @@ func TestQuotaRowsPinTheIconPersistently(t *testing.T) {
 		t.Helper()
 		for row, target := range menu.windowTargets {
 			pinned := target.Provider != "" && target == want
-			if strings.HasPrefix(menu.windowIcons[row], "pinned") != pinned {
+			if (menu.windowIcons[row] == "pinned") != pinned {
 				t.Fatalf("row %d pin mark %q disagrees with %v", row, menu.windowIcons[row], want)
-			}
-			if pinned && menu.windowIcons[row] != "pinned" && menu.windowIcons[row] != "pinned-risk" {
-				t.Fatalf("row %d pin mark %q", row, menu.windowIcons[row])
 			}
 		}
 	}
@@ -331,5 +328,26 @@ func TestQuotaRowsPinTheIconPersistently(t *testing.T) {
 	assertChecks(iconTarget{})
 	if loadIconPin() != (iconTarget{}) {
 		t.Fatal("unpinning did not clear saved pin")
+	}
+}
+
+func TestPinnedQuotaMarkStaysNeutralAtRisk(t *testing.T) {
+	defer systray.ResetMenu()
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: "openai"}, false, nil, false)
+	for _, atRisk := range []bool{false, true, false, true} {
+		menu.windowAtRisk[0] = atRisk
+		setWindowIcon(menu, 0, true)
+		if menu.windowIcons[0] != "pinned" {
+			t.Fatalf("atRisk=%v: pinned state = %q", atRisk, menu.windowIcons[0])
+		}
+		setWindowIcon(menu, 0, false)
+		want := ""
+		if atRisk {
+			want = "risk"
+		}
+		if menu.windowIcons[0] != want {
+			t.Fatalf("atRisk=%v: unpinned state = %q, want %q", atRisk, menu.windowIcons[0], want)
+		}
+		setWindowIcon(menu, 0, true)
 	}
 }

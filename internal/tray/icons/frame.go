@@ -519,19 +519,18 @@ func MenuRiskDot() []byte {
 	return encodePNG(dst)
 }
 
-// MenuCheck marks the quota row the tray icon is pinned to: a check in the
-// menu's text color, or in the over-pace red when that quota runs out first.
-func MenuCheck(palette TrayPalette, atRisk bool) []byte {
+// MenuPin marks the quota row the tray icon is pinned to with a thumbtack.
+// It always uses the menu's text color; quota risk belongs on the tray icon.
+func MenuPin(palette TrayPalette) []byte {
 	dst := image.NewRGBA(image.Rect(0, 0, MenuIconSize, MenuIconSize))
 	c := color.NRGBA{0x2b, 0x2b, 0x2b, 0xff}
 	if palette == TrayPaletteDark {
 		c = color.NRGBA{0xee, 0xee, 0xee, 0xff}
 	}
-	if atRisk {
-		c = frameRed
-	}
-	drawThickLine(dst, 3.5, 8.5, 6.5, 11.5, 1, c)
-	drawThickLine(dst, 6.5, 11.5, 12.5, 4.5, 1, c)
+	// A broad cap, tapered shoulders, and a long needle read at 16px.
+	frameStroke(dst, []framePoint{{5, 3}, {11, 3}}, 1, c, 1.5)
+	frameStroke(dst, []framePoint{{6, 3}, {6, 7}, {4, 9}, {12, 9}, {10, 7}, {10, 3}}, 1, c, 1.5)
+	frameStroke(dst, []framePoint{{8, 9}, {8, 13}}, 1, c, 1.5)
 	return encodePNG(dst)
 }
 
