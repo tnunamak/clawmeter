@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 // These tests pin the machine outputs to the shared snapshot: a stale reading
@@ -87,7 +88,7 @@ func TestAgentAndStatusLineSayOutNowDuringForecastWarmUp(t *testing.T) {
 	if strings.Contains(agent, "runs_out_in") {
 		t.Fatalf("AgentSummary() = %q, warm-up has no run-out ETA", agent)
 	}
-	if got, want := output.StatusLineSummary(), "CM! Claude 5h current 100% projection unknown out now"; got != want {
+	if got, want := output.StatusLineSummary(), "CM! Claude 5h current 100% forecast soon out now"; got != want {
 		t.Fatalf("StatusLineSummary() = %q, want %q", got, want)
 	}
 }
@@ -124,7 +125,7 @@ func TestUnknownResetIsNeverZeroSeconds(t *testing.T) {
 			t.Fatalf("AgentSummary() = %q, unknown reset must not contain %q", agent, banned)
 		}
 	}
-	if got, want := output.StatusLineSummary(), "CM Codex 7d current 40% projection unknown"; got != want {
+	if got, want := output.StatusLineSummary(), "CM Codex 7d current 40% no forecast"; got != want {
 		t.Fatalf("StatusLineSummary() = %q, want %q", got, want)
 	}
 }
@@ -290,5 +291,32 @@ func TestJSONViewCarriesEveryAccountAndTheWorstTarget(t *testing.T) {
 	idle := jpath(t, codex, "windows", 1)
 	if jpath(t, idle, "shown").(bool) {
 		t.Fatal("an idle window must be marked not shown")
+	}
+}
+
+func TestRetainedWarmReadingStillSaysOutNowInStatusline(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
+		Provider: "claude", Stale: true, FetchedAt: now.Add(-time.Minute),
+		Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: now.Add(298 * time.Minute)}},
+	})}}
+	got := output.buildView(now).statusLine()
+	if want := "CM! Claude 5h current 100% forecast soon out now (last good 11:59)"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestViewUsesConfiguredPollIntervalForRetainedReadings(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	output := &MultiProviderOutput{PollInterval: 600, Providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
+		Provider: "claude", Stale: true, FetchedAt: now.Add(-15 * time.Minute),
+		Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 80, ResetsAt: now.Add(3 * time.Hour)}},
+	})}}
+	if got := output.buildView(now).snap.Accounts[0].Windows[0].Forecast.State; got != view.ForecastKnown {
+		t.Fatalf("custom poll interval forecast=%s", got)
+	}
+	output.PollInterval = 300
+	if got := output.buildView(now).snap.Accounts[0].Windows[0].Forecast.State; got != view.ForecastStale {
+		t.Fatalf("default poll interval forecast=%s", got)
 	}
 }

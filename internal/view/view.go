@@ -104,7 +104,7 @@ const (
 	ForecastKnown ForecastState = "known"
 	// ForecastWarming means too little of the window has elapsed to project.
 	ForecastWarming ForecastState = "warming"
-	// ForecastStale means the reading is not fresh, or the reset has passed.
+	// ForecastStale means the reading is too old or unusable, or the reset has passed.
 	ForecastStale ForecastState = "stale"
 	// ForecastNone means the window has no reset, or no known length.
 	ForecastNone ForecastState = "none"
@@ -126,7 +126,7 @@ const (
 	ExhaustionRunsOut ExhaustionState = "runs_out"
 	// ExhaustionLasts means the current rate lasts to the reset.
 	ExhaustionLasts ExhaustionState = "lasts"
-	// ExhaustionUnknown means the forecast cannot say, or the reading is not fresh.
+	// ExhaustionUnknown means the reading cannot establish a current run-out.
 	ExhaustionUnknown ExhaustionState = "unknown"
 )
 
@@ -174,6 +174,9 @@ type Target struct {
 
 // Inputs are everything Build reads. Maps may be nil.
 type Inputs struct {
+	// MaxReadingAge allows a retained reading to forecast up to this age.
+	// Zero disables forecasting retained readings.
+	MaxReadingAge time.Duration
 	// Results maps a source key to its latest provider data. A nil value is
 	// a source with no data.
 	Results map[string]*provider.UsageData
@@ -251,11 +254,19 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 	}
 	account.Provider = data.Provider
 	account.Reading = reading(data)
-	fresh := account.Reading.State == ReadingFresh
+	usable := account.Reading.State == ReadingFresh
+	projectionAt := at
+	if account.Reading.State == ReadingStale && !data.FetchedAt.IsZero() && in.MaxReadingAge > 0 {
+		age := at.Sub(data.FetchedAt)
+		if age >= 0 && age <= in.MaxReadingAge {
+			usable = true
+			projectionAt = data.FetchedAt
+		}
+	}
 
 	account.Windows = make([]Window, 0, len(data.Windows))
 	for _, w := range data.Windows {
-		account.Windows = append(account.Windows, buildWindow(in, key, w, fresh, at))
+		account.Windows = append(account.Windows, buildWindow(in, key, w, usable, projectionAt, at))
 	}
 	showAll := allIdle(data.Windows, at)
 	for i, w := range data.Windows {
@@ -355,7 +366,7 @@ func allIdle(windows []provider.UsageWindow, at time.Time) bool {
 	return true
 }
 
-func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at time.Time) Window {
+func buildWindow(in Inputs, key string, w provider.UsageWindow, usable bool, projectionAt, at time.Time) Window {
 	out := Window{
 		Name:      w.Name,
 		Code:      meter.Code(w),
@@ -377,7 +388,7 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 	}
 	var proj forecast.Projection
 	switch {
-	case !fresh:
+	case !usable:
 		out.Forecast.State = ForecastStale
 	case w.ResetsAt.IsZero():
 		out.Forecast.State = ForecastNone
@@ -386,7 +397,8 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 	case length <= 0:
 		out.Forecast.State = ForecastNone
 	default:
-		proj = forecast.ProjectAt(w.Utilization, w.ResetsAt, length, at)
+		proj = forecast.ProjectAt(w.Utilization, w.ResetsAt, length, projectionAt)
+		proj.RunsOutIn -= at.Sub(projectionAt)
 		switch {
 		case proj.Unknown:
 			out.Forecast.State = ForecastWarming
@@ -397,7 +409,7 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 
 	known := out.Forecast.State == ForecastKnown
 	switch {
-	case !fresh, !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
+	case !usable, !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
 		// A reading from before the window's reset says nothing about now.
 		out.Exhaustion.State = ExhaustionUnknown
 	case w.Utilization >= 100:
@@ -410,6 +422,8 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, fresh bool, at t
 		}
 	case known && proj.WillLastToReset:
 		out.Exhaustion.State = ExhaustionLasts
+	case known && proj.RunsOutIn <= 0:
+		out.Exhaustion.State = ExhaustionUnknown
 	case known:
 		out.Exhaustion.State = ExhaustionRunsOut
 		out.Exhaustion.RunsOutIn = proj.RunsOutIn

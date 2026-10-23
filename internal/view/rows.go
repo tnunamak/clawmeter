@@ -37,8 +37,8 @@ func (a Account) ShownWindows() []Window {
 //
 // Every window's state is read from the snapshot before any layout choice, so a
 // window with no reset or only money reads the same exhaustion and forecast
-// states as any other. A reading that is not fresh has no forecast and no
-// run-out: its forecast is stale or unknown, and its exhaustion is unknown.
+// states as any other. Retained readings use the same forecast age limit on
+// every surface.
 func (w Window) Row(codeShared bool) meter.Row {
 	out := w.Exhaustion.State == ExhaustionOut
 	if w.Money != "" && !w.Reset.Known && w.Reset.Policy == "" {
@@ -61,9 +61,7 @@ func (w Window) Row(codeShared bool) meter.Row {
 			row.Resets = "reset not reported"
 		}
 		row.Bar = bar(w.Used)
-		if w.Forecast.State == ForecastStale {
-			row.ForecastState = "stale"
-		}
+		row.ForecastState = w.ForecastWords()
 		if out {
 			row.RunsOut = "now"
 			row.RanOutAt = w.Exhaustion.OutSince
@@ -82,10 +80,7 @@ func (w Window) Row(codeShared bool) meter.Row {
 		row.Forecast = meter.Percent(w.Forecast.Pct)
 		row.Over = w.Forecast.Pct > 100
 	} else {
-		row.ForecastState = "unknown"
-		if w.Forecast.State == ForecastStale {
-			row.ForecastState = "stale"
-		}
+		row.ForecastState = w.ForecastWords()
 		row.Bar = bar(w.Used)
 	}
 

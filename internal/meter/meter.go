@@ -134,7 +134,7 @@ type Row struct {
 	Bar   []Cell
 	// Forecast is the forecast use at reset, such as "137%". When the
 	// window has a reset but no usable forecast, it is empty and
-	// ForecastState says why ("unknown" or "stale").
+	// ForecastState says why ("forecast soon", "no forecast", or "forecast stale").
 	Forecast      string
 	ForecastState string
 	// Over is true when the forecast passes the limit.

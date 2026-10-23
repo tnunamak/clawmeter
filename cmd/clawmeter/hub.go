@@ -54,7 +54,7 @@ func hubCmd(args []string) int {
 	registry := newRegistry(cfg)
 	// A reading stays current for two tray polls, so one late poll does not
 	// blank the hub.
-	maxAge := 2 * config.PollInterval(cfg.Settings.PollInterval)
+	maxAge := config.ReadingMaxAge(cfg.Settings.PollInterval)
 	handler, err := cliproxy.NewHandler(managementKey, registry.GetConfigured(), maxAge)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clawmeter:", err)

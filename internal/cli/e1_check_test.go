@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 // This helper-level test requires statusCheckExitCode from the fix.
@@ -60,5 +61,45 @@ func TestWorstWindowPrefersExhaustedOverHealthySibling(t *testing.T) {
 	agent := output.AgentSummary()
 	if !strings.Contains(agent, "worst=Test mystery;") || !strings.Contains(agent, "Test mystery(current=100%,projected_at_reset=unknown,reset_in=1h00m,status=at_risk,runs_out=now,runs_out_early_by_seconds=3600,runs_out_early_by=1h00m)") || strings.Contains(agent, "; status=unknown;") {
 		t.Fatalf("agent summary = %q", agent)
+	}
+}
+
+// --check grades a reading kept after a failed poll as the display does: its
+// forecast is projected from when it was taken, not recomputed at now.
+func TestCheckUsesRetainedReadingForecast(t *testing.T) {
+	now := time.Now()
+	reading := func(age time.Duration) *MultiProviderOutput {
+		data := &provider.UsageData{FetchedAt: now.Add(-age), Windows: []provider.UsageWindow{
+			{Name: "5h", Length: 5 * time.Hour, Utilization: 39.5, ResetsAt: now.Add(3 * time.Hour)},
+		}}
+		data.MarkStale("rate limited (429)")
+		return &MultiProviderOutput{Providers: []ProviderFormatter{{Display: "Test", Data: data}}}
+	}
+	// Two minutes old: projected at fetch time it runs out before the reset.
+	young := reading(2 * time.Minute)
+	if acct := young.buildView(now).snap.Accounts[0]; acct.Windows[0].Exhaustion.State != view.ExhaustionRunsOut {
+		t.Fatalf("young reading exhaustion = %s, want runs_out", acct.Windows[0].Exhaustion.State)
+	}
+	if got := statusCheckExitCode(young); got != 2 {
+		t.Fatalf("young retained reading exit=%d want 2", got)
+	}
+	// Older than two polls: no forecast, so stale is a warning.
+	if got := statusCheckExitCode(reading(time.Hour)); got != 1 {
+		t.Fatalf("old retained reading exit=%d want 1", got)
+	}
+}
+
+// The summary names the window that makes an account critical.
+func TestSummaryNamesExhaustedWindow(t *testing.T) {
+	now := time.Now()
+	data := &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{
+		{Name: "5h", Length: 5 * time.Hour, Utilization: 10, ResetsAt: now.Add(time.Hour)},
+		{Name: "mystery", Utilization: 100},
+	}}
+	output := &MultiProviderOutput{Providers: []ProviderFormatter{{Display: "Test", Data: data}}}
+	v := output.buildView(now)
+	u := summaryUrgency(v.entries[0].pf, v.account(v.entries[0].key))
+	if u.tier != 2 || u.window.Name != "mystery" {
+		t.Fatalf("summary = tier %d window %q, want tier 2 window mystery", u.tier, u.window.Name)
 	}
 }

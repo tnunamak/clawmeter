@@ -7,18 +7,17 @@ import (
 	"github.com/tnunamak/clawmeter/internal/format"
 )
 
-// ForecastWords states a window's forecast in the words every surface uses:
-// "est. 50% at reset" when known, "projection unknown" while the forecast
-// cannot yet say, and "stale" for a window whose reading or reset is past.
-// It is empty when the window has no reset.
+// ForecastWords states the forecast or why no forecast is available.
 func (w Window) ForecastWords() string {
 	switch w.Forecast.State {
 	case ForecastKnown:
 		return forecast.PaceLabel(w.Forecast.Pct)
 	case ForecastStale:
-		return "stale"
-	case ForecastWarming, ForecastNone:
-		return "projection unknown"
+		return "forecast stale"
+	case ForecastWarming:
+		return "forecast soon"
+	case ForecastNone:
+		return "no forecast"
 	}
 	return ""
 }
