@@ -242,6 +242,7 @@ func onReadyWithConfig(loaded *config.Config) {
 		explicit := cfg.IsProviderExplicitlyEnabled(provider.FamilyName(p))
 		menu := createProviderMenuItems(p, explicit, providerConnectActions, familyCounts[p.Name()] > 1)
 		menu.order = len(providerMenus)
+		menu.disabled = cfg.IsProviderDisabled(provider.FamilyName(p))
 		hideProviderMenu(menu)
 		providerMenus[provider.SourceKey(p)] = menu
 	}
@@ -672,6 +673,7 @@ func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Co
 	defer trayRenderMu.Unlock()
 	for _, menu := range menus {
 		menu.explicitlyEnabled = cfg.IsProviderExplicitlyEnabled(provider.FamilyName(menu.provider))
+		menu.disabled = cfg.IsProviderDisabled(provider.FamilyName(menu.provider))
 	}
 }
 
@@ -695,6 +697,7 @@ type providerMenuItems struct {
 	opensDashboard    bool
 	everHealthy       bool // true once we've seen useful quota data
 	explicitlyEnabled bool
+	disabled          bool // turned off in config; never shown
 	connecting        atomic.Bool
 	connectFailed     atomic.Bool // last tray connection attempt failed
 	headerState       menuItemState
@@ -1622,7 +1625,7 @@ func trayShown(results, fetched map[string]*provider.UsageData, menus map[string
 	shown := make(map[string]*provider.UsageData, len(menus))
 	for name, menu := range menus {
 		data := results[name]
-		if data == nil && fetched[name] != nil {
+		if menu.disabled || data == nil && fetched[name] != nil {
 			continue
 		}
 		if data != nil && data.EstablishesPrimaryUIHistory() {

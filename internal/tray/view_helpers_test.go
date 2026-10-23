@@ -92,3 +92,17 @@ func viewWindowOf(t *testing.T, window provider.UsageWindow) view.Window {
 	}
 	return snap.Accounts[0].Windows[0]
 }
+
+// A provider turned off in config is never shown, even the Token Plan, which
+// is otherwise shown whenever its console login is detected.
+func TestTrayShownSkipsDisabledProvider(t *testing.T) {
+	menus := testMenus(tokenPlanProviderName)
+	setups := map[string]provider.SetupStatus{tokenPlanProviderName: {State: provider.SetupNeedsAuth}}
+	if _, ok := trayShown(nil, nil, menus, setups)[tokenPlanProviderName]; !ok {
+		t.Fatal("detected Token Plan is not shown")
+	}
+	menus[tokenPlanProviderName].disabled = true
+	if _, ok := trayShown(nil, nil, menus, setups)[tokenPlanProviderName]; ok {
+		t.Fatal("disabled Token Plan is shown")
+	}
+}
