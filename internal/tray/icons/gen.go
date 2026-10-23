@@ -143,14 +143,14 @@ func GenerateProviderIconWithMeter(providerName string, meter MeterState, size i
 // host appearance palette. Unknown values fail safely to the dark default.
 func GenerateProviderIconWithMeterPalette(providerName string, meter MeterState, size int, palette TrayPalette) []byte {
 	if ProviderLogos[providerName] == nil {
-		return plainCrawfish(meter.UsagePct, size)
+		return appLogo(size)
 	}
 	return encodePNG(renderProviderFrameIcon(providerName, meter, size, frameThemeForPalette(palette)))
 }
 
 // GenerateIcon is the lower-level entry point used by callers that pass a raw
 // logo blob (e.g. tests). It auto-detects whether a contrast plate is needed.
-// If providerLogo is nil, returns the plain colored crawfish at usagePct.
+// If providerLogo is nil or invalid, returns the Clawmeter app logo.
 func GenerateIcon(providerLogo []byte, usagePct float64, size int) []byte {
 	return generateIcon(providerLogo, MeterState{
 		UsagePct:    usagePct,
@@ -160,14 +160,14 @@ func GenerateIcon(providerLogo []byte, usagePct float64, size int) []byte {
 }
 
 func generateIcon(providerLogo []byte, meter MeterState, size int, treatment logoTreatment) []byte {
-	// No provider logo: fall back to the colored crawfish.
+	// No provider logo: fall back to the Clawmeter app logo.
 	if providerLogo == nil {
-		return plainCrawfish(meter.UsagePct, size)
+		return appLogo(size)
 	}
 
 	logoImg, _, err := image.Decode(bytes.NewReader(providerLogo))
 	if err != nil {
-		return plainCrawfish(meter.UsagePct, size)
+		return appLogo(size)
 	}
 	if treatment.darkenMonochrome {
 		logoImg = darkMonochromeLogo(logoImg)
@@ -245,28 +245,13 @@ func drawFilledCircle(dst *image.RGBA, cx, cy, radius float64, c color.NRGBA) {
 	}
 }
 
-// plainCrawfish renders the canonical crawfish in the color that matches
-// usagePct. Used when the provider has no embedded logo.
-func plainCrawfish(usagePct float64, size int) []byte {
-	clawData := crawfishForPct(usagePct)
-	clawImg, _, err := image.Decode(bytes.NewReader(clawData))
+// appLogo renders the Clawmeter identity when a provider has no usable logo.
+func appLogo(size int) []byte {
+	logoImg, _, err := image.Decode(bytes.NewReader(App))
 	if err != nil {
-		return clawData
+		return App
 	}
-	return encodePNG(resize(clawImg, size))
-}
-
-func crawfishForPct(usagePct float64) []byte {
-	switch {
-	case usagePct >= 80:
-		return Red
-	case usagePct >= 50:
-		return Yellow
-	case usagePct > 0:
-		return Green
-	default:
-		return Gray
-	}
+	return encodePNG(resize(logoImg, size))
 }
 
 func drawClawMeterOverlay(dst *image.RGBA, meter MeterState, workSize int) {

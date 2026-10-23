@@ -28,10 +28,8 @@ const dynamicIconVersion = 33
 var dynamicIconSizes = []int{22, 32, 64, 128}
 
 var iconSet = map[string][]byte{
-	"green":  icons.Green,
-	"yellow": icons.Yellow,
-	"red":    icons.Red,
-	"gray":   icons.Gray,
+	"logo":     icons.App,
+	"logo-off": icons.AppOff,
 }
 
 func setupIconTheme() {
