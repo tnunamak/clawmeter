@@ -307,9 +307,6 @@ func onReadyWithConfig(loaded *config.Config) {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	// Guard against concurrent refreshes
-	var refreshing sync.Mutex
-
 	ticker := time.NewTicker(config.PollInterval(loaded.Settings.PollInterval))
 	pollIntervalSeconds := loaded.Settings.PollInterval
 	windowExhaustion.load(exhaustionPath(), 2*config.PollInterval(pollIntervalSeconds))
@@ -342,120 +339,23 @@ func onReadyWithConfig(loaded *config.Config) {
 		pollIntervalSeconds = resetPollIntervalIfChanged(pollIntervalSeconds, newCfg.Settings.PollInterval, ticker.Reset)
 	}
 
+	refresher := &usageRefresher{
+		registry:     registry,
+		menus:        providerMenus,
+		reloadConfig: reloadConfig,
+		pollSeconds:  func() int { return pollIntervalSeconds },
+		render: func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus) {
+			updateUI(results, statuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		},
+		finished: func(at time.Time) {
+			trayRenderMu.Lock()
+			mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", at.Format("15:04")))
+			trayRenderMu.Unlock()
+		},
+	}
 	// Refresh usage only (lightweight, runs every poll cycle). It reports
 	// false when another refresh was already running.
-	refresh := func(force bool) bool {
-		if !refreshing.TryLock() {
-			return false
-		}
-		defer refreshing.Unlock()
-
-		reloadConfig()
-
-		// Refresh already runs off the tray event loop. Complete executable-path
-		// recovery before discovering configured providers so CLI-backed sources
-		// cannot disappear based on a startup race.
-		shellpath.Init()
-		configured := registry.GetConfigured()
-		currentRevisions := providerSourceRevisions(configured)
-		s.mu.Lock()
-		priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
-		toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
-		priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
-		s.mu.Unlock()
-
-		// Credential discovery may recover allowlisted variables through a login
-		// shell. Start the network deadline afterward so discovery latency cannot
-		// leave every provider with an already-expired context.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		result := provider.FetchProvidersParallel(ctx, toFetch)
-
-		// Merge in cached data for backed-off providers
-		for name, cached := range skipped {
-			result.Results[name] = cached
-			if revision := priorRevisions[name]; revision != "" {
-				result.SourceRevisions[name] = revision
-			}
-		}
-
-		// Apply failure gate: suppress transient errors when cached data exists
-		s.mu.Lock()
-		for name, data := range result.Results {
-			if _, wasSkipped := skipped[name]; wasSkipped {
-				continue // already using cached data
-			}
-			if data == nil {
-				continue
-			}
-			if data.Error != "" {
-				log.Printf("provider refresh failed: provider=%s error=%s", name, data.Error)
-			}
-
-			if data.Error == "" && !data.IsExpired {
-				s.failureGate.RecordSuccess(name)
-				continue
-			}
-			// Provider errored — keep showing last good windows, but label them
-			// stale so the tray never turns unavailable data into a clean 0%.
-			hasPrior := false
-			if prev, ok := priorResults[name]; ok && prev != nil && prev.HasPresentableUsage() && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
-				hasPrior = true
-			}
-			if data.InvalidatesPriorUsage {
-				_ = s.failureGate.ShouldSurfaceError(name, hasPrior)
-			} else if hasPrior && !data.HasPresentableUsage() {
-				prev := priorResults[name].Clone()
-				prev.MarkStale(data.Error)
-				result.Results[name] = prev
-				_ = s.failureGate.ShouldSurfaceError(name, true)
-			} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
-				// First failure with prior data — keep showing cache silently.
-				if prev, ok := priorResults[name]; ok && prev != nil && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
-					cached := prev.Clone()
-					cached.MarkStale(data.Error)
-					result.Results[name] = cached
-				}
-			}
-		}
-		s.mu.Unlock()
-
-		identities := sourceIdentities(configured, result.SourceRevisions)
-		maxGap := 2 * config.PollInterval(pollIntervalSeconds)
-		windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
-		available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
-		_ = cache.Write(result)
-
-		// The feed is read after the usage cache is written: announcements
-		// are display-only and never enter the usage cache.
-		s.mu.Lock()
-		currentCfg := cfg
-		s.mu.Unlock()
-		if currentCfg.Settings.NotifyQuotaAvailable && len(available) > 0 {
-			if title, body := quotaAvailableNotice(available, result.Results, providerMenus, time.Now()); title != "" {
-				go notify(title, body, "low")
-			}
-		}
-		feed := refreshResetAnnouncements(currentCfg, configured)
-		s.mu.Lock()
-		s.feedReading = feed
-		s.mu.Unlock()
-
-		now := time.Now()
-		s.mu.Lock()
-		s.lastResults = result.Results
-		s.lastSourceRevisions = result.SourceRevisions
-		s.lastRefreshAt = now
-		statuses := s.statuses // reuse last known statuses
-		s.mu.Unlock()
-
-		updateUI(result.Results, statuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
-		trayRenderMu.Lock()
-		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
-		trayRenderMu.Unlock()
-		return true
-	}
+	refresh := refresher.refresh
 
 	// Refresh status pages (heavier, runs less often)
 	refreshStatus := func() {
@@ -570,14 +470,14 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	extensionCtx, stopExtension := context.WithCancel(context.Background())
 	publishAPICredits := func() {
-		publishLocalResetSource(&refreshing, registry, "claude_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		publishLocalResetSource(&refresher.mu, registry, "claude_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 	}
 	go func() {
 		err := claudeweb.ServeExtension(extensionCtx, func() []claudeweb.Account {
 			return claudewebprovider.Accounts(registry.GetFamily("claude"))
 		}, func(result claudeweb.Result) {
 			if result.IsResets() {
-				publishLocalResetSource(&refreshing, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+				publishLocalResetSource(&refresher.mu, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 				return
 			}
 			publishAPICredits()
@@ -642,14 +542,9 @@ func onReadyWithConfig(loaded *config.Config) {
 					return saveHidden(family)
 				})
 			case family := <-providerShowRequests:
-				go func() {
-					if changeEnablement(func() (*config.Config, error) {
-						return saveShown(family)
-					}) {
-						// A hidden provider was not polled; read it now.
-						refresh(true)
-					}
-				}()
+				go showHiddenProvider(family, &enablementMu, applyConfig, func() {
+					updateUI(nil, nil, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+				}, refresher.refreshWhenFree)
 			case target := <-iconPick.picked:
 				selectIconTarget(providerMenus, iconPick, target)
 			case providerName := <-providerConnectActions:
@@ -776,6 +671,18 @@ func changeProviderEnablement(mu sync.Locker, save func() (*config.Config, error
 	}
 	apply(newCfg)
 	render()
+	return true
+}
+
+// showHiddenProvider turns a hidden family back on, redraws, and then reads
+// it, because a hidden provider was not polled. The read must not be skipped
+// when a refresh is running: that refresh started before the change, left the
+// provider out, and would leave its row empty until the next poll.
+func showHiddenProvider(family string, mu sync.Locker, apply func(*config.Config), render func(), refresh func(force bool)) bool {
+	if !changeProviderEnablement(mu, func() (*config.Config, error) { return saveShown(family) }, apply, render) {
+		return false
+	}
+	refresh(true)
 	return true
 }
 
@@ -1585,6 +1492,141 @@ var quotaRecovery recoveryWatch
 
 // resetFeedClient is replaced by tests so that no request leaves the process.
 var resetFeedClient = resetfeed.Default
+
+// usageRefresher polls the configured providers and redraws the menu.
+type usageRefresher struct {
+	mu           sync.Mutex // held for the whole of one refresh
+	registry     *provider.Registry
+	menus        map[string]*providerMenuItems
+	reloadConfig func()
+	pollSeconds  func() int
+	render       func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus)
+	finished     func(at time.Time)
+}
+
+// refresh polls now unless another refresh is running; it reports false then.
+func (r *usageRefresher) refresh(force bool) bool {
+	if !r.mu.TryLock() {
+		return false
+	}
+	defer r.mu.Unlock()
+	r.run(force)
+	return true
+}
+
+// refreshWhenFree polls now, after any refresh that is running ends. That
+// refresh read the config before the caller's change, so it cannot stand in.
+func (r *usageRefresher) refreshWhenFree(force bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.run(force)
+}
+
+// run polls and redraws. The caller holds r.mu.
+func (r *usageRefresher) run(force bool) {
+	r.reloadConfig()
+
+	// Refresh already runs off the tray event loop. Complete executable-path
+	// recovery before discovering configured providers so CLI-backed sources
+	// cannot disappear based on a startup race.
+	shellpath.Init()
+	configured := r.registry.GetConfigured()
+	currentRevisions := providerSourceRevisions(configured)
+	s.mu.Lock()
+	priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
+	toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
+	priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
+	s.mu.Unlock()
+
+	// Credential discovery may recover allowlisted variables through a login
+	// shell. Start the network deadline afterward so discovery latency cannot
+	// leave every provider with an already-expired context.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result := provider.FetchProvidersParallel(ctx, toFetch)
+
+	// Merge in cached data for backed-off providers
+	for name, cached := range skipped {
+		result.Results[name] = cached
+		if revision := priorRevisions[name]; revision != "" {
+			result.SourceRevisions[name] = revision
+		}
+	}
+
+	// Apply failure gate: suppress transient errors when cached data exists
+	s.mu.Lock()
+	for name, data := range result.Results {
+		if _, wasSkipped := skipped[name]; wasSkipped {
+			continue // already using cached data
+		}
+		if data == nil {
+			continue
+		}
+		if data.Error != "" {
+			log.Printf("provider refresh failed: provider=%s error=%s", name, data.Error)
+		}
+
+		if data.Error == "" && !data.IsExpired {
+			s.failureGate.RecordSuccess(name)
+			continue
+		}
+		// Provider errored — keep showing last good windows, but label them
+		// stale so the tray never turns unavailable data into a clean 0%.
+		hasPrior := false
+		if prev, ok := priorResults[name]; ok && prev != nil && prev.HasPresentableUsage() && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
+			hasPrior = true
+		}
+		if data.InvalidatesPriorUsage {
+			_ = s.failureGate.ShouldSurfaceError(name, hasPrior)
+		} else if hasPrior && !data.HasPresentableUsage() {
+			prev := priorResults[name].Clone()
+			prev.MarkStale(data.Error)
+			result.Results[name] = prev
+			_ = s.failureGate.ShouldSurfaceError(name, true)
+		} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
+			// First failure with prior data — keep showing cache silently.
+			if prev, ok := priorResults[name]; ok && prev != nil && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
+				cached := prev.Clone()
+				cached.MarkStale(data.Error)
+				result.Results[name] = cached
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	identities := sourceIdentities(configured, result.SourceRevisions)
+	maxGap := 2 * config.PollInterval(r.pollSeconds())
+	windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
+	available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
+	_ = cache.Write(result)
+
+	// The feed is read after the usage cache is written: announcements
+	// are display-only and never enter the usage cache.
+	s.mu.Lock()
+	currentCfg := cfg
+	s.mu.Unlock()
+	if currentCfg.Settings.NotifyQuotaAvailable && len(available) > 0 {
+		if title, body := quotaAvailableNotice(available, result.Results, r.menus, time.Now()); title != "" {
+			go notify(title, body, "low")
+		}
+	}
+	feed := refreshResetAnnouncements(currentCfg, configured)
+	s.mu.Lock()
+	s.feedReading = feed
+	s.mu.Unlock()
+
+	now := time.Now()
+	s.mu.Lock()
+	s.lastResults = result.Results
+	s.lastSourceRevisions = result.SourceRevisions
+	s.lastRefreshAt = now
+	statuses := s.statuses // reuse last known statuses
+	s.mu.Unlock()
+
+	r.render(result.Results, statuses)
+	r.finished(now)
+}
 
 func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, iconPick *iconPicker, mEmpty, mProviderSetup *systray.MenuItem) bool {
 	// Read and publish after any in-flight refresh has finished publishing.

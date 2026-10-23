@@ -3,12 +3,15 @@
 package tray
 
 import (
+	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/status"
 	"github.com/tnunamak/clawmeter/internal/systray"
 )
 
@@ -318,5 +321,103 @@ func TestAFamilyWithAHealthySiblingGetsNoHideItem(t *testing.T) {
 	}
 	if f.menus[workKey].hideState.title != "Hide Claude" {
 		t.Fatalf("title = %q", f.menus[workKey].hideState.title)
+	}
+}
+
+// failingProvider is a configured provider whose every check ends in an error.
+type failingProvider struct{ hideTestProvider }
+
+func (p failingProvider) FetchUsage(context.Context) (*provider.UsageData, error) {
+	return &provider.UsageData{Provider: p.Name(), FetchedAt: time.Now(), Error: "quota access expired"}, nil
+}
+
+// refreshFixture runs the real refresh path (registry, config reload, fetch,
+// render) over one failing provider.
+func newRefreshFixture(t *testing.T) (*hideFixture, *usageRefresher, *providerMenuItems) {
+	t.Helper()
+	p := failingProvider{hideTestProvider{sourceMenuTestProvider{name: "alibaba_token", id: "default"}, "Alibaba Token Plan"}}
+	f := newHideFixture(t, false, p.hideTestProvider)
+	menu := f.menus[provider.SourceKey(p)]
+	s.mu.Lock()
+	oldGate := s.failureGate
+	s.failureGate = provider.NewFailureGate()
+	s.mu.Unlock()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.failureGate = oldGate
+		s.mu.Unlock()
+	})
+	registry := provider.NewRegistry()
+	if err := registry.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	reload := func() {
+		saved, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.apply(saved)
+		registry.SetEnabledFilter(saved)
+	}
+	r := &usageRefresher{
+		registry:     registry,
+		menus:        f.menus,
+		reloadConfig: reload,
+		pollSeconds:  func() int { return 300 },
+		render:       func(map[string]*provider.UsageData, map[string]*status.ProviderStatus) { f.render() },
+		finished:     func(time.Time) {},
+	}
+	reload()
+	return f, r, menu
+}
+
+// A provider shown again returns to its real state, an error with Hide, after
+// one refresh, even when a refresh that began before the click is still running.
+func TestShownAgainProviderReturnsToItsRealState(t *testing.T) {
+	f, r, menu := newRefreshFixture(t)
+	saveAndApply := func(save func() (*config.Config, error)) {
+		t.Helper()
+		if !f.change(save) {
+			t.Fatal("change failed")
+		}
+	}
+	if !r.refresh(false) || !menu.hideState.visible {
+		t.Fatalf("setup: error not shown with Hide: header %+v hide %+v", menu.headerState, menu.hideState)
+	}
+	saveAndApply(func() (*config.Config, error) { return saveHidden("alibaba_token") })
+	r.refresh(false)
+	if menu.headerState.visible {
+		t.Fatal("setup: provider still shown after Hide")
+	}
+
+	// A refresh that read the config before the click is still running.
+	r.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		showHiddenProvider("alibaba_token", &f.mu, f.apply, f.render, r.refreshWhenFree)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		trayRenderMu.Lock()
+		hidden := menu.disabled
+		trayRenderMu.Unlock()
+		if !hidden {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	r.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("show handler did not finish")
+	}
+
+	if !menu.headerState.visible || !strings.Contains(menu.headerState.title, "quota access expired") {
+		t.Fatalf("block did not return to its error: header %+v", menu.headerState)
+	}
+	if !menu.hideState.visible {
+		t.Fatal("no Hide item on the returned error")
 	}
 }
