@@ -224,6 +224,8 @@ func onReadyWithConfig(loaded *config.Config) {
 	// appears on the next refresh without needing a restart.
 	providerMenus := make(map[string]*providerMenuItems)
 	providerConnectActions := make(chan string, 1)
+	providerHideRequests := make(chan string, 1)
+	providerShowRequests := make(chan string, 1)
 	familyCounts := make(map[string]int)
 	for _, p := range registry.GetAll() {
 		familyCounts[p.Name()]++
@@ -292,17 +294,18 @@ func onReadyWithConfig(loaded *config.Config) {
 	iconPick := newIconPicker()
 	for _, menu := range providerMenus {
 		iconPick.forwardRows(menu)
+		forwardHide(menu, providerHideRequests)
 	}
 	mAutostart := mSettings.AddSubMenuItemCheckbox("Launch at login", "", false)
 	updateAutostartLabel(mAutostart)
 	mSetupExtension := mSettings.AddSubMenuItem("Set up the browser extension…", "")
 	mReport := mSettings.AddSubMenuItem("Report a problem…", "")
+	showHidden := newShowHiddenMenu(mSettings, providerMenus)
+	showHidden.forward(providerShowRequests)
+	showHidden.update(providerMenus)
 	mSettings.AddSubMenuItem(fmt.Sprintf("Clawmeter %s", version), "").Disable()
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
-
-	// Guard against concurrent refreshes
-	var refreshing sync.Mutex
 
 	ticker := time.NewTicker(config.PollInterval(loaded.Settings.PollInterval))
 	pollIntervalSeconds := loaded.Settings.PollInterval
@@ -312,133 +315,47 @@ func onReadyWithConfig(loaded *config.Config) {
 	// to the registry filter and per-provider menu state. This is what
 	// makes `clawmeter config enable <provider>` (or any other out-of-band
 	// edit) reflect in the running tray without a restart.
-	reloadConfig := func() {
-		newCfg, err := config.Load(all.SourceValidator())
-		if err != nil {
-			return
-		}
+	// enablementMu keeps a reload from applying a config read before a
+	// Hide or Show click saved its change.
+	var enablementMu sync.Mutex
+	applyConfig := func(newCfg *config.Config) {
 		s.mu.Lock()
 		cfg = newCfg
 		s.mu.Unlock()
 		registry.SetEnabledFilter(newCfg)
 		applyProviderEnablement(providerMenus, newCfg)
+		trayRenderMu.Lock()
+		showHidden.update(providerMenus)
+		trayRenderMu.Unlock()
+	}
+	reloadConfig := func() {
+		enablementMu.Lock()
+		defer enablementMu.Unlock()
+		newCfg, err := config.Load(all.SourceValidator())
+		if err != nil {
+			return
+		}
+		applyConfig(newCfg)
 		pollIntervalSeconds = resetPollIntervalIfChanged(pollIntervalSeconds, newCfg.Settings.PollInterval, ticker.Reset)
 	}
 
+	refresher := &usageRefresher{
+		registry:     registry,
+		menus:        providerMenus,
+		reloadConfig: reloadConfig,
+		pollSeconds:  func() int { return pollIntervalSeconds },
+		render: func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus) {
+			updateUI(results, statuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		},
+		finished: func(at time.Time) {
+			trayRenderMu.Lock()
+			mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", at.Format("15:04")))
+			trayRenderMu.Unlock()
+		},
+	}
 	// Refresh usage only (lightweight, runs every poll cycle). It reports
 	// false when another refresh was already running.
-	refresh := func(force bool) bool {
-		if !refreshing.TryLock() {
-			return false
-		}
-		defer refreshing.Unlock()
-
-		reloadConfig()
-
-		// Refresh already runs off the tray event loop. Complete executable-path
-		// recovery before discovering configured providers so CLI-backed sources
-		// cannot disappear based on a startup race.
-		shellpath.Init()
-		configured := registry.GetConfigured()
-		currentRevisions := providerSourceRevisions(configured)
-		s.mu.Lock()
-		priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
-		toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
-		priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
-		s.mu.Unlock()
-
-		// Credential discovery may recover allowlisted variables through a login
-		// shell. Start the network deadline afterward so discovery latency cannot
-		// leave every provider with an already-expired context.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		result := provider.FetchProvidersParallel(ctx, toFetch)
-
-		// Merge in cached data for backed-off providers
-		for name, cached := range skipped {
-			result.Results[name] = cached
-			if revision := priorRevisions[name]; revision != "" {
-				result.SourceRevisions[name] = revision
-			}
-		}
-
-		// Apply failure gate: suppress transient errors when cached data exists
-		s.mu.Lock()
-		for name, data := range result.Results {
-			if _, wasSkipped := skipped[name]; wasSkipped {
-				continue // already using cached data
-			}
-			if data == nil {
-				continue
-			}
-			if data.Error != "" {
-				log.Printf("provider refresh failed: provider=%s error=%s", name, data.Error)
-			}
-
-			if data.Error == "" && !data.IsExpired {
-				s.failureGate.RecordSuccess(name)
-				continue
-			}
-			// Provider errored — keep showing last good windows, but label them
-			// stale so the tray never turns unavailable data into a clean 0%.
-			hasPrior := false
-			if prev, ok := priorResults[name]; ok && prev != nil && prev.HasPresentableUsage() && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
-				hasPrior = true
-			}
-			if data.InvalidatesPriorUsage {
-				_ = s.failureGate.ShouldSurfaceError(name, hasPrior)
-			} else if hasPrior && !data.HasPresentableUsage() {
-				prev := priorResults[name].Clone()
-				prev.MarkStale(data.Error)
-				result.Results[name] = prev
-				_ = s.failureGate.ShouldSurfaceError(name, true)
-			} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
-				// First failure with prior data — keep showing cache silently.
-				if prev, ok := priorResults[name]; ok && prev != nil && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
-					cached := prev.Clone()
-					cached.MarkStale(data.Error)
-					result.Results[name] = cached
-				}
-			}
-		}
-		s.mu.Unlock()
-
-		identities := sourceIdentities(configured, result.SourceRevisions)
-		maxGap := 2 * config.PollInterval(pollIntervalSeconds)
-		windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
-		available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
-		_ = cache.Write(result)
-
-		// The feed is read after the usage cache is written: announcements
-		// are display-only and never enter the usage cache.
-		s.mu.Lock()
-		currentCfg := cfg
-		s.mu.Unlock()
-		if currentCfg.Settings.NotifyQuotaAvailable && len(available) > 0 {
-			if title, body := quotaAvailableNotice(available, result.Results, providerMenus, time.Now()); title != "" {
-				go notify(title, body, "low")
-			}
-		}
-		feed := refreshResetAnnouncements(currentCfg, configured)
-		s.mu.Lock()
-		s.feedReading = feed
-		s.mu.Unlock()
-
-		now := time.Now()
-		s.mu.Lock()
-		s.lastResults = result.Results
-		s.lastSourceRevisions = result.SourceRevisions
-		s.lastRefreshAt = now
-		statuses := s.statuses // reuse last known statuses
-		s.mu.Unlock()
-
-		updateUI(result.Results, statuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
-		trayRenderMu.Lock()
-		mRefresh.SetTitle(fmt.Sprintf("Refresh Now  (updated %s)", now.Format("15:04")))
-		trayRenderMu.Unlock()
-		return true
-	}
+	refresh := refresher.refresh
 
 	// Refresh status pages (heavier, runs less often)
 	refreshStatus := func() {
@@ -553,14 +470,14 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	extensionCtx, stopExtension := context.WithCancel(context.Background())
 	publishAPICredits := func() {
-		publishLocalResetSource(&refreshing, registry, "claude_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		publishLocalResetSource(&refresher.mu, registry, "claude_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 	}
 	go func() {
 		err := claudeweb.ServeExtension(extensionCtx, func() []claudeweb.Account {
 			return claudewebprovider.Accounts(registry.GetFamily("claude"))
 		}, func(result claudeweb.Result) {
 			if result.IsResets() {
-				publishLocalResetSource(&refreshing, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+				publishLocalResetSource(&refresher.mu, registry, claudeWebProviderKey(result.Resets.ResetCreditsTarget), providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
 				return
 			}
 			publishAPICredits()
@@ -595,6 +512,14 @@ func onReadyWithConfig(loaded *config.Config) {
 			}
 		}
 	}()
+	// changeEnablement saves a provider on/off change, then redraws at once
+	// instead of waiting for the next poll.
+	changeEnablement := func(save func() (*config.Config, error)) bool {
+		return changeProviderEnablement(&enablementMu, save, applyConfig, func() {
+			updateUI(nil, nil, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		})
+	}
+
 	// Event loop (never blocks on network I/O)
 	go func() {
 		for {
@@ -612,6 +537,14 @@ func onReadyWithConfig(loaded *config.Config) {
 			case <-mRefresh.ClickedCh:
 				go refresh(true)
 				go checkUpdate()
+			case family := <-providerHideRequests:
+				go changeEnablement(func() (*config.Config, error) {
+					return saveHidden(family)
+				})
+			case family := <-providerShowRequests:
+				go showHiddenProvider(family, &enablementMu, applyConfig, func() {
+					updateUI(nil, nil, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+				}, refresher.refreshWhenFree)
 			case target := <-iconPick.picked:
 				selectIconTarget(providerMenus, iconPick, target)
 			case providerName := <-providerConnectActions:
@@ -667,6 +600,170 @@ func onReadyWithConfig(loaded *config.Config) {
 	}()
 }
 
+// completedProblem reports whether a block shows a problem found by a
+// finished check: an error or an expired login in a reading, or a setup status
+// that needs sign-in. A block with no reading yet, as at startup before the
+// first poll ends, is not a problem.
+func completedProblem(data *provider.UsageData, setup provider.SetupStatus) bool {
+	if data == nil {
+		return setup.State == provider.SetupNeedsAuth
+	}
+	return data.IsExpired || data.Error != ""
+}
+
+// hideOffered reports whether the block for source key gets a Hide item: it
+// has a completed problem, and so does every other shown source of its family.
+// Hiding writes `enabled: false` for the whole family, so on a row of a family
+// with a working account (one of several Claude accounts failing while the
+// others work) it would also hide the working accounts. A sibling that has no
+// reading yet may turn out to work, so it blocks Hide too. No Hide is offered
+// there; the user can fix or remove the failing account instead.
+func hideOffered(key string, data *provider.UsageData, menus map[string]*providerMenuItems, shown map[string]*provider.UsageData, setups map[string]provider.SetupStatus) bool {
+	if !completedProblem(data, setups[key]) {
+		return false
+	}
+	family := provider.FamilyName(menus[key].provider)
+	for other, menu := range menus {
+		if other == key || provider.FamilyName(menu.provider) != family {
+			continue
+		}
+		if sibling, ok := shown[other]; ok && !completedProblem(sibling, setups[other]) {
+			return false
+		}
+	}
+	return true
+}
+
+// forwardHide sends the family of a provider block to requests when its Hide
+// item is clicked.
+func forwardHide(menu *providerMenuItems, requests chan<- string) {
+	family := provider.FamilyName(menu.provider)
+	go func() {
+		for range menu.hideItem.ClickedCh {
+			select {
+			case requests <- family:
+			default:
+			}
+		}
+	}()
+}
+
+// saveHidden writes the change `clawmeter providers disable <family>` makes.
+func saveHidden(family string) (*config.Config, error) {
+	return config.SetProviderEnabled(family, false, all.SourceValidator())
+}
+
+// saveShown writes the change `clawmeter providers enable <family>` makes.
+func saveShown(family string) (*config.Config, error) {
+	return config.SetProviderEnabled(family, true, all.SourceValidator())
+}
+
+// changeProviderEnablement saves a provider on/off change, applies the saved
+// config and redraws at once instead of waiting for the next poll.
+func changeProviderEnablement(mu sync.Locker, save func() (*config.Config, error), apply func(*config.Config), render func()) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	newCfg, err := save()
+	if err != nil {
+		log.Printf("save provider setting: %v", err)
+		notify("Clawmeter", "Could not save the change. Try again.", "normal")
+		return false
+	}
+	apply(newCfg)
+	render()
+	return true
+}
+
+// showHiddenProvider turns a hidden family back on, redraws, and then reads
+// it, because a hidden provider was not polled. The read must not be skipped
+// when a refresh is running: that refresh started before the change, left the
+// provider out, and would leave its row empty until the next poll.
+func showHiddenProvider(family string, mu sync.Locker, apply func(*config.Config), render func(), refresh func(force bool)) bool {
+	if !changeProviderEnablement(mu, func() (*config.Config, error) { return saveShown(family) }, apply, render) {
+		return false
+	}
+	refresh(true)
+	return true
+}
+
+// showHiddenMenu is the Settings submenu "Show hidden providers": one item per
+// provider family that has a menu, shown while config turns that family off.
+// The fork cannot insert items, so every item is pre-created and hidden.
+type showHiddenMenu struct {
+	parent      *systray.MenuItem
+	parentState menuItemState
+	items       []*hiddenFamilyItem
+}
+
+type hiddenFamilyItem struct {
+	family string
+	item   *systray.MenuItem
+	state  menuItemState
+}
+
+// newShowHiddenMenu adds the submenu under settings, hidden, with an item for
+// each family among menus, ordered by display name.
+func newShowHiddenMenu(settings *systray.MenuItem, menus map[string]*providerMenuItems) *showHiddenMenu {
+	names := make(map[string]string)
+	for _, menu := range menus {
+		family := provider.FamilyName(menu.provider)
+		if _, ok := names[family]; !ok {
+			names[family] = menu.provider.DisplayName()
+		}
+	}
+	families := make([]string, 0, len(names))
+	for family := range names {
+		families = append(families, family)
+	}
+	sort.Slice(families, func(i, j int) bool {
+		a, b := strings.ToLower(names[families[i]]), strings.ToLower(names[families[j]])
+		if a != b {
+			return a < b
+		}
+		return families[i] < families[j]
+	})
+	m := &showHiddenMenu{parent: settings.AddSubMenuItem("Show hidden providers", "")}
+	for _, family := range families {
+		item := m.parent.AddSubMenuItem(names[family], "")
+		item.Hide()
+		m.items = append(m.items, &hiddenFamilyItem{family: family, item: item, state: menuItemState{title: names[family], enabled: true, initialized: true}})
+	}
+	m.parent.Hide()
+	m.parentState = menuItemState{title: "Show hidden providers", enabled: true, initialized: true}
+	return m
+}
+
+// forward sends the family of a clicked item to requests.
+func (m *showHiddenMenu) forward(requests chan<- string) {
+	for _, entry := range m.items {
+		go func() {
+			for range entry.item.ClickedCh {
+				select {
+				case requests <- entry.family:
+				default:
+				}
+			}
+		}()
+	}
+}
+
+// update shows the item of each family that config turns off, and the
+// submenu while any item is shown. The caller holds trayRenderMu.
+func (m *showHiddenMenu) update(menus map[string]*providerMenuItems) {
+	anyShown := false
+	for _, entry := range m.items {
+		hidden := false
+		for _, menu := range menus {
+			if menu.disabled && provider.FamilyName(menu.provider) == entry.family {
+				hidden = true
+			}
+		}
+		setMenuItemVisible(entry.item, &entry.state, hidden)
+		anyShown = anyShown || hidden
+	}
+	setMenuItemVisible(m.parent, &m.parentState, anyShown)
+}
+
 func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Config) {
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()
@@ -678,12 +775,15 @@ func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Co
 
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
-	provider       provider.Provider
-	displayName    string
-	headerItem     *systray.MenuItem
-	statusItem     *systray.MenuItem
-	resetItem      *systray.MenuItem
-	announceItem   *systray.MenuItem
+	provider     provider.Provider
+	displayName  string
+	headerItem   *systray.MenuItem
+	statusItem   *systray.MenuItem
+	resetItem    *systray.MenuItem
+	announceItem *systray.MenuItem
+	// hideItem turns the provider off in config. It is shown only while the
+	// block reports a problem and no healthy account shares the family.
+	hideItem       *systray.MenuItem
 	connectable    bool // the name row can run the quota connection
 	headerAction   string
 	headerConnects atomic.Bool
@@ -703,6 +803,7 @@ type providerMenuItems struct {
 	statusState       menuItemState
 	resetState        menuItemState
 	announceState     menuItemState
+	hideState         menuItemState
 	announceURL       string // source post of the shown announcement; guarded by trayRenderMu
 	windowStates      []menuItemState
 	windowAtRisk      []bool
@@ -794,6 +895,12 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(announceItem, icons.MenuBlank())
 	announceItem.Hide()
 
+	// "Hide <name>" ends the block. It acts on the whole provider family, as
+	// `clawmeter providers disable` does.
+	hideItem := systray.AddMenuItem("Hide "+p.DisplayName(), "")
+	setMenuItemIcon(hideItem, icons.MenuBlank())
+	hideItem.Hide()
+
 	menu := &providerMenuItems{
 		provider:          p,
 		displayName:       displayName,
@@ -801,6 +908,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		statusItem:        statusItem,
 		resetItem:         resetItem,
 		announceItem:      announceItem,
+		hideItem:          hideItem,
 		connectable:       connectable,
 		windowItems:       windowItems,
 		moreItem:          moreItem,
@@ -813,6 +921,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
 		resetState:        resetState,
 		announceState:     menuItemState{visible: false, enabled: true, initialized: true},
+		hideState:         menuItemState{title: "Hide " + p.DisplayName(), visible: false, enabled: true, initialized: true},
 		windowStates:      windowStates,
 		windowAtRisk:      make([]bool, len(windowItems)),
 		windowIcons:       make([]string, len(windowItems)),
@@ -880,6 +989,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
 	setMenuItemVisible(menu.announceItem, &menu.announceState, false)
+	setMenuItemVisible(menu.hideItem, &menu.hideState, false)
 	hideProviderWindows(menu)
 	setProviderSeparatorVisible(menu, false)
 }
@@ -1133,6 +1243,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			continue
 		}
 		acct := accountNamed(snap, name)
+		setMenuItemVisible(menu.hideItem, &menu.hideState, hideOffered(name, data, menus, shown, setups))
 
 		setup := setups[name]
 		setupReady := setup.IsReady()
@@ -1381,6 +1492,141 @@ var quotaRecovery recoveryWatch
 
 // resetFeedClient is replaced by tests so that no request leaves the process.
 var resetFeedClient = resetfeed.Default
+
+// usageRefresher polls the configured providers and redraws the menu.
+type usageRefresher struct {
+	mu           sync.Mutex // held for the whole of one refresh
+	registry     *provider.Registry
+	menus        map[string]*providerMenuItems
+	reloadConfig func()
+	pollSeconds  func() int
+	render       func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus)
+	finished     func(at time.Time)
+}
+
+// refresh polls now unless another refresh is running; it reports false then.
+func (r *usageRefresher) refresh(force bool) bool {
+	if !r.mu.TryLock() {
+		return false
+	}
+	defer r.mu.Unlock()
+	r.run(force)
+	return true
+}
+
+// refreshWhenFree polls now, after any refresh that is running ends. That
+// refresh read the config before the caller's change, so it cannot stand in.
+func (r *usageRefresher) refreshWhenFree(force bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.run(force)
+}
+
+// run polls and redraws. The caller holds r.mu.
+func (r *usageRefresher) run(force bool) {
+	r.reloadConfig()
+
+	// Refresh already runs off the tray event loop. Complete executable-path
+	// recovery before discovering configured providers so CLI-backed sources
+	// cannot disappear based on a startup race.
+	shellpath.Init()
+	configured := r.registry.GetConfigured()
+	currentRevisions := providerSourceRevisions(configured)
+	s.mu.Lock()
+	priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
+	toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
+	priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
+	s.mu.Unlock()
+
+	// Credential discovery may recover allowlisted variables through a login
+	// shell. Start the network deadline afterward so discovery latency cannot
+	// leave every provider with an already-expired context.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result := provider.FetchProvidersParallel(ctx, toFetch)
+
+	// Merge in cached data for backed-off providers
+	for name, cached := range skipped {
+		result.Results[name] = cached
+		if revision := priorRevisions[name]; revision != "" {
+			result.SourceRevisions[name] = revision
+		}
+	}
+
+	// Apply failure gate: suppress transient errors when cached data exists
+	s.mu.Lock()
+	for name, data := range result.Results {
+		if _, wasSkipped := skipped[name]; wasSkipped {
+			continue // already using cached data
+		}
+		if data == nil {
+			continue
+		}
+		if data.Error != "" {
+			log.Printf("provider refresh failed: provider=%s error=%s", name, data.Error)
+		}
+
+		if data.Error == "" && !data.IsExpired {
+			s.failureGate.RecordSuccess(name)
+			continue
+		}
+		// Provider errored — keep showing last good windows, but label them
+		// stale so the tray never turns unavailable data into a clean 0%.
+		hasPrior := false
+		if prev, ok := priorResults[name]; ok && prev != nil && prev.HasPresentableUsage() && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
+			hasPrior = true
+		}
+		if data.InvalidatesPriorUsage {
+			_ = s.failureGate.ShouldSurfaceError(name, hasPrior)
+		} else if hasPrior && !data.HasPresentableUsage() {
+			prev := priorResults[name].Clone()
+			prev.MarkStale(data.Error)
+			result.Results[name] = prev
+			_ = s.failureGate.ShouldSurfaceError(name, true)
+		} else if !s.failureGate.ShouldSurfaceError(name, hasPrior) {
+			// First failure with prior data — keep showing cache silently.
+			if prev, ok := priorResults[name]; ok && prev != nil && cache.SourceRevisionMatches(priorRevisions, name, result.SourceRevisions[name]) {
+				cached := prev.Clone()
+				cached.MarkStale(data.Error)
+				result.Results[name] = cached
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	identities := sourceIdentities(configured, result.SourceRevisions)
+	maxGap := 2 * config.PollInterval(r.pollSeconds())
+	windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
+	available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
+	_ = cache.Write(result)
+
+	// The feed is read after the usage cache is written: announcements
+	// are display-only and never enter the usage cache.
+	s.mu.Lock()
+	currentCfg := cfg
+	s.mu.Unlock()
+	if currentCfg.Settings.NotifyQuotaAvailable && len(available) > 0 {
+		if title, body := quotaAvailableNotice(available, result.Results, r.menus, time.Now()); title != "" {
+			go notify(title, body, "low")
+		}
+	}
+	feed := refreshResetAnnouncements(currentCfg, configured)
+	s.mu.Lock()
+	s.feedReading = feed
+	s.mu.Unlock()
+
+	now := time.Now()
+	s.mu.Lock()
+	s.lastResults = result.Results
+	s.lastSourceRevisions = result.SourceRevisions
+	s.lastRefreshAt = now
+	statuses := s.statuses // reuse last known statuses
+	s.mu.Unlock()
+
+	r.render(result.Results, statuses)
+	r.finished(now)
+}
 
 func publishLocalResetSource(refreshing sync.Locker, registry *provider.Registry, sourceKey string, menus map[string]*providerMenuItems, mReauth *systray.MenuItem, iconPick *iconPicker, mEmpty, mProviderSetup *systray.MenuItem) bool {
 	// Read and publish after any in-flight refresh has finished publishing.

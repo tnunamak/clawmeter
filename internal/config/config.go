@@ -398,3 +398,19 @@ func (c *Config) EnsureProvider(name string, enabled bool) ProviderConfig {
 	c.Providers[name] = pc
 	return pc
 }
+
+// SetProviderEnabled loads the saved config, turns one provider on or off and
+// saves it. `clawmeter providers enable|disable` and the tray both use it. It
+// returns the saved config.
+func SetProviderEnabled(name string, enabled bool, validators ...SourceValidator) (*Config, error) {
+	var cfg *Config
+	err := Update(func(latest *Config) error {
+		latest.EnsureProvider(name, enabled)
+		cfg = latest
+		return nil
+	}, validators...)
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}

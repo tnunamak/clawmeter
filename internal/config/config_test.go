@@ -441,3 +441,22 @@ func TestSourceConfigValidationAndRoundtrip(t *testing.T) {
 		t.Fatal("duplicate source id should fail")
 	}
 }
+
+func TestSetProviderEnabledChangesOnlyThatProvider(t *testing.T) {
+	scopeHome(t)
+	for _, name := range []string{"codex", "kimi"} {
+		if _, err := SetProviderEnabled(name, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := SetProviderEnabled("codex", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsProviderExplicitlyEnabled("codex") || !got.IsProviderDisabled("kimi") {
+		t.Fatalf("one provider changed the other: %+v", got.Providers)
+	}
+}
