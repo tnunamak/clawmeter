@@ -49,7 +49,33 @@ func setupIconTheme() {
 		}
 	}
 
+	refreshInstalledLauncherIcons(home)
+
 	exec.Command("gtk-update-icon-cache", "-f", "-t", base).Run()
+}
+
+// refreshInstalledLauncherIcons updates only installer-owned launcher copies.
+// App512 is the largest embedded app logo; do not upscale it for the legacy
+// 1024px slot. The existing cache refresh in setupIconTheme follows these writes.
+func refreshInstalledLauncherIcons(home string) {
+	share := filepath.Join(home, ".local", "share")
+	for _, path := range []string{
+		filepath.Join(share, "pixmaps", "clawmeter.png"),
+		filepath.Join(share, "icons", "hicolor", "1024x1024", "apps", "clawmeter.png"),
+	} {
+		current, err := os.ReadFile(path)
+		if err != nil || bytes.Equal(current, icons.App512) {
+			continue
+		}
+		// Deliberately omit O_CREATE: removal after ReadFile must not recreate
+		// a launcher icon that is no longer installed.
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+		if err != nil {
+			continue
+		}
+		_, _ = f.Write(icons.App512)
+		_ = f.Close()
+	}
 }
 
 func cleanupIconTheme() {}
