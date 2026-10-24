@@ -39,7 +39,7 @@ func TestBalanceRowsChooseTheirStepWhenDrawn(t *testing.T) {
 		t.Fatalf("rows = %d", rows)
 	}
 	if !menu.balanceStates[0].enabled || menu.balanceActions[0] != "sign in to the Claude Console" ||
-		!strings.HasSuffix(menu.balanceStates[0].title, "not updated since "+stale.Local().Format("15:04")+" · sign in to the Claude Console") {
+		!strings.HasSuffix(menu.balanceStates[0].title, "not updated since "+sinceLabel(stale, now)+" · sign in to the Claude Console") {
 		t.Fatalf("recent contact row = %+v, action %q", menu.balanceStates[0], menu.balanceActions[0])
 	}
 
@@ -96,5 +96,20 @@ func TestAHiddenBalanceRowOpensNothing(t *testing.T) {
 	openBalanceRow(menu, 0, func(string) { opened++ })
 	if opened != 0 || menu.balanceStates[0].enabled {
 		t.Fatalf("a click on a hidden row opened %d pages; enabled %v", opened, menu.balanceStates[0].enabled)
+	}
+}
+
+// sinceLabel is how the row names the reading time: a clock time today, else
+// the date. Six minutes before now falls on the previous day just after
+// midnight.
+func sinceLabel(t, now time.Time) string {
+	t, now = t.Local(), now.Local()
+	switch {
+	case t.Year() == now.Year() && t.YearDay() == now.YearDay():
+		return t.Format("15:04")
+	case t.Year() == now.Year():
+		return t.Format("Jan 2")
+	default:
+		return t.Format("Jan 2, 2006")
 	}
 }
