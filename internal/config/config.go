@@ -403,12 +403,13 @@ func (c *Config) EnsureProvider(name string, enabled bool) ProviderConfig {
 // saves it. `clawmeter providers enable|disable` and the tray both use it. It
 // returns the saved config.
 func SetProviderEnabled(name string, enabled bool, validators ...SourceValidator) (*Config, error) {
-	cfg, err := Load(validators...)
+	var cfg *Config
+	err := Update(func(latest *Config) error {
+		latest.EnsureProvider(name, enabled)
+		cfg = latest
+		return nil
+	}, validators...)
 	if err != nil {
-		return nil, err
-	}
-	cfg.EnsureProvider(name, enabled)
-	if err := cfg.Save(); err != nil {
 		return nil, err
 	}
 	return cfg, nil

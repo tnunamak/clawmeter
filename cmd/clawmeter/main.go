@@ -463,82 +463,66 @@ func configSetCmd(args []string) int {
 		return 1
 	}
 
-	cfg, err := config.Load(all.SourceValidator())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
-		return 1
-	}
-
 	key, value := args[0], args[1]
-	switch key {
-	case "poll_interval":
-		var seconds int
-		if _, err := fmt.Sscanf(value, "%d", &seconds); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
-			return 1
+	err := config.Update(func(cfg *config.Config) error {
+		switch key {
+		case "poll_interval":
+			var seconds int
+			if _, err := fmt.Sscanf(value, "%d", &seconds); err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			if seconds < config.MinimumPollIntervalSeconds {
+				return fmt.Errorf("poll_interval must be >= %d seconds", config.MinimumPollIntervalSeconds)
+			}
+			cfg.Settings.PollInterval = seconds
+		case "warning_threshold":
+			var pct float64
+			if _, err := fmt.Sscanf(value, "%f", &pct); err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
+				return fmt.Errorf("warning_threshold must be 0-100")
+			}
+			if pct >= cfg.Settings.NotificationThresholds.Critical {
+				return fmt.Errorf("warning_threshold must be less than critical_threshold (%.0f)", cfg.Settings.NotificationThresholds.Critical)
+			}
+			cfg.Settings.NotificationThresholds.Warning = pct
+		case "critical_threshold":
+			var pct float64
+			if _, err := fmt.Sscanf(value, "%f", &pct); err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
+				return fmt.Errorf("critical_threshold must be 0-100")
+			}
+			if pct <= cfg.Settings.NotificationThresholds.Warning {
+				return fmt.Errorf("critical_threshold must be greater than warning_threshold (%.0f)", cfg.Settings.NotificationThresholds.Warning)
+			}
+			cfg.Settings.NotificationThresholds.Critical = pct
+		case "check_for_updates":
+			var enabled bool
+			if _, err := fmt.Sscanf(value, "%t", &enabled); err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			cfg.Settings.CheckForUpdates = &enabled
+		case "codex_reset_announcements":
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			cfg.Settings.CodexResetAnnouncements = enabled
+		case "notify_quota_available":
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			cfg.Settings.NotifyQuotaAvailable = enabled
+		default:
+			return fmt.Errorf("unknown config key %q", key)
 		}
-		if seconds < config.MinimumPollIntervalSeconds {
-			fmt.Fprintf(os.Stderr, "clawmeter: poll_interval must be >= %d seconds\n", config.MinimumPollIntervalSeconds)
-			return 1
-		}
-		cfg.Settings.PollInterval = seconds
-	case "warning_threshold":
-		var pct float64
-		if _, err := fmt.Sscanf(value, "%f", &pct); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
-			return 1
-		}
-		if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
-			fmt.Fprintf(os.Stderr, "clawmeter: warning_threshold must be 0-100\n")
-			return 1
-		}
-		if pct >= cfg.Settings.NotificationThresholds.Critical {
-			fmt.Fprintf(os.Stderr, "clawmeter: warning_threshold must be less than critical_threshold (%.0f)\n", cfg.Settings.NotificationThresholds.Critical)
-			return 1
-		}
-		cfg.Settings.NotificationThresholds.Warning = pct
-	case "critical_threshold":
-		var pct float64
-		if _, err := fmt.Sscanf(value, "%f", &pct); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
-			return 1
-		}
-		if math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100 {
-			fmt.Fprintf(os.Stderr, "clawmeter: critical_threshold must be 0-100\n")
-			return 1
-		}
-		if pct <= cfg.Settings.NotificationThresholds.Warning {
-			fmt.Fprintf(os.Stderr, "clawmeter: critical_threshold must be greater than warning_threshold (%.0f)\n", cfg.Settings.NotificationThresholds.Warning)
-			return 1
-		}
-		cfg.Settings.NotificationThresholds.Critical = pct
-	case "check_for_updates":
-		var enabled bool
-		if _, err := fmt.Sscanf(value, "%t", &enabled); err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
-			return 1
-		}
-		cfg.Settings.CheckForUpdates = &enabled
-	case "codex_reset_announcements":
-		enabled, err := strconv.ParseBool(value)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
-			return 1
-		}
-		cfg.Settings.CodexResetAnnouncements = enabled
-	case "notify_quota_available":
-		enabled, err := strconv.ParseBool(value)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clawmeter: invalid value %q\n", value)
-			return 1
-		}
-		cfg.Settings.NotifyQuotaAvailable = enabled
-	default:
-		fmt.Fprintf(os.Stderr, "clawmeter: unknown config key %q\n", key)
-		return 1
-	}
-
-	if err := cfg.Save(); err != nil {
+		return nil
+	}, all.SourceValidator())
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
 		return 1
 	}
@@ -850,63 +834,61 @@ func providerSourceAddCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "clawmeter: unknown source add argument %q\n", args[i])
 		return 1
 	}
-	cfg, err := config.Load(all.SourceValidator())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "clawmeter:", err)
-		return 1
-	}
-	pc, existed := cfg.Providers[family]
-	if !existed {
-		pc.Enabled = true
-	}
-	if id == "" {
-		fmt.Fprintln(os.Stderr, "clawmeter: source id cannot be empty")
-		return 1
-	}
-	if kindMetadata.RefIsPath {
-		home, err := os.UserHomeDir()
-		if err != nil {
+	reportedError := errors.New("source error already reported")
+	err := config.Update(func(cfg *config.Config) error {
+		pc, existed := cfg.Providers[family]
+		if !existed {
+			pc.Enabled = true
+		}
+		if id == "" {
+			return errors.New("source id cannot be empty")
+		}
+		if kindMetadata.RefIsPath {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			if ref == "~" {
+				ref = home
+			} else if strings.HasPrefix(ref, "~/") || strings.HasPrefix(ref, `~\`) {
+				ref = filepath.Join(home, ref[2:])
+			}
+			if !filepath.IsAbs(ref) {
+				ref, err = filepath.Abs(ref)
+				if err != nil {
+					return err
+				}
+			}
+			ref = filepath.Clean(ref)
+		}
+		if err := capability.ValidateSource(config.SourceConfig{ID: id, Label: label, Credential: config.CredentialRef{Kind: kind, Ref: ref}}); err != nil {
 			fmt.Fprintln(os.Stderr, "clawmeter:", err)
-			return 1
+			printSourceKinds(os.Stderr, family, capability)
+			return reportedError
 		}
-		if ref == "~" {
-			ref = home
-		} else if strings.HasPrefix(ref, "~/") || strings.HasPrefix(ref, `~\`) {
-			ref = filepath.Join(home, ref[2:])
-		}
-		if !filepath.IsAbs(ref) {
-			ref, err = filepath.Abs(ref)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "clawmeter:", err)
-				return 1
+		if len(pc.Sources) == 0 && id != "default" {
+			defaultSource, ok := capability.DefaultSource()
+			if ok {
+				native, err := capability.NewSource(pc, defaultSource)
+				if err != nil {
+					return fmt.Errorf("provider %q default source: %v", family, err)
+				}
+				if native.IsConfigured() {
+					pc.Sources = append(pc.Sources, defaultSource)
+				}
 			}
 		}
-		ref = filepath.Clean(ref)
-	}
-	if err := capability.ValidateSource(config.SourceConfig{ID: id, Label: label, Credential: config.CredentialRef{Kind: kind, Ref: ref}}); err != nil {
-		fmt.Fprintln(os.Stderr, "clawmeter:", err)
-		printSourceKinds(os.Stderr, family, capability)
+		pc.Sources = append(pc.Sources, config.SourceConfig{ID: id, Label: label, Credential: config.CredentialRef{Kind: kind, Ref: ref}})
+		cfg.Providers[family] = pc
+		return nil
+	}, all.SourceValidator())
+	if err != nil {
+		if !errors.Is(err, reportedError) {
+			fmt.Fprintln(os.Stderr, "clawmeter:", err)
+		}
 		return 1
 	}
-	if len(pc.Sources) == 0 && id != "default" {
-		defaultSource, ok := capability.DefaultSource()
-		if ok {
-			native, err := capability.NewSource(pc, defaultSource)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "clawmeter: provider %q default source: %v\n", family, err)
-				return 1
-			}
-			if native.IsConfigured() {
-				pc.Sources = append(pc.Sources, defaultSource)
-			}
-		}
-	}
-	pc.Sources = append(pc.Sources, config.SourceConfig{ID: id, Label: label, Credential: config.CredentialRef{Kind: kind, Ref: ref}})
-	cfg.Providers[family] = pc
-	if err := cfg.Save(all.SourceValidator()); err != nil {
-		fmt.Fprintln(os.Stderr, "clawmeter:", err)
-		return 1
-	}
+
 	fmt.Printf("Added %s source %s. Restart a running tray to apply.\n", family, id)
 	return 0
 }
@@ -923,43 +905,41 @@ func providerSourceRemoveCmd(args []string) int {
 		return 1
 	}
 	family = canonical
-	cfg, err := config.Load(all.SourceValidator())
+	disabled := false
+	err := config.Update(func(cfg *config.Config) error {
+		if err := cfg.ValidateSources(all.SourceValidator()); err != nil {
+			return err
+		}
+		pc, ok := cfg.Providers[family]
+		if !ok {
+			return errors.New("source not found")
+		}
+		found := false
+		kept := pc.Sources[:0]
+		for _, source := range pc.Sources {
+			if source.ID == id {
+				found = true
+				continue
+			}
+			kept = append(kept, source)
+		}
+		if !found {
+			return errors.New("source not found")
+		}
+		pc.Sources = kept
+		if len(kept) == 0 {
+			pc.Enabled = false
+		}
+		cfg.Providers[family] = pc
+		disabled = len(kept) == 0
+		return nil
+	}, all.SourceValidator())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "clawmeter:", err)
 		return 1
 	}
-	if err := cfg.ValidateSources(all.SourceValidator()); err != nil {
-		fmt.Fprintln(os.Stderr, "clawmeter:", err)
-		return 1
-	}
-	pc, ok := cfg.Providers[family]
-	if !ok {
-		fmt.Fprintln(os.Stderr, "clawmeter: source not found")
-		return 1
-	}
-	found := false
-	kept := pc.Sources[:0]
-	for _, source := range pc.Sources {
-		if source.ID == id {
-			found = true
-			continue
-		}
-		kept = append(kept, source)
-	}
-	if !found {
-		fmt.Fprintln(os.Stderr, "clawmeter: source not found")
-		return 1
-	}
-	pc.Sources = kept
-	if len(kept) == 0 {
-		pc.Enabled = false
-	}
-	cfg.Providers[family] = pc
-	if err := cfg.Save(all.SourceValidator()); err != nil {
-		fmt.Fprintln(os.Stderr, "clawmeter:", err)
-		return 1
-	}
-	if len(kept) == 0 {
+
+	if disabled {
 		fmt.Printf("Removed %s source %s and disabled the provider (credentials unchanged). Restart a running tray to apply.\n", family, id)
 	} else {
 		fmt.Printf("Removed %s source %s (credentials unchanged). Restart a running tray to apply.\n", family, id)
