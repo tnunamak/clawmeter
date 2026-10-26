@@ -629,6 +629,7 @@ type UsageData struct {
 	FetchedAt          time.Time          `json:"fetched_at"`                // When this data was fetched
 	Windows            []UsageWindow      `json:"windows"`                   // Usage windows (providers may have 1 or more)
 	Balances           []UsageBalance     `json:"balances,omitempty"`        // Non-resetting balances
+	CreditGrants       []UsageCreditGrant `json:"credit_grants,omitempty"`   // Expiring, non-renewing allowances
 	CreditPools        []UsageCreditPool  `json:"credit_pools,omitempty"`    // Prepaid API credit pools
 	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"`   // Optional banked usage-limit reset metadata
 	AnnouncedReset     *ResetAnnouncement `json:"announced_reset,omitempty"` // Unofficial announced reset that bears on this account
@@ -794,6 +795,13 @@ func (u *UsageData) Clone() *UsageData {
 	if u.Balances != nil {
 		clone.Balances = append([]UsageBalance(nil), u.Balances...)
 	}
+	if u.CreditGrants != nil {
+		clone.CreditGrants = append([]UsageCreditGrant(nil), u.CreditGrants...)
+		for i := range clone.CreditGrants {
+			grant := &clone.CreditGrants[i]
+			grant.Used, grant.Limit, grant.Utilization = CreditAmount(grant.Used), CreditAmount(grant.Limit), CreditAmount(grant.Utilization)
+		}
+	}
 	if u.ResetCredits != nil {
 		resetCredits := *u.ResetCredits
 		if u.ResetCredits.Credits != nil {
@@ -822,7 +830,7 @@ func (u *UsageData) HasPresentableUsage() bool {
 	if u == nil || u.IsExpired {
 		return false
 	}
-	if len(u.Windows) > 0 || len(u.Balances) > 0 {
+	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 {
 		return true
 	}
 	// API credit pools are browser snapshots too: they keep a failed row

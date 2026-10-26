@@ -1094,6 +1094,9 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
 	if acct != nil {
+		for _, grant := range acct.CreditGrants {
+			show(grant.Summary(), "")
+		}
 		for _, pool := range acct.Pools {
 			title := pool.TrayLine(now)
 			// A lone pool on the Claude API row needs no label; anywhere else it
@@ -2466,12 +2469,17 @@ func newResetPeriod(previous, current, now time.Time) bool {
 	return !now.Before(previous) || current.Sub(previous) > 30*time.Minute
 }
 
-// nextAPICreditDeadline excludes old bookmark snapshots and already stale/signed-out pools.
+// nextAPICreditDeadline repaints expiring grants and newly stale API pools.
 func nextAPICreditDeadline(results map[string]*provider.UsageData, now time.Time) time.Time {
 	var earliest time.Time
 	for _, data := range results {
 		if data == nil {
 			continue
+		}
+		for _, grant := range data.CreditGrants {
+			if grant.ExpiresAt.After(now) && (earliest.IsZero() || grant.ExpiresAt.Before(earliest)) {
+				earliest = grant.ExpiresAt
+			}
 		}
 		for _, pool := range data.CreditPools {
 			if pool.ObservationSource != "extension" || !pool.IsLive(now) {
@@ -2511,7 +2519,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 		for name, menu := range menus {
 			data := results[name]
-			if !menu.headerState.visible || data == nil || len(data.CreditPools) == 0 {
+			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0) {
 				continue
 			}
 			balances := data.Balances

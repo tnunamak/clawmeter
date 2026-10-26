@@ -1,3 +1,22 @@
+## cloud-session credit on one source
+tooltip: "Claude · Default 7-Day\nCurrent 60%\nRuns out in 2d10h (23h00m before reset)\nResets in 3d9h\nEst. 116% at reset"
+icon: provider=claude usage=60 expected=52 risk=116 show_expected=true label="7D"
+menu[claude:fixture-default]: "5h    █░░░░░░░░┃░    \u200712% used    \u200714% at reset    resets in 40m | 7d    █████┃█▒▒▒▒    \u200760% used    116% at reset    resets in 3d 9h    runs out in 2d 10h"
+menu[claude:fixture-work]: "5h    █┃░░░░░░░░░    \u2007\u20078% used    forecast soon    resets in 4h 40m | 7d    ███▒░░░░┃░░    \u200730% used    \u200739% at reset    resets in 1d 14h"
+color: "PROVIDER          WINDOW  USAGE        USED       AT RESET  RESETS IN  RUNS OUT IN"
+color: "Claude · Default  5h      █░░░░░░░░┃░   12%            14%        40m"
+color: "                  7d      █████┃█▒▒▒▒   60%           116%      3d 9h       2d 10h"
+color: "                  Cloud session credits: $242.88 of $250.00 left · expires Nov 1 02:00"
+color: ""
+color: "Claude · Work     5h      █┃░░░░░░░░░    8%  forecast soon     4h 40m"
+color: "                  7d      ███▒░░░░┃░░   30%            39%     1d 14h"
+plain[claude:fixture-default]: Claude · Default: 5h: 12% (resets 40m, est. 14% at reset)  7d: 60% (resets 3d9h, est. 116% at reset · runs out in 2d10h (23h00m before reset))  Cloud session credits: $242.88 of $250.00 left · expires Nov 1 02:00
+plain[claude:fixture-work]: Claude · Work: 5h: 8% (resets 4h40m, forecast soon)  7d: 30% (resets 1d14h, est. 39% at reset)
+statusline: CM! Claude · Default 7d est. 116% reset 3d9h out 2d10h
+agent: Quota: worst=Claude · Default 7d; current=60%; projected_at_reset=115.9%; reset_in_seconds=291600; reset_in=3d9h; status=at_risk; runs_out_in_seconds=208800; runs_out_in=2d10h; runs_out_early_by_seconds=82800; runs_out_early_by=23h00m; quotas=[Claude · Default 5h(current=12%,projected_at_reset=13.8%,reset_in=40m,status=on_track) | Claude · Default 7d(current=60%,projected_at_reset=115.9%,reset_in=3d9h,status=at_risk,runs_out_in_seconds=208800,runs_out_in=2d10h,runs_out_early_by_seconds=82800,runs_out_early_by=23h00m) | Claude · Work 5h(current=8%,projected_at_reset=unknown,reset_in=4h40m,status=unknown) | Claude · Work 7d(current=30%,projected_at_reset=38.8%,reset_in=1d14h,status=on_track)]; credit_grants=[Claude · Default · Cloud session credits scope=cloud_sessions currency=USD state=available used=7.125 limit=250 remaining=242.875 used_pct=2.85 expires_at=2026-11-01T02:00:00-06:00 observed_at=2026-10-22T12:00:00-05:00].
+credit grant row[claude:fixture-default]: Cloud session credits: $242.88 of $250.00 left · expires Nov 1 02:00
+json[claude]: source[fixture-default] reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=14] window=7d[forecast=known exhaustion=runs_out reset_known=true shown=true projected_pct=116 runs_out_in_s=208800 early_by_s=82800] credit_grant={"name":"cloud_sessions","label":"Cloud session credits","scope":"cloud_sessions","currency":"USD","state":"available","used":7.125,"limit":250,"remaining":242.875,"utilization":2.85,"expires_at":"2026-11-01T02:00:00-06:00"} ; source[fixture-work] reading=fresh window=5h[forecast=warming exhaustion=unknown reset_known=true shown=true] window=7d[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=39]
+
 ## fresh at 100% in warm-up
 tooltip: "Claude 5-Hour\nCurrent 100%\nOut now (4h59m until reset)\nResets in 4h59m\nforecast soon"
 icon: provider=claude usage=100 expected=0 risk=100 show_expected=true label="5H"

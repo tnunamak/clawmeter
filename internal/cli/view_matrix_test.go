@@ -64,10 +64,26 @@ func fmtr(name, display, family string, data *provider.UsageData) ProviderFormat
 }
 
 func matrixCases(now time.Time) []matrixCase {
+	grantUsed, grantLimit, grantPct := 7.125, 250.0, 2.85
 	claude5h := func(used float64, resetIn time.Duration) []provider.UsageWindow {
 		return []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: used, ResetsAt: now.Add(resetIn)}}
 	}
 	return []matrixCase{
+		{
+			name: "cloud-session credit on one source",
+			providers: []ProviderFormatter{
+				{Name: "claude:fixture-default", Display: "Claude · Default", DisplayName: "Claude", SourceLabel: "Default", SourceID: "fixture-default", Family: "claude", SourceCount: 2,
+					Data: &provider.UsageData{Provider: "claude", SourceID: "fixture-default", FetchedAt: now, Windows: []provider.UsageWindow{
+						{Name: "5h", Length: 5 * time.Hour, Utilization: 12, ResetsAt: now.Add(40 * time.Minute)},
+						{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 60, ResetsAt: now.Add(81 * time.Hour)},
+					}, CreditGrants: []provider.UsageCreditGrant{{Name: "cloud_sessions", DisplayName: "Cloud session credits", Scope: "cloud_sessions", Currency: "USD", Used: &grantUsed, Limit: &grantLimit, Utilization: &grantPct, ExpiresAt: now.Add(231 * time.Hour)}}}},
+				{Name: "claude:fixture-work", Display: "Claude · Work", DisplayName: "Claude", SourceLabel: "Work", SourceID: "fixture-work", Family: "claude", SourceCount: 2,
+					Data: &provider.UsageData{Provider: "claude", SourceID: "fixture-work", FetchedAt: now, Windows: []provider.UsageWindow{
+						{Name: "5h", Length: 5 * time.Hour, Utilization: 8, ResetsAt: now.Add(280 * time.Minute)},
+						{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 30, ResetsAt: now.Add(38 * time.Hour)},
+					}}},
+			},
+		},
 		{
 			name: "fresh at 100% in warm-up",
 			providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
@@ -302,6 +318,9 @@ func dumpCase(tc matrixCase) string {
 		if e.pf.Data == nil {
 			continue
 		}
+		for _, grant := range v.account(e.key).CreditGrants {
+			line("credit grant row[%s]: %s", e.key, grant.Summary())
+		}
 		for _, pool := range e.pf.Data.CreditPools {
 			line("money row[%s]: %s", e.key, pool.Name+": "+pool.TrayLine(matrixNow))
 		}
@@ -366,6 +385,10 @@ func accountSummary(v *JSONAccountView) string {
 		}
 		b.WriteString("]")
 	}
+	for _, grant := range v.CreditGrants {
+		encoded, _ := json.Marshal(grant)
+		fmt.Fprintf(&b, " credit_grant=%s", encoded)
+	}
 	return b.String()
 }
 
@@ -417,6 +440,9 @@ func TestSurfacesAgreeFromOneSnapshot(t *testing.T) {
 	golden := goldenDumps(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "cloud-session credit on one source" {
+				assertCloudCreditSurfaces(t, tc)
+			}
 			got := dumpCase(tc)
 			want, ok := golden[tc.name]
 			if !ok {
@@ -433,5 +459,88 @@ func TestSurfacesAgreeFromOneSnapshot(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// assertCloudCreditSurfaces protects source membership independently of the golden.
+func assertCloudCreditSurfaces(t *testing.T, tc matrixCase) {
+	t.Helper()
+	v := (&MultiProviderOutput{Providers: tc.providers}).buildView(matrixNow)
+	rows := tray.MenuRows(v.snap, 8)
+	for i, e := range v.entries {
+		wantGrant := e.pf.SourceID == "fixture-default"
+		menu := strings.Join(rows[e.key], " | ")
+		for _, grant := range v.account(e.key).CreditGrants {
+			menu += " | " + grant.Summary()
+		}
+		for name, output := range map[string]string{"menu with money rows": menu, "plain": v.plainLine(i), "table": strings.Join(v.colorLines(i, newTableLayout()), "\n")} {
+			for _, ordinary := range []string{"5h", "7d"} {
+				if !strings.Contains(output, ordinary) {
+					t.Errorf("%s %s lost %s: %s", name, e.key, ordinary, output)
+				}
+			}
+			if strings.Contains(output, "Cloud session credits") != wantGrant {
+				t.Errorf("%s %s credit membership wrong: %s", name, e.key, output)
+			}
+			if wantGrant && !strings.Contains(output, "$242.88 of $250.00 left · expires") {
+				t.Errorf("%s lost money/expiry: %s", name, output)
+			}
+		}
+		if strings.Contains(strings.Join(rows[e.key], " "), "Cloud session") {
+			t.Fatal("grant became a quota bar")
+		}
+	}
+	agent := v.agentLine()
+	for _, label := range []string{"Default", "Work"} {
+		for _, window := range []string{"5h", "7d"} {
+			if !strings.Contains(agent, "Claude · "+label+" "+window+"(") {
+				t.Errorf("agent lost %s %s", label, window)
+			}
+		}
+	}
+	if !strings.Contains(agent, "Default · Cloud session credits scope=cloud_sessions currency=USD state=available used=7.125 limit=250 remaining=242.875 used_pct=2.85 expires_at=") || strings.Contains(agent, "Work · Cloud session credits") {
+		t.Errorf("agent credit facts wrong: %s", agent)
+	}
+	doc, err := v.jsonDocument(nil, matrixNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out JSONOutput
+	if err := json.Unmarshal(doc, &out); err != nil {
+		t.Fatal(err)
+	}
+	p := out.Providers["claude"]
+	if p == nil || len(p.Sources) != 2 {
+		t.Fatalf("JSON lost sources: %s", doc)
+	}
+	for _, src := range p.Sources {
+		wantGrant := src.Source.ID == "fixture-default"
+		if src.Usage == nil || src.View == nil {
+			t.Fatalf("JSON source missing details: %s", doc)
+		}
+		if (len(src.Usage.CreditGrants) == 1) != wantGrant || (len(src.View.CreditGrants) == 1) != wantGrant {
+			t.Fatalf("JSON grant on wrong source: %s", doc)
+		}
+		if len(src.Usage.Windows) != 2 || len(src.View.Windows) != 2 {
+			t.Fatal("grant changed ordinary quota membership")
+		}
+		if wantGrant {
+			g := src.View.CreditGrants[0]
+			if g.Scope != "cloud_sessions" || g.Remaining == nil || *g.Remaining != 242.875 || !g.ExpiresAt.Equal(matrixNow.Add(231*time.Hour)) {
+				t.Fatalf("JSON changed credit facts: %+v", g)
+			}
+			encoded, _ := json.Marshal(g)
+			if strings.Contains(string(encoded), "reset") || strings.Contains(string(encoded), "forecast") {
+				t.Fatal("JSON credit acquired a reset or forecast")
+			}
+		}
+	}
+	data := map[string]*provider.UsageData{}
+	for _, e := range v.entries {
+		data[e.key] = e.pf.Data
+	}
+	_, icon := tray.IconState(v.snap)
+	if icon.Label != "7D" || strings.Contains(tray.Tooltip(v.snap, data)+" "+v.statusLine(), "Cloud session") {
+		t.Error("compact surfaces no longer follow selected ordinary quota")
 	}
 }
