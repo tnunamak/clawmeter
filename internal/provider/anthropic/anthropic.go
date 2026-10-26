@@ -297,7 +297,7 @@ func (p *Provider) Description() string {
 
 // DashboardURL returns the web dashboard URL.
 func (p *Provider) DashboardURL() string {
-	return "https://console.anthropic.com"
+	return "https://claude.ai/settings/usage"
 }
 
 // IsConfigured returns true if credentials are available.
@@ -356,20 +356,26 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	if apiResp.usageUnavailable() {
-		return &provider.UsageData{
-			Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
-			FetchedAt: time.Now(),
-			Error:     "usage unavailable",
-		}, nil
-	}
-
 	data := &provider.UsageData{
 		Provider: p.Name(), SourceID: p.SourceID(), SourceLabel: p.SourceLabel(),
 		FetchedAt: time.Now(),
 		Windows:   make([]provider.UsageWindow, 0),
 	}
 
+	if grant := apiResp.IguanaNecktie; grant != nil {
+		used, limit, pct := provider.CreditAmount(grant.UsedDollars), provider.CreditAmount(grant.LimitDollars), provider.CreditAmount(grant.Utilization)
+		if used != nil || limit != nil || pct != nil {
+			data.CreditGrants = append(data.CreditGrants, provider.UsageCreditGrant{
+				Name: "cloud_sessions", DisplayName: "Cloud session credits",
+				Scope: "cloud_sessions", Currency: "USD", Used: used, Limit: limit,
+				Utilization: pct, ExpiresAt: grant.ResetsAt,
+			})
+		}
+	}
+	if apiResp.usageUnavailable() {
+		data.Error = "usage unavailable"
+		return data, nil
+	}
 	addUsageWindows(data, apiResp)
 
 	// Extra usage (overage) — only show if enabled
@@ -387,7 +393,7 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 			})
 		}
 	}
-	if len(data.Windows) == 0 {
+	if len(data.Windows) == 0 && len(data.CreditGrants) == 0 {
 		data.Error = "no complete usage data"
 	}
 
@@ -406,7 +412,6 @@ func addUsageWindows(data *provider.UsageData, apiResp usageResponse) {
 		{"7d OAuth", "7 days (OAuth apps)", apiResp.SevenDayOAuthApps},
 		{"7d Opus", "7 days (Opus)", apiResp.SevenDayOpus},
 		{"7d Sonnet", "7 days (Sonnet)", apiResp.SevenDaySonnet},
-		{"bonus", "Bonus", apiResp.IguanaNecktie},
 	} {
 		if nw.w != nil && validUtilization(nw.w.Utilization) && !nw.w.ResetsAt.IsZero() {
 			data.Windows = append(data.Windows, provider.UsageWindow{
@@ -630,7 +635,7 @@ type usageResponse struct {
 	SevenDayOAuthApps *usageWindow      `json:"seven_day_oauth_apps,omitempty"`
 	SevenDayOpus      *usageWindow      `json:"seven_day_opus,omitempty"`
 	SevenDaySonnet    *usageWindow      `json:"seven_day_sonnet,omitempty"`
-	IguanaNecktie     *usageWindow      `json:"iguana_necktie,omitempty"`
+	IguanaNecktie     *cloudCreditGrant `json:"iguana_necktie,omitempty"`
 	ExtraUsage        *extraUsageWindow `json:"extra_usage,omitempty"`
 	Limits            []usageLimit      `json:"limits,omitempty"`
 }
@@ -661,6 +666,15 @@ func hasResetlessModelWindow(r usageResponse) bool {
 type usageWindow struct {
 	Utilization *float64  `json:"utilization"`
 	ResetsAt    time.Time `json:"resets_at"`
+}
+
+// Anthropic's wire field is called resets_at, but this one-time credit
+// expires. The promotion is separate from the normal session/weekly limits.
+type cloudCreditGrant struct {
+	Utilization  *float64  `json:"utilization"`
+	UsedDollars  *float64  `json:"used_dollars"`
+	LimitDollars *float64  `json:"limit_dollars"`
+	ResetsAt     time.Time `json:"resets_at"`
 }
 
 type usageLimit struct {

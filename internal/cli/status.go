@@ -183,11 +183,15 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 	switch {
 	case pf.Data == nil:
 		addSpan(dim + "no data" + reset)
-	case acct.Reading.State == view.ReadingExpired:
-		addSpan(red + expiredMessage(pf.Data.Error) + reset)
-		lines = appendSnapshotLines(lines, pf.Data, layout, now)
-	case acct.Reading.State == view.ReadingError:
-		addSpan(red + format.HumanizeError(pf.Data.Error) + reset)
+	case acct.Reading.State == view.ReadingExpired || acct.Reading.State == view.ReadingError:
+		problem := format.HumanizeError(pf.Data.Error)
+		if acct.Reading.State == view.ReadingExpired {
+			problem = expiredMessage(pf.Data.Error)
+		}
+		addSpan(red + problem + reset)
+		for _, grant := range acct.CreditGrants {
+			addSpan(grant.Summary())
+		}
 		lines = appendSnapshotLines(lines, pf.Data, layout, now)
 	default:
 		rows := shownRows(acct)
@@ -212,6 +216,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 				line += tableGutter + dim + row.Money + reset
 			}
 			lines = append(lines, line)
+		}
+		for _, grant := range acct.CreditGrants {
+			addSpan(grant.Summary())
 		}
 		for _, balance := range pf.Data.Balances {
 			name := balance.DisplayName
@@ -285,11 +292,16 @@ func (v outputView) plainLine(i int) string {
 	if pf.Data == nil {
 		return fmt.Sprintf("%s: no data%s", display, suffix)
 	}
-	if acct.Reading.State == view.ReadingExpired {
-		return appendSnapshotsPlain(fmt.Sprintf("%s: %s%s", display, expiredMessage(pf.Data.Error), suffix), pf.Data, now)
-	}
-	if acct.Reading.State == view.ReadingError {
-		return appendSnapshotsPlain(fmt.Sprintf("%s: error - %s%s", display, format.HumanizeError(pf.Data.Error), suffix), pf.Data, now)
+	if acct.Reading.State == view.ReadingExpired || acct.Reading.State == view.ReadingError {
+		problem := "error - " + format.HumanizeError(pf.Data.Error)
+		if acct.Reading.State == view.ReadingExpired {
+			problem = expiredMessage(pf.Data.Error)
+		}
+		line := fmt.Sprintf("%s: %s%s", display, problem, suffix)
+		for _, grant := range acct.CreditGrants {
+			line += "  " + grant.Summary()
+		}
+		return appendSnapshotsPlain(line, pf.Data, now)
 	}
 
 	// People see the shown windows: idle ones carry no information and stay
@@ -309,6 +321,9 @@ func (v outputView) plainLine(i int) string {
 	}
 	if announced := announcementSummary(pf.Data, now); announced != "" {
 		parts = append(parts, announced)
+	}
+	for _, grant := range acct.CreditGrants {
+		parts = append(parts, grant.Summary())
 	}
 	for _, balance := range pf.Data.Balances {
 		label := balance.DisplayName
@@ -548,6 +563,9 @@ func (v outputView) agentLine() string {
 		if pools := v.agentCreditPoolSummaries(); len(pools) > 0 {
 			extra += "; api_credits=[" + strings.Join(pools, " | ") + "]"
 		}
+		if grants := v.agentCreditGrantSummaries(); len(grants) > 0 {
+			extra += "; credit_grants=[" + strings.Join(grants, " | ") + "]"
+		}
 		if extra != "" {
 			return "Quota: no active quota data" + extra + "."
 		}
@@ -565,8 +583,36 @@ func (v outputView) agentLine() string {
 	if pools := v.agentCreditPoolSummaries(); len(pools) > 0 {
 		parts = append(parts, "api_credits=["+strings.Join(pools, " | ")+"]")
 	}
+	if grants := v.agentCreditGrantSummaries(); len(grants) > 0 {
+		parts = append(parts, "credit_grants=["+strings.Join(grants, " | ")+"]")
+	}
 
 	return strings.Join(parts, "; ") + "."
+}
+
+func (v outputView) agentCreditGrantSummaries() []string {
+	var out []string
+	for _, acct := range v.snap.Accounts {
+		for _, grant := range acct.CreditGrants {
+			fields := []string{acct.Label + " · " + grant.Label, "scope=" + grant.Scope, "currency=" + grant.Currency, "state=" + grant.State}
+			for _, amount := range []struct {
+				name  string
+				value *float64
+			}{{"used", grant.Used}, {"limit", grant.Limit}, {"remaining", grant.Remaining}, {"last_observed_remaining", grant.LastObservedRemaining}, {"used_pct", grant.Utilization}} {
+				if amount.value != nil {
+					fields = append(fields, amount.name+"="+strconv.FormatFloat(*amount.value, 'f', -1, 64))
+				}
+			}
+			if !grant.ExpiresAt.IsZero() {
+				fields = append(fields, "expires_at="+grant.ExpiresAt.Format(time.RFC3339))
+			}
+			if !acct.Reading.ObservedAt.IsZero() {
+				fields = append(fields, "observed_at="+acct.Reading.ObservedAt.Format(time.RFC3339))
+			}
+			out = append(out, strings.Join(fields, " "))
+		}
+	}
+	return out
 }
 
 func (v outputView) agentResetCreditSummaries() []string {

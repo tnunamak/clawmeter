@@ -50,6 +50,8 @@ type Account struct {
 	// Pools are copies of the source's credit pools. Each Action is
 	// evaluated at the snapshot time with the extension contact input.
 	Pools []provider.UsageCreditPool
+	// CreditGrants are non-renewing balances, evaluated at this snapshot.
+	CreditGrants []CreditGrant
 	// Announcement is the announced reset the source carries, or nil.
 	Announcement *provider.ResetAnnouncement
 }
@@ -264,6 +266,9 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 		}
 	}
 
+	for _, grant := range data.CreditGrants {
+		account.CreditGrants = append(account.CreditGrants, buildCreditGrant(grant, account.Reading, at))
+	}
 	account.Windows = make([]Window, 0, len(data.Windows))
 	for _, w := range data.Windows {
 		account.Windows = append(account.Windows, buildWindow(in, key, w, usable, projectionAt, at))

@@ -5,6 +5,7 @@ A tray instruction offers the next step on the row where the problem appears. Or
 | State | Action |
 | --- | --- |
 | Pinned source with retained usage | Keep the last-known usage meter and quota label, using the same forecast age policy as the menu. Preserve the stale warning in the tooltip. |
+| Cloud-session promotional credit | Show its reported balance and expiry as a money row. It does not change session/weekly quota, forecasts or pinning. |
 | Old Claude reset snapshot | Open Claude Usage. The user must select the browser account matching the source. |
 | Old or signed-out API credit balance | Open Claude Console billing. If the extension has never contacted Clawmeter and its folder is absent, open extension setup instead. |
 | Expired Claude Code or Codex login | Show sign-in steps with a Copy command button. Commands retain the source's configured profile directory; unknown, repointed or config-token routes get diagnostic steps. |
@@ -17,7 +18,9 @@ A tray instruction offers the next step on the row where the problem appears. Or
 | Update applied but restart failed | Retry only the restart, using the installed executable path. |
 | Homebrew-owned or ambiguous keg destination | Show `brew upgrade clawmeter` and repair instructions. |
 
-The API Credits heading opens Claude Console billing. Fresh balance rows keep their existing informational behavior. Codex's heading opens the plan-usage dashboard linked by [OpenAI Help](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan), rather than API spending. Opening any website does not select an account or renew a CLI login.
+The API Credits heading opens Claude Console billing. Claude's heading opens Claude Usage. Fresh balance rows keep their existing informational behavior. Codex's heading opens the plan-usage dashboard linked by [OpenAI Help](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan), rather than API spending. Opening any website does not select an account or renew a CLI login.
+
+Cloud-session credits appear only on sources that report a grant. The tray and full CLI text/table share the balance and expiry wording; `--agent` and `--json` also expose the amounts and cloud-session scope. JSON keeps reported facts in `usage.credit_grants` and evaluated state in `view.credit_grants`. Stale or expired grants expose `last_observed_remaining` instead of a current `remaining` balance. Older percentage-only caches keep their known percentage and expiry without an assumed dollar amount. See [Anthropic's promotion details](https://support.claude.com/en/articles/17152539-cloud-sessions-bonus-credit-promotion).
 
 Recovery help is a private local HTML file. Copy buttons copy commands for the user to run; Clawmeter does not run them. Rendering escapes source labels, instructions and command text. Rendering starts no server and sends no account data. Browser-opening failures produce a desktop error instead of being ignored.
 
