@@ -46,7 +46,7 @@ func TestRenderPathExpiredWithNoWindowsDrawsTheWarning(t *testing.T) {
 	}
 }
 
-func TestRenderPathPinnedStaleWindowStaysStaleOnTheIcon(t *testing.T) {
+func TestRenderPathPinnedStaleWindowKeepsLastKnownMeter(t *testing.T) {
 	now := matrixNowForTray
 	results := map[string]*provider.UsageData{
 		"claude": {Provider: "claude", Stale: true, Warning: "rate limited", FetchedAt: now.Add(-time.Hour),
@@ -70,8 +70,8 @@ func TestRenderPathPinnedStaleWindowStaysStaleOnTheIcon(t *testing.T) {
 	if got := Tooltip(snap, results); got != wantTooltip {
 		t.Fatalf("tooltip = %q\nwant      %q", got, wantTooltip)
 	}
-	if _, meter := IconState(snap); meter.UsagePct != 0 || meter.ShowExpected {
-		t.Fatalf("icon for a pinned stale window = %+v; a stale reading draws no current meter", meter)
+	if _, meter := IconState(snap); meter.UsagePct != 100 || meter.RiskPct != 0 || !meter.ShowExpected || meter.Label != "5H" {
+		t.Fatalf("icon for a pinned stale window = %+v; retain usage and identity without inventing a forecast", meter)
 	}
 	rows := MenuRows(snap, maxWindowItems)
 	if got := strings.Join(rows["claude"], " | "); !strings.Contains(got, "forecast stale") || strings.Contains(got, "out now") {

@@ -4,6 +4,7 @@ A tray instruction offers the next step on the row where the problem appears. Or
 
 | State | Action |
 | --- | --- |
+| Pinned source with retained usage | Keep the last-known usage meter and quota label, using the same forecast age policy as the menu. Preserve the stale warning in the tooltip. |
 | Old Claude reset snapshot | Open Claude Usage. The user must select the browser account matching the source. |
 | Old or signed-out API credit balance | Open Claude Console billing. If the extension has never contacted Clawmeter and its folder is absent, open extension setup instead. |
 | Expired Claude Code or Codex login | Show sign-in steps with a Copy command button. Commands retain the source's configured profile directory; unknown, repointed or config-token routes get diagnostic steps. |

@@ -58,12 +58,18 @@ func IconState(snap view.Snapshot) (string, icons.MeterState) {
 }
 
 // readingMeter is the meter of one window of an account, or of the account
-// alone when w is zero. A stale or errored reading draws an empty meter: it is
-// not a current reading. An expired credential draws a full meter, as a warning.
+// alone when w is zero. Retained readings draw the same last-known values as
+// the menu; the snapshot has already aged their forecasts. Errors without a
+// retained reading draw no meter. Expired credentials draw a warning meter.
 func readingMeter(acct *view.Account, w view.Window) icons.MeterState {
 	switch acct.Reading.State {
 	case view.ReadingExpired:
 		return icons.MeterState{UsagePct: 100, ExpectedPct: 100, RiskPct: 100}
+	case view.ReadingStale:
+		if acct.Reading.ObservedAt.IsZero() {
+			return icons.MeterState{}
+		}
+		fallthrough
 	case view.ReadingFresh:
 		// A window whose reset has passed is not the current window: its usage
 		// is the last period's, so the meter stays empty.
