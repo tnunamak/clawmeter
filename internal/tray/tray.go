@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -44,6 +45,7 @@ const (
 	updateCheckInterval    = 30 * time.Minute
 	tokenPlanProviderName  = "alibaba_token"
 	retryConnectionAction  = "Retry quota access"
+	setupExtensionAction   = "Set up the browser extension…"
 	tokenPlanConnectTarget = "token-plan"
 )
 
@@ -148,8 +150,12 @@ func onReady() {
 	if err != nil {
 		setErrorState("Config error")
 		systray.BeginMenuUpdate()
-		mError := systray.AddMenuItem("Config error — fix config.yaml; retrying automatically", "")
-		mError.Disable()
+		mError := systray.AddMenuItem("Configuration needs attention…", "Show the configuration file location and repair steps; retrying automatically")
+		go func() {
+			for range mError.ClickedCh {
+				openRecovery(configRecoveryAction(), openURL)
+			}
+		}()
 		mQuit := systray.AddMenuItem("Quit", "")
 		systray.EndMenuUpdate()
 		go func() {
@@ -252,8 +258,7 @@ func onReadyWithConfig(loaded *config.Config) {
 	// toggles its visibility based on whether any menu has data to render.
 	mEmpty := systray.AddMenuItem("No active providers", "")
 	mEmpty.Disable()
-	mProviderSetup := systray.AddMenuItem("Manage providers: run `clawmeter providers`", "")
-	mProviderSetup.Disable()
+	mProviderSetup := systray.AddMenuItem("Set up providers…", "Show detected providers and connection steps")
 	mProviderSetup.Hide()
 	s.emptyVisible = true
 	s.emptyVisibleKnown = true
@@ -262,12 +267,9 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	systray.AddSeparator()
 
-	// Hint shown only when Claude's OAuth token has expired. We don't try
-	// to launch a terminal for the user — Windows has no obvious "default
-	// terminal" we can rely on, and the macOS/Linux versions of that flow
-	// saved at most one keystroke. A disabled menu item is the same
-	// outcome with zero platform-specific code.
-	mReauth := systray.AddMenuItem("Claude login expired — run `claude` to renew it", "")
+	// Kept hidden for the shared render signature. Sign-in actions belong on
+	// their own account's header rather than a global, ambiguous instruction.
+	mReauth := systray.AddMenuItem("", "")
 	mReauth.Disable()
 	mReauth.Hide()
 	s.reauthVisible = false
@@ -375,8 +377,20 @@ func onReadyWithConfig(loaded *config.Config) {
 		}
 	}
 
+	var updater updateAction
+	var updateHelp recoveryAction // guarded by trayRenderMu
+
 	// Check update function
 	checkUpdate := func() {
+		if updater.restartPending() {
+			return
+		}
+		trayRenderMu.Lock()
+		helping := updateHelp.help.Title != ""
+		trayRenderMu.Unlock()
+		if helping {
+			return
+		}
 		s.mu.Lock()
 		currentCfg := cfg
 		s.mu.Unlock()
@@ -411,43 +425,72 @@ func onReadyWithConfig(loaded *config.Config) {
 		trayRenderMu.Unlock()
 	}
 
-	// Apply update function
+	// Retry the action shown on the row: apply, restart, or package-manager help.
 	applyUpdate := func() {
+		trayRenderMu.Lock()
+		help := updateHelp
+		trayRenderMu.Unlock()
+		if help.help.Title != "" {
+			openRecovery(help, openURL)
+			return
+		}
 		rel := currentPendingRelease()
-		if rel == nil {
+		if rel == nil && !updater.restartPending() {
 			return
 		}
 		trayRenderMu.Lock()
-		mUpdate.SetTitle("Updating...")
+		mUpdate.SetTitle("Updating…")
 		mUpdate.Disable()
 		trayRenderMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		exe, err := update.ExecutablePath()
-		if err != nil {
-			trayRenderMu.Lock()
-			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
-			mUpdate.Enable()
-			trayRenderMu.Unlock()
+		out, started := updater.run(ctx, rel, updateOperations{
+			ExecutablePath: update.ExecutablePath, ApplyTo: update.ApplyTo, Restart: update.Restart,
+		})
+		if !started {
 			return
 		}
-		if err := update.ApplyTo(ctx, rel.URL, exe); err != nil {
-			trayRenderMu.Lock()
-			mUpdate.SetTitle(fmt.Sprintf("Update failed: %v", err))
-			mUpdate.Enable()
-			trayRenderMu.Unlock()
-			return
+		trayRenderMu.Lock()
+		if errors.Is(out.Err, update.ErrHomebrewManaged) || errors.Is(out.Err, update.ErrHomebrewReceiptUnverified) {
+			updateHelp = updateRecoveryError(out.Err)
+			out.Title = "Homebrew installation · Show update steps…"
+		} else if out.Err != nil && !updater.restartPending() {
+			out.Title = "Update failed · Retry update"
 		}
-		notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", rel.Version), "low")
-		if err := update.Restart(exe); err != nil {
-			trayRenderMu.Lock()
-			mUpdate.SetTitle("Updated — restart Clawmeter")
-			mUpdate.Enable()
-			trayRenderMu.Unlock()
-			notify("Clawmeter", "Updated, but restart failed. Restart Clawmeter manually.", "normal")
-			return
+		mUpdate.SetTitle(out.Title)
+		if out.Err != nil {
+			mUpdate.SetTooltip(out.Err.Error())
+		} else {
+			mUpdate.SetTooltip("")
 		}
-		systray.Quit()
+		if !out.Quit {
+			mUpdate.Enable()
+		}
+		trayRenderMu.Unlock()
+		if out.Err != nil {
+			notify("Clawmeter", out.Err.Error(), "normal")
+		}
+		if out.Quit {
+			if out.Updated && rel != nil {
+				notify("Clawmeter", fmt.Sprintf("Updated to %s — restarting", rel.Version), "low")
+			}
+			systray.Quit()
+		}
+	}
+
+	var manualRefresh manualRefreshAction
+	requestRefresh := func() {
+		manualRefresh.request(func() {
+			trayRenderMu.Lock()
+			mRefresh.SetTitle("Refreshing…")
+			trayRenderMu.Unlock()
+			refresher.refreshWhenFree(true)
+			refreshStatus()
+			checkUpdate()
+		})
+	}
+	for _, menu := range providerMenus {
+		menu.refreshUsage = requestRefresh
 	}
 
 	// Show cached data immediately while fetching fresh data
@@ -535,8 +578,9 @@ func onReadyWithConfig(loaded *config.Config) {
 			case <-updateTicker.C:
 				go checkUpdate()
 			case <-mRefresh.ClickedCh:
-				go refresh(true)
-				go checkUpdate()
+				requestRefresh()
+			case <-mProviderSetup.ClickedCh:
+				go openRecovery(providerSetupAction(), openURL)
 			case family := <-providerHideRequests:
 				go changeEnablement(func() (*config.Config, error) {
 					return saveHidden(family)
@@ -552,6 +596,12 @@ func onReadyWithConfig(loaded *config.Config) {
 				if menu == nil || !menu.connectable {
 					continue
 				}
+				trayRenderMu.Lock()
+				allowed := menu.headerState.visible && menu.headerState.enabled && menu.headerConnects.Load() && !menu.disabled
+				trayRenderMu.Unlock()
+				if !allowed {
+					continue
+				}
 				if !menu.connecting.CompareAndSwap(false, true) {
 					continue
 				}
@@ -559,7 +609,7 @@ func onReadyWithConfig(loaded *config.Config) {
 				setProviderConnectionItemLocked(menu, "", true)
 				trayRenderMu.Unlock()
 				go func(providerName string, menu *providerMenuItems) {
-					err := connectProviderFromTray(providerName)
+					err := connectProviderFromTray(menu.provider.Name())
 					finishProviderConnection(menu, err)
 					if err != nil {
 						notify(menu.provider.DisplayName(), err.Error(), "normal")
@@ -786,6 +836,12 @@ type providerMenuItems struct {
 	hideItem       *systray.MenuItem
 	connectable    bool // the name row can run the quota connection
 	headerAction   string
+	headerRecovery recoveryAction
+	sourceRevision string // login used by the drawn recovery action; guarded by trayRenderMu
+	resetURL       string
+	statusURL      string
+	refreshUsage   func()
+	extensionReady bool
 	headerConnects atomic.Bool
 	windowItems    []*systray.MenuItem
 	// moreItem says how many windows the rows above leave out.
@@ -799,6 +855,7 @@ type providerMenuItems struct {
 	disabled          bool // turned off in config; never shown
 	connecting        atomic.Bool
 	connectFailed     atomic.Bool // last tray connection attempt failed
+	connectProblem    string      // sanitized setup error; guarded by trayRenderMu
 	headerState       menuItemState
 	statusState       menuItemState
 	resetState        menuItemState
@@ -883,7 +940,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	}
 
 	// Quota rows come first, then money, then reset credits.
-	resetItem := systray.AddMenuItem("", "")
+	resetItem := systray.AddMenuItem("", "Open Claude Usage in the browser; make sure it is signed in to this source’s account")
 	resetItem.Disable()
 	setMenuItemIcon(resetItem, icons.MenuBlank())
 	resetItem.Hide()
@@ -943,17 +1000,26 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		}
 	}()
 	go func() {
-		for range header.ClickedCh {
-			if menu.headerConnects.Load() {
-				select {
-				case connectActions <- p.Name():
-				default:
-				}
-			} else if opensDashboard {
-				openURL(p.DashboardURL())
-			}
+		for range resetItem.ClickedCh {
+			openResetRow(menu, openURL)
 		}
 	}()
+	go func() {
+		for range statusItem.ClickedCh {
+			openStatusRow(menu, openURL)
+		}
+	}()
+	go func() {
+		for range header.ClickedCh {
+			openProviderHeader(menu, openURL, func(key string) {
+				select {
+				case connectActions <- key:
+				default:
+				}
+			})
+		}
+	}()
+
 	return menu
 }
 
@@ -963,20 +1029,34 @@ var lastExtensionContact = claudeweb.LastExtensionContact
 // openAnnouncement opens the source post of the announcement on the row.
 func openAnnouncement(menu *providerMenuItems, open func(string)) {
 	trayRenderMu.Lock()
-	target := menu.announceURL
+	target, revision := menu.announceURL, menu.sourceRevision
+	visible := menu.announceState.visible && menu.announceState.enabled && !menu.disabled
 	trayRenderMu.Unlock()
-	if target != "" {
+	if visible && sourceStillCurrent(menu, revision) && target != "" {
 		open(target)
 	}
 }
 
 // openBalanceRow opens the Console for a balance row that carries an action.
 func openBalanceRow(menu *providerMenuItems, row int, open func(string)) {
+	openBalanceRowWithSetup(menu, row, open, openExtensionSetup)
+}
+
+func openBalanceRowWithSetup(menu *providerMenuItems, row int, open func(string), setup func()) {
 	trayRenderMu.Lock()
-	action := menu.balanceActions[row]
+	if row < 0 || row >= len(menu.balanceActions) {
+		trayRenderMu.Unlock()
+		return
+	}
+	action, revision := menu.balanceActions[row], menu.sourceRevision
+	visible := menu.balanceStates[row].visible && menu.balanceStates[row].enabled && !menu.disabled
 	trayRenderMu.Unlock()
-	if action != "" {
-		open(claudeweb.ConsoleURL)
+	if visible && sourceStillCurrent(menu, revision) && action != "" {
+		if action == setupExtensionAction {
+			setup()
+		} else {
+			open(claudeweb.ConsoleURL)
+		}
 	}
 }
 
@@ -985,6 +1065,9 @@ func setProviderSeparatorVisible(menu *providerMenuItems, visible bool) {
 }
 
 func hideProviderMenu(menu *providerMenuItems) {
+	menu.headerRecovery = recoveryAction{}
+	menu.resetURL, menu.announceURL, menu.statusURL = "", "", ""
+	menu.headerConnects.Store(false)
 	setMenuItemVisible(menu.headerItem, &menu.headerState, false)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
@@ -1020,7 +1103,12 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 			if acct.Provider != provider.ClaudeAPISourceName || len(acct.Pools) > 1 {
 				title = pool.Name + ": " + title
 			}
-			show(title, pool.Action(now))
+			action := pool.Action(now)
+			if action != "" && pool.ObservationSource == "extension" && pool.ExtensionContactAt.IsZero() && !menu.extensionReady {
+				title = strings.TrimSuffix(title, action) + setupExtensionAction
+				action = setupExtensionAction
+			}
+			show(title, action)
 		}
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
@@ -1045,6 +1133,12 @@ func hideProviderWindows(menu *providerMenuItems) {
 }
 
 func showProviderHeader(menu *providerMenuItems) {
+	if menu.headerAction == "" {
+		menu.headerRecovery = recoveryAction{}
+	}
+	if !menu.connectable {
+		setMenuItemEnabled(menu.headerItem, &menu.headerState, menu.opensDashboard)
+	}
 	title := menu.displayName
 	if menu.headerAction != "" {
 		title += " · " + menu.headerAction
@@ -1056,6 +1150,22 @@ func showProviderHeader(menu *providerMenuItems) {
 // showProviderProblem puts a provider's only message on its name row, so a
 // provider without readings takes one line.
 func showProviderProblem(menu *providerMenuItems, problem string) {
+	if menu.headerAction == "" {
+		menu.headerRecovery = recoveryAction{}
+		s.mu.Lock()
+		current := cfg
+		s.mu.Unlock()
+		menu.headerRecovery = providerRecovery(menu.provider, problem, current, runtime.GOOS)
+		problem = format.HumanizeError(problem)
+		if menu.provider.Name() == provider.ClaudeAPISourceName && !menu.extensionReady {
+			menu.headerRecovery = recoveryAction{label: setupExtensionAction, setupExtension: true}
+		}
+		if menu.headerRecovery.problem != "" {
+			problem = menu.headerRecovery.problem
+		}
+		problem += " · " + menu.headerRecovery.label
+		setMenuItemEnabled(menu.headerItem, &menu.headerState, true)
+	}
 	if menu.headerAction != "" {
 		// The action names the fix; it replaces the problem.
 		problem = menu.headerAction
@@ -1142,6 +1252,15 @@ func setProviderConnectionItemLocked(menu *providerMenuItems, action string, sho
 		setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+action)
 	}
 	menu.headerConnects.Store(show)
+	if menu.connectFailed.Load() && menu.connectProblem != "" {
+		s.mu.Lock()
+		current := cfg
+		s.mu.Unlock()
+		menu.headerRecovery = providerRecovery(menu.provider, menu.connectProblem, current, runtime.GOOS)
+		menu.headerAction = menu.headerRecovery.label
+		menu.headerConnects.Store(false)
+		setMenuItemTitle(menu.headerItem, &menu.headerState, menu.displayName+" · "+menu.headerAction)
+	}
 	setMenuItemEnabled(menu.headerItem, &menu.headerState, true)
 }
 
@@ -1152,6 +1271,7 @@ func finishProviderConnection(menu *providerMenuItems, err error) {
 		return
 	}
 	trayRenderMu.Lock()
+	menu.connectProblem = err.Error()
 	setProviderConnectionItemLocked(menu, retryConnectionAction, true)
 	trayRenderMu.Unlock()
 }
@@ -1214,6 +1334,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	// show, so it is read under the lock: a pin set by a click that takes the
 	// lock first must be the one this render draws.
 	contact := lastExtensionContact()
+	extensionReady := extensionFolderExists()
 
 	results, statuses = lockLatestTrayState(&trayRenderMu)
 	defer trayRenderMu.Unlock()
@@ -1227,7 +1348,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 	shown := trayShown(results, fetched, menus, setups)
 	snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 
-	hasExpiredClaude := false
 	hasClaude := false
 	displayNames := make(map[string]string, len(menus))
 	activeResults := make(map[string]*provider.UsageData, len(results))
@@ -1237,6 +1357,10 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 	for name, menu := range menus {
 		displayNames[name] = menu.displayName
+		menu.extensionReady = extensionReady
+		s.mu.Lock()
+		menu.sourceRevision = s.lastSourceRevisions[name]
+		s.mu.Unlock()
 		data, ok := shown[name]
 		if !ok {
 			hideProviderMenu(menu)
@@ -1281,9 +1405,6 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 
 		if data.IsExpired {
-			if menu.provider.Name() == "claude" {
-				hasExpiredClaude = true
-			}
 			hideProviderWindows(menu)
 			expiredMsg := "Token expired"
 			if connectionStatus != "" {
@@ -1291,7 +1412,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 			}
 			if data.Error != "" {
 				if connectionStatus == "" {
-					expiredMsg = format.HumanizeError(data.Error)
+					expiredMsg = "Token expired: " + data.Error
 				}
 			}
 			showProviderProblem(menu, expiredMsg)
@@ -1302,7 +1423,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		if data.Error != "" {
 			hideProviderWindows(menu)
-			showProviderProblem(menu, format.HumanizeError(data.Error))
+			showProviderProblem(menu, data.Error)
 			showBalanceRows(menu, acct, nil, now)
 			setProviderSeparatorVisible(menu, true)
 			continue
@@ -1316,10 +1437,21 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		if data.Stale {
 			statusParts = append(statusParts, fmt.Sprintf("Usage unavailable - showing last good data from %s", data.FetchedAt.Local().Format("15:04")))
 		}
+		menu.statusURL = ""
+		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
+			menu.statusURL = status.StatusPages[provider.FamilyName(menu.provider)].BaseURL
+		}
 		if len(statusParts) > 0 {
+			if menu.statusURL != "" {
+				statusParts = append(statusParts, "Open service status…")
+			} else if data.Stale && menu.refreshUsage != nil {
+				statusParts = append(statusParts, "Refresh now")
+			}
+			setMenuItemEnabled(menu.statusItem, &menu.statusState, menu.statusURL != "" || (data.Stale && menu.refreshUsage != nil))
 			setMenuItemTitle(menu.statusItem, &menu.statusState, strings.Join(statusParts, " - "))
 			setMenuItemVisible(menu.statusItem, &menu.statusState, true)
 		} else {
+			setMenuItemEnabled(menu.statusItem, &menu.statusState, false)
 			setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 		}
 
@@ -1373,8 +1505,8 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 		}
 	}
 
-	// Show/hide reauth button (only for Claude expired tokens)
-	setSharedMenuItemVisible(mReauth, hasExpiredClaude, &s.reauthVisible, &s.reauthVisibleKnown)
+	// Recovery is attached to the affected source header, never a global hint.
+	setSharedMenuItemVisible(mReauth, false, &s.reauthVisible, &s.reauthVisibleKnown)
 	if mExtension != nil {
 		setSharedMenuItemVisible(mExtension, hasClaude && offerExtension(extensionFolderExists(), contact, now),
 			&s.extensionVisible, &s.extensionVisibleKnown)
@@ -1417,6 +1549,12 @@ func lockLatestTrayState(renderMu sync.Locker) (map[string]*provider.UsageData, 
 
 func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now time.Time) {
 	title := resetCreditTraySummary(data, now)
+	menu.resetURL = ""
+	if title != "" && provider.FamilyName(menu.provider) == "claude" && data.ResetCredits.Snapshot && !data.ResetCredits.FetchedAt.IsZero() && now.Sub(data.ResetCredits.FetchedAt) > 5*time.Minute {
+		menu.resetURL = claudeweb.UsageURL
+		title = strings.Replace(title, "open claude.ai signed in to this account", "Open Claude Usage…", 1)
+	}
+	setMenuItemEnabled(menu.resetItem, &menu.resetState, menu.resetURL != "")
 	if title == "" {
 		setMenuItemVisible(menu.resetItem, &menu.resetState, false)
 		return
@@ -2217,7 +2355,9 @@ func issueURL(version, platform, desktop string) string {
 }
 
 func openURL(url string) {
-	_ = browser.OpenURL(url)
+	if err := browser.OpenURL(url); err != nil {
+		notify("Clawmeter", "Could not open the page: "+err.Error(), "normal")
+	}
 }
 
 // notify delivers a desktop notification using beeep, which natively wraps

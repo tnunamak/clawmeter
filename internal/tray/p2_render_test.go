@@ -39,10 +39,11 @@ func TestP2ProviderEnablementRace(t *testing.T) {
 	wg.Wait()
 }
 
-func TestP2FailedProviderConnectionRestoresRetry(t *testing.T) {
+func TestP2FailedProviderConnectionOffersRecoverySteps(t *testing.T) {
 	defer systray.ResetMenu()
 	menu := &providerMenuItems{
 		displayName: "Alibaba Token Plan",
+		provider:    sourceMenuTestProvider{name: tokenPlanProviderName},
 		connectable: true,
 		headerItem:  systray.AddMenuItem("Alibaba Token Plan · Connecting...", ""),
 		headerState: menuItemState{title: "Alibaba Token Plan · Connecting...", visible: true, enabled: false, initialized: true},
@@ -54,7 +55,7 @@ func TestP2FailedProviderConnectionRestoresRetry(t *testing.T) {
 	if menu.connecting.Load() {
 		t.Fatal("connection remains marked as active")
 	}
-	if !menu.headerState.enabled || !menu.headerConnects.Load() || menu.headerState.title != "Alibaba Token Plan · "+retryConnectionAction {
+	if !menu.headerState.enabled || menu.headerConnects.Load() || menu.headerRecovery.help.Title == "" || menu.headerState.title != "Alibaba Token Plan · Show connection steps…" {
 		t.Fatalf("retry action not restored: %+v", menu.headerState)
 	}
 }
@@ -123,7 +124,7 @@ func TestP2FailedProviderConnectionSurvivesRender(t *testing.T) {
 	menu.connecting.Store(true)
 	finishProviderConnection(menu, errors.New("connection failed"))
 	render()
-	if menu.headerAction != retryConnectionAction || !strings.HasSuffix(menu.headerState.title, " · "+retryConnectionAction) {
+	if menu.headerAction != "Show connection steps…" || menu.headerConnects.Load() || !strings.HasSuffix(menu.headerState.title, " · Show connection steps…") {
 		t.Fatalf("retry action lost on the next render: %+v", menu.headerState)
 	}
 
