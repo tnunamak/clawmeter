@@ -21,12 +21,12 @@ The API Credits heading opens Claude Console billing. Fresh balance rows keep th
 
 Recovery help is a private local HTML file. Copy buttons copy commands for the user to run; Clawmeter does not run them. Rendering escapes source labels, instructions and command text. Rendering starts no server and sends no account data. Browser-opening failures produce a desktop error instead of being ignored.
 
-Before dispatch, provider-row actions check current visibility, enablement and the login revision that produced the row, when available. Hiding a provider clears its reset and announcement targets. Update attempts serialize effects, and a successful restart request suppresses queued duplicate attempts.
+Before dispatch, provider-row actions check current visibility, enablement and the login revision that produced the row, when available. Hiding a provider clears its reset and announcement targets. Update attempts serialize effects, and a successful restart request suppresses queued duplicate attempts. Background check results cannot replace a newer restart, retry or package-manager recovery action.
 
 ## Verification
 
 - `go test -tags tray ./internal/tray -count=1`
-- `go test -race -tags tray ./internal/tray -run 'Test(Recovery|UpdateAction|ManualRefresh|StatusRow|HeaderConnection|StaleReset|MissingExtension|HealthyHeader)' -count=1`
+- `go test -race -tags tray ./internal/tray -run 'Test(Recovery|Update(Action|Menu)|ManualRefresh|StatusRow|HeaderConnection|StaleReset|MissingExtension|HealthyHeader)' -count=1`
 - `go test ./internal/update ./internal/provider/openai -count=1`
 - `go vet -tags tray ./internal/tray ./internal/update ./internal/provider/openai`
 

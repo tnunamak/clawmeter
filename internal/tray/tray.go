@@ -378,95 +378,93 @@ func onReadyWithConfig(loaded *config.Config) {
 	}
 
 	var updater updateAction
+	var updateMenu updateMenuState
 	var updateHelp recoveryAction // guarded by trayRenderMu
 
-	// Check update function
+	// Checks publish only while their original menu action is still current.
 	checkUpdate := func() {
-		if updater.restartPending() {
-			return
-		}
-		trayRenderMu.Lock()
-		helping := updateHelp.help.Title != ""
-		trayRenderMu.Unlock()
-		if helping {
-			return
-		}
-		s.mu.Lock()
-		currentCfg := cfg
-		s.mu.Unlock()
-		if !currentCfg.ShouldCheckForUpdates() {
-			setPendingRelease(nil)
-			trayRenderMu.Lock()
-			mUpdate.Hide()
-			trayRenderMu.Unlock()
-			return
-		}
 		if !updateChecking.TryLock() {
 			return
 		}
 		defer updateChecking.Unlock()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		rel, err := update.Check(ctx, version)
-		if err != nil {
-			return
-		}
-		setPendingRelease(rel)
 		contact := lastExtensionContact()
-		trayRenderMu.Lock()
-		if rel == nil {
-			mUpdate.Hide()
-		} else {
-			mUpdate.SetTitle(fmt.Sprintf("• Update to %s", rel.Version))
-			mUpdate.Show()
-		}
-		renderIconAndTooltip(providerMenus, contact)
-		trayRenderMu.Unlock()
+		updateMenu.check(func() (*update.Release, error) {
+			s.mu.Lock()
+			currentCfg := cfg
+			s.mu.Unlock()
+			if !currentCfg.ShouldCheckForUpdates() {
+				return nil, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			return update.Check(ctx, version)
+		}, func(rel *update.Release) {
+			setPendingRelease(rel)
+			if rel == nil {
+				mUpdate.Hide()
+			} else {
+				mUpdate.SetTitle(fmt.Sprintf("• Update to %s", rel.Version))
+				mUpdate.Show()
+			}
+			renderIconAndTooltip(providerMenus, contact)
+		})
 	}
 
 	// Retry the action shown on the row: apply, restart, or package-manager help.
 	applyUpdate := func() {
-		trayRenderMu.Lock()
-		help := updateHelp
-		trayRenderMu.Unlock()
+		var rel *update.Release
+		var help recoveryAction
+		var skip bool
+		if !updateMenu.begin(func() {
+			help = updateHelp
+			rel = currentPendingRelease()
+			skip = help.help.Title == "" && rel == nil && !updater.restartPending()
+			if help.help.Title == "" && !skip {
+				mUpdate.SetTitle("Updating…")
+				mUpdate.Disable()
+			}
+		}) {
+			return
+		}
+		if skip {
+			updateMenu.finish(false, func() {})
+			return
+		}
 		if help.help.Title != "" {
+			updateMenu.finish(true, func() {})
 			openRecovery(help, openURL)
 			return
 		}
-		rel := currentPendingRelease()
-		if rel == nil && !updater.restartPending() {
-			return
-		}
-		trayRenderMu.Lock()
-		mUpdate.SetTitle("Updating…")
-		mUpdate.Disable()
-		trayRenderMu.Unlock()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		out, started := updater.run(ctx, rel, updateOperations{
 			ExecutablePath: update.ExecutablePath, ApplyTo: update.ApplyTo, Restart: update.Restart,
 		})
 		if !started {
+			updateMenu.finish(true, func() {})
 			return
 		}
-		trayRenderMu.Lock()
-		if errors.Is(out.Err, update.ErrHomebrewManaged) || errors.Is(out.Err, update.ErrHomebrewReceiptUnverified) {
-			updateHelp = updateRecoveryError(out.Err)
-			out.Title = "Homebrew installation · Show update steps…"
-		} else if out.Err != nil && !updater.restartPending() {
-			out.Title = "Update failed · Retry update"
-		}
-		mUpdate.SetTitle(out.Title)
-		if out.Err != nil {
-			mUpdate.SetTooltip(out.Err.Error())
-		} else {
-			mUpdate.SetTooltip("")
-		}
-		if !out.Quit {
-			mUpdate.Enable()
-		}
-		trayRenderMu.Unlock()
+		managed := errors.Is(out.Err, update.ErrHomebrewManaged) || errors.Is(out.Err, update.ErrHomebrewReceiptUnverified)
+		restartPending := updater.restartPending()
+		updateMenu.finish(out.Quit || restartPending || managed, func() {
+			if managed {
+				updateHelp = updateRecoveryError(out.Err)
+				out.Title = "Homebrew installation · Show update steps…"
+			} else if out.Err != nil && !restartPending {
+				out.Title = "Update failed · Retry update"
+			}
+			mUpdate.SetTitle(out.Title)
+			if out.Err != nil {
+				mUpdate.SetTooltip(out.Err.Error())
+			} else {
+				mUpdate.SetTooltip("")
+			}
+			if !out.Quit {
+				mUpdate.Enable()
+				mUpdate.Show()
+			}
+		})
 		if out.Err != nil {
 			notify("Clawmeter", out.Err.Error(), "normal")
 		}
