@@ -25,7 +25,7 @@ type CreditGrant struct {
 	ExpiresAt             time.Time `json:"expires_at,omitzero"`
 }
 
-func buildCreditGrant(raw provider.UsageCreditGrant, reading Reading, at time.Time) CreditGrant {
+func buildCreditGrant(raw provider.UsageCreditGrant, reading Reading, at time.Time, maxAge time.Duration) CreditGrant {
 	g := CreditGrant{
 		Name: raw.Name, Label: raw.DisplayName, Scope: raw.Scope, Currency: raw.Currency,
 		Used: provider.CreditAmount(raw.Used), Limit: provider.CreditAmount(raw.Limit),
@@ -43,7 +43,8 @@ func buildCreditGrant(raw provider.UsageCreditGrant, reading Reading, at time.Ti
 			g.State = "depleted"
 		}
 	}
-	if reading.State != ReadingFresh {
+	age := at.Sub(reading.ObservedAt)
+	if reading.State != ReadingFresh || reading.ObservedAt.IsZero() || age < 0 || age > maxAge {
 		g.State = "stale"
 	}
 	if !g.ExpiresAt.IsZero() && !at.Before(g.ExpiresAt) {

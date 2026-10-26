@@ -177,7 +177,8 @@ type Target struct {
 // Inputs are everything Build reads. Maps may be nil.
 type Inputs struct {
 	// MaxReadingAge allows a retained reading to forecast up to this age.
-	// Zero disables forecasting retained readings.
+	// It also bounds current credit-grant balances. Zero disables retained
+	// forecasts and permits current credit only at its observation instant.
 	MaxReadingAge time.Duration
 	// Results maps a source key to its latest provider data. A nil value is
 	// a source with no data.
@@ -267,7 +268,7 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 	}
 
 	for _, grant := range data.CreditGrants {
-		account.CreditGrants = append(account.CreditGrants, buildCreditGrant(grant, account.Reading, at))
+		account.CreditGrants = append(account.CreditGrants, buildCreditGrant(grant, account.Reading, at, in.MaxReadingAge))
 	}
 	account.Windows = make([]Window, 0, len(data.Windows))
 	for _, w := range data.Windows {

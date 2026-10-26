@@ -13,7 +13,7 @@ import (
 func TestCloudCreditFactsAgreeAcrossFullDetailSurfaces(t *testing.T) {
 	now := matrixNow
 	used, limit := 7.125, 250.0
-	for _, state := range []string{"available", "stale", "expired", "grant only", "login expired", "usage unavailable"} {
+	for _, state := range []string{"available", "stale", "expired", "grant only", "login expired", "usage unavailable", "missing timestamp", "future timestamp", "age boundary", "aged"} {
 		t.Run(state, func(t *testing.T) {
 			expiry := now.Add(time.Hour)
 			if state == "expired" {
@@ -32,6 +32,16 @@ func TestCloudCreditFactsAgreeAcrossFullDetailSurfaces(t *testing.T) {
 			if state == "usage unavailable" {
 				data.Error = "usage unavailable"
 			}
+			switch state {
+			case "missing timestamp":
+				data.FetchedAt = time.Time{}
+			case "future timestamp":
+				data.FetchedAt = now.Add(time.Minute)
+			case "age boundary":
+				data.FetchedAt = now.Add(-10 * time.Minute)
+			case "aged":
+				data.FetchedAt = now.Add(-10*time.Minute - time.Nanosecond)
+			}
 			m := &MultiProviderOutput{Providers: []ProviderFormatter{
 				{Name: "claude", DisplayName: "Claude", Family: "claude", SourceID: "default", SourceLabel: "Default", SourceCount: 2, Data: data},
 				{Name: "claude:work", DisplayName: "Claude", Family: "claude", SourceID: "work", SourceLabel: "Work", SourceCount: 2, Data: &provider.UsageData{Provider: "claude", SourceID: "work", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 3, ResetsAt: now.Add(4 * time.Hour)}}}},
@@ -39,6 +49,12 @@ func TestCloudCreditFactsAgreeAcrossFullDetailSurfaces(t *testing.T) {
 			v := m.buildView(now)
 			acct := v.account("claude")
 			grant := acct.CreditGrants[0]
+			if (state == "missing timestamp" || state == "future timestamp" || state == "aged") && (grant.State != "stale" || grant.Remaining != nil) {
+				t.Fatalf("untrusted observation exposed current credit: %+v", grant)
+			}
+			if state == "age boundary" && (grant.State != "available" || grant.Remaining == nil) {
+				t.Fatal("freshness ceiling excluded its exact boundary")
+			}
 			plain, table, agent := v.plainLine(0), strings.Join(v.colorTable(), "\n"), v.agentLine()
 			if !strings.Contains(plain, grant.Summary()) || !strings.Contains(table, grant.Summary()) || strings.Contains(v.plainLine(1), "Cloud session credits") {
 				t.Fatalf("human surfaces lost/misassigned a grant:\n%s\n%s", plain, table)
@@ -46,7 +62,7 @@ func TestCloudCreditFactsAgreeAcrossFullDetailSurfaces(t *testing.T) {
 			if !strings.Contains(agent, "credit_grants=[Claude · Default · Cloud session credits scope=cloud_sessions currency=USD state="+grant.State) || strings.Contains(agent, "Work · Cloud session credits") {
 				t.Fatalf("agent grant facts = %s", agent)
 			}
-			if (state == "expired" || state == "stale") && (!strings.Contains(agent, "last_observed_remaining=") || strings.Contains(agent, " state="+grant.State+" used=7.125 limit=250 remaining=")) {
+			if (grant.State == "expired" || grant.State == "stale") && (!strings.Contains(agent, "last_observed_remaining=") || strings.Contains(agent, " state="+grant.State+" used=7.125 limit=250 remaining=")) {
 				t.Fatal("agent advertised an old balance as currently remaining")
 			}
 			for _, row := range tray.MenuRows(v.snap, 8)["claude"] {
