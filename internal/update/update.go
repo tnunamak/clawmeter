@@ -30,10 +30,11 @@ const (
 // apiURL and dlPrefix are overridable by tests via the package-level
 // Check function below. They are not exported to keep the public API stable.
 var (
-	apiURL     = defaultAPIURL
-	dlPrefix   = defaultDLPrefix
-	latestURL  = defaultLatestURL
-	httpClient = &http.Client{Timeout: httpTimeout}
+	apiURL       = defaultAPIURL
+	dlPrefix     = defaultDLPrefix
+	latestURL    = defaultLatestURL
+	httpClient   = &http.Client{Timeout: httpTimeout}
+	osExecutable = os.Executable
 )
 
 type Release struct {
@@ -159,14 +160,14 @@ func assetNameFor(goos, goarch string) string {
 // CleanupOld removes leftover .old files from a previous update (Windows).
 func CleanupOld() {
 	exe, err := ExecutablePath()
-	if err != nil {
+	if err != nil || checkHomebrewOrigin(exe) != nil {
 		return
 	}
 	os.Remove(exe + ".old")
 }
 
 func ExecutablePath() (string, error) {
-	exe, err := os.Executable()
+	exe, err := osExecutable()
 	if err != nil {
 		return "", fmt.Errorf("resolve executable: %w", err)
 	}
@@ -175,6 +176,86 @@ func ExecutablePath() (string, error) {
 		return "", fmt.Errorf("resolve symlinks: %w", err)
 	}
 	return exe, nil
+}
+
+// ErrHomebrewManaged prevents replacing a binary owned by Homebrew.
+var ErrHomebrewManaged = errors.New("this installation is managed by Homebrew; run `brew upgrade clawmeter` instead")
+
+// CheckSelfUpdateAllowed checks the running executable before release checks or
+// update effects. PATH and the operating system do not establish package origin.
+func CheckSelfUpdateAllowed() error {
+	exe, err := ExecutablePath()
+	if err != nil {
+		return err
+	}
+	return checkHomebrewOrigin(exe)
+}
+
+// An exact keg layout without usable package evidence is ambiguous: refuse
+// replacement rather than risk damaging a Homebrew installation.
+var errHomebrewReceiptUnverified = errors.New("installation resembles a Homebrew package but its receipt cannot be verified; refusing self-update; run `brew upgrade clawmeter` or repair the installation")
+
+// checkHomebrewOrigin refuses both verified and ambiguous Homebrew keg
+// destinations. A copied binary outside its keg is standalone, even when
+// brew is installed. This is not a security boundary against forged files.
+func checkHomebrewOrigin(exe string) error {
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		// ApplyTo also supports a new destination. Preserve that behavior, but
+		// do not treat a dangling symlink or a symlink loop as standalone.
+		if _, statErr := os.Lstat(exe); !os.IsNotExist(statErr) {
+			return fmt.Errorf("resolve update destination: %w", err)
+		}
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(exe))
+		if parentErr != nil {
+			return fmt.Errorf("resolve update destination: %w", parentErr)
+		}
+		resolved = filepath.Join(parent, filepath.Base(exe))
+	}
+	bin := filepath.Dir(resolved)
+	keg := filepath.Dir(bin)
+	formula := filepath.Dir(keg)
+	if filepath.Base(resolved) != "clawmeter" || filepath.Base(bin) != "bin" ||
+		filepath.Base(formula) != "clawmeter" || filepath.Base(filepath.Dir(formula)) != "Cellar" {
+		return nil
+	}
+
+	receiptPath := filepath.Join(keg, "INSTALL_RECEIPT.json")
+	info, err := os.Lstat(receiptPath)
+	if err != nil {
+		return fmt.Errorf("%w: inspect receipt: %v", errHomebrewReceiptUnverified, err)
+	}
+	// Never follow a receipt symlink or open special files. Keep reads bounded.
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: receipt is not a regular file", errHomebrewReceiptUnverified)
+	}
+	const maxReceiptSize = 1 << 20
+	if info.Size() > maxReceiptSize {
+		return fmt.Errorf("%w: receipt exceeds size limit", errHomebrewReceiptUnverified)
+	}
+	f, err := os.Open(receiptPath)
+	if err != nil {
+		return fmt.Errorf("%w: read receipt: %v", errHomebrewReceiptUnverified, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxReceiptSize+1))
+	if err != nil {
+		return fmt.Errorf("%w: read receipt: %v", errHomebrewReceiptUnverified, err)
+	}
+	if len(data) > maxReceiptSize {
+		return fmt.Errorf("%w: receipt exceeds size limit", errHomebrewReceiptUnverified)
+	}
+	var receipt struct {
+		HomebrewVersion string `json:"homebrew_version"`
+		Source          struct {
+			Path string `json:"path"`
+		} `json:"source"`
+	}
+	if json.Unmarshal(data, &receipt) != nil || receipt.HomebrewVersion == "" ||
+		filepath.Base(receipt.Source.Path) != "clawmeter.rb" {
+		return fmt.Errorf("%w: invalid package metadata", errHomebrewReceiptUnverified)
+	}
+	return ErrHomebrewManaged
 }
 
 // Apply downloads the binary from url, verifies it, and replaces the
@@ -222,6 +303,9 @@ var ErrNotNewer = errors.New("installed version is already up to date")
 func ApplyTo(ctx context.Context, rawURL, exe string) error {
 	if exe == "" {
 		return errors.New("executable path is empty")
+	}
+	if err := checkHomebrewOrigin(exe); err != nil {
+		return err
 	}
 	asset, sumsURL, tag, err := artifactURLs(rawURL)
 	if err != nil {
