@@ -311,20 +311,21 @@ func TestHomebrewOriginPrefixesAndSymlinks(t *testing.T) {
 	}
 }
 
-func TestHomebrewOriginNeedsPackageEvidence(t *testing.T) {
+func TestHomebrewOriginRefusesAmbiguousKegs(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, receipt string
+		wantRefusal         bool
 	}{
-		{"standalone", "usr/local/bin/clawmeter", homebrewReceiptFixture},
-		{"loose Cellar substring", "myCellar/clawmeter/1.2.3/bin/clawmeter", homebrewReceiptFixture},
-		{"other formula", "Cellar/other/1.2.3/bin/clawmeter", homebrewReceiptFixture},
-		{"unversioned", "Cellar/clawmeter/bin/clawmeter", homebrewReceiptFixture},
-		{"nested binary", "Cellar/clawmeter/1.2.3/libexec/bin/clawmeter", homebrewReceiptFixture},
-		{"no receipt", "Cellar/clawmeter/1.2.3/bin/clawmeter", ""},
-		{"empty object", "Cellar/clawmeter/1.2.3/bin/clawmeter", "{}"},
-		{"malformed receipt", "Cellar/clawmeter/1.2.3/bin/clawmeter", "{"},
-		{"other formula receipt", "Cellar/clawmeter/1.2.3/bin/clawmeter", `{"homebrew_version":"4.4.0","source":{"path":"/Formula/other.rb"}}`},
-		{"no Homebrew version", "Cellar/clawmeter/1.2.3/bin/clawmeter", `{"source":{"path":"/Formula/clawmeter.rb"}}`},
+		{"standalone", "usr/local/bin/clawmeter", homebrewReceiptFixture, false},
+		{"loose Cellar substring", "myCellar/clawmeter/1.2.3/bin/clawmeter", homebrewReceiptFixture, false},
+		{"other formula", "Cellar/other/1.2.3/bin/clawmeter", homebrewReceiptFixture, false},
+		{"unversioned", "Cellar/clawmeter/bin/clawmeter", homebrewReceiptFixture, false},
+		{"nested binary", "Cellar/clawmeter/1.2.3/libexec/bin/clawmeter", homebrewReceiptFixture, false},
+		{"no receipt", "Cellar/clawmeter/1.2.3/bin/clawmeter", "", true},
+		{"empty object", "Cellar/clawmeter/1.2.3/bin/clawmeter", "{}", true},
+		{"malformed receipt", "Cellar/clawmeter/1.2.3/bin/clawmeter", "{", true},
+		{"other formula receipt", "Cellar/clawmeter/1.2.3/bin/clawmeter", `{"homebrew_version":"4.4.0","source":{"path":"/Formula/other.rb"}}`, true},
+		{"no Homebrew version", "Cellar/clawmeter/1.2.3/bin/clawmeter", `{"source":{"path":"/Formula/clawmeter.rb"}}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exe := filepath.Join(t.TempDir(), filepath.FromSlash(tc.path))
@@ -332,8 +333,12 @@ func TestHomebrewOriginNeedsPackageEvidence(t *testing.T) {
 			if tc.receipt != "" {
 				writeHomebrewFixtureFile(t, filepath.Join(filepath.Dir(filepath.Dir(exe)), "INSTALL_RECEIPT.json"), tc.receipt)
 			}
-			if err := checkHomebrewOrigin(exe); err != nil {
-				t.Fatalf("standalone origin = %v", err)
+			err := checkHomebrewOrigin(exe)
+			if (err != nil) != tc.wantRefusal {
+				t.Fatalf("origin error = %v, want refusal %v", err, tc.wantRefusal)
+			}
+			if tc.wantRefusal && !strings.Contains(err.Error(), "brew upgrade clawmeter") {
+				t.Fatalf("refusal lacks upgrade guidance: %v", err)
 			}
 		})
 	}
@@ -387,8 +392,8 @@ func TestHomebrewOriginReceiptBoundsAndKinds(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "size limit") {
 					t.Fatalf("oversized receipt = %v", err)
 				}
-			} else if err != nil {
-				t.Fatalf("nonregular receipt is not package evidence: %v", err)
+			} else if err == nil || !strings.Contains(err.Error(), "brew upgrade clawmeter") {
+				t.Fatalf("nonregular receipt must refuse with upgrade guidance: %v", err)
 			}
 		})
 	}
@@ -432,52 +437,74 @@ func (f homebrewUpdateTransport) RoundTrip(r *http.Request) (*http.Response, err
 }
 
 func TestHomebrewUpdateEntryPointsHaveNoEffects(t *testing.T) {
-	exe, receipt := homebrewFixture(t, t.TempDir())
-	link := filepath.Join(t.TempDir(), "clawmeter")
-	homebrewFixtureSymlink(t, exe, link)
-	writeHomebrewFixtureFile(t, exe+".old", "previous binary")
-	savedExe, savedClient, savedTransport := osExecutable, httpClient, http.DefaultTransport
-	osExecutable = func() (string, error) { return link, nil }
-	requests := 0
-	transport := homebrewUpdateTransport(func(*http.Request) (*http.Response, error) {
-		requests++
-		return nil, errors.New("offline test transport")
-	})
-	httpClient = &http.Client{Transport: transport}
-	http.DefaultTransport = transport
-	defer func() {
-		osExecutable, httpClient, http.DefaultTransport = savedExe, savedClient, savedTransport
-	}()
-	url := defaultDLPrefix + "/v9.9.9/" + assetNameFor(runtime.GOOS, runtime.GOARCH)
-	for _, call := range []func() error{
-		CheckSelfUpdateAllowed,
-		func() error { return Apply(context.Background(), url) },
-		func() error { return ApplyTo(context.Background(), url, exe) },
-		func() error { return ApplyTo(context.Background(), url, link) },
-	} {
-		if err := call(); !errors.Is(err, ErrHomebrewManaged) || !strings.Contains(err.Error(), "brew upgrade clawmeter") {
-			t.Fatalf("managed update = %v", err)
-		}
-	}
-	CleanupOld()
-	if requests != 0 {
-		t.Fatalf("managed update made %d network requests", requests)
-	}
-	for path, want := range map[string]string{exe: "installed binary", exe + ".old": "previous binary", receipt: homebrewReceiptFixture} {
-		data, err := os.ReadFile(path)
-		if err != nil || string(data) != want {
-			t.Errorf("%s changed: %q, %v", path, data, err)
-		}
-	}
-	entries, err := os.ReadDir(filepath.Dir(exe))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("unexpected staged artifacts: %v", entries)
-	}
-	if _, err := os.Readlink(link); err != nil {
-		t.Fatalf("managed symlink replaced: %v", err)
+	for _, kind := range []string{"valid", "missing", "malformed"} {
+		t.Run(kind, func(t *testing.T) {
+			exe, receipt := homebrewFixture(t, t.TempDir())
+			wantReceipt := homebrewReceiptFixture
+			switch kind {
+			case "missing":
+				if err := os.Remove(receipt); err != nil {
+					t.Fatal(err)
+				}
+			case "malformed":
+				wantReceipt = "{"
+				writeHomebrewFixtureFile(t, receipt, wantReceipt)
+			}
+			link := filepath.Join(t.TempDir(), "clawmeter")
+			homebrewFixtureSymlink(t, exe, link)
+			writeHomebrewFixtureFile(t, exe+".old", "previous binary")
+			savedExe, savedClient, savedTransport := osExecutable, httpClient, http.DefaultTransport
+			osExecutable = func() (string, error) { return link, nil }
+			requests := 0
+			transport := homebrewUpdateTransport(func(*http.Request) (*http.Response, error) {
+				requests++
+				return nil, errors.New("offline test transport")
+			})
+			httpClient = &http.Client{Transport: transport}
+			http.DefaultTransport = transport
+			defer func() {
+				osExecutable, httpClient, http.DefaultTransport = savedExe, savedClient, savedTransport
+			}()
+			url := defaultDLPrefix + "/v9.9.9/" + assetNameFor(runtime.GOOS, runtime.GOARCH)
+			for _, call := range []func() error{
+				CheckSelfUpdateAllowed,
+				func() error { return Apply(context.Background(), url) },
+				func() error { return ApplyTo(context.Background(), url, exe) },
+				func() error { return ApplyTo(context.Background(), url, link) },
+			} {
+				if err := call(); err == nil || (kind == "valid" && !errors.Is(err, ErrHomebrewManaged)) || !strings.Contains(err.Error(), "brew upgrade clawmeter") {
+					t.Fatalf("managed update = %v", err)
+				}
+			}
+			CleanupOld()
+			if requests != 0 {
+				t.Fatalf("managed update made %d network requests", requests)
+			}
+			expected := map[string]string{exe: "installed binary", exe + ".old": "previous binary"}
+			if kind == "missing" {
+				if _, err := os.Lstat(receipt); !os.IsNotExist(err) {
+					t.Fatalf("missing receipt changed: %v", err)
+				}
+			} else {
+				expected[receipt] = wantReceipt
+			}
+			for path, want := range expected {
+				data, err := os.ReadFile(path)
+				if err != nil || string(data) != want {
+					t.Errorf("%s changed: %q, %v", path, data, err)
+				}
+			}
+			entries, err := os.ReadDir(filepath.Dir(exe))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 2 {
+				t.Fatalf("unexpected staged artifacts: %v", entries)
+			}
+			if _, err := os.Readlink(link); err != nil {
+				t.Fatalf("managed symlink replaced: %v", err)
+			}
+		})
 	}
 }
 
