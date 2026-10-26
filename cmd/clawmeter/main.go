@@ -1179,6 +1179,14 @@ func describeProviderState(p provider.Provider, cfg *config.Config) string {
 }
 
 func updateCmd() int {
+	return updateCmdWith(update.CheckSelfUpdateAllowed, update.Check, update.Apply)
+}
+
+func updateCmdWith(preflight func() error, check func(context.Context, string) (*update.Release, error), apply func(context.Context, string) error) int {
+	if err := preflight(); err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 1
+	}
 	if Version == "dev" {
 		fmt.Fprintln(os.Stderr, "clawmeter: self-update is not available for dev builds")
 		return 1
@@ -1190,7 +1198,7 @@ func updateCmd() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	rel, err := update.Check(ctx, Version)
+	rel, err := check(ctx, Version)
 	if err != nil {
 		fmt.Println()
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1204,7 +1212,7 @@ func updateCmd() int {
 	fmt.Printf("found %s\n", rel.Version)
 	fmt.Printf("Downloading and installing %s... ", rel.Version)
 
-	if err := update.Apply(ctx, rel.URL); errors.Is(err, update.ErrNotNewer) {
+	if err := apply(ctx, rel.URL); errors.Is(err, update.ErrNotNewer) {
 		fmt.Println()
 		fmt.Println("already up to date: a newer version is installed. Restart any running tray instances.")
 		return 0

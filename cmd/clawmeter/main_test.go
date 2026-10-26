@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/tnunamak/clawmeter/internal/update"
 )
 
 func TestRedteamSourceAddWithNullProviders(t *testing.T) {
@@ -715,5 +719,111 @@ func TestReleaseVersionOrDevAcceptsOnlyReleaseTags(t *testing.T) {
 		if got := releaseVersionOrDev(v); got != defaultVersion {
 			t.Errorf("releaseVersionOrDev(%q) = %q, want %q", v, got, defaultVersion)
 		}
+	}
+}
+
+func TestUpdateHomebrewRunningExecutable(t *testing.T) {
+	bin := buildBinary(t)
+	body, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	keg := filepath.Join(root, "custom prefix", "Cellar", "clawmeter", "1.2.3_1")
+	exe := filepath.Join(keg, "bin", "clawmeter")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	receipt := `{"homebrew_version":"4.4.0","source":{"path":"/test/Formula/clawmeter.rb"}}`
+	if err := os.WriteFile(filepath.Join(keg, "INSTALL_RECEIPT.json"), []byte(receipt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe+".old", []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture uses a dev build: if the guard regresses, the existing dev
+	// check still prevents a real network request. No brew process is needed.
+	stdout, stderr, code := runWithHome(t, exe, t.TempDir(), "update")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "brew upgrade clawmeter") {
+		t.Fatalf("managed update: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if old, err := os.ReadFile(exe + ".old"); err != nil || string(old) != "keep" {
+		t.Fatalf("managed startup cleanup changed .old: %q, %v", old, err)
+	}
+	stdout, stderr, code = runWithHome(t, bin, t.TempDir(), "update")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "not available for dev builds") || strings.Contains(stderr, "Homebrew") {
+		t.Fatalf("standalone dev update: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestUpdateHomebrewPreflightRunsBeforeCheckAndApply(t *testing.T) {
+	saved := Version
+	Version = "v1.2.3"
+	defer func() { Version = saved }()
+	for _, failure := range []error{update.ErrHomebrewManaged, errors.New("cannot resolve executable")} {
+		code := updateCmdWith(
+			func() error { return failure },
+			func(context.Context, string) (*update.Release, error) {
+				t.Fatal("release check ran after failed preflight")
+				return nil, nil
+			},
+			func(context.Context, string) error {
+				t.Fatal("apply ran after failed preflight")
+				return nil
+			},
+		)
+		if code != 1 {
+			t.Fatalf("failed preflight exit=%d, want 1", code)
+		}
+	}
+}
+
+func TestUpdateStandaloneBehaviorPreserved(t *testing.T) {
+	saved := Version
+	defer func() { Version = saved }()
+	for _, tc := range []struct {
+		name       string
+		version    string
+		release    *update.Release
+		checkErr   error
+		applyErr   error
+		wantCode   int
+		wantChecks int
+		wantApply  int
+	}{
+		{name: "dev", version: "dev", wantCode: 1},
+		{name: "current", version: "v1.2.3", wantChecks: 1},
+		{name: "new release", version: "v1.2.3", release: &update.Release{Version: "v1.2.4", URL: "fixture"}, wantChecks: 1, wantApply: 1},
+		{name: "already replaced", version: "v1.2.3", release: &update.Release{Version: "v1.2.4", URL: "fixture"}, applyErr: update.ErrNotNewer, wantChecks: 1, wantApply: 1},
+		{name: "check failure", version: "v1.2.3", checkErr: errors.New("offline"), wantCode: 1, wantChecks: 1},
+		{name: "apply failure", version: "v1.2.3", release: &update.Release{Version: "v1.2.4", URL: "fixture"}, applyErr: errors.New("apply failed"), wantCode: 1, wantChecks: 1, wantApply: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			Version = tc.version
+			preflights, checks, applies := 0, 0, 0
+			code := updateCmdWith(
+				func() error { preflights++; return nil },
+				func(_ context.Context, version string) (*update.Release, error) {
+					checks++
+					if version != tc.version {
+						t.Fatalf("checked version %q, want %q", version, tc.version)
+					}
+					return tc.release, tc.checkErr
+				},
+				func(_ context.Context, url string) error {
+					applies++
+					if tc.release == nil || url != tc.release.URL {
+						t.Fatalf("unexpected apply URL %q", url)
+					}
+					return tc.applyErr
+				},
+			)
+			if code != tc.wantCode || preflights != 1 || checks != tc.wantChecks || applies != tc.wantApply {
+				t.Fatalf("exit/preflight/check/apply = %d/%d/%d/%d, want %d/1/%d/%d", code, preflights, checks, applies, tc.wantCode, tc.wantChecks, tc.wantApply)
+			}
+		})
 	}
 }
