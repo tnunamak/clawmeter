@@ -11,7 +11,7 @@ json[claude]: reading=fresh window=5h[forecast=warming exhaustion=out reset_know
 
 ## young reading kept after a 429
 tooltip: "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:58 AM (rate limited)\nCurrent 80%\nRuns out in 28m (2h33m before reset)\nResets in 3h00m\nEst. 203% at reset"
-icon: provider=claude usage=0 expected=0 risk=0 show_expected=false label=""
+icon: provider=claude usage=80 expected=40 risk=203 show_expected=true label="5H"
 menu[claude]: "5h    ████┃████▒▒    \u200780% used    203% at reset    resets in 3h    runs out in 28m"
 color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
 color: "Claude    5h      ████┃████▒▒   80%      203%         3h          28m"
@@ -23,7 +23,7 @@ json[claude]: reading=stale window=5h[forecast=known exhaustion=runs_out reset_k
 
 ## stale critical
 tooltip: "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 100%\nRun-out unknown\nResets in 1h00m\nforecast stale"
-icon: provider=claude usage=0 expected=0 risk=0 show_expected=false label=""
+icon: provider=claude usage=100 expected=80 risk=0 show_expected=true label="5H"
 menu[claude]: "5h    ████████┃██    100% used    forecast stale    resets in 1h"
 color: "PROVIDER  WINDOW  USAGE        USED        AT RESET  RESETS IN  RUNS OUT IN"
 color: "Claude    5h      ████████┃██  100%  forecast stale         1h"
@@ -68,7 +68,7 @@ json[openai]: reading=fresh window=7d[forecast=none exhaustion=out reset_known=f
 
 ## stale reset-less window
 tooltip: "Codex 7-Day\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 40%\nRun-out unknown\nReset not reported\nforecast stale"
-icon: provider=openai usage=0 expected=0 risk=0 show_expected=false label=""
+icon: provider=openai usage=40 expected=0 risk=0 show_expected=false label="7D"
 menu[openai]: "7d    ████░░░░░░\u2007    \u200740% used    forecast stale    reset not reported"
 color: "PROVIDER  WINDOW  USAGE        USED        AT RESET           RESETS IN  RUNS OUT IN"
 color: "Codex     7d      ████░░░░░░    40%  forecast stale  reset not reported"
@@ -197,7 +197,7 @@ json[openai]: reading=fresh window=daily[forecast=none exhaustion=out reset_know
 
 ## pinned stale window
 tooltip: "Claude 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nCurrent 100%\nRun-out unknown\nResets in 1h00m\nforecast stale"
-icon: provider=claude usage=0 expected=0 risk=0 show_expected=false label=""
+icon: provider=claude usage=100 expected=80 risk=0 show_expected=true label="5H"
 menu[claude]: "5h    ████████┃██    100% used    forecast stale    resets in 1h"
 menu[codex]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u2007\u200775% at reset    resets in 3h"
 color: "PROVIDER  WINDOW  USAGE        USED        AT RESET  RESETS IN  RUNS OUT IN"

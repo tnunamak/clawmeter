@@ -191,9 +191,9 @@ func CheckSelfUpdateAllowed() error {
 	return checkHomebrewOrigin(exe)
 }
 
-// An exact keg layout without usable package evidence is ambiguous: refuse
-// replacement rather than risk damaging a Homebrew installation.
-var errHomebrewReceiptUnverified = errors.New("installation resembles a Homebrew package but its receipt cannot be verified; refusing self-update; run `brew upgrade clawmeter` or repair the installation")
+// ErrHomebrewReceiptUnverified refuses an exact keg layout without usable
+// package evidence rather than risking damage to a Homebrew installation.
+var ErrHomebrewReceiptUnverified = errors.New("installation resembles a Homebrew package but its receipt cannot be verified; refusing self-update; run `brew upgrade clawmeter` or repair the installation")
 
 // checkHomebrewOrigin refuses both verified and ambiguous Homebrew keg
 // destinations. A copied binary outside its keg is standalone, even when
@@ -223,27 +223,27 @@ func checkHomebrewOrigin(exe string) error {
 	receiptPath := filepath.Join(keg, "INSTALL_RECEIPT.json")
 	info, err := os.Lstat(receiptPath)
 	if err != nil {
-		return fmt.Errorf("%w: inspect receipt: %v", errHomebrewReceiptUnverified, err)
+		return fmt.Errorf("%w: inspect receipt: %v", ErrHomebrewReceiptUnverified, err)
 	}
 	// Never follow a receipt symlink or open special files. Keep reads bounded.
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: receipt is not a regular file", errHomebrewReceiptUnverified)
+		return fmt.Errorf("%w: receipt is not a regular file", ErrHomebrewReceiptUnverified)
 	}
 	const maxReceiptSize = 1 << 20
 	if info.Size() > maxReceiptSize {
-		return fmt.Errorf("%w: receipt exceeds size limit", errHomebrewReceiptUnverified)
+		return fmt.Errorf("%w: receipt exceeds size limit", ErrHomebrewReceiptUnverified)
 	}
 	f, err := os.Open(receiptPath)
 	if err != nil {
-		return fmt.Errorf("%w: read receipt: %v", errHomebrewReceiptUnverified, err)
+		return fmt.Errorf("%w: read receipt: %v", ErrHomebrewReceiptUnverified, err)
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxReceiptSize+1))
 	if err != nil {
-		return fmt.Errorf("%w: read receipt: %v", errHomebrewReceiptUnverified, err)
+		return fmt.Errorf("%w: read receipt: %v", ErrHomebrewReceiptUnverified, err)
 	}
 	if len(data) > maxReceiptSize {
-		return fmt.Errorf("%w: receipt exceeds size limit", errHomebrewReceiptUnverified)
+		return fmt.Errorf("%w: receipt exceeds size limit", ErrHomebrewReceiptUnverified)
 	}
 	var receipt struct {
 		HomebrewVersion string `json:"homebrew_version"`
@@ -253,7 +253,7 @@ func checkHomebrewOrigin(exe string) error {
 	}
 	if json.Unmarshal(data, &receipt) != nil || receipt.HomebrewVersion == "" ||
 		filepath.Base(receipt.Source.Path) != "clawmeter.rb" {
-		return fmt.Errorf("%w: invalid package metadata", errHomebrewReceiptUnverified)
+		return fmt.Errorf("%w: invalid package metadata", ErrHomebrewReceiptUnverified)
 	}
 	return ErrHomebrewManaged
 }

@@ -19,6 +19,7 @@ func drawBalanceRows(t *testing.T, menu *providerMenuItems, contact time.Time, p
 	data := &provider.UsageData{Provider: provider.ClaudeAPISourceName, CreditPools: pools}
 	// The snapshot carries the contact the render reads, as updateUI does.
 	now := time.Now()
+	menu.extensionReady = true
 	snap := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"api": data}, ExtensionContact: contact}, now)
 	trayRenderMu.Lock()
 	defer trayRenderMu.Unlock()

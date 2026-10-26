@@ -63,10 +63,13 @@ func NewSource(cfg config.ProviderConfig, source config.SourceConfig) (*Provider
 	return p.(*Provider), nil
 }
 
-func (p *Provider) Name() string         { return "openai" } // stable config key
-func (p *Provider) DisplayName() string  { return "Codex" }
-func (p *Provider) Description() string  { return "Codex quota (via local Codex auth)" }
-func (p *Provider) DashboardURL() string { return "https://platform.openai.com/usage" }
+func (p *Provider) Name() string        { return "openai" } // stable config key
+func (p *Provider) DisplayName() string { return "Codex" }
+func (p *Provider) Description() string { return "Codex quota (via local Codex auth)" }
+
+// DashboardURL follows the Codex usage dashboard linked by OpenAI Help,
+// rather than the unrelated API-spend dashboard on platform.openai.com.
+func (p *Provider) DashboardURL() string { return "https://chatgpt.com/codex/settings/usage" }
 
 // CredentialRoute names the credential this source reads, so a repointed source keeps its own
 // rate-limit backoff. It ignores token changes, so a refresh does not end one.
