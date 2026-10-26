@@ -482,6 +482,54 @@ func TestNoneAnnouncementRevalidatesWithETag(t *testing.T) {
 	}
 }
 
+func TestCachedAnnouncementIsRemovedWhenWithdrawn(t *testing.T) {
+	clock := &fakeClock{t: t0}
+	fs := newFeedServer(t, func(n int, w http.ResponseWriter, r *http.Request) {
+		switch n {
+		case 1:
+			okJSON(scheduledBody("evt_1", "scheduled", "regular", goodScheduled, goodAnnounced, goodSource), `"announced"`)(n, w, r)
+		case 2:
+			if got := r.Header.Get("If-None-Match"); got != `"announced"` {
+				t.Errorf("withdrawal request ETag = %q", got)
+			}
+			okJSON(`{"data":{"scheduled_reset":null}}`, `"withdrawn"`)(n, w, r)
+		case 3:
+			if got := r.Header.Get("If-None-Match"); got != `"withdrawn"` {
+				t.Errorf("revalidation ETag = %q", got)
+			}
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			t.Errorf("unexpected request %d", n)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	client := newTestClient(t, fs.srv.URL, clock)
+	data := codexReading(t0, window("7d", 100, 72*time.Hour, t0))
+	initial, err := client.Read(context.Background())
+	if err != nil || Visible(data, initial, clock.Now()) == nil {
+		t.Fatalf("initial announcement not visible: %+v, %v", initial, err)
+	}
+	clock.Advance(16 * time.Minute)
+	withdrawn, err := client.Read(context.Background())
+	if err != nil || withdrawn.Announcement != nil || !withdrawn.CheckedAt.Equal(clock.Now()) {
+		t.Fatalf("withdrawn reading = %+v, %v", withdrawn, err)
+	}
+	if got := Announce(Announce(data, initial, t0), withdrawn, clock.Now()); got.AnnouncedReset != nil {
+		t.Fatalf("withdrawal left an announcement attached: %+v", got.AnnouncedReset)
+	}
+	// A new client must reuse the withdrawn state on disk without fetching.
+	other := &Client{BaseURL: fs.srv.URL, Path: client.Path, Now: clock.Now}
+	cached, err := other.Read(context.Background())
+	if err != nil || cached.Announcement != nil || !cached.CheckedAt.Equal(withdrawn.CheckedAt) || fs.count() != 2 {
+		t.Fatalf("cached withdrawal = %+v, %v; requests = %d", cached, err, fs.count())
+	}
+	clock.Advance(16 * time.Minute)
+	revalidated, err := other.Read(context.Background())
+	if err != nil || revalidated.Announcement != nil || !revalidated.CheckedAt.Equal(clock.Now()) || fs.count() != 3 {
+		t.Fatalf("304 resurrected announcement: %+v, %v; requests = %d", revalidated, err, fs.count())
+	}
+}
+
 func TestALongRetryAfterIsCut(t *testing.T) {
 	now := time.Now()
 	if got := retryAfter("999999999", now); got != LastGoodLimit {
