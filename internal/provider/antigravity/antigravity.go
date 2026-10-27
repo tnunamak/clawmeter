@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,8 +39,8 @@ type httpClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Provider reads the Antigravity CLI's existing login and fetches its two
-// provider-reported weekly usage pools.
+// Provider reads native CLI quota reports or an explicitly selected token's
+// remote quota summary. Pool membership and cadence come from the provider.
 type Provider struct {
 	baseURL                    string
 	tokenURL                   string
@@ -49,6 +48,7 @@ type Provider struct {
 	homeDir                    func() (string, error)
 	lookPath                   func(string) (string, error)
 	readFile                   func(string) ([]byte, error)
+	readCLIUsage               func(context.Context) (*provider.UsageData, error)
 	now                        func() time.Time
 	tokenMu                    sync.Mutex
 	memoryToken                storedToken
@@ -74,13 +74,14 @@ func New() *Provider {
 		readFile: os.ReadFile,
 		now:      time.Now,
 	}
+	p.readCLIUsage = p.fetchCLIUsage
 	return p
 }
 
 func (p *Provider) Name() string        { return "antigravity" }
 func (p *Provider) DisplayName() string { return "Antigravity" }
 func (p *Provider) Description() string {
-	return "Google Antigravity weekly model pools (via agy login)"
+	return "Google Antigravity quota groups (via agy login)"
 }
 func (p *Provider) DashboardURL() string { return "https://antigravity.google" }
 func (p *Provider) SafeForAutoPolling() bool {
@@ -92,6 +93,11 @@ func (p *Provider) IsConfigured() bool {
 }
 
 func (p *Provider) SetupStatus() provider.SetupStatus {
+	if p.tokenPath == "" {
+		if _, err := p.executablePath("agy"); err != nil {
+			return provider.SetupStatus{State: provider.SetupUnavailable, Detail: "Antigravity CLI is not installed"}
+		}
+	}
 	token, err := p.readToken()
 	if errors.Is(err, errTokenPermissions) {
 		return provider.SetupStatus{
@@ -123,6 +129,13 @@ func (p *Provider) SetupStatus() provider.SetupStatus {
 }
 
 func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) {
+	// The native CLI reports all of its pools. The legacy remote summary can
+	// omit Gemini entirely. Never attribute an ambient CLI login to an explicit
+	// token-file source; those sources retain their account-scoped API path.
+	if p.readCLIUsage != nil && p.tokenPath == "" {
+		data, err := p.readCLIUsage(ctx)
+		return p.withSource(data), err
+	}
 	token, err := p.validAccessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -595,12 +608,14 @@ type quotaSummary struct {
 
 type quotaGroup struct {
 	DisplayName string        `json:"displayName"`
+	Description string        `json:"description"`
 	Buckets     []quotaBucket `json:"buckets"`
 }
 
 type quotaBucket struct {
 	BucketID          string   `json:"bucketId"`
 	DisplayName       string   `json:"displayName"`
+	Description       string   `json:"description"`
 	RemainingFraction *float64 `json:"remainingFraction"`
 	Remaining         *struct {
 		RemainingFraction *float64 `json:"remainingFraction"`
@@ -632,6 +647,12 @@ func parseQuotaSummary(body []byte, now time.Time) ([]provider.UsageWindow, erro
 	byID := make(map[string]provider.UsageWindow)
 	order := make([]string, 0, len(summary.Groups))
 	for _, group := range summary.Groups {
+		cadences := make(map[time.Duration]int)
+		for _, bucket := range group.Buckets {
+			if !bucket.Disabled {
+				cadences[quotaWindowLength(bucket.Window)]++
+			}
+		}
 		for _, bucket := range group.Buckets {
 			if bucket.Disabled {
 				continue
@@ -644,24 +665,44 @@ func parseQuotaSummary(body []byte, now time.Time) ([]provider.UsageWindow, erro
 			if remaining == nil || math.IsNaN(*remaining) || math.IsInf(*remaining, 0) || *remaining < 0 || *remaining > 1 {
 				return nil, fmt.Errorf("Antigravity quota bucket %q has invalid remaining usage", id)
 			}
-			resetAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(bucket.ResetTime))
-			if err != nil || !resetAt.After(now) {
-				return nil, fmt.Errorf("Antigravity quota bucket %q has an invalid reset time", id)
-			}
-			if bucket.Window != "" && !strings.EqualFold(strings.TrimSpace(bucket.Window), "weekly") {
-				return nil, fmt.Errorf("Antigravity quota bucket %q has unsupported window %q", id, bucket.Window)
+			var resetAt time.Time
+			if raw := strings.TrimSpace(bucket.ResetTime); raw != "" {
+				var err error
+				resetAt, err = time.Parse(time.RFC3339Nano, raw)
+				if err != nil {
+					return nil, fmt.Errorf("Antigravity quota bucket %q has an invalid reset time", id)
+				}
 			}
 
-			label := poolLabel(id, group.DisplayName)
+			label := strings.TrimSpace(group.DisplayName)
+			label = strings.TrimSuffix(strings.TrimSuffix(label, " models"), " Models")
+			if label == "" {
+				label = id
+			}
+			length := quotaWindowLength(bucket.Window)
+			if cadences[length] > 1 {
+				name := strings.TrimSpace(bucket.DisplayName)
+				if name == "" {
+					name = id
+				}
+				label += " · " + name
+			}
+			display := label
+			if length > 0 {
+				display = quotaDurationLabel(length) + " (" + label + ")"
+			}
 			window := provider.UsageWindow{
-				Name:        "7d " + label,
-				Length:      7 * 24 * time.Hour,
-				DisplayName: "7 days (" + label + ")",
-				Utilization: (1 - *remaining) * 100,
-				ResetsAt:    resetAt,
+				Name:          quotaWindowName(id),
+				Length:        length,
+				LengthUnknown: length == 0,
+				DisplayName:   display,
+				Scope:         strings.TrimSpace(group.Description),
+				Description:   strings.TrimSpace(bucket.Description),
+				Utilization:   (1 - *remaining) * 100,
+				ResetsAt:      resetAt,
 			}
 			if prior, exists := byID[id]; exists {
-				if prior.Name != window.Name || prior.Utilization != window.Utilization || !prior.ResetsAt.Equal(window.ResetsAt) {
+				if prior != window {
 					return nil, fmt.Errorf("Antigravity quota summary contains conflicting duplicate bucket %q", id)
 				}
 				continue
@@ -674,9 +715,6 @@ func parseQuotaSummary(body []byte, now time.Time) ([]provider.UsageWindow, erro
 		return nil, fmt.Errorf("Antigravity quota summary contained no usable buckets")
 	}
 
-	sort.SliceStable(order, func(i, j int) bool {
-		return poolOrder(order[i]) < poolOrder(order[j])
-	})
 	windows := make([]provider.UsageWindow, 0, len(order))
 	for _, id := range order {
 		windows = append(windows, byID[id])
@@ -684,31 +722,49 @@ func parseQuotaSummary(body []byte, now time.Time) ([]provider.UsageWindow, erro
 	return windows, nil
 }
 
-func poolLabel(bucketID, groupName string) string {
-	switch strings.ToLower(strings.TrimSpace(bucketID)) {
+// These two aliases preserve existing cache and pin identities. They do not
+// select supported models, supply labels, infer cadence, or filter new pools.
+func quotaWindowName(bucketID string) string {
+	switch bucketID {
 	case "gemini-weekly":
-		return "Gemini"
+		return "7d Gemini"
 	case "3p-weekly":
-		return "Claude + GPT"
+		return "7d Claude + GPT"
 	}
-	label := strings.TrimSpace(groupName)
-	label = strings.TrimSuffix(label, " models")
-	label = strings.TrimSuffix(label, " Models")
-	if label == "" {
-		return "Models"
-	}
-	return label
+	return bucketID
 }
 
-func poolOrder(bucketID string) int {
-	switch strings.ToLower(strings.TrimSpace(bucketID)) {
-	case "gemini-weekly":
-		return 0
-	case "3p-weekly":
-		return 1
-	default:
-		return 2
+func quotaWindowLength(cadence string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(cadence)) {
+	case "weekly":
+		return 7 * 24 * time.Hour
+	case "daily":
+		return 24 * time.Hour
+	case "hourly":
+		return time.Hour
 	}
+	// Explicit numeric durations remain useful when the provider adds a new
+	// cadence. Unknown and calendar-based cadences do not imply a fixed length.
+	if d, err := time.ParseDuration(strings.TrimSpace(cadence)); err == nil && d > 0 {
+		return d
+	}
+	return 0
+}
+
+func quotaDurationLabel(d time.Duration) string {
+	if d%(24*time.Hour) == 0 {
+		if d == 24*time.Hour {
+			return "1 day"
+		}
+		return fmt.Sprintf("%d days", d/(24*time.Hour))
+	}
+	if d%time.Hour == 0 {
+		if d == time.Hour {
+			return "1 hour"
+		}
+		return fmt.Sprintf("%d hours", d/time.Hour)
+	}
+	return d.String()
 }
 
 func expiredUsage(now time.Time) *provider.UsageData {

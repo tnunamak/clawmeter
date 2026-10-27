@@ -82,6 +82,7 @@ type Window struct {
 	Code      string
 	Qualifier string
 	Label     string
+	Scope     string
 	// Used is the utilization in percent.
 	Used float64
 	// Money is the window's money detail, or "" when it has none.
@@ -115,7 +116,9 @@ const (
 // Forecast is the projected use at reset. Pct is meaningful only when known.
 type Forecast struct {
 	State ForecastState
-	Pct   float64
+	// Reason qualifies a withheld forecast without changing the state contract.
+	Reason string
+	Pct    float64
 }
 
 // ExhaustionState says whether a window is used up, and how.
@@ -378,6 +381,7 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, usable bool, pro
 		Code:      meter.Code(w),
 		Qualifier: meter.Qualifier(w),
 		Label:     meter.Label(w),
+		Scope:     w.Scope,
 		Used:      w.Utilization,
 		Reset:     Reset{Policy: w.ResetPolicy},
 	}
@@ -408,6 +412,9 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, usable bool, pro
 		switch {
 		case proj.Unknown:
 			out.Forecast.State = ForecastWarming
+			if w.Utilization == 0 {
+				out.Forecast.Reason = "no_usage"
+			}
 		default:
 			out.Forecast = Forecast{State: ForecastKnown, Pct: proj.ProjectedPct}
 		}

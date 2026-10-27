@@ -246,6 +246,9 @@ func (p Projection) ColorIndicator() string {
 
 // WindowLength prefers provider metadata, then legacy window names.
 func WindowLength(w provider.UsageWindow) time.Duration {
+	if w.LengthUnknown {
+		return 0
+	}
 	if w.Length > 0 {
 		return w.Length
 	}

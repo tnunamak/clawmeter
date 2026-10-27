@@ -216,6 +216,12 @@ func agentWindowFields(acct *view.Account, w view.Window, seconds bool) []string
 		fields = append(fields, "reset_in=unknown")
 	}
 	fields = append(fields, "status="+agentStatus(acct, w))
+	if w.Forecast.Reason != "" {
+		fields = append(fields, "forecast_reason="+w.Forecast.Reason)
+	}
+	if w.Scope != "" {
+		fields = append(fields, fmt.Sprintf("scope=%q", w.Scope))
+	}
 	fields = append(fields, runsOutFields(w)...)
 	if acct.Reading.State != view.ReadingFresh {
 		fields = append(fields, "data="+string(acct.Reading.State))
@@ -280,6 +286,7 @@ type JSONViewWindow struct {
 	Name       string             `json:"name"`
 	Code       string             `json:"code,omitempty"`
 	Label      string             `json:"label,omitempty"`
+	Scope      string             `json:"scope,omitempty"`
 	Used       float64            `json:"used"`
 	Forecast   JSONViewForecast   `json:"forecast"`
 	Exhaustion JSONViewExhaustion `json:"exhaustion"`
@@ -289,8 +296,9 @@ type JSONViewWindow struct {
 
 // JSONViewForecast carries pct only when the state is known.
 type JSONViewForecast struct {
-	State string   `json:"state"`
-	Pct   *float64 `json:"pct,omitempty"`
+	State  string   `json:"state"`
+	Reason string   `json:"reason,omitempty"`
+	Pct    *float64 `json:"pct,omitempty"`
 }
 
 // JSONViewExhaustion carries the run-out figures only when they are known.
@@ -350,8 +358,9 @@ func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 		Name:       w.Name,
 		Code:       w.Code,
 		Label:      w.Label,
+		Scope:      w.Scope,
 		Used:       w.Used,
-		Forecast:   JSONViewForecast{State: string(w.Forecast.State)},
+		Forecast:   JSONViewForecast{State: string(w.Forecast.State), Reason: w.Forecast.Reason},
 		Exhaustion: JSONViewExhaustion{State: string(w.Exhaustion.State)},
 		Reset:      JSONViewReset{Policy: w.Reset.Policy, Known: w.Reset.Known},
 		Shown:      shown,
