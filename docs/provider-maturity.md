@@ -20,8 +20,11 @@ console session created through Alibaba's official CLI, launched directly by
 allowlisted read-only quota operation; Alibaba has not
 documented that operation contract as a public API, and no entitled Coding Plan
 account has yet provided live quota-field validation. Antigravity has been validated against one live
-consumer account, but its CLI-owned credential storage and internal quota API
-still need live validation on macOS and Windows. Grok is experimental because
+consumer account. Its native source reads the structured, zero-turn `agy /usage`
+report because the remote quota summary has omitted an exhausted Gemini pool.
+Explicit token-file sources retain their account-scoped remote path; omitted
+pools remain unknown. Native CLI execution and credential storage still need
+live validation on macOS and Windows. Grok is experimental because
 its live endpoint has omitted the usage percentage even while the account was
 exhausted. DeepSeek is experimental because, although its `GET
 /user/balance` contract is officially documented, no live entitled DeepSeek

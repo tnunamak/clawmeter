@@ -84,7 +84,7 @@ func TestFetchUsageReturnsAuthoritativeWeeklyPools(t *testing.T) {
 		t.Fatalf("windows = %+v", data.Windows)
 	}
 	assertWindow(t, data.Windows[0], "7d Gemini", "7 days (Gemini)", 25)
-	assertWindow(t, data.Windows[1], "7d Claude + GPT", "7 days (Claude + GPT)", 60)
+	assertWindow(t, data.Windows[1], "7d Claude + GPT", "7 days (Claude and GPT)", 60)
 }
 
 func TestFetchUsageRefreshesExpiredTokenWithoutWritingLoginFile(t *testing.T) {
@@ -367,10 +367,9 @@ func TestOAuthServiceFailureDoesNotTryEveryClient(t *testing.T) {
 
 func TestFetchUsageFailsInsteadOfInventingZero(t *testing.T) {
 	tests := map[string]string{
-		"missing groups":     `{}`,
-		"missing fraction":   `{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","resetTime":"2026-07-30T17:47:46Z"}]}]}`,
-		"invalid fraction":   `{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","remainingFraction":1.2,"resetTime":"2026-07-30T17:47:46Z"}]}]}`,
-		"missing reset time": `{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","remainingFraction":0.5}]}]}`,
+		"missing groups":   `{}`,
+		"missing fraction": `{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","resetTime":"2026-07-30T17:47:46Z"}]}]}`,
+		"invalid fraction": `{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","remainingFraction":1.2,"resetTime":"2026-07-30T17:47:46Z"}]}]}`,
 	}
 	for name, payload := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -444,14 +443,18 @@ func TestSetupStatusRequiresCLIAndUsableToken(t *testing.T) {
 	}
 }
 
-func TestSetupStatusKeepsStoredLoginConfiguredWithoutCLI(t *testing.T) {
+func TestNativeSetupRequiresCLIWhileTokenFileSourceDoesNot(t *testing.T) {
 	home := t.TempDir()
 	writeToken(t, home, "token", testNow.Add(-time.Hour))
 	p := newTestProvider(home, "http://unused.invalid")
 	p.lookPath = func(string) (string, error) { return "", errors.New("missing") }
 
+	if got := p.SetupStatus(); got.State != provider.SetupUnavailable {
+		t.Fatalf("SetupStatus() = %+v, want required CLI unavailable", got)
+	}
+	p.tokenPath = tokenPath(home)
 	if got := p.SetupStatus(); got.State != provider.SetupReady {
-		t.Fatalf("SetupStatus() = %+v, want stored login to remain configured", got)
+		t.Fatalf("explicit token-file source needs no CLI: %+v", got)
 	}
 }
 
@@ -495,6 +498,7 @@ func TestSetupStatusExplainsUnsafeOrMalformedLoginFile(t *testing.T) {
 
 func newTestProvider(home, baseURL string) *Provider {
 	p := New()
+	p.readCLIUsage = nil // These tests exercise the explicit remote-token path.
 	p.homeDir = func() (string, error) { return home, nil }
 	p.baseURL = baseURL
 	p.lookPath = func(string) (string, error) { return "/bin/agy", nil }

@@ -15,6 +15,9 @@ func (w Window) ForecastWords() string {
 	case ForecastStale:
 		return "forecast stale"
 	case ForecastWarming:
+		if w.Forecast.Reason == "no_usage" {
+			return "no usage yet"
+		}
 		return "forecast soon"
 	case ForecastNone:
 		return "no forecast"

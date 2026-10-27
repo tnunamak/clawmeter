@@ -278,7 +278,7 @@ In T3, enter `http://127.0.0.1:8318` as the hub URL and the same key as the mana
 |---|---|
 | Claude | 5h, 7d, model-specific windows |
 | Codex | 5h and weekly rate limits; banked reset-credit expiry when available |
-| Antigravity | Separate weekly pools for Gemini models and Claude/GPT models |
+| Antigravity | Provider-reported shared model pools and time windows from `agy /usage` |
 | Gemini | 24h Pro-model and Flash-model quotas; Code Assist tier checked when available |
 | GitHub Copilot | Provider-reported premium, chat, and completion quotas when available |
 | Grok/xAI | Grok weekly usage pool; API prepaid credits |
