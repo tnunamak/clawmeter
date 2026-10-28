@@ -385,19 +385,18 @@ func parseUsage(raw any, now time.Time) (*provider.UsageData, error) {
 	result := &provider.UsageData{FetchedAt: now}
 	for _, spec := range []struct {
 		name, display, pct, reset string
-		length                    time.Duration
 	}{
-		{"session_5h", "5h", "per5HourPercentage", "per5HourResetTime", 0},
-		{"weekly", "7d", "per1WeekPercentage", "per1WeekResetTime", 0},
+		{"session_5h", "5h", "per5HourPercentage", "per5HourResetTime"},
+		{"weekly", "7d", "per1WeekPercentage", "per1WeekResetTime"},
 		// Since October 2026 the plan reports one monthly quota instead.
-		{"monthly", "Monthly", "per1MonthPercentage", "per1MonthResetTime", 30 * 24 * time.Hour},
+		{"monthly", "Monthly", "per1MonthPercentage", "per1MonthResetTime"},
 	} {
 		utilization, ok := findNumber(raw, spec.pct)
 		if !ok {
 			continue
 		}
 		reset, _ := findValue(raw, spec.reset)
-		result.Windows = append(result.Windows, provider.UsageWindow{Name: spec.name, DisplayName: spec.display, Length: spec.length, Utilization: normalizeUtilization(utilization), ResetsAt: parseTime(reset)})
+		result.Windows = append(result.Windows, provider.UsageWindow{Name: spec.name, DisplayName: spec.display, LengthUnknown: spec.name == "monthly", Utilization: normalizeUtilization(utilization), ResetsAt: parseTime(reset)})
 	}
 	if len(result.Windows) == 0 {
 		// No "token" in this message: the error classifier would read it as a

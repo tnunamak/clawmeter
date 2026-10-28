@@ -167,7 +167,7 @@ func TestParseUsageReadsTheMonthlyQuota(t *testing.T) {
 		t.Fatalf("data = %+v, %v", data, err)
 	}
 	w := data.Windows[0]
-	if w.Name != "monthly" || w.Utilization != 25 || w.Length != 30*24*time.Hour || !w.ResetsAt.Equal(time.UnixMilli(1793289600000)) {
+	if w.Name != "monthly" || w.Utilization != 25 || w.Length != 0 || !w.LengthUnknown || !w.ResetsAt.Equal(time.UnixMilli(1793289600000)) {
 		t.Fatalf("monthly window = %+v", w)
 	}
 }

@@ -506,7 +506,7 @@ func TestCachedAnnouncementIsRemovedWhenWithdrawn(t *testing.T) {
 	client := newTestClient(t, fs.srv.URL, clock)
 	data := codexReading(t0, window("7d", 100, 72*time.Hour, t0))
 	initial, err := client.Read(context.Background())
-	if err != nil || Visible(data, initial, clock.Now()) == nil {
+	if err != nil || Visible(data, initial, clock.Now(), 10*time.Minute) == nil {
 		t.Fatalf("initial announcement not visible: %+v, %v", initial, err)
 	}
 	clock.Advance(16 * time.Minute)
@@ -514,7 +514,7 @@ func TestCachedAnnouncementIsRemovedWhenWithdrawn(t *testing.T) {
 	if err != nil || withdrawn.Announcement != nil || !withdrawn.CheckedAt.Equal(clock.Now()) {
 		t.Fatalf("withdrawn reading = %+v, %v", withdrawn, err)
 	}
-	if got := Announce(Announce(data, initial, t0), withdrawn, clock.Now()); got.AnnouncedReset != nil {
+	if got := Announce(Announce(data, initial, t0, 10*time.Minute), withdrawn, clock.Now(), 10*time.Minute); got.AnnouncedReset != nil {
 		t.Fatalf("withdrawal left an announcement attached: %+v", got.AnnouncedReset)
 	}
 	// A new client must reuse the withdrawn state on disk without fetching.

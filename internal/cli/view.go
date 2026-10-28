@@ -216,6 +216,9 @@ func agentWindowFields(acct *view.Account, w view.Window, seconds bool) []string
 		fields = append(fields, "reset_in=unknown")
 	}
 	fields = append(fields, "status="+agentStatus(acct, w))
+	if w.Forecast.State == view.ForecastKnown {
+		fields = append(fields, "forecast_basis=average_since_reset")
+	}
 	if w.Forecast.Reason != "" {
 		fields = append(fields, "forecast_reason="+w.Forecast.Reason)
 	}
@@ -297,6 +300,7 @@ type JSONViewWindow struct {
 // JSONViewForecast carries pct only when the state is known.
 type JSONViewForecast struct {
 	State  string   `json:"state"`
+	Basis  string   `json:"basis,omitempty"`
 	Reason string   `json:"reason,omitempty"`
 	Pct    *float64 `json:"pct,omitempty"`
 }
@@ -368,6 +372,7 @@ func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 	if w.Forecast.State == view.ForecastKnown {
 		pct := roundPct(w.Forecast.Pct)
 		out.Forecast.Pct = &pct
+		out.Forecast.Basis = "average_since_reset"
 	}
 	if w.Reset.Known {
 		out.Reset.At = w.Reset.At.Format(time.RFC3339)

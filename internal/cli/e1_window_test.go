@@ -15,8 +15,10 @@ func TestE1TypedMonthlyWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.ResetsAt = time.Now().Add(12 * time.Hour)
-	data := &provider.UsageData{Windows: []provider.UsageWindow{w}}
-	projection := forecastFor(data).Windows["premium"]
+	now := time.Now()
+	data := &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{w}}
+	output := MultiProviderOutput{Providers: []ProviderFormatter{{Name: "test", Data: data}}}
+	projection := forecastFor(output.buildView(now).account("test")).Windows["premium"]
 	if projection.ProjectedPct < 60 || projection.ProjectedPct > 62 {
 		t.Errorf("monthly projection=%v want about 61", projection.ProjectedPct)
 	}
@@ -40,7 +42,7 @@ func TestE1WindowClassification(t *testing.T) {
 		{"unknown reset", provider.UsageWindow{Name: "5h", Utilization: 100}, 2, "current=100%"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			pf := ProviderFormatter{Display: "Test", Data: &provider.UsageData{Windows: []provider.UsageWindow{tt.w}}}
+			pf := ProviderFormatter{Display: "Test", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{tt.w}}}
 			if got := classifyProvider(&pf).tier; got != tt.tier {
 				t.Errorf("tier=%d want %d", got, tt.tier)
 			}
@@ -60,7 +62,7 @@ func TestE1StatusLineUnknownAndStale(t *testing.T) {
 		{time.Now().Add(298 * time.Minute), "forecast soon"},
 		{time.Now().Add(-time.Hour), "stale"},
 	} {
-		output := MultiProviderOutput{Providers: []ProviderFormatter{{Display: "Test", Data: &provider.UsageData{Windows: []provider.UsageWindow{{Name: "5h", Utilization: 3, ResetsAt: tt.reset}}}}}}
+		output := MultiProviderOutput{Providers: []ProviderFormatter{{Display: "Test", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{{Name: "5h", Utilization: 3, ResetsAt: tt.reset}}}}}}
 		got := output.StatusLineSummary()
 		if !strings.Contains(got, tt.want) || !strings.Contains(got, "3%") {
 			t.Errorf("status line=%s want current 3%% and %s", got, tt.want)

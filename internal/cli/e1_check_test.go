@@ -33,7 +33,7 @@ func TestE1CheckExitCodes(t *testing.T) {
 			if tt.remaining != 0 {
 				w.ResetsAt = time.Now().Add(tt.remaining)
 			}
-			output := &MultiProviderOutput{Providers: []ProviderFormatter{{Data: &provider.UsageData{Windows: []provider.UsageWindow{w}}}}}
+			output := &MultiProviderOutput{Providers: []ProviderFormatter{{Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{w}}}}}
 			if got := statusCheckExitCode(output); got != tt.want {
 				t.Errorf("exit=%d want %d", got, tt.want)
 			}
@@ -46,7 +46,7 @@ func TestE1CheckExitCodes(t *testing.T) {
 // pick a healthy sibling while --check reports the provider critical.
 func TestWorstWindowPrefersExhaustedOverHealthySibling(t *testing.T) {
 	reset := time.Now().Add(time.Hour)
-	data := &provider.UsageData{Windows: []provider.UsageWindow{
+	data := &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 		{Name: "mystery", Utilization: 100, ResetsAt: reset},
 		{Name: "5h", Utilization: 10, ResetsAt: reset},
 	}}

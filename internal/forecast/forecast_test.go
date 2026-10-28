@@ -162,7 +162,7 @@ func TestGuessWindowType(t *testing.T) {
 		{"5h Review", FiveHourWindow},
 		{"7d Review", SevenDayWindow},
 		{"7d_oauth_apps", SevenDayWindow},
-		{"Monthly Credits", MonthlyWindow},
+		{"Monthly Credits", 0},
 		{"session", 0}, // unknown
 		{"credits", 0}, // unknown
 		{"", 0},        // unknown
@@ -233,7 +233,7 @@ func TestProjection_Indicator(t *testing.T) {
 	}{
 		{0, "0%"},
 		{50.4, "50%"},
-		{99.6, "100%"},
+		{99.6, "99.6%"},
 		{150, "150%"},
 	}
 
@@ -255,27 +255,27 @@ func TestProjection_PaceIndicator(t *testing.T) {
 		{
 			name: "under limit estimate",
 			proj: Projection{ProjectedPct: 70, WillLastToReset: true},
-			want: "est. 70% at reset",
+			want: "est. 70% at reset (average since reset)",
 		},
 		{
 			name: "over limit estimate with run-out note",
 			proj: Projection{ProjectedPct: 139, WillLastToReset: false, RunsOutIn: 2 * time.Hour, RunsOutEarlyBy: time.Hour},
-			want: "est. 139% at reset · runs out in 2h00m (1h00m before reset)",
+			want: "est. 139% at reset (average since reset) · runs out in 2h00m (1h00m before reset)",
 		},
 		{
 			name: "zero usage estimate",
 			proj: Projection{ProjectedPct: 0, WillLastToReset: true},
-			want: "est. 0% at reset",
+			want: "est. 0% at reset (average since reset)",
 		},
 		{
 			name: "near limit estimate",
 			proj: Projection{ProjectedPct: 98, WillLastToReset: true},
-			want: "est. 98% at reset",
+			want: "est. 98% at reset (average since reset)",
 		},
 		{
 			name: "over limit estimate",
 			proj: Projection{ProjectedPct: 104, WillLastToReset: false},
-			want: "est. 104% at reset",
+			want: "est. 104% at reset (average since reset)",
 		},
 		{
 			name: "runs out includes duration",

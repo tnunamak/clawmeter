@@ -17,14 +17,14 @@ func TestFormatDuration(t *testing.T) {
 			want: "0m",
 		},
 		{
-			name: "30 seconds rounds to 1m (Round rounds .5 up)",
+			name: "30 seconds stays below a minute",
 			d:    30 * time.Second,
-			want: "1m",
+			want: "<1m",
 		},
 		{
-			name: "29 seconds rounds down to 0m",
+			name: "29 seconds stays below a minute",
 			d:    29 * time.Second,
-			want: "0m",
+			want: "<1m",
 		},
 		{
 			name: "65 minutes",

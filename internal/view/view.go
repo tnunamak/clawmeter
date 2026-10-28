@@ -179,9 +179,9 @@ type Target struct {
 
 // Inputs are everything Build reads. Maps may be nil.
 type Inputs struct {
-	// MaxReadingAge allows a retained reading to forecast up to this age.
-	// It also bounds current credit-grant balances. Zero disables retained
-	// forecasts and permits current credit only at its observation instant.
+	// MaxReadingAge bounds all usage readings and current credit-grant balances.
+	// Zero permits successful usage only at its observation instant and disables
+	// retained forecasts; credit is also current only at its observation instant.
 	MaxReadingAge time.Duration
 	// Results maps a source key to its latest provider data. A nil value is
 	// a source with no data.
@@ -260,22 +260,27 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 	}
 	account.Provider = data.Provider
 	account.Reading = reading(data)
-	usable := account.Reading.State == ReadingFresh
-	projectionAt := at
-	if account.Reading.State == ReadingStale && !data.FetchedAt.IsZero() && in.MaxReadingAge > 0 {
-		age := at.Sub(data.FetchedAt)
-		if age >= 0 && age <= in.MaxReadingAge {
-			usable = true
-			projectionAt = data.FetchedAt
+	age := at.Sub(data.FetchedAt)
+	validAge := !data.FetchedAt.IsZero() && age >= 0 && age <= in.MaxReadingAge
+	if len(data.Windows) > 0 && account.Reading.State == ReadingFresh && !validAge {
+		account.Reading.State = ReadingStale
+		switch {
+		case data.FetchedAt.IsZero():
+			account.Reading.Reason = "observation time unavailable"
+		case age < 0:
+			account.Reading.Reason = "observation time in future"
+		default:
+			account.Reading.Reason = "reading too old"
 		}
 	}
+	usable := validAge && (account.Reading.State == ReadingFresh || account.Reading.State == ReadingStale && in.MaxReadingAge > 0)
 
 	for _, grant := range data.CreditGrants {
 		account.CreditGrants = append(account.CreditGrants, buildCreditGrant(grant, account.Reading, at, in.MaxReadingAge))
 	}
 	account.Windows = make([]Window, 0, len(data.Windows))
 	for _, w := range data.Windows {
-		account.Windows = append(account.Windows, buildWindow(in, key, w, usable, projectionAt, at))
+		account.Windows = append(account.Windows, buildWindow(in, key, w, usable, data.FetchedAt, at))
 	}
 	showAll := allIdle(data.Windows, at)
 	for i, w := range data.Windows {
@@ -460,8 +465,8 @@ type candidate struct {
 // rankWindows orders every window of the accounts from most to least at risk.
 //
 // The order is, in turn:
-//  1. fresh before not fresh, and in each a window with a known reset first;
-//  2. out before runs_out before lasts or unknown;
+//  1. fresh before not fresh, then observed out before other states;
+//  2. a known reset first, then runs_out before lasts or unknown;
 //  3. among runs_out, the soonest RunsOutIn first;
 //  4. a known forecast before an unknown one, then the higher Pct first;
 //  5. the higher Used first;
@@ -491,11 +496,17 @@ func rankWindows(accounts []Account) []candidate {
 }
 
 func moreAtRisk(accounts []Account, a, b candidate) bool {
-	if a.class != b.class {
-		return a.class < b.class
+	if a.class/2 != b.class/2 {
+		return a.class/2 < b.class/2
 	}
 	x := accounts[a.account].Windows[a.window]
 	y := accounts[b.account].Windows[b.window]
+	if xOut, yOut := x.Exhaustion.State == ExhaustionOut, y.Exhaustion.State == ExhaustionOut; xOut != yOut {
+		return xOut
+	}
+	if a.class != b.class {
+		return a.class < b.class
+	}
 	if rx, ry := exhaustionRank(x), exhaustionRank(y); rx != ry {
 		return rx < ry
 	}

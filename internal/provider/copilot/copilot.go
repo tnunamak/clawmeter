@@ -373,12 +373,19 @@ func appendSnapshotWindow(
 		return
 	}
 	resetAt, _ := snap.resetAt(fallbackReset, fallbackResetKnown)
+	// Copilot quotas renew on the first of the month in UTC. An unexpected
+	// boundary does not establish a start for extrapolation.
+	var length time.Duration
+	if reset := resetAt.UTC(); !resetAt.IsZero() && reset.Day() == 1 && reset.Hour() == 0 && reset.Minute() == 0 && reset.Second() == 0 && reset.Nanosecond() == 0 {
+		length = reset.Sub(reset.AddDate(0, -1, 0))
+	}
 	data.Windows = append(data.Windows, provider.UsageWindow{
-		Name:        name,
-		Length:      30 * 24 * time.Hour,
-		DisplayName: displayName,
-		Utilization: clamp(100-percent, 0, 100),
-		ResetsAt:    resetAt,
+		Name:          name,
+		Length:        length,
+		LengthUnknown: length == 0,
+		DisplayName:   displayName,
+		Utilization:   clamp(100-percent, 0, 100),
+		ResetsAt:      resetAt,
 	})
 }
 

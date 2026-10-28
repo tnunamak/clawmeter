@@ -49,7 +49,7 @@ func announcedFor(t *testing.T, data *provider.UsageData, now time.Time) *provid
 			SourceURL:    "https://x.com/example/status/1",
 		},
 	}
-	out := resetfeed.Announce(data, reading, now)
+	out := resetfeed.Announce(data, reading, now, 10*time.Minute)
 	if out.AnnouncedReset == nil {
 		t.Fatal("fixture: expected a visible announcement")
 	}

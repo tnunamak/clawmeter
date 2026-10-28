@@ -27,7 +27,7 @@ func TestZeroMatureAndPositiveYoungForecastsUnchanged(t *testing.T) {
 		left  time.Duration
 		words string
 	}{
-		{0, 6 * 24 * time.Hour, "est. 0% at reset"},
+		{0, 6 * 24 * time.Hour, "est. 0% at reset (average since reset)"},
 		{3, 7*24*time.Hour - 10*time.Minute, "forecast soon"},
 	} {
 		got := buildWindow(Inputs{}, "a", provider.UsageWindow{Name: "pool", Length: 7 * 24 * time.Hour, Utilization: tc.used, ResetsAt: at.Add(tc.left)}, true, at, at)

@@ -69,6 +69,14 @@ func TestEmittedStatusWithViewMatchesPublishedSchema(t *testing.T) {
 	if err := compileSchema(t, "status-v1.schema.json").Validate(raw); err != nil {
 		t.Fatalf("emitted status does not match published schema: %v\n%s", err, data)
 	}
+	var emitted cli.JSONOutput
+	if err := json.Unmarshal(data, &emitted); err != nil {
+		t.Fatal(err)
+	}
+	forecast := emitted.Providers["openai"].View.Windows[0].Forecast
+	if forecast.Basis != "average_since_reset" || forecast.Pct == nil {
+		t.Fatalf("known forecast omitted its model: %+v", forecast)
+	}
 }
 
 func TestStatusSchemaKeepsViewValuesKnownAndOptionalWithoutVersionBump(t *testing.T) {
@@ -101,6 +109,9 @@ func TestStatusSchemaKeepsViewValuesKnownAndOptionalWithoutVersionBump(t *testin
 	}
 
 	cases := map[string]func(map[string]any){
+		"unknown forecast basis": func(doc map[string]any) {
+			openaiWindow(doc)["forecast"].(map[string]any)["basis"] = "recent_demand"
+		},
 		"unknown forecast state": func(doc map[string]any) {
 			openaiWindow(doc)["forecast"].(map[string]any)["state"] = "invented"
 		},

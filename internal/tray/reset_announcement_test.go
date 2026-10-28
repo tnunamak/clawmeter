@@ -30,7 +30,7 @@ func announcedCodex(t *testing.T, now time.Time) *provider.UsageData {
 			SourceURL:    "https://x.com/example/status/1",
 		},
 	}
-	out := resetfeed.Announce(data, reading, now)
+	out := resetfeed.Announce(data, reading, now, 10*time.Minute)
 	if out.AnnouncedReset == nil {
 		t.Fatal("fixture: expected a visible announcement")
 	}
@@ -132,7 +132,7 @@ func TestTrayAnnouncementIsCleanOnStaleOrErroredReadings(t *testing.T) {
 	stale := &provider.UsageData{Provider: "openai", Stale: true, Windows: blocked}
 	errored := &provider.UsageData{Provider: "openai", Error: "boom", Windows: blocked}
 	for name, data := range map[string]*provider.UsageData{"stale": stale, "errored": errored} {
-		results := resetfeed.AnnounceAll(map[string]*provider.UsageData{"openai": data}, reading, now)
+		results := resetfeed.AnnounceAll(map[string]*provider.UsageData{"openai": data}, reading, now, 10*time.Minute)
 		if results["openai"].AnnouncedReset != nil {
 			t.Fatalf("%s reading carries an announcement", name)
 		}

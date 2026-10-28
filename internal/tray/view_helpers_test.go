@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/systray"
 	"github.com/tnunamak/clawmeter/internal/view"
@@ -26,6 +27,7 @@ func viewOf(results map[string]*provider.UsageData, now time.Time) view.Snapshot
 // are shown, as the tray shows only its menus' sources.
 func viewNamed(results map[string]*provider.UsageData, names map[string]string, now time.Time) view.Snapshot {
 	in := view.Inputs{
+		MaxReadingAge:      config.ReadingMaxAge(0),
 		Results:            make(map[string]*provider.UsageData, len(names)),
 		DisplayNames:       make(map[string]string, len(names)),
 		SourceLabels:       make(map[string]string, len(names)),
@@ -86,7 +88,8 @@ func riskOrderOf(snap view.Snapshot) []iconTarget {
 // viewWindowOf is the snapshot window of a single fresh reading.
 func viewWindowOf(t *testing.T, window provider.UsageWindow) view.Window {
 	t.Helper()
-	snap := viewOf(map[string]*provider.UsageData{"a": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	now := time.Now()
+	snap := viewOf(map[string]*provider.UsageData{"a": {FetchedAt: now, Windows: []provider.UsageWindow{window}}}, now)
 	if len(snap.Accounts) != 1 || len(snap.Accounts[0].Windows) != 1 {
 		t.Fatalf("snapshot = %+v; want one window", snap.Accounts)
 	}

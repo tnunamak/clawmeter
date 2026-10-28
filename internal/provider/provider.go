@@ -358,7 +358,7 @@ func WindowLengthFromName(name string) time.Duration {
 		word   string
 		length time.Duration
 	}{
-		{"hourly", time.Hour}, {"daily", 24 * time.Hour}, {"weekly", 7 * 24 * time.Hour}, {"monthly", 30 * 24 * time.Hour},
+		{"hourly", time.Hour}, {"daily", 24 * time.Hour}, {"weekly", 7 * 24 * time.Hour},
 	} {
 		if strings.Contains(normalized, pair.word) {
 			return pair.length
@@ -373,7 +373,7 @@ func WindowDuration(n int64, unit string) time.Duration {
 	unit = strings.TrimSuffix(unit, "s")
 	lengths := map[string]time.Duration{
 		"minute": time.Minute, "hour": time.Hour, "day": 24 * time.Hour,
-		"week": 7 * 24 * time.Hour, "month": 30 * 24 * time.Hour,
+		"week": 7 * 24 * time.Hour,
 	}
 	length := lengths[unit]
 	if n <= 0 || length <= 0 || n > int64(1<<63-1)/int64(length) {
