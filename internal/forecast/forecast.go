@@ -12,10 +12,10 @@ import (
 const (
 	FiveHourWindow = 5 * time.Hour
 	SevenDayWindow = 7 * 24 * time.Hour
+	AverageBasis   = "average since reset"
 
-	// paceWidth is the fixed column width before an extra run-out note.
-	// Must be >= the longest output of PaceLabel.
-	paceWidth = 18
+	// paceWidth is the minimum column width before an extra run-out note.
+	paceWidth = 40
 )
 
 type Projection struct {
@@ -224,7 +224,7 @@ func (p Projection) RunOutNote() string {
 
 // PaceLabel summarizes the projected usage at reset.
 func PaceLabel(projectedPct float64) string {
-	return fmt.Sprintf("est. %s at reset", format.Percent(projectedPct))
+	return fmt.Sprintf("est. %s at reset (%s)", format.Percent(projectedPct), AverageBasis)
 }
 
 // ColorIndicator returns an ANSI-colored indicator with pace info.

@@ -48,16 +48,32 @@ Consumers should:
   indicators carry a numeric zero placeholder for compatibility, not a forecast;
 - impose their own timeout when invoking Clawmeter.
 
+A fresh usage reading can still have an unknown forecast. In particular, a
+monthly quota with an unknown start reports `usage.stale=false` and legacy
+`indicator="unknown"`. Consumers must not treat its `projected_pct=0` as a
+prediction of zero use. Prefer the matching window in that source's evaluated
+`view`: require `forecast.state="known"` and a present `forecast.pct`; otherwise
+map the forecast to null in the consumer. Legacy-only consumers must validate
+the percentage indicator before reading `projected_pct`, rejecting `unknown`
+and `stale`. No legacy field is renamed or removed.
+
 Known forecasts use the average utilization rate from the start of the quota
 window to the reading's observation time. They do not measure recent demand or
 predict workload changes. Each account's `view.windows[].forecast.basis` is
 `average_since_reset`, and `--agent` emits `forecast_basis=average_since_reset`.
 The `on_track`, `tight`, `at_risk`, `lasts`, and `runs_out` values are conditional
 on that average pace continuing. An observed `out` is a separate fact.
+Plain output, menu rows, statusline and summary text label that basis; the
+compact table uses a shared forecast legend. Precise agent percentages use
+`<90%`, `>90%`, `<100%` or `>100%` when rounding would hide the threshold side.
+JSON percentages retain two-decimal rounding, so consumers must read explicit
+forecast and exhaustion states rather than derive states from rounded numbers.
 
 Re-rendering a cached reading preserves its rate and projected percentage;
 the exhaustion estimate counts down from its observation time. Once that
 estimate passes, exhaustion is `unknown` until another reading establishes it.
+Reset-announcement eligibility uses the same evaluated window and configured
+age allowance. Feed expiry and announcement timing still use the render clock.
 Usage readings older than two configured poll intervals, or with missing or
 future observation timestamps, cannot establish a forecast or exhaustion.
 Copilot's UTC calendar quotas use the actual month length. Other monthly quotas

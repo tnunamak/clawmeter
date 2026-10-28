@@ -491,10 +491,10 @@ func TestTooltipShowsWhenAWindowRanOut(t *testing.T) {
 	today := time.Now()
 	at := time.Date(today.Year(), today.Month(), today.Day(), 9, 40, 0, 0, time.Local)
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(2 * time.Hour)}
-	results := map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{window}}}
+	results := map[string]*provider.UsageData{"codex": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}}
 	names := map[string]string{"codex": "Codex"}
 	tooltipWith := func(outSince time.Time) string {
-		in := view.Inputs{Results: results, DisplayNames: names, Families: map[string]string{"codex": "codex"}, FamilySourceCounts: map[string]int{"codex": 1}}
+		in := view.Inputs{Results: results, MaxReadingAge: testMaxGap, DisplayNames: names, Families: map[string]string{"codex": "codex"}, FamilySourceCounts: map[string]int{"codex": 1}}
 		if !outSince.IsZero() {
 			in.OutSince = map[string]map[string]time.Time{"codex": {"7d": outSince}}
 		}

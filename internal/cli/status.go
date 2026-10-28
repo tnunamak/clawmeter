@@ -463,9 +463,11 @@ func (m *MultiProviderOutput) PrintColor() {
 func (v outputView) colorTable() []string {
 	layout := newTableLayout()
 	hasRows := false
+	hasForecast := false
 	for _, e := range v.entries {
 		layout.provider = max(layout.provider, cellWidth(v.display(e.key)))
 		for _, row := range shownRows(v.account(e.key)) {
+			hasForecast = hasForecast || row.Forecast != ""
 			if row.Line == "" {
 				hasRows = true
 				layout.fit(rowCells(row))
@@ -482,6 +484,9 @@ func (v outputView) colorTable() []string {
 		if i < len(v.entries)-1 && len(lines) > 0 {
 			out = append(out, "")
 		}
+	}
+	if hasForecast {
+		out = append(out, dim+"Forecasts: "+forecast.AverageBasis+reset)
 	}
 	return out
 }
@@ -533,7 +538,7 @@ func (v outputView) statusLine() string {
 		return line + readingNote
 	}
 	resetIn := format.FormatDuration(window.Reset.At.Sub(v.snap.At))
-	line := fmt.Sprintf("%s %s %s est. %s reset %s", prefix, display, window.Name, format.Percent(window.Forecast.Pct), resetIn)
+	line := fmt.Sprintf("%s %s %s est. %s (%s) reset %s", prefix, display, window.Name, format.Percent(window.Forecast.Pct), forecast.AverageBasis, resetIn)
 	switch window.Exhaustion.State {
 	case view.ExhaustionOut:
 		line += " out now"
@@ -765,11 +770,12 @@ func formatExactDuration(d time.Duration) string {
 func formatPrecisePct(pct float64) string {
 	absPct := math.Abs(pct)
 	nearBoundary := math.Abs(pct-90) <= 1 || math.Abs(pct-100) <= 1
+	if nearBoundary {
+		return format.Percent(pct)
+	}
 	var s string
 	switch {
 	case absPct > 0 && absPct < 1:
-		s = fmt.Sprintf("%.2f", pct)
-	case nearBoundary:
 		s = fmt.Sprintf("%.2f", pct)
 	default:
 		s = fmt.Sprintf("%.1f", pct)
@@ -826,7 +832,8 @@ type JSONForecast struct {
 	Windows map[string]JSONProjection `json:"windows"`
 }
 
-// JSONProjection is a single window projection.
+// JSONProjection is a single window projection. ProjectedPct is valid only
+// when Indicator is a percentage; unknown and stale retain a zero placeholder.
 type JSONProjection struct {
 	ProjectedPct float64 `json:"projected_pct"`
 	Indicator    string  `json:"indicator"`
@@ -1092,7 +1099,7 @@ func attachResetAnnouncements(output *MultiProviderOutput, registry *provider.Re
 	defer cancel()
 	reading, _ := client.Read(ctx)
 	for i := range output.Providers {
-		output.Providers[i].Data = resetfeed.Announce(output.Providers[i].Data, reading, now)
+		output.Providers[i].Data = resetfeed.Announce(output.Providers[i].Data, reading, now, config.ReadingMaxAge(output.PollInterval))
 	}
 }
 

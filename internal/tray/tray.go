@@ -1603,7 +1603,13 @@ func lastResults() map[string]*provider.UsageData {
 // announcement cannot drop out of the tooltip or the menu on one of them.
 // Callers must not hold s.mu.
 func presentedResults(results map[string]*provider.UsageData) map[string]*provider.UsageData {
-	return resetfeed.AnnounceAll(provider.PresentResetCreditSources(results), latestFeedReading(), time.Now())
+	s.mu.Lock()
+	pollSeconds := 0
+	if cfg != nil {
+		pollSeconds = cfg.Settings.PollInterval
+	}
+	s.mu.Unlock()
+	return resetfeed.AnnounceAll(provider.PresentResetCreditSources(results), latestFeedReading(), time.Now(), config.ReadingMaxAge(pollSeconds))
 }
 
 // refreshResetAnnouncements reads the codex-resets.com feed when the user
@@ -2257,7 +2263,7 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 			if note := window.ExhaustionWords(); note != "" {
 				words += " · " + note
 			}
-			message := fmt.Sprintf("%s window at %.0f%% — %s", window.Name, pct, words)
+			message := fmt.Sprintf("%s window at %s — %s", window.Name, format.Percent(pct), words)
 			if pct >= criticalThreshold && oldPct < criticalThreshold {
 				pending = append(pending, notification{fmt.Sprintf("%s usage critical", display), message, "critical"})
 			} else if pct >= warningThreshold && oldPct < warningThreshold {
