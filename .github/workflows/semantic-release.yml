@@ -46,7 +46,7 @@ jobs:
           fs.writeFileSync(path, JSON.stringify(config));
           NODE
 
-      - uses: cycjimmy/semantic-release-action@1989a0fefc4aea321e07f717680ed8e345925dc1 # v4.2.2 (v4)
+      - uses: cycjimmy/semantic-release-action@1989a0fefc4aea321e07f717680ed8e345925dc1 # v7.1.2
         id: semantic
         with:
           semantic_version: 24.2.6
