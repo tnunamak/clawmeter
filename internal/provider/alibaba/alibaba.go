@@ -474,12 +474,13 @@ func (p *Provider) transformQuota(quota map[string]any) *provider.UsageData {
 		}
 
 		data.Windows = append(data.Windows, provider.UsageWindow{
-			Name:        wd.name,
-			DisplayName: wd.displayName,
-			Utilization: math.Round(utilization*100) / 100,
-			ResetsAt:    resetsAt,
-			Limit:       int(total),
-			Used:        int(used),
+			Name:          wd.name,
+			LengthUnknown: wd.name == "monthly",
+			DisplayName:   wd.displayName,
+			Utilization:   math.Round(utilization*100) / 100,
+			ResetsAt:      resetsAt,
+			Limit:         int(total),
+			Used:          int(used),
 		})
 	}
 

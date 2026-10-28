@@ -43,8 +43,26 @@ Consumers should:
 - require a supported top-level `schema_version`;
 - treat missing providers, provider errors, and stale readings as distinct from zero use;
 - ignore unknown fields;
-- use `usage.windows[].name` as the key into `forecast.windows`;
+- use `usage.windows[].name` as the key into `forecast.windows`, and read its
+  `projected_pct` only when `indicator` is a percentage; `stale` and `unknown`
+  indicators carry a numeric zero placeholder for compatibility, not a forecast;
 - impose their own timeout when invoking Clawmeter.
+
+Known forecasts use the average utilization rate from the start of the quota
+window to the reading's observation time. They do not measure recent demand or
+predict workload changes. Each account's `view.windows[].forecast.basis` is
+`average_since_reset`, and `--agent` emits `forecast_basis=average_since_reset`.
+The `on_track`, `tight`, `at_risk`, `lasts`, and `runs_out` values are conditional
+on that average pace continuing. An observed `out` is a separate fact.
+
+Re-rendering a cached reading preserves its rate and projected percentage;
+the exhaustion estimate counts down from its observation time. Once that
+estimate passes, exhaustion is `unknown` until another reading establishes it.
+Usage readings older than two configured poll intervals, or with missing or
+future observation timestamps, cannot establish a forecast or exhaustion.
+Copilot's UTC calendar quotas use the actual month length. Other monthly quotas
+without an established start withhold forecasts; the word `monthly` does not
+establish a 30-day interval.
 
 ## Provider diagnostics
 

@@ -368,7 +368,7 @@ func plainWindow(w view.Window) string {
 			detail += ", out now"
 		}
 	}
-	return fmt.Sprintf("%s: %.0f%% (%s)%s", label, w.Used, detail, moneySuffix(w.Money))
+	return fmt.Sprintf("%s: %s (%s)%s", label, format.Percent(w.Used), detail, moneySuffix(w.Money))
 }
 
 // plainIndicator is a window's forecast, with its run-out note when it has one.
@@ -506,7 +506,7 @@ func (v outputView) statusLine() string {
 	display := v.display(acct.Key)
 
 	if acct.Reading.State != view.ReadingFresh && window.Forecast.State == view.ForecastStale {
-		return fmt.Sprintf("CM~ %s %s last %.0f%% %s", display, window.Name, window.Used, acct.Reading.State)
+		return fmt.Sprintf("CM~ %s %s last %s %s", display, window.Name, format.Percent(window.Used), acct.Reading.State)
 	}
 
 	readingNote := ""
@@ -526,14 +526,14 @@ func (v outputView) statusLine() string {
 
 	if !known {
 		indicator := window.ForecastWords()
-		line := fmt.Sprintf("%s %s %s current %.0f%% %s", prefix, display, window.Name, window.Used, indicator)
+		line := fmt.Sprintf("%s %s %s current %s %s", prefix, display, window.Name, format.Percent(window.Used), indicator)
 		if outNow {
 			line += " out now"
 		}
 		return line + readingNote
 	}
 	resetIn := format.FormatDuration(window.Reset.At.Sub(v.snap.At))
-	line := fmt.Sprintf("%s %s %s est. %.0f%% reset %s", prefix, display, window.Name, window.Forecast.Pct, resetIn)
+	line := fmt.Sprintf("%s %s %s est. %s reset %s", prefix, display, window.Name, format.Percent(window.Forecast.Pct), resetIn)
 	switch window.Exhaustion.State {
 	case view.ExhaustionOut:
 		line += " out now"
@@ -882,11 +882,11 @@ func (v outputView) jsonDocument(cacheEntry *cache.Entry, now time.Time) ([]byte
 			base := &ProviderJSONOutput{Maturity: provider.GetMaturity(family)}
 			for _, i := range group {
 				pf := *v.entries[i].pf
-				src := makeJSONSource(pf)
+				src := makeJSONSource(pf, v.account(v.entries[i].key))
 				src.View = v.jsonAccount(v.entries[i].key)
 				base.Sources = append(base.Sources, src)
 				if pf.SourceID == "default" {
-					base.Usage, base.Forecast, base.Status = legacyUsage(pf.Data), forecastFor(pf.Data), pf.Status
+					base.Usage, base.Forecast, base.Status = legacyUsage(pf.Data), src.Forecast, pf.Status
 					base.View = src.View
 				}
 			}
@@ -908,20 +908,7 @@ func (v outputView) jsonDocument(cacheEntry *cache.Entry, now time.Time) ([]byte
 			View:     v.jsonAccount(v.entries[i].key),
 		}
 
-		// Add forecasts for each window
-		windows := pf.Data.UsableWindows()
-		if len(windows) > 0 {
-			providerOut.Forecast = &JSONForecast{
-				Windows: make(map[string]JSONProjection),
-			}
-			for _, window := range windows {
-				proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-				providerOut.Forecast.Windows[window.Name] = JSONProjection{
-					ProjectedPct: roundPct(proj.ProjectedPct),
-					Indicator:    proj.Indicator(),
-				}
-			}
-		}
+		providerOut.Forecast = forecastFor(v.account(v.entries[i].key))
 
 		if pf.Status != nil {
 			providerOut.Status = pf.Status
@@ -933,8 +920,8 @@ func (v outputView) jsonDocument(cacheEntry *cache.Entry, now time.Time) ([]byte
 	return json.MarshalIndent(out, "", "  ")
 }
 
-func makeJSONSource(pf ProviderFormatter) JSONSourceOutput {
-	return JSONSourceOutput{Source: JSONSourceIdentity{ID: pf.SourceID, Label: pf.SourceLabel}, Usage: pf.Data, Forecast: forecastFor(pf.Data), Status: pf.Status}
+func makeJSONSource(pf ProviderFormatter, acct *view.Account) JSONSourceOutput {
+	return JSONSourceOutput{Source: JSONSourceIdentity{ID: pf.SourceID, Label: pf.SourceLabel}, Usage: pf.Data, Forecast: forecastFor(acct), Status: pf.Status}
 }
 
 func legacyUsage(data *provider.UsageData) *provider.UsageData {
@@ -949,18 +936,27 @@ func legacyUsage(data *provider.UsageData) *provider.UsageData {
 	return copy
 }
 
-func forecastFor(data *provider.UsageData) *JSONForecast {
-	if data == nil {
-		return nil
-	}
-	windows := data.UsableWindows()
-	if len(windows) == 0 {
+func forecastFor(acct *view.Account) *JSONForecast {
+	if acct == nil {
 		return nil
 	}
 	result := &JSONForecast{Windows: make(map[string]JSONProjection)}
-	for _, window := range windows {
-		proj := forecast.Project(window.Utilization, window.ResetsAt, forecast.WindowLength(window))
-		result.Windows[window.Name] = JSONProjection{ProjectedPct: roundPct(proj.ProjectedPct), Indicator: proj.Indicator()}
+	for _, window := range acct.Windows {
+		if !window.Reset.Known {
+			continue
+		}
+		projection := JSONProjection{Indicator: "unknown"}
+		switch window.Forecast.State {
+		case view.ForecastKnown:
+			projection.ProjectedPct = roundPct(window.Forecast.Pct)
+			projection.Indicator = format.Percent(window.Forecast.Pct)
+		case view.ForecastStale:
+			projection.Indicator = "stale"
+		}
+		result.Windows[window.Name] = projection
+	}
+	if len(result.Windows) == 0 {
+		return nil
 	}
 	return result
 }
@@ -1644,7 +1640,7 @@ func (v outputView) printSummary(colorMode bool) {
 
 		paceWord := worstU.window.ForecastWords()
 		if worstU.window.Forecast.State != view.ForecastKnown && worstU.window.Name != "" {
-			paceWord = fmt.Sprintf("current %.0f%% %s", worstU.window.Used, paceWord)
+			paceWord = fmt.Sprintf("current %s %s", format.Percent(worstU.window.Used), paceWord)
 		}
 		if worstU.tier == 3 && worstU.window.Name == "" {
 			paceWord = "forecast stale"

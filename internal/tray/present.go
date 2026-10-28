@@ -152,7 +152,7 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 		lines = append(lines, staleLine(acct))
 	}
 	lines = append(lines,
-		fmt.Sprintf("Current %.0f%%", w.Used),
+		"Current "+format.Percent(w.Used),
 		exhaustionLine(w, snap.At),
 		resetLine(w),
 	)
@@ -207,9 +207,12 @@ func exhaustionLine(w view.Window, at time.Time) string {
 		if w.Exhaustion.State == view.ExhaustionOut {
 			note = ranOutNote(note, w.Exhaustion.OutSince, at)
 		}
+		if w.Exhaustion.State == view.ExhaustionRunsOut {
+			return "At average pace since reset: " + note
+		}
 		return upperFirst(note)
 	case view.ExhaustionLasts:
-		return "Won't run out"
+		return "At average pace since reset: lasts to reset"
 	}
 	return "Run-out unknown"
 }

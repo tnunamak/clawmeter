@@ -162,7 +162,7 @@ func TestGuessWindowType(t *testing.T) {
 		{"5h Review", FiveHourWindow},
 		{"7d Review", SevenDayWindow},
 		{"7d_oauth_apps", SevenDayWindow},
-		{"Monthly Credits", MonthlyWindow},
+		{"Monthly Credits", 0},
 		{"session", 0}, // unknown
 		{"credits", 0}, // unknown
 		{"", 0},        // unknown
@@ -233,7 +233,7 @@ func TestProjection_Indicator(t *testing.T) {
 	}{
 		{0, "0%"},
 		{50.4, "50%"},
-		{99.6, "100%"},
+		{99.6, "99.6%"},
 		{150, "150%"},
 	}
 

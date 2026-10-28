@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/forecast"
+	"github.com/tnunamak/clawmeter/internal/format"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
@@ -157,9 +158,9 @@ func (r Row) HasPace() bool {
 	return len(r.Bar) > BarCells
 }
 
-// Percent writes a whole percentage.
+// Percent uses the shared rounding policy and preserves risk thresholds.
 func Percent(pct float64) string {
-	return strconv.FormatFloat(math.Round(pct), 'f', 0, 64) + "%"
+	return format.Percent(pct)
 }
 
 // Duration writes a duration in at most two units with a space between

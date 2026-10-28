@@ -177,6 +177,7 @@
           "type": "object",
           "required": ["state"],
           "properties": {
+            "basis": { "type": "string", "enum": ["average_since_reset"] },
             "state": { "enum": ["known", "warming", "stale", "none"] },
             "pct": { "type": "number" }
           },
