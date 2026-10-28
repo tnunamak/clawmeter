@@ -30,6 +30,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/format"
+	localhistory "github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
@@ -1684,6 +1685,13 @@ func (r *usageRefresher) run(force bool) {
 	defer cancel()
 
 	result := provider.FetchProvidersParallel(ctx, toFetch)
+	if cfg != nil && cfg.Settings.ShouldRecordUsageHistory() {
+		if dir, err := cache.Path("history"); err == nil {
+			if err := localhistory.Append(dir, result.Results, time.Now()); err != nil {
+				log.Printf("usage history write failed: %v", err)
+			}
+		}
+	}
 
 	// Merge in cached data for backed-off providers
 	for name, cached := range skipped {

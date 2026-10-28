@@ -12,11 +12,12 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/diagnose"
+	"github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
 func TestPublishedSchemasAreJSON(t *testing.T) {
-	for _, name := range []string{"status-v1.schema.json", "diagnose-v1.schema.json"} {
+	for _, name := range []string{"status-v1.schema.json", "diagnose-v1.schema.json", "history-v1.schema.json"} {
 		data := readRepoFile(t, "docs", "schemas", name)
 		var schema map[string]any
 		if err := json.Unmarshal(data, &schema); err != nil {
@@ -25,6 +26,31 @@ func TestPublishedSchemasAreJSON(t *testing.T) {
 		if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" {
 			t.Fatalf("%s: unexpected or missing $schema", name)
 		}
+	}
+}
+
+func TestHistoryV1LineMatchesPublishedContract(t *testing.T) {
+	schema := compileSchema(t, "history-v1.schema.json")
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
+	data := &provider.UsageData{
+		Provider: "claude", SourceID: "work", SourceLabel: "Work", FetchedAt: at,
+		Windows: []provider.UsageWindow{{Name: "7d Claude 4 Sonnet", Length: 7 * 24 * time.Hour,
+			Utilization: 44.5, ResetsAt: at.Add(3 * 24 * time.Hour)}},
+	}
+	if err := history.Append(dir, map[string]*provider.UsageData{"work": data}, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	line, err := os.ReadFile(filepath.Join(dir, "usage-2026-10.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw any
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(raw); err != nil {
+		t.Fatalf("history JSONL line does not match published schema: %v\n%s", err, line)
 	}
 }
 

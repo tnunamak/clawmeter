@@ -10,6 +10,17 @@ import (
 	"testing"
 )
 
+func TestUsageHistoryDefaultsOnAndCanBeDisabled(t *testing.T) {
+	if !DefaultConfig().Settings.ShouldRecordUsageHistory() {
+		t.Fatal("usage history should default on")
+	}
+	disabled := false
+	cfg := &Config{Settings: GlobalSettings{UsageHistory: &disabled}}
+	if cfg.Settings.ShouldRecordUsageHistory() {
+		t.Fatal("explicitly disabled usage history should remain off")
+	}
+}
+
 func TestValidateSourcesSkipsEmptyEntries(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnsureProvider("legacy_unknown", false)
