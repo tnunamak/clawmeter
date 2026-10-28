@@ -100,6 +100,23 @@ func TestCatalogRequiresExplicitZeroPriceAndRejectsMalformed(t *testing.T) {
 
 func f(n float64) *float64 { return &n }
 
+func TestCatalogRejectsTrailingValuesAndAcceptsWhitespace(t *testing.T) {
+	const catalog = `{"opencode":{"models":{}}}`
+	for _, suffix := range []string{"garbage", `{}`, `null`, "\n\t "} {
+		t.Run(suffix, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "models.json")
+			if err := os.WriteFile(path, []byte(catalog+suffix), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := readCatalog(path)
+			wantError := strings.TrimSpace(suffix) != ""
+			if (err != nil) != wantError {
+				t.Fatalf("trailing %q: error = %v, want error %v", suffix, err, wantError)
+			}
+		})
+	}
+}
+
 func TestSQLiteQueryIsReadOnlyAndModelScoped(t *testing.T) {
 	if _, err := exec.LookPath("sqlite3"); err != nil {
 		t.Skip("sqlite3 unavailable")

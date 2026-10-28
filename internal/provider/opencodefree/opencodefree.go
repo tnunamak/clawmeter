@@ -316,6 +316,9 @@ func readCatalog(path string) (map[string]modelInfo, error) {
 	if err := d.Decode(&c); err != nil {
 		return nil, fmt.Errorf("decode OpenCode model catalog: %w", err)
 	}
+	if err := d.Decode(new(json.RawMessage)); err != io.EOF {
+		return nil, errors.New("OpenCode model catalog has trailing data")
+	}
 	if c.OpenCode.Models == nil {
 		return nil, errors.New("OpenCode model catalog has no models object")
 	}
