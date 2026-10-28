@@ -268,9 +268,10 @@ type JSONViewTarget struct {
 // JSONAccountView is one source's snapshot. It appears on a provider object
 // and on each entry of its sources array.
 type JSONAccountView struct {
-	Reading      JSONViewReading    `json:"reading"`
-	Windows      []JSONViewWindow   `json:"windows"`
-	CreditGrants []view.CreditGrant `json:"credit_grants,omitempty"`
+	Reading      JSONViewReading            `json:"reading"`
+	Windows      []JSONViewWindow           `json:"windows"`
+	CreditGrants []view.CreditGrant         `json:"credit_grants,omitempty"`
+	LocalModels  []provider.LocalModelUsage `json:"local_models,omitempty"`
 }
 
 // JSONViewReading says how far the source's reading can be trusted.
@@ -343,6 +344,7 @@ func (v outputView) jsonAccount(key string) *JSONAccountView {
 		Reading:      JSONViewReading{State: string(acct.Reading.State), Reason: acct.Reading.Reason},
 		Windows:      make([]JSONViewWindow, 0, len(acct.Windows)),
 		CreditGrants: acct.CreditGrants,
+		LocalModels:  acct.LocalModels,
 	}
 	if !acct.Reading.ObservedAt.IsZero() {
 		out.Reading.ObservedAt = acct.Reading.ObservedAt.Format(time.RFC3339)

@@ -7,7 +7,7 @@ func TestGetMaturityUsesExplicitAuditClassification(t *testing.T) {
 		"alibaba": true, "alibaba_token": true, "antigravity": true, "claude": false, "openai": false, "gemini": false, "xai": true,
 		"kimi": true, "kimik2": true, "copilot": true, "openrouter": true,
 		"jetbrains": true, "synthetic": true, "zai": true,
-		"deepseek": true,
+		"deepseek": true, "opencode_free": true,
 	}
 	for name, want := range tests {
 		got := GetMaturity(name)

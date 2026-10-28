@@ -22,6 +22,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/kimi"
 	"github.com/tnunamak/clawmeter/internal/provider/kimik2"
 	"github.com/tnunamak/clawmeter/internal/provider/openai"
+	"github.com/tnunamak/clawmeter/internal/provider/opencodefree"
 	"github.com/tnunamak/clawmeter/internal/provider/openrouter"
 	"github.com/tnunamak/clawmeter/internal/provider/synthetic"
 	"github.com/tnunamak/clawmeter/internal/provider/xai"
@@ -46,11 +47,11 @@ var aliases = map[string]string{
 	"claude-api":         "claude_api",
 }
 
-// localProviders name the providers that read only what Clawmeter itself
-// saved, such as Claude Console credits read by the browser extension. They hold no
+// localProviders name providers that read local observations without selecting
+// credentials, such as browser snapshots and local activity records. They hold no
 // credentials, so they have no enrolled sources, but users can select and
 // disable them by name. Register builds the live instances.
-var localProviders = []provider.Provider{claudeapi.New(nil)}
+var localProviders = []provider.Provider{claudeapi.New(nil), opencodefree.New()}
 
 type registration struct {
 	name string
@@ -96,6 +97,9 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 		}
 	}
 	if err := registry.Register(claudeapi.New(registry.GetFamily("claude"))); err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
+	}
+	if err := registry.Register(opencodefree.New()); err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 	}
 }

@@ -845,6 +845,10 @@ type providerMenuItems struct {
 	// moreItem says how many windows the rows above leave out.
 	moreItem          *systray.MenuItem
 	balanceItems      []*systray.MenuItem
+	localModelsItem   *systray.MenuItem
+	localModelItems   []*systray.MenuItem
+	localModelStates  []menuItemState
+	localModelsState  menuItemState
 	separator         *systray.MenuItem
 	order             int // position in the menu, top first
 	opensDashboard    bool
@@ -900,6 +904,12 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(header, icons.MenuMark(p.Name(), resolveTrayPalette()))
 	if !opensDashboard && !connectable {
 		header.Disable()
+	}
+	var localModelsItem *systray.MenuItem
+	if p.Name() == "opencode_free" {
+		localModelsItem = systray.AddMenuItem("Free models · local observations", "Local activity observations; these do not indicate quota or request availability")
+		localModelsItem.Disable()
+		localModelsItem.Hide()
 	}
 
 	// Status item (shows loading/error)
@@ -969,6 +979,7 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		moreItem:          moreItem,
 		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
 		balanceItems:      balanceItems,
+		localModelsItem:   localModelsItem,
 		separator:         separator,
 		opensDashboard:    opensDashboard,
 		explicitlyEnabled: explicitlyEnabled,
@@ -1111,13 +1122,58 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 			}
 			show(title, action)
 		}
+		showLocalModelRows(menu, acct.LocalModels)
+	} else {
+		hideLocalModelRows(menu)
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 		setMenuItemEnabled(menu.balanceItems[i], &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
 	}
+	if acct != nil && menu.localModelsItem != nil && len(acct.LocalModels) > 0 {
+		return rows + len(acct.LocalModels)
+	}
 	return rows
+}
+
+func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsage) {
+	if menu.localModelsItem == nil {
+		return
+	}
+	if len(models) == 0 {
+		hideLocalModelRows(menu)
+		return
+	}
+	setMenuItemTitle(menu.localModelsItem, &menu.localModelsState, fmt.Sprintf("Free models (%d) · local observations", len(models)))
+	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, true)
+	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, true)
+	for len(menu.localModelItems) < len(models) {
+		item := menu.localModelsItem.AddSubMenuItem("", "")
+		item.Disable()
+		item.Hide()
+		menu.localModelItems = append(menu.localModelItems, item)
+		menu.localModelStates = append(menu.localModelStates, menuItemState{visible: false, enabled: false, initialized: true})
+	}
+	for i, item := range menu.localModelItems {
+		if i < len(models) {
+			setMenuItemTitle(item, &menu.localModelStates[i], models[i].Summary())
+			setMenuItemEnabled(item, &menu.localModelStates[i], false)
+			setMenuItemVisible(item, &menu.localModelStates[i], true)
+		} else {
+			setMenuItemVisible(item, &menu.localModelStates[i], false)
+		}
+	}
+}
+
+func hideLocalModelRows(menu *providerMenuItems) {
+	if menu.localModelsItem == nil {
+		return
+	}
+	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, false)
+	for i, item := range menu.localModelItems {
+		setMenuItemVisible(item, &menu.localModelStates[i], false)
+	}
 }
 
 func hideProviderWindows(menu *providerMenuItems) {
@@ -1131,6 +1187,7 @@ func hideProviderWindows(menu *providerMenuItems) {
 		setMenuItemEnabled(b, &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
 	}
+	hideLocalModelRows(menu)
 }
 
 func showProviderHeader(menu *providerMenuItems) {
