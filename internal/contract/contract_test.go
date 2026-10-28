@@ -16,7 +16,7 @@ import (
 )
 
 func TestPublishedSchemasAreJSON(t *testing.T) {
-	for _, name := range []string{"status-v1.schema.json", "diagnose-v1.schema.json"} {
+	for _, name := range []string{"status-v1.schema.json", "diagnose-v1.schema.json", "history-v1.schema.json"} {
 		data := readRepoFile(t, "docs", "schemas", name)
 		var schema map[string]any
 		if err := json.Unmarshal(data, &schema); err != nil {
@@ -25,6 +25,33 @@ func TestPublishedSchemasAreJSON(t *testing.T) {
 		if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" {
 			t.Fatalf("%s: unexpected or missing $schema", name)
 		}
+	}
+}
+
+func TestHistoryV1LineMatchesPublishedContract(t *testing.T) {
+	schema := compileSchema(t, "history-v1.schema.json")
+	line, err := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"reading_time":   "2026-10-27T10:00:00Z",
+		"recorded_at":    "2026-10-27T10:00:01Z",
+		"provider":       "claude",
+		"account":        "Work",
+		"source":         "work",
+		"window":         "7d Claude 4 Sonnet",
+		"window_minutes": 10080,
+		"used_percent":   44.5,
+		"resets_at":      "2026-10-30T10:00:00Z",
+		"age_seconds":    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw any
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(raw); err != nil {
+		t.Fatalf("history JSONL line does not match published schema: %v\n%s", err, line)
 	}
 }
 

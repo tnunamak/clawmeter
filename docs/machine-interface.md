@@ -76,6 +76,26 @@ The diagnostic never invokes quota-reset redemption or other quota-consuming act
 Providers that normally refresh expired local OAuth credentials may do so during a live
 probe, just as they do during an ordinary Clawmeter refresh.
 
+## Usage history
+
+```bash
+clawmeter history --json [--since 168h] [--provider claude]
+```
+
+The command prints one JSON object per line and reads only local files. Each line
+follows [`history-v1.schema.json`](schemas/history-v1.schema.json). `reading_time` is
+when the provider reading was fetched; `recorded_at` is when Clawmeter wrote it;
+`age_seconds` records the reading's age at write time. `account` is the source label
+shown by Clawmeter, falling back to its source ID. `source` is that source ID. The
+history does not contain credentials, account IDs, or email addresses. A zero
+`window_minutes` means Clawmeter has no duration for that quota window.
+
+Clawmeter records successful readings by default in monthly JSONL files beside
+`usage.json`, with mode `0600`, a 50 MB total cap, and hourly heartbeats for unchanged
+windows. Turn recording off with `clawmeter config set usage_history false`; use
+`--no-history` on a status refresh to suppress recording for that invocation.
+Re-enable it with `clawmeter config set usage_history true`.
+
 ## Compatibility policy
 
 Both interfaces use an integer major `schema_version`:
