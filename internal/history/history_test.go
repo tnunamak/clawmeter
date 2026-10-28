@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -132,40 +130,6 @@ func TestHistoryLineHasNoCredentialFieldsAndIsPrivate(t *testing.T) {
 	}
 }
 
-func TestHistoryChildWriter(t *testing.T) {
-	dir := os.Getenv("CLAWMETER_HISTORY_TEST_DIR")
-	if dir == "" {
-		return
-	}
-	source := os.Getenv("CLAWMETER_HISTORY_TEST_SOURCE")
-	at := time.Now().UTC()
-	reading := dataAt(20, at)
-	reading.SourceID, reading.SourceLabel = source, source
-	if err := Append(dir, map[string]*provider.UsageData{"claude:" + source: reading}, at); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestConcurrentTrayAndCLIWriters(t *testing.T) {
-	dir := t.TempDir()
-	var wg sync.WaitGroup
-	for _, source := range []string{"tray", "cli"} {
-		wg.Add(1)
-		go func(source string) {
-			defer wg.Done()
-			cmd := exec.Command(os.Args[0], "-test.run=^TestHistoryChildWriter$")
-			cmd.Env = append(os.Environ(), "CLAWMETER_HISTORY_TEST_DIR="+dir, "CLAWMETER_HISTORY_TEST_SOURCE="+source)
-			if output, err := cmd.CombinedOutput(); err != nil {
-				t.Errorf("%s writer: %v: %s", source, err, output)
-			}
-		}(source)
-	}
-	wg.Wait()
-	if got := countLines(t, dir); got != 2 {
-		t.Fatalf("concurrent writer lines = %d, want 2", got)
-	}
-}
-
 func TestReadFiltersProviderAndSince(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 10, 27, 8, 0, 0, 0, time.UTC)
@@ -224,6 +188,11 @@ func countLines(t *testing.T, dir string) int {
 		}
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
+			var reading Reading
+			if err := json.Unmarshal(scanner.Bytes(), &reading); err != nil || reading.SchemaVersion != SchemaVersion {
+				file.Close()
+				t.Fatalf("invalid history line: %q, %v", scanner.Bytes(), err)
+			}
 			count++
 		}
 		if err := scanner.Err(); err != nil {

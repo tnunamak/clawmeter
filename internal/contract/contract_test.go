@@ -12,6 +12,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/diagnose"
+	"github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
@@ -30,19 +31,17 @@ func TestPublishedSchemasAreJSON(t *testing.T) {
 
 func TestHistoryV1LineMatchesPublishedContract(t *testing.T) {
 	schema := compileSchema(t, "history-v1.schema.json")
-	line, err := json.Marshal(map[string]any{
-		"schema_version": 1,
-		"reading_time":   "2026-10-27T10:00:00Z",
-		"recorded_at":    "2026-10-27T10:00:01Z",
-		"provider":       "claude",
-		"account":        "Work",
-		"source":         "work",
-		"window":         "7d Claude 4 Sonnet",
-		"window_minutes": 10080,
-		"used_percent":   44.5,
-		"resets_at":      "2026-10-30T10:00:00Z",
-		"age_seconds":    1,
-	})
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
+	data := &provider.UsageData{
+		Provider: "claude", SourceID: "work", SourceLabel: "Work", FetchedAt: at,
+		Windows: []provider.UsageWindow{{Name: "7d Claude 4 Sonnet", Length: 7 * 24 * time.Hour,
+			Utilization: 44.5, ResetsAt: at.Add(3 * 24 * time.Hour)}},
+	}
+	if err := history.Append(dir, map[string]*provider.UsageData{"work": data}, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	line, err := os.ReadFile(filepath.Join(dir, "usage-2026-10.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
