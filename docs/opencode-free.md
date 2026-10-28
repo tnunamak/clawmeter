@@ -1,6 +1,6 @@
 # OpenCode Free local observations
 
-`clawmeter opencode_free` reports locally recorded activity for OpenCode's
+`clawmeter opencode` (alias `opencode_free`) reports local activity for OpenCode's
 zero-priced model candidates. It is separate from the paid DeepSeek API balance.
 No model request or remote quota probe is made.
 

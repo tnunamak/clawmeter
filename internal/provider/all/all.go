@@ -30,6 +30,8 @@ import (
 )
 
 var aliases = map[string]string{
+	"opencode":           "opencode_free",
+	"opencode-free":      "opencode_free",
 	"codex":              "openai",
 	"grok":               "xai",
 	"x.ai":               "xai",
