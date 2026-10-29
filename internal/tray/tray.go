@@ -1538,8 +1538,8 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		showProviderHeader(menu)
 		var statusParts []string
-		if len(data.LocalModels) > 0 && len(data.Windows) == 0 {
-			statusParts = append(statusParts, "Remaining quota not reported · reset unknown")
+		if acct != nil && acct.LocalModelStatus != nil {
+			statusParts = append(statusParts, acct.LocalModelStatus.Text)
 		}
 		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
 			statusParts = append(statusParts, providerStatus.Indicator.Label())

@@ -274,6 +274,7 @@ type JSONAccountView struct {
 	CreditBenefits    []view.CreditBenefit       `json:"credit_benefits,omitempty"`
 	APICreditBalances []view.APIBalance          `json:"api_credit_balances,omitempty"`
 	LocalModels       []provider.LocalModelUsage `json:"local_models,omitempty"`
+	LocalModelStatus  *provider.LocalModelStatus `json:"local_model_status,omitempty"`
 }
 
 // JSONViewReading says how far the source's reading can be trusted.
@@ -349,6 +350,7 @@ func (v outputView) jsonAccount(key string) *JSONAccountView {
 		CreditBenefits:    acct.CreditBenefits,
 		APICreditBalances: acct.APICreditBalances,
 		LocalModels:       acct.LocalModels,
+		LocalModelStatus:  acct.LocalModelStatus,
 	}
 	if !acct.Reading.ObservedAt.IsZero() {
 		out.Reading.ObservedAt = acct.Reading.ObservedAt.Format(time.RFC3339)
