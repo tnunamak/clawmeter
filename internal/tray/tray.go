@@ -2648,7 +2648,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 		for name, menu := range menus {
 			data := results[name]
-			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0) {
+			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0 && len(data.CreditBenefits) == 0 && len(data.APICreditBalances) == 0) {
 				continue
 			}
 			balances := data.Balances

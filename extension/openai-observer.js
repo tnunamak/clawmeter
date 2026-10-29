@@ -113,11 +113,14 @@ function installOpenAIObserver(win) {
     if (method.toUpperCase() === "GET" && target(info.url)) this.addEventListener("load", () => {
       if (requests.get(this) !== info) return;
       if (this.status < 200 || this.status >= 300 || !target(this.responseURL)) return;
-      capture(info, async () => {
-        if (this.responseType === "json") return this.response;
-        if (this.responseText.length > 262144) throw Error("Oversized receipt");
-        return JSON.parse(this.responseText);
-      });
+      // The caller may reuse this XHR or mutate a JSON response before the
+      // collector queue runs. Capture an immutable body at the load event.
+      let text;
+      try {
+        text = this.responseType === "json" ? JSON.stringify(this.response) : this.responseText;
+        if (typeof text !== "string" || text.length > 262144) return;
+      } catch { return; }
+      capture(info, async () => JSON.parse(text));
     }, { once: true });
     return open.apply(this, arguments);
   };

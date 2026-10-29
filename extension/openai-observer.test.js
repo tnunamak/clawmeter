@@ -79,3 +79,37 @@ test("installed fetch observer returns the original response and emits only norm
   assert.doesNotMatch(JSON.stringify(emitted),/synthetic-secret|Authorization|org-a/);
   assert.equal(emitted[0].receipt.credits.balance,0);
 });
+
+for (const responseType of ["json", "text"]) test(`reused XHR ${responseType} responses retain their own organization and immutable body`, {timeout:5000}, async () => {
+  let release, entered;
+  const blocked=new Promise(resolve=>{release=resolve;});
+  const hashing=new Promise(resolve=>{entered=resolve;});
+  const s=setup({subtle:{digest:async(...args)=>{entered();await blocked;return webcrypto.subtle.digest(...args);}}});
+  const url="https://api.openai.com/v1/dashboard/billing/credit_grants";
+  const body=amount=>({object:"credit_summary",total_granted:amount,total_used:0,total_available:amount,grants:{object:"list",data:[]}});
+  class XHR {
+    constructor(){this.listeners=[];this.responseType=responseType;}
+    open(){} setRequestHeader(){}
+    addEventListener(type,fn){if(type==="load")this.listeners.push(fn);}
+    complete(value){
+      this.status=200;this.responseURL=url;this.response=value;this.responseText=JSON.stringify(value);
+      const callbacks=this.listeners;this.listeners=[];for(const fn of callbacks)fn();
+    }
+  }
+  let finish;const delivered=new Promise(resolve=>{finish=resolve;});const emitted=[];
+  const win={location:{origin:"https://platform.openai.com",href:"https://platform.openai.com/settings/organization/billing/overview"},
+    fetch:async()=>({ok:true,url,clone:()=>({text:async()=>JSON.stringify(body(1))})}),XMLHttpRequest:XHR,
+    postMessage:r=>{emitted.push(r.receipt);if(emitted.length===3)finish();}};
+  s.context.installOpenAIObserver(win);
+  await win.fetch(url,{headers:{"OpenAI-Organization":"org-blocker"}});await hashing;
+  const xhr=new XHR(), first=body(2);
+  xhr.open("GET",url);xhr.setRequestHeader("OpenAI-Organization","org-a");xhr.complete(first);
+  // User code can mutate a JSON response as well as reuse the XHR instance.
+  first.total_granted=99;first.total_available=99;
+  xhr.open("GET",url);xhr.setRequestHeader("OpenAI-Organization","org-b");xhr.complete(body(3));
+  release();await delivered;
+  const pool=async org=>Buffer.from(await webcrypto.subtle.digest("SHA-256",new TextEncoder().encode("clawmeter:openai-api-org:v1:"+org))).toString("hex");
+  const poolA=await pool("org-a"), poolB=await pool("org-b");
+  assert.equal(emitted.find(r=>r.pool===poolA)?.credits.balance,200);
+  assert.equal(emitted.find(r=>r.pool===poolB)?.credits.balance,300);
+});
