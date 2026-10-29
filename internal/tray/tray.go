@@ -907,6 +907,12 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	if !opensDashboard && !connectable {
 		header.Disable()
 	}
+	// Status precedes the OpenCode activity submenu so the latest dated
+	// limit observation is visible before secondary consumption details.
+	statusItem := systray.AddMenuItem("Loading...", "")
+	statusItem.Disable()
+	setMenuItemIcon(statusItem, icons.MenuBlank())
+
 	var localModelsItem *systray.MenuItem
 	var localModelItems []*systray.MenuItem
 	var localModelStates []menuItemState
@@ -922,11 +928,6 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		localModelsItem.Disable()
 		localModelsItem.Hide()
 	}
-
-	// Status item (shows loading/error)
-	statusItem := systray.AddMenuItem("Loading...", "")
-	statusItem.Disable()
-	setMenuItemIcon(statusItem, icons.MenuBlank())
 
 	// Pre-create window items (hidden until populated)
 	windowItems := make([]*systray.MenuItem, maxWindowItems)
@@ -1538,8 +1539,8 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		showProviderHeader(menu)
 		var statusParts []string
-		if len(data.LocalModels) > 0 && len(data.Windows) == 0 {
-			statusParts = append(statusParts, "Remaining quota not reported · reset unknown")
+		if acct != nil && acct.LocalModelStatus != nil {
+			statusParts = append(statusParts, acct.LocalModelStatus.Text)
 		}
 		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
 			statusParts = append(statusParts, providerStatus.Indicator.Label())
