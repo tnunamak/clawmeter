@@ -4,6 +4,35 @@ importScripts("console.js", "resets.js");
 
 let running = null;
 
+const openAIMatches = ["https://platform.openai.com/*"];
+async function openAIEnabled() {
+  return !!chrome.permissions && await chrome.permissions.contains({ origins: openAIMatches });
+}
+
+async function installOpenAICollectors() {
+  if (!await openAIEnabled()) return;
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: ["openai-observer", "openai-relay"] });
+  if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
+  await chrome.scripting.registerContentScripts([
+    { id: "openai-relay", matches: openAIMatches, js: ["openai-relay.js"], runAt: "document_start", world: "ISOLATED", persistAcrossSessions: false },
+    { id: "openai-observer", matches: openAIMatches, js: ["openai.js", "openai-observer.js"], runAt: "document_start", world: "MAIN", persistAcrossSessions: false },
+  ]);
+}
+
+async function receiveOpenAI(receipt, sender) {
+  if (sender.url && new URL(sender.url).origin === "https://platform.openai.com" && await openAIEnabled()) {
+    const delivery = await post("/v1/openai-api-credits", receipt);
+    const { status = {} } = await chrome.storage.session.get("status");
+    const at = new Date().toISOString();
+    const next = { ...status, at, delivery: [delivery], openai: { delivery, at } };
+    const shown = signal(next, status);
+    await chrome.storage.session.set({ status: next });
+    await showSignal(shown);
+    return delivery === "saved";
+  }
+  return false;
+}
+
 async function ensureAlarm() {
   if (!(await chrome.alarms.get("poll"))) {
     await chrome.alarms.create("poll", { periodInMinutes: 1 });
@@ -305,6 +334,7 @@ async function check() {
     let shown = null;
     try {
       const { status: previous } = await chrome.storage.session.get("status");
+      if (previous?.openai) status.openai = previous.openai;
       shown = signal(status, previous);
     } catch {}
     // A failed cost-cache write must not lose the status or renewal lookups.
@@ -321,6 +351,18 @@ async function check() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (sender.id === chrome.runtime.id && message?.type === "openai-receipt") {
+    receiveOpenAI(message.receipt, sender).then(reply, () => reply(false));
+    return true;
+  }
+  if (sender.id === chrome.runtime.id && message === "open-openai") {
+    installOpenAICollectors().then(async () => {
+      if (!await openAIEnabled()) return false;
+      await chrome.tabs.create({ url: "https://platform.openai.com/settings/organization/billing/overview" });
+      return true;
+    }).then(reply, () => reply(false));
+    return true;
+  }
   if (sender.id !== chrome.runtime.id || (message !== "poll" && message !== "open-claude")) return;
   (message === "poll" ? poll() : openClaude()).then(() => reply(true), () => reply(false));
   return true;
@@ -338,3 +380,4 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(() => { void ensureAlarm().catch(() => {}); void poll(); });
 void ensureAlarm().catch(() => {});
+void installOpenAICollectors().catch(() => {});

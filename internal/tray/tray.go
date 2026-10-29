@@ -522,7 +522,9 @@ func onReadyWithConfig(loaded *config.Config) {
 				return
 			}
 			publishAPICredits()
-		}, browserext.Token)
+		}, browserext.Token, func() {
+			publishLocalResetSource(&refresher.mu, registry, "openai_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		})
 		if err != nil {
 			log.Printf("claude extension listener: %v", err)
 		}
@@ -1074,6 +1076,8 @@ func openBalanceRowWithSetup(menu *providerMenuItems, row int, open func(string)
 	if visible && sourceStillCurrent(menu, revision) && action != "" {
 		if action == setupExtensionAction {
 			setup()
+		} else if action == provider.OpenAIAPIBillingURL {
+			open(provider.OpenAIAPIBillingURL)
 		} else {
 			open(claudeweb.ConsoleURL)
 		}
@@ -1116,6 +1120,14 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
 	if acct != nil {
+		for _, balance := range acct.APICreditBalances {
+			show(balance.Text, balance.ActionURL)
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				show(benefit.Text, benefit.ActionURL)
+			}
+		}
 		for _, grant := range acct.CreditGrants {
 			show(grant.Summary(), "")
 		}
@@ -2578,6 +2590,26 @@ func nextAPICreditDeadline(results map[string]*provider.UsageData, now time.Time
 				earliest = grant.ExpiresAt
 			}
 		}
+		for _, benefit := range data.CreditBenefits {
+			for _, deadline := range []time.Time{benefit.ObservedAt.Add(5 * time.Minute), benefit.LinkObservedAt.Add(5 * time.Minute), benefit.ExpiresAt} {
+				if deadline.After(now) && (earliest.IsZero() || deadline.Before(earliest)) {
+					earliest = deadline
+				}
+			}
+		}
+		for _, balance := range data.APICreditBalances {
+			deadlines := []time.Time{balance.ObservedAt.Add(5 * time.Minute)}
+			for _, grant := range balance.Grants {
+				if grant.Remaining > 0 {
+					deadlines = append(deadlines, grant.ExpiresAt)
+				}
+			}
+			for _, deadline := range deadlines {
+				if deadline.After(now) && (earliest.IsZero() || deadline.Before(earliest)) {
+					earliest = deadline
+				}
+			}
+		}
 		for _, pool := range data.CreditPools {
 			if pool.ObservationSource != "extension" || !pool.IsLive(now) {
 				continue
@@ -2616,7 +2648,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 		for name, menu := range menus {
 			data := results[name]
-			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0) {
+			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0 && len(data.CreditBenefits) == 0 && len(data.APICreditBalances) == 0) {
 				continue
 			}
 			balances := data.Balances

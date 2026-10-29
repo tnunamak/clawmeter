@@ -625,22 +625,24 @@ func announcementTime(t, now time.Time) string {
 
 // UsageData contains usage information for a provider.
 type UsageData struct {
-	Provider           string             `json:"provider"` // Provider name
-	SourceID           string             `json:"source_id,omitempty"`
-	SourceLabel        string             `json:"source_label,omitempty"`
-	ResetCreditsTarget string             `json:"reset_credits_target,omitempty"`
-	FetchedAt          time.Time          `json:"fetched_at"`                // When this data was fetched
-	Windows            []UsageWindow      `json:"windows"`                   // Usage windows (providers may have 1 or more)
-	Balances           []UsageBalance     `json:"balances,omitempty"`        // Non-resetting balances
-	CreditGrants       []UsageCreditGrant `json:"credit_grants,omitempty"`   // Expiring, non-renewing allowances
-	LocalModels        []LocalModelUsage  `json:"local_models,omitempty"`    // Local activity, never a measured quota.
-	CreditPools        []UsageCreditPool  `json:"credit_pools,omitempty"`    // Prepaid API credit pools
-	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"`   // Optional banked usage-limit reset metadata
-	AnnouncedReset     *ResetAnnouncement `json:"announced_reset,omitempty"` // Unofficial announced reset that bears on this account
-	IsExpired          bool               `json:"is_expired,omitempty"`      // True if credentials are expired
-	Error              string             `json:"error,omitempty"`           // Error message if fetch failed
-	Stale              bool               `json:"stale,omitempty"`           // True if showing last good data after refresh failed
-	Warning            string             `json:"warning,omitempty"`         // Short non-blocking data quality note
+	Provider           string                  `json:"provider"` // Provider name
+	SourceID           string                  `json:"source_id,omitempty"`
+	SourceLabel        string                  `json:"source_label,omitempty"`
+	ResetCreditsTarget string                  `json:"reset_credits_target,omitempty"`
+	FetchedAt          time.Time               `json:"fetched_at"`                // When this data was fetched
+	Windows            []UsageWindow           `json:"windows"`                   // Usage windows (providers may have 1 or more)
+	Balances           []UsageBalance          `json:"balances,omitempty"`        // Non-resetting balances
+	CreditGrants       []UsageCreditGrant      `json:"credit_grants,omitempty"`   // Expiring, non-renewing allowances
+	CreditBenefits     []UsageCreditBenefit    `json:"credit_benefits,omitempty"` // Offers to claim; never funded balances.
+	LocalModels        []LocalModelUsage       `json:"local_models,omitempty"`    // Local activity, never a measured quota.
+	APICreditBalances  []UsageAPICreditBalance `json:"api_credit_balances,omitempty"`
+	CreditPools        []UsageCreditPool       `json:"credit_pools,omitempty"`    // Prepaid API credit pools
+	ResetCredits       *UsageResetCredits      `json:"reset_credits,omitempty"`   // Optional banked usage-limit reset metadata
+	AnnouncedReset     *ResetAnnouncement      `json:"announced_reset,omitempty"` // Unofficial announced reset that bears on this account
+	IsExpired          bool                    `json:"is_expired,omitempty"`      // True if credentials are expired
+	Error              string                  `json:"error,omitempty"`           // Error message if fetch failed
+	Stale              bool                    `json:"stale,omitempty"`           // True if showing last good data after refresh failed
+	Warning            string                  `json:"warning,omitempty"`         // Short non-blocking data quality note
 	// InvalidatesPriorUsage means the current response disproves the semantic
 	// validity of earlier readings, so callers must not use stale fallback.
 	InvalidatesPriorUsage bool `json:"-"`
@@ -793,6 +795,14 @@ func (u *UsageData) Clone() *UsageData {
 		return nil
 	}
 	clone := *u
+	clone.APICreditBalances = append([]UsageAPICreditBalance(nil), u.APICreditBalances...)
+	for i := range clone.APICreditBalances {
+		clone.APICreditBalances[i].Grants = append([]APICreditExpiry(nil), u.APICreditBalances[i].Grants...)
+	}
+	clone.CreditBenefits = make([]UsageCreditBenefit, len(u.CreditBenefits))
+	for i, benefit := range u.CreditBenefits {
+		clone.CreditBenefits[i] = benefit.Clone()
+	}
 	clone.LocalModels = append([]LocalModelUsage(nil), u.LocalModels...)
 	for i := range clone.LocalModels {
 		m := &clone.LocalModels[i]
@@ -844,7 +854,12 @@ func (u *UsageData) HasPresentableUsage() bool {
 	if u == nil || u.IsExpired {
 		return false
 	}
-	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 || len(u.LocalModels) > 0 {
+	for _, benefit := range u.CreditBenefits {
+		if benefit.Eligibility == "eligible" || benefit.LinkState == "linked" {
+			return true
+		}
+	}
+	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 || len(u.LocalModels) > 0 || len(u.APICreditBalances) > 0 {
 		return true
 	}
 	// API credit pools are browser snapshots too: they keep a failed row
