@@ -906,8 +906,17 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		header.Disable()
 	}
 	var localModelsItem *systray.MenuItem
+	var localModelItems []*systray.MenuItem
+	var localModelStates []menuItemState
 	if p.Name() == "opencode_free" {
 		localModelsItem = systray.AddMenuItem("Free models · local observations", "Local activity observations; these do not indicate quota or request availability")
+		// Plasma treats children-display as immutable when importing a row.
+		// Establish the submenu before the first export, not after polling.
+		placeholder := localModelsItem.AddSubMenuItem("", "")
+		placeholder.Disable()
+		placeholder.Hide()
+		localModelItems = []*systray.MenuItem{placeholder}
+		localModelStates = []menuItemState{{visible: false, enabled: false, initialized: true}}
 		localModelsItem.Disable()
 		localModelsItem.Hide()
 	}
@@ -980,6 +989,8 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
 		balanceItems:      balanceItems,
 		localModelsItem:   localModelsItem,
+		localModelItems:   localModelItems,
+		localModelStates:  localModelStates,
 		separator:         separator,
 		opensDashboard:    opensDashboard,
 		explicitlyEnabled: explicitlyEnabled,
@@ -1489,6 +1500,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		showProviderHeader(menu)
 		var statusParts []string
+		if len(data.LocalModels) > 0 && len(data.Windows) == 0 {
+			statusParts = append(statusParts, "Remaining quota not reported · reset unknown")
+		}
 		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
 			statusParts = append(statusParts, providerStatus.Indicator.Label())
 		}
