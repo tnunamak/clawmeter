@@ -192,6 +192,14 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		for _, grant := range acct.CreditGrants {
 			addSpan(grant.Summary())
 		}
+		for _, balance := range acct.APICreditBalances {
+			addSpan(balance.Text)
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				addSpan(benefit.Text)
+			}
+		}
 		for _, model := range acct.LocalModels {
 			addSpan(model.Summary())
 		}
@@ -222,6 +230,14 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		}
 		for _, grant := range acct.CreditGrants {
 			addSpan(grant.Summary())
+		}
+		for _, balance := range acct.APICreditBalances {
+			addSpan(balance.Text)
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				addSpan(benefit.Text)
+			}
 		}
 		for _, model := range acct.LocalModels {
 			addSpan(model.Summary())
@@ -307,6 +323,14 @@ func (v outputView) plainLine(i int) string {
 		for _, grant := range acct.CreditGrants {
 			line += "  " + grant.Summary()
 		}
+		for _, balance := range acct.APICreditBalances {
+			line += "  " + balance.Text
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				line += "  " + benefit.Text
+			}
+		}
 		for _, model := range acct.LocalModels {
 			line += "  " + model.Summary()
 		}
@@ -333,6 +357,14 @@ func (v outputView) plainLine(i int) string {
 	}
 	for _, grant := range acct.CreditGrants {
 		parts = append(parts, grant.Summary())
+	}
+	for _, balance := range acct.APICreditBalances {
+		parts = append(parts, balance.Text)
+	}
+	for _, benefit := range acct.CreditBenefits {
+		if benefit.Text != "" {
+			parts = append(parts, benefit.Text)
+		}
 	}
 	for _, model := range acct.LocalModels {
 		parts = append(parts, model.Summary())
@@ -581,8 +613,14 @@ func (v outputView) agentLine() string {
 		if grants := v.agentCreditGrantSummaries(); len(grants) > 0 {
 			extra += "; credit_grants=[" + strings.Join(grants, " | ") + "]"
 		}
+		if benefits := v.agentCreditBenefits(); benefits != "" {
+			extra += "; credit_benefits=" + benefits
+		}
 		if models := v.agentLocalModels(); models != "" {
 			extra += "; local_models=" + models
+		}
+		if balances := v.agentAPIBalances(); balances != "" {
+			extra += "; api_credit_balances=" + balances
 		}
 		if extra != "" {
 			return "Quota: no active quota data" + extra + "."
@@ -605,8 +643,14 @@ func (v outputView) agentLine() string {
 		parts = append(parts, "credit_grants=["+strings.Join(grants, " | ")+"]")
 	}
 
+	if benefits := v.agentCreditBenefits(); benefits != "" {
+		parts = append(parts, "credit_benefits="+benefits)
+	}
 	if models := v.agentLocalModels(); models != "" {
 		parts = append(parts, "local_models="+models)
+	}
+	if balances := v.agentAPIBalances(); balances != "" {
+		parts = append(parts, "api_credit_balances="+balances)
 	}
 	return strings.Join(parts, "; ") + "."
 }
@@ -1538,7 +1582,7 @@ type summaryState struct {
 // summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
 func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	u := summaryState{tier: 4}
-	if pf.Data != nil && len(pf.Data.LocalModels) > 0 && len(acct.Windows) == 0 {
+	if pf.Data != nil && (len(pf.Data.LocalModels) > 0 || len(pf.Data.CreditBenefits) > 0) && len(acct.Windows) == 0 {
 		return summaryState{tier: 5}
 	}
 	switch {
@@ -1913,6 +1957,20 @@ func expiredMessage(providerErr string) string {
 	return "expired — " + msg
 }
 
+func (v outputView) agentAPIBalances() string {
+	balances := map[string][]view.APIBalance{}
+	for _, acct := range v.snap.Accounts {
+		if len(acct.APICreditBalances) > 0 {
+			balances[acct.Key] = acct.APICreditBalances
+		}
+	}
+	if len(balances) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(balances)
+	return string(b)
+}
+
 func (v outputView) agentLocalModels() string {
 	models := map[string][]provider.LocalModelUsage{}
 	for _, acct := range v.snap.Accounts {
@@ -1924,5 +1982,20 @@ func (v outputView) agentLocalModels() string {
 		return ""
 	}
 	b, _ := json.Marshal(models)
+	return string(b)
+}
+
+// agentCreditBenefits retains typed actionability separately from spendable credit.
+func (v outputView) agentCreditBenefits() string {
+	benefits := map[string][]view.CreditBenefit{}
+	for _, acct := range v.snap.Accounts {
+		if len(acct.CreditBenefits) > 0 {
+			benefits[acct.Key] = acct.CreditBenefits
+		}
+	}
+	if len(benefits) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(benefits)
 	return string(b)
 }

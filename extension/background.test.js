@@ -13,7 +13,7 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204, heade
   let timerID = 0;
   const context = vm.createContext({
     importScripts: (...names) => assert.deepEqual(names, ["console.js", "resets.js"]),
-    readConsole, readResets, fetch, AbortController, Date, Headers,
+    readConsole, readResets, fetch, AbortController, Date, Headers, URL,
     setTimeout: (callback, delay) => { assert.equal(delay, 20000); timers.set(++timerID, callback); return timerID; },
     clearTimeout: id => timers.delete(id),
     chrome: {
@@ -45,6 +45,38 @@ function worker(readConsole, fetch = async () => ({ ok: true, status: 204, heade
   vm.runInContext(readFileSync(require.resolve("./background.js"), "utf8"), context);
   return { context, listeners, created, stored, sessions, timers, queries, injections, badges, icons, opened, removed };
 }
+
+test("OpenAI observers register only after optional permission and never request it in the worker", async () => {
+  const w=worker(async()=>({status:"ok",payloads:[]})); const registered=[];
+  let allowed=false;
+  w.context.chrome.permissions={contains:async()=>allowed,request:()=>assert.fail("worker requested permission without a user gesture")};
+  w.context.chrome.scripting.getRegisteredContentScripts=async()=>[];
+  w.context.chrome.scripting.registerContentScripts=async scripts=>registered.push(...scripts);
+  await vm.runInContext("installOpenAICollectors()",w.context);assert.equal(registered.length,0);
+  allowed=true;
+  await vm.runInContext("installOpenAICollectors()",w.context);
+  assert.equal(registered.length,2);
+  assert.equal(registered[0].runAt,"document_start");
+  assert.equal(registered[1].world,"MAIN");
+  assert.deepEqual(Array.from(registered[1].js),["openai.js","openai-observer.js"]);
+});
+
+test("OpenAI receipt delivery requires granted host access and a Platform sender", async () => {
+  const posted=[];const w=worker(async()=>({status:"ok",payloads:[]}),async(url,options)=>{
+    if(url.endsWith("pairing.json"))return{json:async()=>({token:"synthetic-pair"})};
+    posted.push({url,options});return{ok:true,status:204,headers:new Headers()};
+  });
+  let allowed=false;w.context.chrome.permissions={contains:async()=>allowed};
+  const r={pool:"a".repeat(64),name:"Synthetic"};
+  assert.equal(await w.context.receiveOpenAI(r,{url:"https://platform.openai.com/settings/organization/billing/overview"}),false);
+  allowed=true;
+  assert.equal(await w.context.receiveOpenAI(r,{url:"https://untrusted.example/"}),false);
+  assert.equal(posted.length,0);
+  assert.equal(await w.context.receiveOpenAI(r,{url:"https://platform.openai.com/settings/organization/billing/overview"}),true);
+  assert.equal(posted[0].url,"http://127.0.0.1:17344/v1/openai-api-credits");
+  assert.equal(posted[0].options.credentials,"omit");
+  assert.equal(posted[0].options.headers["Clawmeter-Token"],"synthetic-pair");
+});
 
 test("alarm lifecycle and one poll at a time", async () => {
   let count = 0, release;
