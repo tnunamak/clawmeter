@@ -1,9 +1,9 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
 const vm = require("node:vm"), fs = require("node:fs"), { webcrypto } = require("node:crypto");
-function setup() {
+function setup(crypto = webcrypto) {
   let at = Date.parse("2026-10-29T12:00:00Z"); const receipts = [];
-  const context = vm.createContext({ URL, Date, Headers, crypto: webcrypto, TextEncoder, Uint8Array });
+  const context = vm.createContext({ URL, Date, Headers, crypto, TextEncoder, Uint8Array });
   for (const file of ["openai.js", "openai-observer.js"]) vm.runInContext(fs.readFileSync(require.resolve("./"+file), "utf8"), context);
   const observe = context.createOpenAICollector({ emit: r => receipts.push(JSON.parse(JSON.stringify(r))), hash: async s => webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then(b => Buffer.from(b).toString("hex")), now: () => at });
   const read = (url, body, extra={}) => observe({ url, body, at, ...extra });
@@ -57,17 +57,24 @@ test("credit receipts require an explicit organization header and retain genuine
   s.advance(1); await s.read(url,{...body,total_available:undefined},{organization:"org-a"}).then(()=>assert.fail("malformed receipt accepted"),()=>{});
   assert.equal(s.receipts.length,1);
 });
-test("installed fetch observer returns the original response and emits only normalized financial data", async () => {
-  const s=setup(), emitted=[];
+test("installed fetch observer returns the original response and emits only normalized financial data", {timeout:5000}, async () => {
+  let releaseHash;
+  const hashReady=new Promise(resolve=>{releaseHash=resolve;});
+  const s=setup({subtle:{digest:async(...args)=>{await hashReady;return webcrypto.subtle.digest(...args);}}}), emitted=[];
   const url="https://api.openai.com/v1/dashboard/billing/credit_grants";
   const body={object:"credit_summary",total_granted:0,total_used:0,total_available:0,grants:{object:"list",data:[]}};
   const response={ok:true,url,clone:()=>({text:async()=>JSON.stringify(body)})};
   function XHR() {} XHR.prototype.open=function(){}; XHR.prototype.setRequestHeader=function(){};
-  const win={location:{origin:"https://platform.openai.com",href:"https://platform.openai.com/settings/organization/billing/overview"},fetch:async()=>response,XMLHttpRequest:XHR,postMessage:r=>emitted.push(r)};
+  let finish;
+  const delivered=new Promise(resolve=>{finish=resolve;});
+  const win={location:{origin:"https://platform.openai.com",href:"https://platform.openai.com/settings/organization/billing/overview"},fetch:async()=>response,XMLHttpRequest:XHR,postMessage:r=>{emitted.push(r);finish();}};
   s.context.installOpenAIObserver(win);
   assert.equal(await win.fetch(url,{headers:{"OpenAI-Organization":"org-a",Authorization:"synthetic-secret"}}),response);
-  // Drain asynchronous hashing without a wall-clock sleep.
-  for(let i=0;i<20 && !emitted.length;i++) await new Promise(resolve=>setImmediate(resolve));
+  // Fetch returns before hashing completes. Wait for the actual delivery,
+  // independent of WebCrypto thread scheduling or runner speed.
+  assert.equal(emitted.length,0);
+  releaseHash();
+  await delivered;
   assert.equal(emitted.length,1);
   assert.doesNotMatch(JSON.stringify(emitted),/synthetic-secret|Authorization|org-a/);
   assert.equal(emitted[0].receipt.credits.balance,0);
