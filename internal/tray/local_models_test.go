@@ -13,7 +13,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/view"
 )
 
-func TestOpenCodeFreeLocalModelsUseUnboundedOwnedSubmenu(t *testing.T) {
+func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	defer systray.ResetMenu()
 	menu := createProviderMenuItems(sourceMenuTestProvider{name: "opencode_free"}, false, nil, false)
 	// Plasma creates a submenu only when children-display is present on the
@@ -25,20 +25,38 @@ func TestOpenCodeFreeLocalModelsUseUnboundedOwnedSubmenu(t *testing.T) {
 	for i := range models {
 		models[i] = provider.LocalModelUsage{Model: fmt.Sprintf("provider/model-%02d", i), Day: "2026-10-28"}
 	}
+	used := int64(3)
+	models[12].AssistantMessages = &used
+	models[35].LimitHitAt = time.Now()
 	acct := &view.Account{LocalModels: models}
 
 	if rows := showBalanceRows(menu, acct, nil, time.Now()); rows != len(models) {
 		t.Fatalf("reported rows = %d, want %d", rows, len(models))
 	}
-	if !menu.localModelsState.visible || !menu.localModelsState.enabled || menu.localModelsState.title != "Free models (39) · local observations" {
+	if !menu.localModelsState.visible || !menu.localModelsState.enabled || menu.localModelsState.title != "Local activity (2 models)" {
 		t.Fatalf("submenu parent = %+v", menu.localModelsState)
 	}
-	if len(menu.localModelItems) != 39 {
-		t.Fatalf("submenu items = %d, want all 39 catalog entries", len(menu.localModelItems))
+	if len(menu.localModelItems) != 2 {
+		t.Fatalf("submenu items = %d, want only 2 models with observations", len(menu.localModelItems))
 	}
+	want := []provider.LocalModelUsage{models[12], models[35]}
 	for i, item := range menu.localModelStates {
-		if !item.visible || item.enabled || item.title != models[i].Summary() {
+		if !item.visible || item.enabled || item.title != want[i].Summary() {
 			t.Fatalf("submenu row %d = %+v", i, item)
+		}
+	}
+	showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free"}})
+	if menu.localModelsState.enabled || menu.localModelsState.title != "Local activity unavailable · quota unknown" {
+		t.Fatalf("unused catalog appeared as capacity: %+v", menu.localModelsState)
+	}
+	zero := int64(0)
+	showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free", AssistantMessages: &zero}})
+	if menu.localModelsState.enabled || menu.localModelsState.title != "No local activity · quota unknown" {
+		t.Fatal("known zero and unknown activity conflated")
+	}
+	for _, item := range menu.localModelStates {
+		if item.visible {
+			t.Fatal("old activity survived an empty observation")
 		}
 	}
 

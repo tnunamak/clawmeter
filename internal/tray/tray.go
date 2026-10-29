@@ -1156,8 +1156,34 @@ func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsa
 		hideLocalModelRows(menu)
 		return
 	}
-	setMenuItemTitle(menu.localModelsItem, &menu.localModelsState, fmt.Sprintf("Free models (%d) · local observations", len(models)))
-	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, true)
+	// A catalog entry with no observations says nothing about available quota.
+	// Keep the complete catalog in the detailed CLI/JSON; the tray earns its
+	// space by showing activity and dated limit events only.
+	observed := make([]provider.LocalModelUsage, 0, len(models))
+	unknown := false
+	for _, model := range models {
+		unknown = unknown || model.AssistantMessages == nil
+		used := !model.LimitHitAt.IsZero()
+		for _, count := range []*int64{model.AssistantMessages, model.InputTokens, model.OutputTokens, model.ReasoningTokens, model.CacheReadTokens, model.CacheWriteTokens} {
+			used = used || (count != nil && *count > 0)
+		}
+		if used {
+			observed = append(observed, model)
+		}
+	}
+	models = observed
+	title := fmt.Sprintf("Local activity (%d models)", len(models))
+	if len(models) == 1 {
+		title = "Local activity (1 model)"
+	}
+	if len(models) == 0 {
+		title = "No local activity · quota unknown"
+		if unknown {
+			title = "Local activity unavailable · quota unknown"
+		}
+	}
+	setMenuItemTitle(menu.localModelsItem, &menu.localModelsState, title)
+	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, len(models) > 0)
 	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, true)
 	for len(menu.localModelItems) < len(models) {
 		item := menu.localModelsItem.AddSubMenuItem("", "")
