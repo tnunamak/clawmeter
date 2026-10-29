@@ -192,6 +192,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		for _, grant := range acct.CreditGrants {
 			addSpan(grant.Summary())
 		}
+		for _, model := range acct.LocalModels {
+			addSpan(model.Summary())
+		}
 		lines = appendSnapshotLines(lines, pf.Data, layout, now)
 	default:
 		rows := shownRows(acct)
@@ -219,6 +222,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		}
 		for _, grant := range acct.CreditGrants {
 			addSpan(grant.Summary())
+		}
+		for _, model := range acct.LocalModels {
+			addSpan(model.Summary())
 		}
 		for _, balance := range pf.Data.Balances {
 			name := balance.DisplayName
@@ -301,6 +307,9 @@ func (v outputView) plainLine(i int) string {
 		for _, grant := range acct.CreditGrants {
 			line += "  " + grant.Summary()
 		}
+		for _, model := range acct.LocalModels {
+			line += "  " + model.Summary()
+		}
 		return appendSnapshotsPlain(line, pf.Data, now)
 	}
 
@@ -325,6 +334,9 @@ func (v outputView) plainLine(i int) string {
 	for _, grant := range acct.CreditGrants {
 		parts = append(parts, grant.Summary())
 	}
+	for _, model := range acct.LocalModels {
+		parts = append(parts, model.Summary())
+	}
 	for _, balance := range pf.Data.Balances {
 		label := balance.DisplayName
 		if label == "" {
@@ -334,6 +346,9 @@ func (v outputView) plainLine(i int) string {
 	}
 	for _, pool := range pf.Data.CreditPools {
 		parts = append(parts, fmt.Sprintf("%s: %s", pool.Name, pool.Summary(now)))
+	}
+	if len(acct.LocalModels) > 0 {
+		return fmt.Sprintf("%s: %s%s\n  %s", display, prefix, suffix, strings.Join(parts, "\n  "))
 	}
 	return fmt.Sprintf("%s: %s%s%s", display, prefix, strings.Join(parts, "  "), suffix)
 }
@@ -566,6 +581,9 @@ func (v outputView) agentLine() string {
 		if grants := v.agentCreditGrantSummaries(); len(grants) > 0 {
 			extra += "; credit_grants=[" + strings.Join(grants, " | ") + "]"
 		}
+		if models := v.agentLocalModels(); models != "" {
+			extra += "; local_models=" + models
+		}
 		if extra != "" {
 			return "Quota: no active quota data" + extra + "."
 		}
@@ -587,6 +605,9 @@ func (v outputView) agentLine() string {
 		parts = append(parts, "credit_grants=["+strings.Join(grants, " | ")+"]")
 	}
 
+	if models := v.agentLocalModels(); models != "" {
+		parts = append(parts, "local_models="+models)
+	}
 	return strings.Join(parts, "; ") + "."
 }
 
@@ -1517,6 +1538,9 @@ type summaryState struct {
 // summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
 func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	u := summaryState{tier: 4}
+	if pf.Data != nil && len(pf.Data.LocalModels) > 0 && len(acct.Windows) == 0 {
+		return summaryState{tier: 5}
+	}
 	switch {
 	case pf.Data == nil:
 		u.tier = 5
@@ -1887,4 +1911,18 @@ func expiredMessage(providerErr string) string {
 		return msg
 	}
 	return "expired — " + msg
+}
+
+func (v outputView) agentLocalModels() string {
+	models := map[string][]provider.LocalModelUsage{}
+	for _, acct := range v.snap.Accounts {
+		if len(acct.LocalModels) > 0 {
+			models[acct.Key] = acct.LocalModels
+		}
+	}
+	if len(models) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(models)
+	return string(b)
 }

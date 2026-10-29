@@ -845,6 +845,10 @@ type providerMenuItems struct {
 	// moreItem says how many windows the rows above leave out.
 	moreItem          *systray.MenuItem
 	balanceItems      []*systray.MenuItem
+	localModelsItem   *systray.MenuItem
+	localModelItems   []*systray.MenuItem
+	localModelStates  []menuItemState
+	localModelsState  menuItemState
 	separator         *systray.MenuItem
 	order             int // position in the menu, top first
 	opensDashboard    bool
@@ -900,6 +904,21 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(header, icons.MenuMark(p.Name(), resolveTrayPalette()))
 	if !opensDashboard && !connectable {
 		header.Disable()
+	}
+	var localModelsItem *systray.MenuItem
+	var localModelItems []*systray.MenuItem
+	var localModelStates []menuItemState
+	if p.Name() == "opencode_free" {
+		localModelsItem = systray.AddMenuItem("Free models · local observations", "Local activity observations; these do not indicate quota or request availability")
+		// Plasma treats children-display as immutable when importing a row.
+		// Establish the submenu before the first export, not after polling.
+		placeholder := localModelsItem.AddSubMenuItem("", "")
+		placeholder.Disable()
+		placeholder.Hide()
+		localModelItems = []*systray.MenuItem{placeholder}
+		localModelStates = []menuItemState{{visible: false, enabled: false, initialized: true}}
+		localModelsItem.Disable()
+		localModelsItem.Hide()
 	}
 
 	// Status item (shows loading/error)
@@ -969,6 +988,9 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		moreItem:          moreItem,
 		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
 		balanceItems:      balanceItems,
+		localModelsItem:   localModelsItem,
+		localModelItems:   localModelItems,
+		localModelStates:  localModelStates,
 		separator:         separator,
 		opensDashboard:    opensDashboard,
 		explicitlyEnabled: explicitlyEnabled,
@@ -1111,13 +1133,84 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 			}
 			show(title, action)
 		}
+		showLocalModelRows(menu, acct.LocalModels)
+	} else {
+		hideLocalModelRows(menu)
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 		setMenuItemEnabled(menu.balanceItems[i], &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
 	}
+	if acct != nil && menu.localModelsItem != nil && len(acct.LocalModels) > 0 {
+		return rows + len(acct.LocalModels)
+	}
 	return rows
+}
+
+func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsage) {
+	if menu.localModelsItem == nil {
+		return
+	}
+	if len(models) == 0 {
+		hideLocalModelRows(menu)
+		return
+	}
+	// A catalog entry with no observations says nothing about available quota.
+	// Keep the complete catalog in the detailed CLI/JSON; the tray earns its
+	// space by showing activity and dated limit events only.
+	observed := make([]provider.LocalModelUsage, 0, len(models))
+	unknown := false
+	for _, model := range models {
+		unknown = unknown || model.AssistantMessages == nil
+		used := !model.LimitHitAt.IsZero()
+		for _, count := range []*int64{model.AssistantMessages, model.InputTokens, model.OutputTokens, model.ReasoningTokens, model.CacheReadTokens, model.CacheWriteTokens} {
+			used = used || (count != nil && *count > 0)
+		}
+		if used {
+			observed = append(observed, model)
+		}
+	}
+	models = observed
+	title := fmt.Sprintf("Local activity (%d models)", len(models))
+	if len(models) == 1 {
+		title = "Local activity (1 model)"
+	}
+	if len(models) == 0 {
+		title = "No local activity · quota unknown"
+		if unknown {
+			title = "Local activity unavailable · quota unknown"
+		}
+	}
+	setMenuItemTitle(menu.localModelsItem, &menu.localModelsState, title)
+	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, len(models) > 0)
+	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, true)
+	for len(menu.localModelItems) < len(models) {
+		item := menu.localModelsItem.AddSubMenuItem("", "")
+		item.Disable()
+		item.Hide()
+		menu.localModelItems = append(menu.localModelItems, item)
+		menu.localModelStates = append(menu.localModelStates, menuItemState{visible: false, enabled: false, initialized: true})
+	}
+	for i, item := range menu.localModelItems {
+		if i < len(models) {
+			setMenuItemTitle(item, &menu.localModelStates[i], models[i].Summary())
+			setMenuItemEnabled(item, &menu.localModelStates[i], false)
+			setMenuItemVisible(item, &menu.localModelStates[i], true)
+		} else {
+			setMenuItemVisible(item, &menu.localModelStates[i], false)
+		}
+	}
+}
+
+func hideLocalModelRows(menu *providerMenuItems) {
+	if menu.localModelsItem == nil {
+		return
+	}
+	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, false)
+	for i, item := range menu.localModelItems {
+		setMenuItemVisible(item, &menu.localModelStates[i], false)
+	}
 }
 
 func hideProviderWindows(menu *providerMenuItems) {
@@ -1131,6 +1224,7 @@ func hideProviderWindows(menu *providerMenuItems) {
 		setMenuItemEnabled(b, &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
 	}
+	hideLocalModelRows(menu)
 }
 
 func showProviderHeader(menu *providerMenuItems) {
@@ -1432,6 +1526,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		showProviderHeader(menu)
 		var statusParts []string
+		if len(data.LocalModels) > 0 && len(data.Windows) == 0 {
+			statusParts = append(statusParts, "Remaining quota not reported · reset unknown")
+		}
 		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
 			statusParts = append(statusParts, providerStatus.Indicator.Label())
 		}
