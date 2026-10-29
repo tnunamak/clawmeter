@@ -907,6 +907,12 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	if !opensDashboard && !connectable {
 		header.Disable()
 	}
+	// Status precedes the OpenCode activity submenu so the latest dated
+	// limit observation is visible before secondary consumption details.
+	statusItem := systray.AddMenuItem("Loading...", "")
+	statusItem.Disable()
+	setMenuItemIcon(statusItem, icons.MenuBlank())
+
 	var localModelsItem *systray.MenuItem
 	var localModelItems []*systray.MenuItem
 	var localModelStates []menuItemState
@@ -922,11 +928,6 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		localModelsItem.Disable()
 		localModelsItem.Hide()
 	}
-
-	// Status item (shows loading/error)
-	statusItem := systray.AddMenuItem("Loading...", "")
-	statusItem.Disable()
-	setMenuItemIcon(statusItem, icons.MenuBlank())
 
 	// Pre-create window items (hidden until populated)
 	windowItems := make([]*systray.MenuItem, maxWindowItems)
