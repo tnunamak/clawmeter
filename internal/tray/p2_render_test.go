@@ -4,10 +4,12 @@ package tray
 
 import (
 	"errors"
+	"fmt"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/status"
 	"github.com/tnunamak/clawmeter/internal/systray"
+	"github.com/tnunamak/clawmeter/internal/view"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,5 +352,84 @@ func TestPinnedQuotaMarkStaysNeutralAtRisk(t *testing.T) {
 			t.Fatalf("atRisk=%v: unpinned state = %q, want %q", atRisk, menu.windowIcons[0], want)
 		}
 		setWindowIcon(menu, 0, true)
+	}
+}
+
+func TestOpenAITrayPreservesBenefitAfterEightBalances(t *testing.T) {
+	defer systray.ResetMenu()
+	now := time.Now()
+	claimable, periodCredit := int64(5000), int64(5000)
+	data := &provider.UsageData{
+		Provider: "openai_api", FetchedAt: now,
+		CreditBenefits: []provider.UsageCreditBenefit{{
+			Eligibility: "eligible", LinkState: "unlinked", Currency: "USD",
+			Claimable: &claimable, PeriodCredit: &periodCredit, Cadence: "monthly",
+			ObservedAt: now, ExpiresAt: now.Add(24 * time.Hour),
+		}},
+	}
+	for i := 0; i < 8; i++ {
+		data.APICreditBalances = append(data.APICreditBalances, provider.UsageAPICreditBalance{
+			Pool: fmt.Sprintf("pool-%d", i), Name: fmt.Sprintf("Pool %d", i),
+			Currency: "USD", Balance: 1000, ObservedAt: now,
+		})
+	}
+	snap := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"openai_api": data}}, now)
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: "openai_api"}, false, nil, false)
+	rows := showBalanceRows(menu, accountNamed(snap, "openai_api"), nil, now)
+	if !menu.balanceStates[0].visible || !menu.balanceStates[0].enabled ||
+		!strings.HasPrefix(menu.balanceStates[0].title, "Claim ") ||
+		menu.balanceActions[0] != provider.OpenAIAPIBillingURL {
+		t.Errorf("claim offer was crowded out by balances: state=%+v action=%q", menu.balanceStates[0], menu.balanceActions[0])
+	}
+	if rows != 9 {
+		t.Errorf("rendered %d rows, want eight entries plus one overflow row", rows)
+	}
+	if !menu.balanceMoreState.visible || menu.balanceMoreState.enabled || menu.balanceMoreState.title != "+1 more" {
+		t.Errorf("missing disabled balance overflow row: %+v", menu.balanceMoreState)
+	}
+	for i := 1; i < 8; i++ {
+		if !menu.balanceStates[i].visible || menu.balanceStates[i].title != data.APICreditBalances[i-1].Summary(now) {
+			t.Errorf("balance row %d = %+v", i, menu.balanceStates[i])
+		}
+	}
+}
+
+func TestOpenAITrayReportsBalanceOnlyOverflow(t *testing.T) {
+	defer systray.ResetMenu()
+	now := time.Now()
+	data := &provider.UsageData{Provider: "openai_api", FetchedAt: now}
+	for i := 0; i < 9; i++ {
+		data.APICreditBalances = append(data.APICreditBalances, provider.UsageAPICreditBalance{
+			Pool: fmt.Sprintf("pool-%d", i), Name: fmt.Sprintf("Pool %d", i),
+			Currency: "USD", Balance: 1000, ObservedAt: now,
+		})
+	}
+	snap := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"openai_api": data}}, now)
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: "openai_api"}, false, nil, false)
+	acct := accountNamed(snap, "openai_api")
+	balances := acct.APICreditBalances
+	for _, count := range []int{9, 8, 1, 0, 9} {
+		acct.APICreditBalances = balances[:count]
+		rows := showBalanceRows(menu, acct, nil, now)
+		if rows != count {
+			t.Errorf("%d balances: rendered %d rows, want %d including any overflow row", count, rows, count)
+		}
+		wantMore := count > 8
+		if menu.balanceMoreState.visible != wantMore || menu.balanceMoreState.enabled ||
+			(wantMore && menu.balanceMoreState.title != "+1 more") {
+			t.Errorf("%d balances: overflow = %+v", count, menu.balanceMoreState)
+		}
+		for i, state := range menu.balanceStates {
+			if state.visible != (i < count) {
+				t.Errorf("%d balances: row %d visibility = %v", count, i, state.visible)
+			}
+			if i >= count && (state.enabled || menu.balanceActions[i] != "") {
+				t.Errorf("%d balances: hidden row %d retained an action", count, i)
+			}
+		}
+	}
+	hideProviderMenu(menu)
+	if menu.balanceMoreState.visible {
+		t.Fatal("hiding provider left its balance overflow row visible")
 	}
 }
