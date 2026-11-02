@@ -190,6 +190,14 @@ type GlobalSettings struct {
 	// NotifyQuotaAvailable opts into a desktop notification when an account
 	// the tray saw run out has quota again. Off by default.
 	NotifyQuotaAvailable bool `yaml:"notify_quota_available,omitempty"`
+
+	// UsageHistory controls local quota history. Nil keeps the default on.
+	UsageHistory *bool `yaml:"usage_history,omitempty"`
+}
+
+// ShouldRecordUsageHistory reports whether local quota history is enabled.
+func (s GlobalSettings) ShouldRecordUsageHistory() bool {
+	return s.UsageHistory == nil || *s.UsageHistory
 }
 
 // NotificationConfig holds notification settings.

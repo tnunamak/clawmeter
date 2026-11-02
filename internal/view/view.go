@@ -51,7 +51,10 @@ type Account struct {
 	// evaluated at the snapshot time with the extension contact input.
 	Pools []provider.UsageCreditPool
 	// CreditGrants are non-renewing balances, evaluated at this snapshot.
-	CreditGrants []CreditGrant
+	CreditGrants      []CreditGrant
+	CreditBenefits    []CreditBenefit
+	APICreditBalances []APIBalance
+	LocalModels       []provider.LocalModelUsage
 	// Announcement is the announced reset the source carries, or nil.
 	Announcement *provider.ResetAnnouncement
 }
@@ -260,6 +263,13 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 	}
 	account.Provider = data.Provider
 	account.Reading = reading(data)
+	for _, balance := range data.APICreditBalances {
+		account.APICreditBalances = append(account.APICreditBalances, buildAPIBalance(balance, at))
+	}
+	for _, benefit := range data.CreditBenefits {
+		account.CreditBenefits = append(account.CreditBenefits, buildCreditBenefit(benefit, at))
+	}
+	account.LocalModels = provider.LocalModelsAt(data.LocalModels, data.FetchedAt, at, account.Reading.State == ReadingFresh && !data.FetchedAt.IsZero() && at.Sub(data.FetchedAt) <= in.MaxReadingAge)
 	age := at.Sub(data.FetchedAt)
 	validAge := !data.FetchedAt.IsZero() && age >= 0 && age <= in.MaxReadingAge
 	if len(data.Windows) > 0 && account.Reading.State == ReadingFresh && !validAge {

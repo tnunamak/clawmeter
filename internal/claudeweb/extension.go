@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/openaicredits"
 )
 
 const extensionAddress = "127.0.0.1:17344"
@@ -113,7 +115,7 @@ func LastExtensionContact() time.Time {
 // each stored reading; a Result without resets is an API credit reading.
 // token reads the pairing token from this user's extension folder, or ""
 // when there is none.
-func ServeExtension(ctx context.Context, accounts func() []Account, saved func(Result), token func() (string, error)) error {
+func ServeExtension(ctx context.Context, accounts func() []Account, saved func(Result), token func() (string, error), openAISaved ...func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -122,7 +124,7 @@ func ServeExtension(ctx context.Context, accounts func() []Account, saved func(R
 		return fmt.Errorf("start Claude extension: %w", err)
 	}
 	server := &http.Server{
-		Handler: ExtensionHandler(accounts, saved, token), ReadHeaderTimeout: 2 * time.Second,
+		Handler: ExtensionHandler(accounts, saved, token, openAISaved...), ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second,
 	}
 	done := make(chan struct{})
@@ -156,9 +158,10 @@ type extensionResetsPayload struct {
 // ExtensionHandler serves the extension's readings. It admits only the
 // extension's origin on the loopback address, paired with this user's folder;
 // saved and token are as for ServeExtension.
-func ExtensionHandler(accounts func() []Account, saved func(Result), token func() (string, error)) http.Handler {
+func ExtensionHandler(accounts func() []Account, saved func(Result), token func() (string, error), openAISaved ...func()) http.Handler {
 	var mu sync.Mutex
 	var contactWritten time.Time
+	var openAIStore *openaicredits.Store
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != extensionAddress {
 			http.Error(w, "not allowed", http.StatusForbidden)
@@ -167,7 +170,7 @@ func ExtensionHandler(accounts func() []Account, saved func(Result), token func(
 		if !admit(w, r, http.MethodPost, ExtensionOrigins...) {
 			return
 		}
-		if r.URL.Path != "/v1/api-credits" && r.URL.Path != "/v1/resets" && r.URL.Path != "/v1/status" {
+		if r.URL.Path != "/v1/api-credits" && r.URL.Path != "/v1/resets" && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/openai-api-credits" {
 			http.NotFound(w, r)
 			return
 		}
@@ -178,7 +181,11 @@ func ExtensionHandler(accounts func() []Account, saved func(Result), token func(
 			http.Error(w, "this extension is paired with another user's Clawmeter", http.StatusUnauthorized)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		bodyLimit := int64(maxBodyBytes)
+		if r.URL.Path == "/v1/openai-api-credits" {
+			bodyLimit = 256 * 1024
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		defer r.Body.Close()
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
@@ -186,6 +193,34 @@ func ExtensionHandler(accounts func() []Account, saved func(Result), token func(
 		mu.Lock()
 		defer mu.Unlock()
 		now := time.Now()
+		if r.URL.Path == "/v1/openai-api-credits" {
+			// Reuse the receiver's loopback, origin, pairing and body limits.
+			// No vendor response or credential crosses this boundary.
+			var payload openaicredits.Snapshot
+			if decoder.Decode(&payload) != nil || decoder.Decode(&trailing) != io.EOF || payload.Validate() != nil {
+				http.Error(w, msgUnreadable, http.StatusBadRequest)
+				return
+			}
+			if openAIStore == nil {
+				var err error
+				openAIStore, err = openaicredits.New()
+				if err != nil {
+					http.Error(w, msgSaveFailed, http.StatusInternalServerError)
+					return
+				}
+			}
+			if err := openAIStore.Save(payload, now); err != nil {
+				http.Error(w, msgUnreadable, http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			for _, notify := range openAISaved {
+				if notify != nil {
+					notify()
+				}
+			}
+			return
+		}
 		// Any reading, even one Clawmeter drops, shows the extension is
 		// installed; the tray stops suggesting it. The time is written at
 		// most once a minute.

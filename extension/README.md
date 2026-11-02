@@ -13,3 +13,10 @@ claude.ai answers 403 to requests from the extension's background worker, so `ba
 Run the tests with `node --test extension/*.test.js`. `go test ./internal/claudeweb` also runs both readers in Node and posts their output to the Go receiver.
 
 `make extension-zip` builds the Chrome Web Store upload; see [docs/chrome-web-store.md](../docs/chrome-web-store.md).
+## OpenAI billing (optional)
+
+In the extension popup, select **Connect OpenAI billing…** and allow access to `platform.openai.com`. Then open Billing overview and Credit grants while signed in. The extension observes those pages' read requests and sends normalized balance, expiry and benefit readings to the paired Clawmeter app. It does not copy credentials, link organizations, claim benefits or purchase credits.
+
+Clawmeter shows reported API credit balances separately from subscription offers. An eligible, unlinked offer gets a **Claim … in API credits** action that opens OpenAI billing for review. The amount comes from the account's offer, including proration; it is not funded money or Codex quota. Confirm the named organization on the billing page before linking it.
+
+Readings become stale after five minutes without a new page check. Reopen billing to refresh them. Grant expiry invalidates the old balance; no spending forecast, monthly reset or subscription-only balance is inferred from the combined grants response. Existing installations leave OpenAI access disabled until you choose to connect it.

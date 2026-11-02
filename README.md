@@ -289,6 +289,7 @@ In T3, enter `http://127.0.0.1:8318` as the hub URL and the same key as the mana
 | Alibaba Coding Plan | Coding Plan 5-hour, weekly, and monthly quotas |
 | Alibaba Token Plan | Personal Token Plan 5-hour, 7-day, and reset-credit data after one-time Model Studio quota connection |
 | DeepSeek | Account balance only (read-only); no utilization, spend, or reset-time data |
+| OpenCode Free | Local daily activity and observed free-limit events per zero-priced model; quota and reset remain unknown |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 
@@ -449,4 +450,8 @@ Tray builds require CGO. Linux also needs `libayatana-appindicator3-dev`.
 
 ## How It Works
 
-Clawmeter reads existing credentials from your AI coding tools and queries their usage APIs. Results are cached at `~/.cache/clawmeter/usage.json` for 60 seconds, so the CLI and tray do not hammer provider APIs. See [Privacy Policy](PRIVACY.md), [Security Policy](SECURITY.md), and [Third-party components](docs/third-party-components.md).
+Clawmeter reads existing credentials from your AI coding tools and queries their usage APIs. Results are cached at `~/.cache/clawmeter/usage.json` for 60 seconds, so the CLI and tray do not hammer provider APIs. It also keeps a local, bounded history of quota readings by default; disable it with `clawmeter config set usage_history false`. The history contains shown source labels and quota values, but no credentials, emails, or account IDs. Read it with `clawmeter history --json`. See [Privacy Policy](PRIVACY.md), [Security Policy](SECURITY.md), and [Third-party components](docs/third-party-components.md).
+
+### Privacy
+
+History stays in the OS user cache, uses private file permissions, and makes no extra network requests. Set `usage_history` to `false` in Clawmeter's config, or pass `--no-history` to skip one status refresh.

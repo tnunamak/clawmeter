@@ -18,6 +18,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
+	localhistory "github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
@@ -28,6 +29,19 @@ import (
 
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+func recordUsageHistory(results map[string]*provider.UsageData, cfg *config.Config, noHistory ...bool) {
+	if cfg == nil || !cfg.Settings.ShouldRecordUsageHistory() || len(noHistory) > 0 && noHistory[0] {
+		return
+	}
+	dir, err := cache.Path("history")
+	if err == nil {
+		err = localhistory.Append(dir, results, time.Now())
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: history write failed: %v\n", err)
+	}
 }
 
 const (
@@ -192,6 +206,17 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		for _, grant := range acct.CreditGrants {
 			addSpan(grant.Summary())
 		}
+		for _, balance := range acct.APICreditBalances {
+			addSpan(balance.Text)
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				addSpan(benefit.Text)
+			}
+		}
+		for _, model := range acct.LocalModels {
+			addSpan(model.Summary())
+		}
 		lines = appendSnapshotLines(lines, pf.Data, layout, now)
 	default:
 		rows := shownRows(acct)
@@ -219,6 +244,17 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		}
 		for _, grant := range acct.CreditGrants {
 			addSpan(grant.Summary())
+		}
+		for _, balance := range acct.APICreditBalances {
+			addSpan(balance.Text)
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				addSpan(benefit.Text)
+			}
+		}
+		for _, model := range acct.LocalModels {
+			addSpan(model.Summary())
 		}
 		for _, balance := range pf.Data.Balances {
 			name := balance.DisplayName
@@ -301,6 +337,17 @@ func (v outputView) plainLine(i int) string {
 		for _, grant := range acct.CreditGrants {
 			line += "  " + grant.Summary()
 		}
+		for _, balance := range acct.APICreditBalances {
+			line += "  " + balance.Text
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				line += "  " + benefit.Text
+			}
+		}
+		for _, model := range acct.LocalModels {
+			line += "  " + model.Summary()
+		}
 		return appendSnapshotsPlain(line, pf.Data, now)
 	}
 
@@ -325,6 +372,17 @@ func (v outputView) plainLine(i int) string {
 	for _, grant := range acct.CreditGrants {
 		parts = append(parts, grant.Summary())
 	}
+	for _, balance := range acct.APICreditBalances {
+		parts = append(parts, balance.Text)
+	}
+	for _, benefit := range acct.CreditBenefits {
+		if benefit.Text != "" {
+			parts = append(parts, benefit.Text)
+		}
+	}
+	for _, model := range acct.LocalModels {
+		parts = append(parts, model.Summary())
+	}
 	for _, balance := range pf.Data.Balances {
 		label := balance.DisplayName
 		if label == "" {
@@ -334,6 +392,9 @@ func (v outputView) plainLine(i int) string {
 	}
 	for _, pool := range pf.Data.CreditPools {
 		parts = append(parts, fmt.Sprintf("%s: %s", pool.Name, pool.Summary(now)))
+	}
+	if len(acct.LocalModels) > 0 {
+		return fmt.Sprintf("%s: %s%s\n  %s", display, prefix, suffix, strings.Join(parts, "\n  "))
 	}
 	return fmt.Sprintf("%s: %s%s%s", display, prefix, strings.Join(parts, "  "), suffix)
 }
@@ -571,6 +632,15 @@ func (v outputView) agentLine() string {
 		if grants := v.agentCreditGrantSummaries(); len(grants) > 0 {
 			extra += "; credit_grants=[" + strings.Join(grants, " | ") + "]"
 		}
+		if benefits := v.agentCreditBenefits(); benefits != "" {
+			extra += "; credit_benefits=" + benefits
+		}
+		if models := v.agentLocalModels(); models != "" {
+			extra += "; local_models=" + models
+		}
+		if balances := v.agentAPIBalances(); balances != "" {
+			extra += "; api_credit_balances=" + balances
+		}
 		if extra != "" {
 			return "Quota: no active quota data" + extra + "."
 		}
@@ -592,6 +662,15 @@ func (v outputView) agentLine() string {
 		parts = append(parts, "credit_grants=["+strings.Join(grants, " | ")+"]")
 	}
 
+	if benefits := v.agentCreditBenefits(); benefits != "" {
+		parts = append(parts, "credit_benefits="+benefits)
+	}
+	if models := v.agentLocalModels(); models != "" {
+		parts = append(parts, "local_models="+models)
+	}
+	if balances := v.agentAPIBalances(); balances != "" {
+		parts = append(parts, "api_credit_balances="+balances)
+	}
 	return strings.Join(parts, "; ") + "."
 }
 
@@ -969,8 +1048,8 @@ func forecastFor(acct *view.Account) *JSONForecast {
 }
 
 // Status fetches and displays usage status for all configured providers.
-func Status(jsonMode, plainMode, showAll bool) int {
-	output, cacheEntry, code := loadStatusOutput(showAll)
+func Status(jsonMode, plainMode, showAll bool, noHistory ...bool) int {
+	output, cacheEntry, code := loadStatusOutput(showAll, noHistory...)
 	if code != 0 {
 		return code
 	}
@@ -989,8 +1068,8 @@ func StatusLine(showAll bool) int {
 }
 
 // StatusAgent prints one precise, token-efficient line for AI agents.
-func StatusAgent(showAll bool) int {
-	output, _, code := loadStatusOutput(showAll)
+func StatusAgent(showAll bool, noHistory ...bool) int {
+	output, _, code := loadStatusOutput(showAll, noHistory...)
 	if code != 0 {
 		return code
 	}
@@ -998,7 +1077,7 @@ func StatusAgent(showAll bool) int {
 	return 0
 }
 
-func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
+func loadStatusOutput(showAll bool, noHistory ...bool) (*MultiProviderOutput, *cache.Entry, int) {
 	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1049,6 +1128,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 			}
 		}
 
+		recordUsageHistory(result.Results, cfg, noHistory...)
 		_ = cache.Write(result)
 		done <- struct{}{}
 	}()
@@ -1197,7 +1277,7 @@ func staleSummary(data *provider.UsageData) string {
 }
 
 // Check fetches usage and returns an exit code: 0=healthy, 1=warning, 2=critical/expired/error.
-func Check() int {
+func Check(noHistory ...bool) int {
 	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1231,6 +1311,7 @@ func Check() int {
 				}
 			}
 		}
+		recordUsageHistory(result.Results, cfg, noHistory...)
 		_ = cache.Write(result)
 		output = buildOutputFromResult(registry, cfg, result, nil)
 	}
@@ -1520,6 +1601,9 @@ type summaryState struct {
 // summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
 func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	u := summaryState{tier: 4}
+	if pf.Data != nil && (len(pf.Data.LocalModels) > 0 || len(pf.Data.CreditBenefits) > 0) && len(acct.Windows) == 0 {
+		return summaryState{tier: 5}
+	}
 	switch {
 	case pf.Data == nil:
 		u.tier = 5
@@ -1731,7 +1815,7 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 	return SingleProviderStatusSource(providerName, "", jsonMode, plainMode)
 }
 
-func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMode bool) int {
+func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMode bool, noHistory ...bool) int {
 	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1802,6 +1886,7 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 	result := provider.FetchProvidersParallel(ctx, fetchSet)
 	cacheEntry, _ := cache.Read()
 	hadFetchError := applySourceFallbacks(providers, result, cacheEntry)
+	recordUsageHistory(result.Results, cfg, noHistory...)
 	result.Results = provider.PresentResetCreditSources(result.Results)
 	var ps *status.ProviderStatus
 	done := make(chan struct{}, 1)
@@ -1890,4 +1975,47 @@ func expiredMessage(providerErr string) string {
 		return msg
 	}
 	return "expired — " + msg
+}
+
+func (v outputView) agentAPIBalances() string {
+	balances := map[string][]view.APIBalance{}
+	for _, acct := range v.snap.Accounts {
+		if len(acct.APICreditBalances) > 0 {
+			balances[acct.Key] = acct.APICreditBalances
+		}
+	}
+	if len(balances) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(balances)
+	return string(b)
+}
+
+func (v outputView) agentLocalModels() string {
+	models := map[string][]provider.LocalModelUsage{}
+	for _, acct := range v.snap.Accounts {
+		if len(acct.LocalModels) > 0 {
+			models[acct.Key] = acct.LocalModels
+		}
+	}
+	if len(models) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(models)
+	return string(b)
+}
+
+// agentCreditBenefits retains typed actionability separately from spendable credit.
+func (v outputView) agentCreditBenefits() string {
+	benefits := map[string][]view.CreditBenefit{}
+	for _, acct := range v.snap.Accounts {
+		if len(acct.CreditBenefits) > 0 {
+			benefits[acct.Key] = acct.CreditBenefits
+		}
+	}
+	if len(benefits) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(benefits)
+	return string(b)
 }

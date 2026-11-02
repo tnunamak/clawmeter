@@ -30,6 +30,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/claudeweb"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/format"
+	localhistory "github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
 	claudewebprovider "github.com/tnunamak/clawmeter/internal/provider/claudeweb"
@@ -522,7 +523,9 @@ func onReadyWithConfig(loaded *config.Config) {
 				return
 			}
 			publishAPICredits()
-		}, browserext.Token)
+		}, browserext.Token, func() {
+			publishLocalResetSource(&refresher.mu, registry, "openai_api", providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+		})
 		if err != nil {
 			log.Printf("claude extension listener: %v", err)
 		}
@@ -845,6 +848,10 @@ type providerMenuItems struct {
 	// moreItem says how many windows the rows above leave out.
 	moreItem          *systray.MenuItem
 	balanceItems      []*systray.MenuItem
+	localModelsItem   *systray.MenuItem
+	localModelItems   []*systray.MenuItem
+	localModelStates  []menuItemState
+	localModelsState  menuItemState
 	separator         *systray.MenuItem
 	order             int // position in the menu, top first
 	opensDashboard    bool
@@ -900,6 +907,21 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(header, icons.MenuMark(p.Name(), resolveTrayPalette()))
 	if !opensDashboard && !connectable {
 		header.Disable()
+	}
+	var localModelsItem *systray.MenuItem
+	var localModelItems []*systray.MenuItem
+	var localModelStates []menuItemState
+	if p.Name() == "opencode_free" {
+		localModelsItem = systray.AddMenuItem("Free models · local observations", "Local activity observations; these do not indicate quota or request availability")
+		// Plasma treats children-display as immutable when importing a row.
+		// Establish the submenu before the first export, not after polling.
+		placeholder := localModelsItem.AddSubMenuItem("", "")
+		placeholder.Disable()
+		placeholder.Hide()
+		localModelItems = []*systray.MenuItem{placeholder}
+		localModelStates = []menuItemState{{visible: false, enabled: false, initialized: true}}
+		localModelsItem.Disable()
+		localModelsItem.Hide()
 	}
 
 	// Status item (shows loading/error)
@@ -969,6 +991,9 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		moreItem:          moreItem,
 		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
 		balanceItems:      balanceItems,
+		localModelsItem:   localModelsItem,
+		localModelItems:   localModelItems,
+		localModelStates:  localModelStates,
 		separator:         separator,
 		opensDashboard:    opensDashboard,
 		explicitlyEnabled: explicitlyEnabled,
@@ -1052,6 +1077,8 @@ func openBalanceRowWithSetup(menu *providerMenuItems, row int, open func(string)
 	if visible && sourceStillCurrent(menu, revision) && action != "" {
 		if action == setupExtensionAction {
 			setup()
+		} else if action == provider.OpenAIAPIBillingURL {
+			open(provider.OpenAIAPIBillingURL)
 		} else {
 			open(claudeweb.ConsoleURL)
 		}
@@ -1094,6 +1121,14 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
 	if acct != nil {
+		for _, balance := range acct.APICreditBalances {
+			show(balance.Text, balance.ActionURL)
+		}
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				show(benefit.Text, benefit.ActionURL)
+			}
+		}
 		for _, grant := range acct.CreditGrants {
 			show(grant.Summary(), "")
 		}
@@ -1111,13 +1146,84 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 			}
 			show(title, action)
 		}
+		showLocalModelRows(menu, acct.LocalModels)
+	} else {
+		hideLocalModelRows(menu)
 	}
 	for i := rows; i < len(menu.balanceItems); i++ {
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 		setMenuItemEnabled(menu.balanceItems[i], &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
 	}
+	if acct != nil && menu.localModelsItem != nil && len(acct.LocalModels) > 0 {
+		return rows + len(acct.LocalModels)
+	}
 	return rows
+}
+
+func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsage) {
+	if menu.localModelsItem == nil {
+		return
+	}
+	if len(models) == 0 {
+		hideLocalModelRows(menu)
+		return
+	}
+	// A catalog entry with no observations says nothing about available quota.
+	// Keep the complete catalog in the detailed CLI/JSON; the tray earns its
+	// space by showing activity and dated limit events only.
+	observed := make([]provider.LocalModelUsage, 0, len(models))
+	unknown := false
+	for _, model := range models {
+		unknown = unknown || model.AssistantMessages == nil
+		used := !model.LimitHitAt.IsZero()
+		for _, count := range []*int64{model.AssistantMessages, model.InputTokens, model.OutputTokens, model.ReasoningTokens, model.CacheReadTokens, model.CacheWriteTokens} {
+			used = used || (count != nil && *count > 0)
+		}
+		if used {
+			observed = append(observed, model)
+		}
+	}
+	models = observed
+	title := fmt.Sprintf("Local activity (%d models)", len(models))
+	if len(models) == 1 {
+		title = "Local activity (1 model)"
+	}
+	if len(models) == 0 {
+		title = "No local activity · quota unknown"
+		if unknown {
+			title = "Local activity unavailable · quota unknown"
+		}
+	}
+	setMenuItemTitle(menu.localModelsItem, &menu.localModelsState, title)
+	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, len(models) > 0)
+	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, true)
+	for len(menu.localModelItems) < len(models) {
+		item := menu.localModelsItem.AddSubMenuItem("", "")
+		item.Disable()
+		item.Hide()
+		menu.localModelItems = append(menu.localModelItems, item)
+		menu.localModelStates = append(menu.localModelStates, menuItemState{visible: false, enabled: false, initialized: true})
+	}
+	for i, item := range menu.localModelItems {
+		if i < len(models) {
+			setMenuItemTitle(item, &menu.localModelStates[i], models[i].Summary())
+			setMenuItemEnabled(item, &menu.localModelStates[i], false)
+			setMenuItemVisible(item, &menu.localModelStates[i], true)
+		} else {
+			setMenuItemVisible(item, &menu.localModelStates[i], false)
+		}
+	}
+}
+
+func hideLocalModelRows(menu *providerMenuItems) {
+	if menu.localModelsItem == nil {
+		return
+	}
+	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, false)
+	for i, item := range menu.localModelItems {
+		setMenuItemVisible(item, &menu.localModelStates[i], false)
+	}
 }
 
 func hideProviderWindows(menu *providerMenuItems) {
@@ -1131,6 +1237,7 @@ func hideProviderWindows(menu *providerMenuItems) {
 		setMenuItemEnabled(b, &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
 	}
+	hideLocalModelRows(menu)
 }
 
 func showProviderHeader(menu *providerMenuItems) {
@@ -1432,6 +1539,9 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 
 		showProviderHeader(menu)
 		var statusParts []string
+		if len(data.LocalModels) > 0 && len(data.Windows) == 0 {
+			statusParts = append(statusParts, "Remaining quota not reported · reset unknown")
+		}
 		if providerStatus := statuses[provider.FamilyName(menu.provider)]; providerStatus != nil && providerStatus.Indicator.HasIssue() {
 			statusParts = append(statusParts, providerStatus.Indicator.Label())
 		}
@@ -1690,6 +1800,13 @@ func (r *usageRefresher) run(force bool) {
 	defer cancel()
 
 	result := provider.FetchProvidersParallel(ctx, toFetch)
+	if cfg != nil && cfg.Settings.ShouldRecordUsageHistory() {
+		if dir, err := cache.Path("history"); err == nil {
+			if err := localhistory.Append(dir, result.Results, time.Now()); err != nil {
+				log.Printf("usage history write failed: %v", err)
+			}
+		}
+	}
 
 	// Merge in cached data for backed-off providers
 	for name, cached := range skipped {
@@ -2487,6 +2604,26 @@ func nextAPICreditDeadline(results map[string]*provider.UsageData, now time.Time
 				earliest = grant.ExpiresAt
 			}
 		}
+		for _, benefit := range data.CreditBenefits {
+			for _, deadline := range []time.Time{benefit.ObservedAt.Add(5 * time.Minute), benefit.LinkObservedAt.Add(5 * time.Minute), benefit.ExpiresAt} {
+				if deadline.After(now) && (earliest.IsZero() || deadline.Before(earliest)) {
+					earliest = deadline
+				}
+			}
+		}
+		for _, balance := range data.APICreditBalances {
+			deadlines := []time.Time{balance.ObservedAt.Add(5 * time.Minute)}
+			for _, grant := range balance.Grants {
+				if grant.Remaining > 0 {
+					deadlines = append(deadlines, grant.ExpiresAt)
+				}
+			}
+			for _, deadline := range deadlines {
+				if deadline.After(now) && (earliest.IsZero() || deadline.Before(earliest)) {
+					earliest = deadline
+				}
+			}
+		}
 		for _, pool := range data.CreditPools {
 			if pool.ObservationSource != "extension" || !pool.IsLive(now) {
 				continue
@@ -2525,7 +2662,7 @@ func scheduleAPICreditRows(results map[string]*provider.UsageData, menus map[str
 		snap := view.Build(trayViewInputs(shown, menus, now, contact, currentIconPin()), now)
 		for name, menu := range menus {
 			data := results[name]
-			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0) {
+			if !menu.headerState.visible || data == nil || (len(data.CreditPools) == 0 && len(data.CreditGrants) == 0 && len(data.CreditBenefits) == 0 && len(data.APICreditBalances) == 0) {
 				continue
 			}
 			balances := data.Balances

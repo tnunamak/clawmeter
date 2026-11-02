@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/autostart"
+	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/cli"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/diagnose"
+	localhistory "github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/alibabatoken"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
@@ -181,6 +183,8 @@ func run() int {
 		return trayCmd(os.Args[2:])
 	case "hub":
 		return hubCmd(os.Args[2:])
+	case "history":
+		return historyCmd(os.Args[2:])
 	case "config":
 		return configCmd(os.Args[2:])
 	case "providers":
@@ -213,7 +217,8 @@ func isStatusShortcutFlag(arg string) bool {
 		"--check", "-check",
 		"--all", "-all",
 		"--provider", "-provider",
-		"--source", "-source":
+		"--source", "-source",
+		"--no-history", "-no-history":
 		return true
 	default:
 		return false
@@ -236,18 +241,79 @@ func statusCmd(args []string) int {
 	providerFlag := fs.String("provider", "", "show only specific provider")
 	sourceFlag := fs.String("source", "", "show only the source id")
 	showAll := fs.Bool("all", false, "show all providers including unavailable ones")
+	noHistory := fs.Bool("no-history", false, "do not record this refresh in local history")
 	fs.Parse(args)
 
 	if *checkMode {
-		return cli.Check()
+		return cli.Check(*noHistory)
 	}
 	if *agentMode {
-		return cli.StatusAgent(*showAll)
+		return cli.StatusAgent(*showAll, *noHistory)
 	}
 	if *providerFlag != "" {
-		return cli.SingleProviderStatusSource(*providerFlag, *sourceFlag, *jsonMode, *plainMode)
+		return cli.SingleProviderStatusSource(*providerFlag, *sourceFlag, *jsonMode, *plainMode, *noHistory)
 	}
-	return cli.Status(*jsonMode, *plainMode, *showAll)
+	return cli.Status(*jsonMode, *plainMode, *showAll, *noHistory)
+}
+
+func historyCmd(args []string) int {
+	fs := flag.NewFlagSet("history", flag.ExitOnError)
+	jsonMode := fs.Bool("json", false, "output JSON Lines")
+	sinceFlag := fs.String("since", "", "include readings within a duration such as 168h or 7d")
+	providerFlag := fs.String("provider", "", "include only one provider")
+	fs.Parse(args)
+	if fs.NArg() != 0 || !*jsonMode {
+		fmt.Fprintln(os.Stderr, "Usage: clawmeter history --json [--since DURATION] [--provider NAME]")
+		return 1
+	}
+	var since time.Time
+	if *sinceFlag != "" {
+		duration, err := parseHistoryDuration(*sinceFlag)
+		if err != nil || duration <= 0 {
+			fmt.Fprintf(os.Stderr, "clawmeter: invalid --since duration %q\n", *sinceFlag)
+			return 1
+		}
+		since = time.Now().Add(-duration)
+	}
+	providerName := ""
+	if *providerFlag != "" {
+		var ok bool
+		providerName, ok = all.CanonicalName(*providerFlag)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "clawmeter: unknown provider %q\n", *providerFlag)
+			return 1
+		}
+	}
+	dir, err := cache.Path("history")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 1
+	}
+	readings, err := localhistory.Read(dir, since, providerName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: read history: %v\n", err)
+		return 1
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	for _, reading := range readings {
+		if err := encoder.Encode(reading); err != nil {
+			fmt.Fprintf(os.Stderr, "clawmeter: write history: %v\n", err)
+			return 1
+		}
+	}
+	return 0
+}
+
+func parseHistoryDuration(value string) (time.Duration, error) {
+	if strings.HasSuffix(value, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		if err != nil || days <= 0 || days > 36500 {
+			return 0, fmt.Errorf("invalid day duration")
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(value)
 }
 
 func statuslineCmd(args []string) int {
@@ -262,9 +328,10 @@ func providerCmd(providerName string, args []string) int {
 	jsonMode := fs.Bool("json", false, "output JSON")
 	plainMode := fs.Bool("plain", false, "plain text (no color)")
 	sourceFlag := fs.String("source", "", "show only the source id")
+	noHistory := fs.Bool("no-history", false, "do not record this refresh in local history")
 	fs.Parse(args)
 
-	return cli.SingleProviderStatusSource(providerName, *sourceFlag, *jsonMode, *plainMode)
+	return cli.SingleProviderStatusSource(providerName, *sourceFlag, *jsonMode, *plainMode, *noHistory)
 }
 
 func trayCmd(args []string) int {
@@ -445,6 +512,7 @@ func configShowCmd(args []string) int {
 	fmt.Printf("  Check for updates: %t\n", cfg.ShouldCheckForUpdates())
 	fmt.Printf("  Codex reset announcements: %t\n", cfg.Settings.CodexResetAnnouncements)
 	fmt.Printf("  Notify when quota is available again: %t\n", cfg.Settings.NotifyQuotaAvailable)
+	fmt.Printf("  Usage history: %t\n", cfg.Settings.ShouldRecordUsageHistory())
 	fmt.Printf("  Warning threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Warning)
 	fmt.Printf("  Critical threshold: %.0f%%\n", cfg.Settings.NotificationThresholds.Critical)
 
@@ -460,6 +528,7 @@ func configSetCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "  check_for_updates <true|false>")
 		fmt.Fprintln(os.Stderr, "  codex_reset_announcements <true|false>")
 		fmt.Fprintln(os.Stderr, "  notify_quota_available <true|false>")
+		fmt.Fprintln(os.Stderr, "  usage_history <true|false>")
 		return 1
 	}
 
@@ -517,6 +586,12 @@ func configSetCmd(args []string) int {
 				return fmt.Errorf("invalid value %q", value)
 			}
 			cfg.Settings.NotifyQuotaAvailable = enabled
+		case "usage_history":
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("invalid value %q", value)
+			}
+			cfg.Settings.UsageHistory = &enabled
 		default:
 			return fmt.Errorf("unknown config key %q", key)
 		}
@@ -1239,6 +1314,7 @@ Commands:
   doctor                    Check provider and integration readiness
   tray                      Run as system tray icon
   hub                       Serve cached Claude and Codex quotas to T3 Code
+  history                   Read local quota history as JSON Lines
   config                    Manage configuration
   update                    Self-update to the latest release
   version                   Show version
@@ -1252,6 +1328,7 @@ Status flags:
   --provider <name>         Show only specific provider
   --source <id>             With --provider, show only one enrolled source
   --all                     Include unavailable providers
+  --no-history              Do not record this refresh locally
 
 Config commands:
   config show               Show current configuration
@@ -1300,6 +1377,7 @@ Settable keys:
   notify_quota_available <bool>
                             Notify when an account the tray saw run out has
                             quota again (default: false)
+  usage_history <bool>      Record quota readings locally (default: true)
 
 Examples:
   clawmeter config show
