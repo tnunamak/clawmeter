@@ -826,12 +826,16 @@ func applyProviderEnablement(menus map[string]*providerMenuItems, cfg *config.Co
 
 // providerMenuItems holds menu items for a single provider.
 type providerMenuItems struct {
-	provider     provider.Provider
-	displayName  string
-	headerItem   *systray.MenuItem
-	statusItem   *systray.MenuItem
-	resetItem    *systray.MenuItem
-	announceItem *systray.MenuItem
+	provider            provider.Provider
+	displayName         string
+	headerItem          *systray.MenuItem
+	statusItem          *systray.MenuItem
+	resetItem           *systray.MenuItem
+	resetScheduleItem   *systray.MenuItem
+	resetScheduleItems  []*systray.MenuItem
+	resetScheduleState  menuItemState
+	resetScheduleStates []menuItemState
+	announceItem        *systray.MenuItem
 	// hideItem turns the provider off in config. It is shown only while the
 	// block reports a problem and no healthy account shares the family.
 	hideItem       *systray.MenuItem
@@ -973,6 +977,13 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	setMenuItemIcon(resetItem, icons.MenuBlank())
 	resetItem.Hide()
 	resetState := menuItemState{visible: false, enabled: false, initialized: true}
+	// Plasma imports submenu capability only on the first export.
+	resetScheduleItem := systray.AddMenuItem("Expiry schedule", "Exact banked reset expiration dates and times")
+	resetPlaceholder := resetScheduleItem.AddSubMenuItem("", "")
+	resetPlaceholder.Disable()
+	resetPlaceholder.Hide()
+	resetScheduleItem.Hide()
+	setMenuItemIcon(resetScheduleItem, icons.MenuBlank())
 
 	// An announced Codex reset sits after the reset-credit row and opens its
 	// source post when clicked.
@@ -987,38 +998,42 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 	hideItem.Hide()
 
 	menu := &providerMenuItems{
-		provider:          p,
-		displayName:       displayName,
-		headerItem:        header,
-		statusItem:        statusItem,
-		resetItem:         resetItem,
-		announceItem:      announceItem,
-		hideItem:          hideItem,
-		connectable:       connectable,
-		windowItems:       windowItems,
-		moreItem:          moreItem,
-		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
-		balanceItems:      balanceItems,
-		balanceMoreItem:   balanceMoreItem,
-		balanceMoreState:  menuItemState{visible: false, enabled: false, initialized: true},
-		localModelsItem:   localModelsItem,
-		localModelItems:   localModelItems,
-		localModelStates:  localModelStates,
-		separator:         separator,
-		opensDashboard:    opensDashboard,
-		explicitlyEnabled: explicitlyEnabled,
-		headerState:       menuItemState{title: displayName, visible: true, enabled: opensDashboard || connectable, initialized: true},
-		statusState:       menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
-		resetState:        resetState,
-		announceState:     menuItemState{visible: false, enabled: true, initialized: true},
-		hideState:         menuItemState{title: "Hide " + p.DisplayName(), visible: false, enabled: true, initialized: true},
-		windowStates:      windowStates,
-		windowAtRisk:      make([]bool, len(windowItems)),
-		windowIcons:       make([]string, len(windowItems)),
-		windowTargets:     make([]iconTarget, len(windowItems)),
-		balanceStates:     balanceStates,
-		balanceActions:    make([]string, len(balanceItems)),
-		separatorState:    menuItemState{visible: true, initialized: true},
+		provider:            p,
+		displayName:         displayName,
+		headerItem:          header,
+		statusItem:          statusItem,
+		resetItem:           resetItem,
+		resetScheduleItem:   resetScheduleItem,
+		resetScheduleItems:  []*systray.MenuItem{resetPlaceholder},
+		resetScheduleStates: []menuItemState{{visible: false, enabled: false, initialized: true}},
+		resetScheduleState:  menuItemState{title: "Expiry schedule", visible: false, enabled: true, initialized: true},
+		announceItem:        announceItem,
+		hideItem:            hideItem,
+		connectable:         connectable,
+		windowItems:         windowItems,
+		moreItem:            moreItem,
+		moreState:           menuItemState{visible: false, enabled: false, initialized: true},
+		balanceItems:        balanceItems,
+		balanceMoreItem:     balanceMoreItem,
+		balanceMoreState:    menuItemState{visible: false, enabled: false, initialized: true},
+		localModelsItem:     localModelsItem,
+		localModelItems:     localModelItems,
+		localModelStates:    localModelStates,
+		separator:           separator,
+		opensDashboard:      opensDashboard,
+		explicitlyEnabled:   explicitlyEnabled,
+		headerState:         menuItemState{title: displayName, visible: true, enabled: opensDashboard || connectable, initialized: true},
+		statusState:         menuItemState{title: "Loading...", visible: true, enabled: false, initialized: true},
+		resetState:          resetState,
+		announceState:       menuItemState{visible: false, enabled: true, initialized: true},
+		hideState:           menuItemState{title: "Hide " + p.DisplayName(), visible: false, enabled: true, initialized: true},
+		windowStates:        windowStates,
+		windowAtRisk:        make([]bool, len(windowItems)),
+		windowIcons:         make([]string, len(windowItems)),
+		windowTargets:       make([]iconTarget, len(windowItems)),
+		balanceStates:       balanceStates,
+		balanceActions:      make([]string, len(balanceItems)),
+		separatorState:      menuItemState{visible: true, initialized: true},
 	}
 	for row, item := range balanceItems {
 		go func() {
@@ -1106,6 +1121,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 	setMenuItemVisible(menu.headerItem, &menu.headerState, false)
 	setMenuItemVisible(menu.statusItem, &menu.statusState, false)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, false)
+	updateResetExpiryRows(menu, nil, time.Time{})
 	setMenuItemVisible(menu.announceItem, &menu.announceState, false)
 	setMenuItemVisible(menu.hideItem, &menu.hideState, false)
 	hideProviderWindows(menu)
@@ -1686,10 +1702,23 @@ func lockLatestTrayState(renderMu sync.Locker) (map[string]*provider.UsageData, 
 func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now time.Time) {
 	title := resetCreditTraySummary(data, now)
 	menu.resetURL = ""
-	if title != "" && provider.FamilyName(menu.provider) == "claude" && data.ResetCredits.Snapshot && !data.ResetCredits.FetchedAt.IsZero() && now.Sub(data.ResetCredits.FetchedAt) > 5*time.Minute {
+	if title != "" && provider.FamilyName(menu.provider) == "claude" {
 		menu.resetURL = claudeweb.UsageURL
 		title = strings.Replace(title, "open claude.ai signed in to this account", "Open Claude Usage…", 1)
+		if !strings.Contains(title, "Open Claude Usage…") {
+			title += " · Open Claude Usage…"
+		}
+	} else if title != "" && provider.FamilyName(menu.provider) == "openai" {
+		menu.resetURL = menu.provider.DashboardURL()
+		if menu.resetURL != "" {
+			title += " · Open Usage…"
+		}
 	}
+	var credits *provider.UsageResetCredits
+	if title != "" {
+		credits = data.ResetCredits
+	}
+	updateResetExpiryRows(menu, credits, now)
 	setMenuItemEnabled(menu.resetItem, &menu.resetState, menu.resetURL != "")
 	if title == "" {
 		setMenuItemVisible(menu.resetItem, &menu.resetState, false)
@@ -1697,6 +1726,39 @@ func updateResetCreditRow(menu *providerMenuItems, data *provider.UsageData, now
 	}
 	setMenuItemTitle(menu.resetItem, &menu.resetState, title)
 	setMenuItemVisible(menu.resetItem, &menu.resetState, true)
+}
+
+func updateResetExpiryRows(menu *providerMenuItems, credits *provider.UsageResetCredits, now time.Time) {
+	if menu.resetScheduleItem == nil {
+		return
+	}
+	var lines []string
+	if credits != nil && credits.DisplayCount(now) > 0 {
+		lines = append(lines, menu.displayName)
+		if !credits.FetchedAt.IsZero() {
+			lines = append(lines, "Observed "+credits.FetchedAt.Local().Format("Jan 2, 2006 15:04 MST (UTC-07:00)"))
+		} else {
+			lines = append(lines, "Observation time unknown")
+		}
+		if credits.Snapshot {
+			lines = append(lines, "Saved observation; resets may have been spent since")
+		}
+		lines = append(lines, credits.ExpirySchedule(now).Details(time.Local)...)
+	}
+	setMenuItemVisible(menu.resetScheduleItem, &menu.resetScheduleState, len(lines) > 0)
+	for len(menu.resetScheduleItems) < len(lines) {
+		item := menu.resetScheduleItem.AddSubMenuItem("", "")
+		item.Disable()
+		item.Hide()
+		menu.resetScheduleItems = append(menu.resetScheduleItems, item)
+		menu.resetScheduleStates = append(menu.resetScheduleStates, menuItemState{visible: false, enabled: false, initialized: true})
+	}
+	for i, item := range menu.resetScheduleItems {
+		if i < len(lines) {
+			setMenuItemTitle(item, &menu.resetScheduleStates[i], lines[i])
+		}
+		setMenuItemVisible(item, &menu.resetScheduleStates[i], i < len(lines))
+	}
 }
 
 // updateAnnouncementRow shows the announced Codex reset that bears on this

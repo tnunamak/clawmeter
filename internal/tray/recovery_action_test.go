@@ -42,8 +42,8 @@ func TestStaleResetSnapshotOffersUsageAction(t *testing.T) {
 	updateResetCreditRow(menu, data, now)
 	trayRenderMu.Unlock()
 	openResetRow(menu, func(url string) { opened = append(opened, url) })
-	if len(opened) != 1 || menu.resetState.enabled || menu.resetURL != "" {
-		t.Fatal("fresh snapshot retained the stale recovery action")
+	if len(opened) != 2 || !menu.resetState.enabled || menu.resetURL != claudeweb.UsageURL {
+		t.Fatal("fresh reset inventory lost the direct Usage action")
 	}
 }
 

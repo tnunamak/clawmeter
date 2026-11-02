@@ -271,6 +271,7 @@ type JSONViewTarget struct {
 // JSONAccountView is one source's snapshot. It appears on a provider object
 // and on each entry of its sources array.
 type JSONAccountView struct {
+	ResetCredits      *JSONResetCredits          `json:"reset_credits,omitempty"`
 	Reading           JSONViewReading            `json:"reading"`
 	Windows           []JSONViewWindow           `json:"windows"`
 	CreditGrants      []view.CreditGrant         `json:"credit_grants,omitempty"`
@@ -278,6 +279,14 @@ type JSONAccountView struct {
 	APICreditBalances []view.APIBalance          `json:"api_credit_balances,omitempty"`
 	LocalModels       []provider.LocalModelUsage `json:"local_models,omitempty"`
 	LocalModelStatus  *provider.LocalModelStatus `json:"local_model_status,omitempty"`
+}
+
+// JSONResetCredits is the evaluated inventory at the output's snapshot time.
+type JSONResetCredits struct {
+	Schedule   provider.ResetExpirySchedule `json:"schedule"`
+	ObservedAt string                       `json:"observed_at,omitempty"`
+	Snapshot   bool                         `json:"snapshot"`
+	Stale      bool                         `json:"stale"`
 }
 
 // JSONViewReading says how far the source's reading can be trusted.
@@ -355,6 +364,12 @@ func (v outputView) jsonAccount(key string) *JSONAccountView {
 		APICreditBalances: acct.APICreditBalances,
 		LocalModels:       acct.LocalModels,
 		LocalModelStatus:  acct.LocalModelStatus,
+	}
+	if credits := acct.ResetCredits; credits != nil {
+		out.ResetCredits = &JSONResetCredits{Schedule: credits.Schedule, Snapshot: credits.Snapshot, Stale: credits.Stale || (!credits.Snapshot && acct.Reading.State != view.ReadingFresh)}
+		if !credits.ObservedAt.IsZero() {
+			out.ResetCredits.ObservedAt = credits.ObservedAt.Format(time.RFC3339Nano)
+		}
 	}
 	if !acct.Reading.ObservedAt.IsZero() {
 		out.Reading.ObservedAt = acct.Reading.ObservedAt.Format(time.RFC3339)

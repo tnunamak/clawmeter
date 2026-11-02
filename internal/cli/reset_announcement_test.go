@@ -153,7 +153,7 @@ func TestAnnouncementNeverChangesQuotaOrExitCode(t *testing.T) {
 		t.Fatal("announcement changed the exit code")
 	}
 	summary := announced.Data.AnnouncedReset.Summary(time.Now())
-	if got, want := strings.Replace(announced.FormatPlain(), "  "+summary, "", 1), plain.FormatPlain(); got != want {
+	if got, want := strings.Replace(announced.FormatPlain(), "\n  "+summary, "", 1), plain.FormatPlain(); got != want {
 		t.Fatalf("announcement changed the plain quota line:\n got %q\nwant %q", got, want)
 	}
 	if got, want := strings.Replace(withOutput.AgentSummary(), ","+announced.Data.AnnouncedReset.AgentField(), "", 1), withoutOutput.AgentSummary(); got != want {

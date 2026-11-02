@@ -274,6 +274,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 		}
 		if summary := resetCreditSummary(pf.Data, now); summary != "" {
 			addSpan(summary)
+			for _, detail := range resetCreditDetails(pf.Data, now) {
+				addSpan("  " + detail)
+			}
 		}
 		if announced := announcementSummary(pf.Data, now); announced != "" {
 			addSpan(announced)
@@ -375,9 +378,6 @@ func (v outputView) plainLine(i int) string {
 	if resetSummary := resetCreditSummary(pf.Data, now); resetSummary != "" {
 		parts = append(parts, resetSummary)
 	}
-	if announced := announcementSummary(pf.Data, now); announced != "" {
-		parts = append(parts, announced)
-	}
 	for _, grant := range acct.CreditGrants {
 		parts = append(parts, grant.Summary())
 	}
@@ -408,7 +408,18 @@ func (v outputView) plainLine(i int) string {
 	if len(acct.LocalModels) > 0 {
 		return fmt.Sprintf("%s: %s%s\n  %s", display, prefix, suffix, strings.Join(parts, "\n  "))
 	}
-	return fmt.Sprintf("%s: %s%s%s", display, prefix, strings.Join(parts, "  "), suffix)
+	line := fmt.Sprintf("%s: %s%s%s", display, prefix, strings.Join(parts, "  "), suffix)
+	if details := resetCreditDetails(pf.Data, now); len(details) > 0 {
+		line += "\n  Expiry schedule:\n    " + strings.Join(details, "\n    ")
+	}
+	if announced := announcementSummary(pf.Data, now); announced != "" {
+		separator := "  "
+		if len(resetCreditDetails(pf.Data, now)) > 0 {
+			separator = "\n  "
+		}
+		line += separator + announced
+	}
+	return line
 }
 
 // plainWindow is one window of the plain line. Its states come from the
@@ -476,6 +487,13 @@ func resetCreditSummary(data *provider.UsageData, now time.Time) string {
 	return data.ResetCredits.Summary(now)
 }
 
+func resetCreditDetails(data *provider.UsageData, now time.Time) []string {
+	if resetCreditSummary(data, now) == "" {
+		return nil
+	}
+	return data.ResetCredits.ExpirySchedule(now).Details(time.Local)
+}
+
 // announcementSummary is the announced-reset line. Attachment has already
 // decided that it bears on this account; the empty string means it does not.
 func announcementSummary(data *provider.UsageData, now time.Time) string {
@@ -488,6 +506,9 @@ func announcementSummary(data *provider.UsageData, now time.Time) string {
 func appendSnapshotLines(lines []string, data *provider.UsageData, layout tableLayout, now time.Time) []string {
 	if summary := resetCreditSummary(data, now); summary != "" && data.ResetCredits.Snapshot {
 		lines = append(lines, layout.span("", summary))
+		for _, detail := range resetCreditDetails(data, now) {
+			lines = append(lines, layout.span("", "  "+detail))
+		}
 	}
 	for _, pool := range data.CreditPools {
 		lines = append(lines, layout.span("", pool.Name+": "+pool.Summary(now)))
@@ -498,6 +519,9 @@ func appendSnapshotLines(lines []string, data *provider.UsageData, layout tableL
 func appendSnapshotsPlain(line string, data *provider.UsageData, now time.Time) string {
 	if summary := resetCreditSummary(data, now); summary != "" && data.ResetCredits.Snapshot {
 		line += "  " + summary
+		for _, detail := range resetCreditDetails(data, now) {
+			line += "\n    " + detail
+		}
 	}
 	for _, pool := range data.CreditPools {
 		line += "  " + pool.Name + ": " + pool.Summary(now)
@@ -755,6 +779,10 @@ func (v outputView) agentResetCreditSummaries() []string {
 				field = "last_observed_at=" + pf.Data.ResetCredits.FetchedAt.Local().Format(time.RFC3339)
 			}
 			fields = append(fields, field)
+		}
+		if acct := v.account(e.key); acct != nil && acct.ResetCredits != nil {
+			schedule, _ := json.Marshal(acct.ResetCredits.Schedule)
+			fields = append(fields, "expiry_schedule="+string(schedule))
 		}
 		summaries = append(summaries, resetSummary{
 			text:      strings.Join(fields, " "),

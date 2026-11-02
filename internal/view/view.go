@@ -166,6 +166,8 @@ type Credits struct {
 	Count int
 	// NextExpiry is the earliest known expiry, or zero.
 	NextExpiry time.Time
+	// Schedule retains all observed deadlines, not just the first one.
+	Schedule provider.ResetExpirySchedule
 	// ObservedAt is when the inventory was fetched.
 	ObservedAt time.Time
 	// Snapshot is true for a manual browser snapshot.
@@ -307,6 +309,7 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 	if r := data.ResetCredits; r != nil {
 		credits := &Credits{
 			Count:      r.DisplayCount(at),
+			Schedule:   r.ExpirySchedule(at),
 			ObservedAt: r.FetchedAt,
 			Snapshot:   r.Snapshot,
 			Stale:      r.Snapshot && !r.FetchedAt.IsZero() && at.Sub(r.FetchedAt) > snapshotStale,

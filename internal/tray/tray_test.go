@@ -889,7 +889,7 @@ func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
 
 	got := Tooltip(viewNamed(results, map[string]string{"openai": "Codex"}, now), results)
 
-	if !strings.Contains(got, "\nResets: 2 · next expires ") {
+	if !strings.Contains(got, "\nResets: 2 · expire ") || !strings.Contains(got, "1 expiry unknown") {
 		t.Fatalf("Tooltip() = %q, want reset-credit expiry line", got)
 	}
 	if strings.Count(got, "\n") != 5 {
