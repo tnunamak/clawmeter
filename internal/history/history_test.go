@@ -169,6 +169,32 @@ func TestAppendInfersWindowMinutesFromName(t *testing.T) {
 	}
 }
 
+func TestTrimOldestLinesPreservesExactBoundary(t *testing.T) {
+	// Each record is six bytes, so limit 12 starts exactly at the second record.
+	for _, tc := range []struct {
+		name  string
+		limit int64
+		want  string
+	}{
+		{"exact record start", 12, "line2\nline3\n"},
+		{"inside a record", 11, "line3\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "usage-2026-10.jsonl")
+			if err := os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := trimOldestLines(path, tc.limit); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("trimmed to %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func dataAt(used float64, at time.Time) *provider.UsageData {
 	return &provider.UsageData{Provider: "claude", SourceID: "work", SourceLabel: "Work", FetchedAt: at,
 		Windows: []provider.UsageWindow{{Name: "7d Claude 4 Sonnet", Length: 7 * 24 * time.Hour, Utilization: used, ResetsAt: at.Add(24 * time.Hour)}}}

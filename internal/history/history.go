@@ -376,8 +376,10 @@ func trimOldestLines(path string, limit int64) error {
 		return nil
 	}
 	start := len(data) - int(limit)
-	if newline := bytes.IndexByte(data[start:], '\n'); newline >= 0 {
-		start += newline + 1
+	if start > 0 && data[start-1] != '\n' {
+		if newline := bytes.IndexByte(data[start:], '\n'); newline >= 0 {
+			start += newline + 1
+		}
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), compactTempPrefix+"*")
 	if err != nil {
