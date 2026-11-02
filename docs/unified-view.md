@@ -109,8 +109,12 @@ forecast, current use and display order, so ties always break the same way.
 
 - Tray menu and CLI plain/color: every account, window, credit, pool and
   announcement, with actions (clickable in the tray, text in the CLI).
-- Tooltip, icon and statusline: the Worst target only, with used percent,
-  forecast or its state, exhaustion and reset, and the reading's freshness.
+- Tooltip, icon and statusline: the Selected target (the pin when present,
+  otherwise Worst), with current usage and the reading's freshness. The tooltip
+  gives one run-out/lasting estimate and its average-since-reset basis, or the
+  unknown state, followed by the reset. The full projected percentage, blocked
+  interval and reset inventory remain in the clicked menu and CLI. Error
+  fallbacks can still include reset inventory when no quota can be shown.
 - `--json`: every existing v1 field keeps its type and meaning (including
   `projected_pct`, which stays numeric). Each provider object, and each entry
   of its `sources` array, adds an optional `view` object with the account's

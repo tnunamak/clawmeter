@@ -501,10 +501,10 @@ func TestTooltipShowsWhenAWindowRanOut(t *testing.T) {
 		return Tooltip(view.Build(in, time.Now()), results)
 	}
 
-	if got := tooltipWith(at); !strings.Contains(got, "Out since 09:40 (2h00m until reset)") {
+	if got := tooltipWith(at); !strings.Contains(got, "Out since 09:40\nResets in 2h00m") {
 		t.Fatalf("tooltip with a known time = %q", got)
 	}
-	if got := tooltipWith(time.Time{}); !strings.Contains(got, "Out now (2h00m until reset)") {
+	if got := tooltipWith(time.Time{}); !strings.Contains(got, "Out now\nResets in 2h00m") {
 		t.Fatalf("tooltip without a known time = %q", got)
 	}
 }

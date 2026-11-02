@@ -142,9 +142,8 @@ func TestTrayAnnouncementIsCleanOnStaleOrErroredReadings(t *testing.T) {
 	}
 }
 
-// Selecting the Codex icon target re-renders the tooltip from stored results.
-// The announcement is added at render time, so it must survive that path.
-func TestIconTargetSelectionKeepsTheAnnouncement(t *testing.T) {
+// Pinning changes the compact hover, while announcements remain in the menu.
+func TestIconTargetSelectionKeepsTheAnnouncementInTheMenu(t *testing.T) {
 	defer systray.ResetMenu()
 	now := time.Now()
 	stored := &provider.UsageData{
@@ -172,13 +171,22 @@ func TestIconTargetSelectionKeepsTheAnnouncement(t *testing.T) {
 	menus := map[string]*providerMenuItems{
 		"openai": createProviderMenuItems(sourceMenuTestProvider{name: "openai"}, false, nil, false),
 	}
+	trayRenderMu.Lock()
+	updateAnnouncementRow(menus["openai"], presentedResults(lastResults())["openai"], now)
+	trayRenderMu.Unlock()
 	picker := newIconPicker()
 	selectIconTarget(menus, picker, iconTarget{Provider: "openai", Window: "7d"})
 
 	s.mu.Lock()
 	tooltip := s.currentTooltip
 	s.mu.Unlock()
-	if !strings.Contains(tooltip, "\nReset announced for ~") {
-		t.Fatalf("selecting the Codex target dropped the announcement; tooltip = %q", tooltip)
+	if strings.Contains(tooltip, "Reset announced") || !strings.HasPrefix(tooltip, "Pinned · ") {
+		t.Fatalf("pinning should show a compact quota hover; tooltip = %q", tooltip)
+	}
+	trayRenderMu.Lock()
+	visible, title, target := menus["openai"].announceState.visible, menus["openai"].announceState.title, menus["openai"].announceURL
+	trayRenderMu.Unlock()
+	if !visible || !strings.Contains(title, "Reset announced for ~") || target != reading.Announcement.SourceURL {
+		t.Fatalf("pinning lost the announcement menu row: visible=%v title=%q target=%q", visible, title, target)
 	}
 }

@@ -127,7 +127,9 @@ func TestAuditN1PercentageMeaningAcrossSurfaces(t *testing.T) {
 		output := MultiProviderOutput{Providers: []ProviderFormatter{{Name: "claude", Family: "claude", Data: data}}}
 		v := output.buildView(now)
 		w := v.snap.Accounts[0].Windows[0]
-		texts := []string{v.plainLine(0), v.statusLine(), tray.Tooltip(v.snap, map[string]*provider.UsageData{"claude": data}), strings.Join(v.colorTable(), "\n"), strings.Join(tray.MenuRows(v.snap, 8)["claude"], "\n")}
+		// The compact hover carries a single ETA rather than a duplicate projection;
+		// deliberate inspection surfaces retain the numeric forecast.
+		texts := []string{v.plainLine(0), v.statusLine(), strings.Join(v.colorTable(), "\n"), strings.Join(tray.MenuRows(v.snap, 8)["claude"], "\n")}
 		for _, got := range texts {
 			if !strings.Contains(got, tc.pct) {
 				t.Errorf("projection want %s in %q", tc.pct, got)
@@ -155,7 +157,7 @@ func TestAuditN1PercentageMeaningAcrossSurfaces(t *testing.T) {
 			if got := v.plainLine(0); !strings.Contains(got, "5h: 99.6%") {
 				t.Errorf("current rounded to out: %s", got)
 			}
-			if got := tray.Tooltip(v.snap, map[string]*provider.UsageData{"claude": data}); !strings.Contains(got, "Current 99.6%") {
+			if got := tray.Tooltip(v.snap, map[string]*provider.UsageData{"claude": data}); !strings.Contains(got, "99.6% used") {
 				t.Errorf("current rounded to out: %s", got)
 			}
 		}

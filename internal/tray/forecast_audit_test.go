@@ -18,7 +18,7 @@ func TestAuditM4TooltipIdentifiesHistoricalAverage(t *testing.T) {
 		t.Fatalf("projection=%v want full-window average 84", w.Forecast.Pct)
 	}
 	got := Tooltip(snap, data)
-	if strings.Contains(got, "Won't run out") || !strings.Contains(got, "At average pace since reset: lasts to reset") {
+	if strings.Contains(got, "Won't run out") || !strings.Contains(got, "Est. lasts to reset") || !strings.Contains(got, "Average pace since reset") {
 		t.Fatalf("unqualified forecast: %s", got)
 	}
 }

@@ -149,18 +149,31 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 	}
 
 	lines := []string{iconTooltipTitle(acct.Label, w)}
+	if snap.Selected.Reason == "pinned" {
+		lines[0] = "Pinned · " + lines[0]
+	}
+	usage := format.Percent(w.Used) + " used"
 	if acct.Reading.State == view.ReadingStale {
 		lines = append(lines, staleLine(acct))
+		usage = "Last known " + usage
 	}
 	lines = append(lines,
-		"Current "+format.Percent(w.Used),
+		usage,
 		exhaustionLine(w, snap.At),
 		resetLine(w),
 	)
-	if line := forecastLine(w); line != "" {
-		lines = append(lines, line)
+	// The menu retains the full forecast percentage and blocked interval.
+	// Hover gives one estimate and its basis, without repeating the same risk.
+	if w.Exhaustion.State == view.ExhaustionRunsOut || w.Exhaustion.State == view.ExhaustionLasts {
+		lines = append(lines, "Average pace since reset")
+	} else if w.Forecast.State != view.ForecastKnown && acct.Reading.State != view.ReadingStale {
+		if words := w.ForecastWords(); words != "" {
+			lines = append(lines, words)
+		}
 	}
-	return appendResetCreditTooltip(strings.Join(lines, "\n"), raw, snap.At)
+	// Inventory, announcements and actions remain in the clicked menu. Error
+	// fallbacks above still expose the inventory when no quota can be shown.
+	return strings.Join(lines, "\n")
 }
 
 // AppendUpdateLine adds the pending-update line to a tooltip. An empty version
@@ -203,17 +216,12 @@ func staleLine(acct *view.Account) string {
 // exhaustionLine says when the window runs out, or that it cannot say.
 func exhaustionLine(w view.Window, at time.Time) string {
 	switch w.Exhaustion.State {
-	case view.ExhaustionOut, view.ExhaustionRunsOut:
-		note := w.ExhaustionWords()
-		if w.Exhaustion.State == view.ExhaustionOut {
-			note = ranOutNote(note, w.Exhaustion.OutSince, at)
-		}
-		if w.Exhaustion.State == view.ExhaustionRunsOut {
-			return "At average pace since reset: " + note
-		}
-		return upperFirst(note)
+	case view.ExhaustionOut:
+		return upperFirst(ranOutNote("out now", w.Exhaustion.OutSince, at))
+	case view.ExhaustionRunsOut:
+		return "Est. run-out in " + format.FormatDuration(w.Exhaustion.RunsOutIn)
 	case view.ExhaustionLasts:
-		return "At average pace since reset: lasts to reset"
+		return "Est. lasts to reset"
 	}
 	return "Run-out unknown"
 }
@@ -229,15 +237,6 @@ func resetLine(w view.Window) string {
 		return upperFirst(w.Reset.Policy)
 	}
 	return "Reset not reported"
-}
-
-// forecastLine is the forecast at reset, or why it is unavailable.
-func forecastLine(w view.Window) string {
-	words := w.ForecastWords()
-	if w.Forecast.State == view.ForecastKnown {
-		return upperFirst(words)
-	}
-	return words
 }
 
 func MenuRows(snap view.Snapshot, limit int) map[string][]string {
@@ -436,7 +435,7 @@ func iconTooltipTitle(display string, w view.Window) string {
 	if display == "" {
 		return windowLabel
 	}
-	return display + " " + windowLabel
+	return display + " · " + windowLabel
 }
 
 // humanWindowLabel is a provider window's label in the tooltip, such as "5-Hour".

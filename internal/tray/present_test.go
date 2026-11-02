@@ -10,6 +10,34 @@ import (
 	"github.com/tnunamak/clawmeter/internal/view"
 )
 
+func TestTooltipCompactSummary(t *testing.T) {
+	at := time.Date(2026, 11, 2, 11, 23, 0, 0, time.UTC)
+	w := view.Window{
+		Name: "7d", Label: "7d", Used: 92,
+		Forecast:   view.Forecast{State: view.ForecastKnown, Pct: 158},
+		Exhaustion: view.Exhaustion{State: view.ExhaustionRunsOut, RunsOutIn: 8*time.Hour + 27*time.Minute, BlockedFor: 2*24*time.Hour + 13*time.Hour},
+		Reset:      view.Reset{Known: true, In: 2*24*time.Hour + 22*time.Hour},
+	}
+	snap := view.Snapshot{At: at, Selected: &view.Target{AccountKey: "codex", Window: "7d"}, Accounts: []view.Account{{
+		Key: "codex", Label: "Codex", Provider: "openai",
+		Reading: view.Reading{State: view.ReadingFresh, ObservedAt: at}, Windows: []view.Window{w}, Shown: []string{"7d"},
+	}}}
+	want := "Codex · 7-Day\n92% used\nEst. run-out in 8h27m\nResets in 2d22h\nAverage pace since reset"
+	if got := Tooltip(snap, nil); got != want {
+		t.Fatalf("tooltip = %q; want %q", got, want)
+	}
+	// The compact hover omits the duplicate forecast percentage; the deliberate
+	// inspection surface retains it alongside the same usage and reset.
+	rows := strings.Join(MenuRows(snap, 8)["codex"], "\n")
+	if !strings.Contains(rows, "158%") || !strings.Contains(rows, "92%") || !strings.Contains(rows, "2d 22h") {
+		t.Fatalf("menu lost full quota facts: %q", rows)
+	}
+	snap.Selected.Reason = "pinned"
+	if got := Tooltip(snap, nil); !strings.HasPrefix(got, "Pinned · Codex · 7-Day\n92% used\n") {
+		t.Fatalf("pinned target not identified: %q", got)
+	}
+}
+
 // An expired credential with no quota windows is still the account the icon
 // shows: the warning meter, not an empty one. It is what the tray drew before
 // the snapshot, and an empty meter would hide the expiry.
