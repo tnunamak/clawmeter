@@ -33,4 +33,26 @@ func TestAuditM3QuotaFilePreservesObservationAge(t *testing.T) {
 	if !data.FetchedAt.Equal(observed) {
 		t.Fatalf("file observed at %v, got %v", observed, data.FetchedAt)
 	}
+	second, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.FetchedAt.Equal(data.FetchedAt) {
+		t.Fatalf("unchanged file acquired a new observation: first=%v second=%v", data.FetchedAt, second.FetchedAt)
+	}
+	writeQuotaFile(t, path, 100, 90)
+	updated := observed.Add(time.Hour)
+	if err := os.Chtimes(path, updated, updated); err != nil {
+		t.Fatal(err)
+	}
+	third, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !third.FetchedAt.Equal(updated) || !third.FetchedAt.After(second.FetchedAt) {
+		t.Fatalf("updated file observation=%v, want %v after %v", third.FetchedAt, updated, second.FetchedAt)
+	}
+	if len(third.Windows) == 0 || third.Windows[0].Utilization != 90 {
+		t.Fatalf("updated quota contents were not read: %+v", third.Windows)
+	}
 }

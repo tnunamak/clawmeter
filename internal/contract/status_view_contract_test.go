@@ -77,6 +77,18 @@ func TestEmittedStatusWithViewMatchesPublishedSchema(t *testing.T) {
 	if forecast.Basis != "average_since_reset" || forecast.Pct == nil {
 		t.Fatalf("known forecast omitted its model: %+v", forecast)
 	}
+	// Basis is optional even in a known, view-bearing v1 forecast.
+	doc := raw.(map[string]any)
+	providers := doc["providers"].(map[string]any)
+	account := providers["openai"].(map[string]any)["view"].(map[string]any)
+	known := account["windows"].([]any)[0].(map[string]any)["forecast"].(map[string]any)
+	if known["state"] != "known" || known["basis"] != "average_since_reset" || known["pct"] == nil {
+		t.Fatalf("expected emitted known forecast before deleting basis: %v", known)
+	}
+	delete(known, "basis")
+	if err := compileSchema(t, "status-v1.schema.json").Validate(doc); err != nil {
+		t.Fatalf("known v1 forecast without optional basis rejected: %v", err)
+	}
 }
 
 func TestStatusSchemaKeepsViewValuesKnownAndOptionalWithoutVersionBump(t *testing.T) {

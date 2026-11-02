@@ -55,3 +55,27 @@ func TestAuditM2UnexpectedCopilotBoundaryWithholdsForecast(t *testing.T) {
 		t.Fatalf("invented billing start: %+v", w)
 	}
 }
+
+func TestCopilotUTCEquivalentResetBoundaries(t *testing.T) {
+	now := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	for _, reset := range []string{"2026-03-01T00:00:00Z", "2026-02-28T19:00:00-05:00", "2026-03-01T01:00:00Z"} {
+		t.Run(reset, func(t *testing.T) {
+			remaining := 91.0
+			data := (&Provider{}).transformUsage(&userResponse{QuotaResetDate: reset, QuotaSnapshots: map[string]quotaSnapshot{"premium_interactions": {PercentRemaining: &remaining}}})
+			data.FetchedAt = now
+			w := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"copilot": data}, MaxReadingAge: time.Minute}, now).Accounts[0].Windows[0]
+			if reset == "2026-03-01T01:00:00Z" {
+				if data.Windows[0].Length != 0 || !data.Windows[0].LengthUnknown || w.Forecast.State != view.ForecastNone || w.Exhaustion.State != view.ExhaustionUnknown {
+					t.Fatalf("non-midnight boundary invented a period: data=%+v view=%+v", data.Windows[0], w)
+				}
+				return
+			}
+			if data.Windows[0].Length != 28*24*time.Hour || w.Forecast.State != view.ForecastKnown || math.Abs(w.Forecast.Pct-252) > 1e-8 || w.Exhaustion.State != view.ExhaustionRunsOut {
+				t.Fatalf("UTC month-start projection: %+v", w)
+			}
+			if !w.Reset.At.Equal(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)) || w.Exhaustion.RunsOutIn != 10*24*time.Hour+2*time.Hour+40*time.Minute {
+				t.Fatalf("equivalent UTC month-start must have identical reset and run-out: %+v", w)
+			}
+		})
+	}
+}
