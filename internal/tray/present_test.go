@@ -4,11 +4,43 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/view"
 )
+
+func TestTooltipCompactSummary(t *testing.T) {
+	at := time.Date(2026, 11, 2, 11, 23, 0, 0, time.UTC)
+	w := view.Window{
+		Name: "7d", Label: "7d", Used: 92, Pace: 58, HasPace: true,
+		Forecast:   view.Forecast{State: view.ForecastKnown, Pct: 158},
+		Exhaustion: view.Exhaustion{State: view.ExhaustionRunsOut, RunsOutIn: 8*time.Hour + 27*time.Minute, BlockedFor: 2*24*time.Hour + 13*time.Hour},
+		Reset:      view.Reset{Known: true, In: 2*24*time.Hour + 22*time.Hour},
+	}
+	snap := view.Snapshot{At: at, Selected: &view.Target{AccountKey: "codex", Window: "7d"}, Accounts: []view.Account{{
+		Key: "codex", Label: "Codex", Provider: "openai",
+		Reading: view.Reading{State: view.ReadingFresh, ObservedAt: at}, Windows: []view.Window{w}, Shown: []string{"7d"},
+	}}}
+	want := "Codex · 7-Day\n92% used  ██████┃███▒\nEst. run-out in 8h27m\nResets in 2d22h\nEst. 158% at reset (avg. since reset)"
+	if got := Tooltip(snap, nil); got != want {
+		t.Fatalf("tooltip = %q; want %q", got, want)
+	}
+	// Hover and clicked inspection retain the same forecast, usage and reset;
+	// the full shared bar adds projected use and the even-pace marker.
+	rows := strings.Join(MenuRows(snap, 8)["codex"], "\n")
+	if !strings.Contains(rows, "158%") || !strings.Contains(rows, "92%") || !strings.Contains(rows, "2d 22h") {
+		t.Fatalf("menu lost full quota facts: %q", rows)
+	}
+	snap.Selected.Reason = "pinned"
+	if got := Tooltip(snap, nil); !strings.HasPrefix(got, "Pinned · Codex · 7-Day\n92% used  ██████┃███▒\n") {
+		t.Fatalf("pinned target not identified: %q", got)
+	}
+	if n := len(utf16.Encode([]rune(Tooltip(snap, nil)))); n > 127 {
+		t.Fatalf("ordinary pinned hover needs %d UTF-16 units; Windows allows 127", n)
+	}
+}
 
 // An expired credential with no quota windows is still the account the icon
 // shows: the warning meter, not an empty one. It is what the tray drew before

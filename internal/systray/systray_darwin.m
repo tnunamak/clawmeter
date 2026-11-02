@@ -2,6 +2,7 @@
 
 #import <Cocoa/Cocoa.h>
 #include "systray.h"
+#include <math.h>
 
 #if __MAC_OS_X_VERSION_MIN_REQUIRED < 101400
 
@@ -15,6 +16,43 @@
 
 #endif
 
+// Called on the AppKit main thread. Return nil for plain or invalid payloads.
+static NSAttributedString *styledMenuTitle(NSString *json, NSString *plainTitle) {
+  NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+  if (data == nil || data.length == 0) return nil;
+  id spans = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+  if (![spans isKindOfClass:[NSArray class]] || [spans count] == 0) return nil;
+
+  NSMutableAttributedString *result = [[NSMutableAttributedString alloc] initWithString:@""];
+  for (id span in spans) {
+    if (![span isKindOfClass:[NSDictionary class]]) return nil;
+    id text = span[@"text"];
+    id style = span[@"style"];
+    if (![text isKindOfClass:[NSString class]] ||
+        ![style isKindOfClass:[NSNumber class]] ||
+        CFGetTypeID((__bridge CFTypeRef)style) == CFBooleanGetTypeID()) return nil;
+    double value = [style doubleValue];
+    if (!isfinite(value) || value < 0 || value > 255 || floor(value) != value) return nil;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    switch ([style unsignedIntegerValue]) {
+      case 1: attributes[NSForegroundColorAttributeName] = [NSColor systemRedColor]; break;
+      case 2: attributes[NSForegroundColorAttributeName] = [NSColor systemGreenColor]; break;
+      case 3: attributes[NSForegroundColorAttributeName] = [NSColor secondaryLabelColor]; break;
+      case 4: {
+        NSFont *font = [[NSFontManager sharedFontManager]
+          convertFont:[NSFont menuFontOfSize:0] toHaveTrait:NSBoldFontMask];
+        if (font != nil) attributes[NSFontAttributeName] = font;
+        break;
+      }
+      default: break; // Normal and future styles retain native label attributes.
+    }
+    [result appendAttributedString:[[NSAttributedString alloc] initWithString:text attributes:attributes]];
+  }
+  if (![result.string isEqualToString:plainTitle]) return nil;
+  return [result copy];
+}
+
 @interface MenuItem : NSObject
 {
   @public
@@ -22,6 +60,8 @@
     NSNumber* parentMenuId;
     NSString* title;
     NSString* tooltip;
+    NSString* titleSpansJSON;
+    NSAttributedString* attributedTitle;
     short disabled;
     short checked;
 }
@@ -29,6 +69,7 @@
 withParentMenuId: (int)theParentMenuId
        withTitle: (const char*)theTitle
      withTooltip: (const char*)theTooltip
+   withTitleSpans: (const char*)theTitleSpans
     withDisabled: (short)theDisabled
      withChecked: (short)theChecked;
      @end
@@ -37,6 +78,7 @@ withParentMenuId: (int)theParentMenuId
      withParentMenuId: (int)theParentMenuId
             withTitle: (const char*)theTitle
           withTooltip: (const char*)theTooltip
+        withTitleSpans: (const char*)theTitleSpans
          withDisabled: (short)theDisabled
           withChecked: (short)theChecked
 {
@@ -46,6 +88,8 @@ withParentMenuId: (int)theParentMenuId
                                    encoding:NSUTF8StringEncoding];
   tooltip = [[NSString alloc] initWithCString:theTooltip
                                      encoding:NSUTF8StringEncoding];
+  titleSpansJSON = theTitleSpans == NULL ? nil :
+    [[NSString alloc] initWithCString:theTitleSpans encoding:NSUTF8StringEncoding];
   disabled = theDisabled;
   checked = theChecked;
   return self;
@@ -216,6 +260,10 @@ withParentMenuId: (int)theParentMenuId
     [menuItem setRepresentedObject:item->menuId];
   }
   [menuItem setTitle:item->title];
+  item->attributedTitle = styledMenuTitle(item->titleSpansJSON, item->title);
+  // Clear stale styling on plain/invalid updates and use native disabled rendering.
+  // Enabling reuses the Go model spans and restores their attributed title.
+  [menuItem setAttributedTitle:item->disabled == 1 ? nil : item->attributedTitle];
   [menuItem setTag:[item->menuId integerValue]];
   [menuItem setTarget:self];
   [menuItem setToolTip:item->tooltip];
@@ -428,10 +476,11 @@ void setRemovalAllowed(bool allowed) {
   }
 }
 
-void add_or_update_menu_item(int menuId, int parentMenuId, char* title, char* tooltip, short disabled, short checked, short isCheckable) {
-  MenuItem* item = [[MenuItem alloc] initWithId: menuId withParentMenuId: parentMenuId withTitle: title withTooltip: tooltip withDisabled: disabled withChecked: checked];
+void add_or_update_menu_item(int menuId, int parentMenuId, char* title, char* tooltip, char* titleSpans, short disabled, short checked, short isCheckable) {
+  MenuItem* item = [[MenuItem alloc] initWithId: menuId withParentMenuId: parentMenuId withTitle: title withTooltip: tooltip withTitleSpans: titleSpans withDisabled: disabled withChecked: checked];
   free(title);
   free(tooltip);
+  free(titleSpans);
   runInMainThread(@selector(add_or_update_menu_item:), (id)item);
 }
 

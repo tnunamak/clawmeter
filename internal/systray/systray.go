@@ -47,7 +47,8 @@ type MenuItem struct {
 	// id uniquely identify a menu item, not supposed to be modified
 	id uint32
 	// title is the text shown on menu item
-	title string
+	title      string
+	titleSpans []TextSpan
 	// tooltip is the text shown when pointing to menu item
 	tooltip string
 	// disabled menu item is grayed out and has no effect when clicked
@@ -230,6 +231,7 @@ func (item *MenuItem) AddSubMenuItemCheckbox(title string, tooltip string, check
 
 // SetTitle set the text to display on a menu item
 func (item *MenuItem) SetTitle(title string) {
+	item.titleSpans = nil
 	item.title = title
 	item.update()
 }

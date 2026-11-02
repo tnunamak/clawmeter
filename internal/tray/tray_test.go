@@ -296,7 +296,7 @@ func TestTrayTitleForPlatform(t *testing.T) {
 	}
 }
 
-func TestTooltipShowsBlockedGap(t *testing.T) {
+func TestTooltipShowsOneEstimateAndReset(t *testing.T) {
 	// 99% used three hours before a reset runs out an hour and a half in,
 	// well before the reset.
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 99, ResetsAt: time.Now().Add(3 * time.Hour)}
@@ -304,11 +304,9 @@ func TestTooltipShowsBlockedGap(t *testing.T) {
 	got := Tooltip(snap, nil)
 
 	for _, want := range []string{
-		"Codex 7-Day",
-		"Current 99%",
-		"At average pace since reset: runs out in ",
-		"(",
-		"before reset)",
+		"Codex · 7-Day",
+		"99% used",
+		"Est. run-out in ",
 		"Resets in",
 		"Est. ",
 	} {
@@ -321,7 +319,7 @@ func TestTooltipShowsBlockedGap(t *testing.T) {
 func TestTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(2 * time.Hour)}
 	snap := viewOf(map[string]*provider.UsageData{"codex": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}}, time.Now())
-	if got := Tooltip(snap, nil); !strings.Contains(got, "Out now (2h00m until reset)") {
+	if got := Tooltip(snap, nil); !strings.Contains(got, "Out now\nResets in 2h00m") {
 		t.Fatalf("Tooltip() = %q, want already-out wait", got)
 	}
 }
@@ -807,14 +805,14 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 	names := map[string]string{"claude": "Claude", "openai": "Codex"}
 	got := Tooltip(viewNamed(results, names, now), results)
 
-	// Changed on purpose: the used percentage is always stated, before the run-out.
-	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nCurrent 90%\nAt average pace since reset: runs out in ") {
+	// Current usage precedes the single run-out estimate.
+	if !strings.HasPrefix(got, "Claude · 7-Day Sonnet\n90% used  █┃████████▒\nEst. run-out in ") {
 		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out line", got)
 	}
 	if strings.Contains(got, "7S") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
 		t.Fatalf("Tooltip() = %q, want run-out, reset, and estimate", got)
 	}
-	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 4 {
+	if strings.Count(got, "\n") != 4 {
 		t.Fatalf("Tooltip() = %q, want five newline-separated lines", got)
 	}
 }
@@ -849,19 +847,19 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 	names := map[string]string{"claude": "Claude", "openai": "Codex"}
 	got := Tooltip(viewNamed(results, names, now), results)
 
-	// Changed on purpose: the used percentage is always stated, before the run-out.
-	if !strings.HasPrefix(got, "Codex 5-Hour\nCurrent 20%\nAt average pace since reset: lasts to reset") {
+	// Current usage precedes the single run-out estimate.
+	if !strings.HasPrefix(got, "Pinned · Codex · 5-Hour\n20% used  ██▒▒┃▒░░░░░\nEst. lasts to reset") {
 		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out state", got)
 	}
 	if strings.Contains(got, "5H") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
 		t.Fatalf("Tooltip() = %q, want run-out state, reset, and estimate", got)
 	}
-	if strings.Contains(got, " · ") || strings.Count(got, "\n") != 4 {
+	if strings.Count(got, "\n") != 4 {
 		t.Fatalf("Tooltip() = %q, want five newline-separated lines", got)
 	}
 }
 
-func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
+func TestTrayTooltipLeavesResetCreditsInTheMenu(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
@@ -889,11 +887,12 @@ func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
 
 	got := Tooltip(viewNamed(results, map[string]string{"openai": "Codex"}, now), results)
 
-	if !strings.Contains(got, "\nResets: 2 · expire ") || !strings.Contains(got, "1 expiry unknown") {
-		t.Fatalf("Tooltip() = %q, want reset-credit expiry line", got)
+	if strings.Contains(got, "Resets:") || strings.Count(got, "\n") != 4 {
+		t.Fatalf("Tooltip() = %q, want only the selected quota summary", got)
 	}
-	if strings.Count(got, "\n") != 5 {
-		t.Fatalf("Tooltip() = %q, want six newline-separated lines with reset credits", got)
+	menuSummary := resetCreditTraySummary(results["openai"], now)
+	if !strings.Contains(menuSummary, "Resets: 2 · expire ") || !strings.Contains(menuSummary, "1 expiry unknown") {
+		t.Fatalf("menu inventory = %q, want complete expiry summary", menuSummary)
 	}
 }
 
@@ -945,12 +944,12 @@ func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.
 
 	got := Tooltip(viewNamed(results, map[string]string{"claude": "Claude"}, now), results)
 
-	// Changed on purpose: the stale window is named, with its freshness on the
+	// The stale window is named, with its freshness on the
 	// line after its title. It is not forecast.
-	if !strings.HasPrefix(got, "Claude 5-Hour\nstale - showing last good data from ") {
+	if !strings.HasPrefix(got, "Claude · 5-Hour\nstale - showing last good data from ") {
 		t.Fatalf("Tooltip() = %q, want the window title then the stale line", got)
 	}
-	if !strings.Contains(got, "rate limited") || !strings.Contains(got, "Current 11%") {
+	if !strings.Contains(got, "rate limited") || !strings.Contains(got, "Last known 11% used") {
 		t.Fatalf("Tooltip() = %q, want the stale reason and the last used percentage", got)
 	}
 	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est.") || strings.Contains(got, "Runs out") {
@@ -1346,9 +1345,9 @@ func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
 		want []string
 		ban  []string
 	}{
-		{"unknown", &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Out now", "forecast soon"}, []string{"Won't run out", "Est. 0%"}},
-		{"stale", stale, []string{"Current 100%", "Run-out unknown", "stale"}, []string{"Won't run out", "Est.", "Out now"}},
-		{"missing observation", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Run-out unknown", "observation time unavailable"}, []string{"Est.", "Out now"}},
+		{"unknown", &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{warming}}, []string{"100% used", "Out now", "forecast soon"}, []string{"Won't run out", "Est. 0%"}},
+		{"stale", stale, []string{"Last known 100% used", "Run-out unknown", "stale"}, []string{"Won't run out", "Est.", "Out now"}},
+		{"missing observation", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Last known 100% used", "Run-out unknown", "observation time unavailable"}, []string{"Est.", "Out now"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Tooltip(viewNamed(map[string]*provider.UsageData{"t": tc.data}, map[string]string{"t": "Test"}, now), nil)
