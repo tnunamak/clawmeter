@@ -178,3 +178,119 @@ func TestAuditN2SubminuteAcrossSurfaces(t *testing.T) {
 		}
 	}
 }
+
+func TestForecastBasisOnlyEmittedWhenKnown(t *testing.T) {
+	now := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	for _, state := range []string{"known", "warming", "stale", "none"} {
+		t.Run(state, func(t *testing.T) {
+			data := &provider.UsageData{Provider: "claude", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 80, ResetsAt: now.Add(3 * time.Hour)}}}
+			switch state {
+			case "warming":
+				data.Windows[0].ResetsAt = now.Add(299 * time.Minute)
+			case "stale":
+				data.FetchedAt = now.Add(-11 * time.Minute)
+			case "none":
+				data.Windows[0].ResetsAt = time.Time{}
+			}
+			output := MultiProviderOutput{PollInterval: 300, Providers: []ProviderFormatter{{Name: "claude", Family: "claude", Data: data}}}
+			raw, err := output.JSON(nil, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			f := jpath(t, doc, "providers", "claude", "view", "windows", 0, "forecast").(map[string]any)
+			if f["state"] != state {
+				t.Fatalf("forecast=%v, want %s", f, state)
+			}
+			agent := output.buildView(now).agentLine()
+			if state == "known" {
+				if f["basis"] != "average_since_reset" || !hasKey(f, "pct") || !strings.Contains(agent, "forecast_basis=average_since_reset") {
+					t.Fatalf("known forecast lost basis or percentage: %v / %s", f, agent)
+				}
+			} else if hasKey(f, "basis") || hasKey(f, "pct") || strings.Contains(agent, "forecast_basis=") {
+				t.Fatalf("unknown forecast invented basis or percentage: %v / %s", f, agent)
+			}
+		})
+	}
+}
+
+func TestResetlessExhaustionAcrossSurfaces(t *testing.T) {
+	now := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	for _, aged := range []bool{false, true} {
+		name := "fresh"
+		if aged {
+			name = "aged"
+		}
+		t.Run(name, func(t *testing.T) {
+			healthy := &provider.UsageData{Provider: "claude", SourceID: "one", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 20, ResetsAt: now.Add(3 * time.Hour)}}}
+			exhausted := &provider.UsageData{Provider: "claude", SourceID: "two", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 100}}}
+			if aged {
+				exhausted.FetchedAt = now.Add(-10*time.Minute - time.Nanosecond)
+			}
+			output := MultiProviderOutput{PollInterval: 300, Providers: []ProviderFormatter{
+				{Name: "claude:one", DisplayName: "Claude", Family: "claude", SourceID: "one", SourceLabel: "One", SourceCount: 2, Data: healthy},
+				{Name: "claude:two", DisplayName: "Claude", Family: "claude", SourceID: "two", SourceLabel: "Two", SourceCount: 2, Data: exhausted},
+			}}
+			v := output.buildView(now)
+			wantKey, wantLabel, wantUsed := "claude:two", "Claude · Two", 100.0
+			if aged {
+				wantKey, wantLabel, wantUsed = "claude:one", "Claude · One", 20
+			}
+			if v.snap.Worst == nil || v.snap.Worst.AccountKey != wantKey || v.snap.Worst.Window != "5h" || v.snap.Selected == nil || *v.snap.Selected != *v.snap.Worst {
+				t.Fatalf("winner=%+v selected=%+v, want %s/5h", v.snap.Worst, v.snap.Selected, wantKey)
+			}
+			agent, line := v.agentLine(), v.statusLine()
+			if !strings.HasPrefix(agent, "Quota: worst="+wantLabel+" 5h;") || !strings.Contains(line, wantLabel+" 5h") {
+				t.Fatalf("surface winner differs: agent=%s statusline=%s", agent, line)
+			}
+			tooltip := tray.Tooltip(v.snap, map[string]*provider.UsageData{"claude:one": healthy, "claude:two": exhausted})
+			_, meter := tray.IconState(v.snap)
+			if meter.UsagePct != wantUsed || !strings.Contains(tooltip, wantLabel) {
+				t.Fatalf("tray winner differs: meter=%+v tooltip=%s", meter, tooltip)
+			}
+			if !aged {
+				if !strings.Contains(agent, "runs_out=now") || !strings.Contains(agent, "reset_in=unknown") || !strings.Contains(line, "out now") || !strings.Contains(tooltip, "Out now") {
+					t.Fatalf("observed exhaustion missing: %s / %s / %s", agent, line, tooltip)
+				}
+				if strings.Contains(line, " reset ") || strings.Contains(agent, "reset_in=0s") {
+					t.Fatalf("resetless winner invented reset: %s / %s", agent, line)
+				}
+			} else if strings.Contains(agent, "runs_out=now") || strings.Contains(line, "out now") || strings.Contains(tooltip, "Out now") {
+				t.Fatalf("aged exhaustion asserted current out: %s / %s / %s", agent, line, tooltip)
+			}
+			raw, err := output.JSON(nil, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc map[string]any
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if jpath(t, doc, "view", "worst", "account") != wantKey || jpath(t, doc, "view", "worst", "window") != "5h" {
+				t.Fatalf("JSON winner differs: %s", raw)
+			}
+			found := false
+			for _, src := range jpath(t, doc, "providers", "claude", "sources").([]any) {
+				if jpath(t, src, "source", "id") != "two" {
+					continue
+				}
+				found = true
+				w := jpath(t, src, "view", "windows", 0)
+				state, forecast := "out", "none"
+				if aged {
+					state, forecast = "unknown", "stale"
+				}
+				reset := jpath(t, w, "reset")
+				if jpath(t, w, "exhaustion", "state") != state || jpath(t, w, "forecast", "state") != forecast || hasKey(jpath(t, w, "forecast"), "pct") || hasKey(jpath(t, w, "exhaustion"), "runs_out_in_seconds") || jpath(t, reset, "known") != false || hasKey(reset, "at") || hasKey(reset, "in_seconds") {
+					t.Fatalf("resetless source invented forecast/reset/exhaustion: %v", w)
+				}
+			}
+			if !found {
+				t.Fatal("missing exhausted source two")
+			}
+		})
+	}
+}
