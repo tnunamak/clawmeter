@@ -14,7 +14,7 @@ import (
 func TestTooltipCompactSummary(t *testing.T) {
 	at := time.Date(2026, 11, 2, 11, 23, 0, 0, time.UTC)
 	w := view.Window{
-		Name: "7d", Label: "7d", Used: 92,
+		Name: "7d", Label: "7d", Used: 92, Pace: 58, HasPace: true,
 		Forecast:   view.Forecast{State: view.ForecastKnown, Pct: 158},
 		Exhaustion: view.Exhaustion{State: view.ExhaustionRunsOut, RunsOutIn: 8*time.Hour + 27*time.Minute, BlockedFor: 2*24*time.Hour + 13*time.Hour},
 		Reset:      view.Reset{Known: true, In: 2*24*time.Hour + 22*time.Hour},
@@ -23,18 +23,18 @@ func TestTooltipCompactSummary(t *testing.T) {
 		Key: "codex", Label: "Codex", Provider: "openai",
 		Reading: view.Reading{State: view.ReadingFresh, ObservedAt: at}, Windows: []view.Window{w}, Shown: []string{"7d"},
 	}}}
-	want := "Codex · 7-Day\n92% used  █████████░\nEst. run-out in 8h27m\nResets in 2d22h\nAverage pace since reset"
+	want := "Codex · 7-Day\n92% used  ██████┃███▒\nEst. run-out in 8h27m\nResets in 2d22h\nEst. 158% at reset (avg. since reset)"
 	if got := Tooltip(snap, nil); got != want {
 		t.Fatalf("tooltip = %q; want %q", got, want)
 	}
-	// The compact hover omits the duplicate forecast percentage; the deliberate
-	// inspection surface retains it alongside the same usage and reset.
+	// Hover and clicked inspection retain the same forecast, usage and reset;
+	// the full shared bar adds projected use and the even-pace marker.
 	rows := strings.Join(MenuRows(snap, 8)["codex"], "\n")
 	if !strings.Contains(rows, "158%") || !strings.Contains(rows, "92%") || !strings.Contains(rows, "2d 22h") {
 		t.Fatalf("menu lost full quota facts: %q", rows)
 	}
 	snap.Selected.Reason = "pinned"
-	if got := Tooltip(snap, nil); !strings.HasPrefix(got, "Pinned · Codex · 7-Day\n92% used  █████████░\n") {
+	if got := Tooltip(snap, nil); !strings.HasPrefix(got, "Pinned · Codex · 7-Day\n92% used  ██████┃███▒\n") {
 		t.Fatalf("pinned target not identified: %q", got)
 	}
 	if n := len(utf16.Encode([]rune(Tooltip(snap, nil)))); n > 127 {

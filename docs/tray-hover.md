@@ -6,31 +6,34 @@ numeric forecasts, exact reset expiry schedule and actions.
 
 Keep the existing native desktop appearance. The title identifies the account
 and window, including a pin when present. The body states usage beside a
-ten-cell meter, one estimate, the reset horizon and the estimate's average-since-reset basis. Last-known usage
-is labelled beside the value, after its freshness qualification. Missing or
-stale forecasts never become reassuring estimates.
+ten-cell meter, one run-out estimate, the reset horizon and the forecast amount
+with its average-since-reset basis. Last-known usage is labelled beside the
+value, after its freshness qualification. Missing or stale forecasts never
+become reassuring estimates.
 
 For example, a frozen quota snapshot renders:
 
 ```text
 Codex · 7-Day
-92% used  █████████░
+92% used  ██████┃███▒
 Est. run-out in 8h27m
 Resets in 2d22h
-Average pace since reset
+Est. 158% at reset (avg. since reset)
 ```
 
-The meter reuses the menu and CLI glyphs on their fixed 0–100% scale. It shows
-observed usage only; forecast shading and the pace marker stay in the clicked
-menu, where their numeric context is available. The exact percentage remains
-beside the rounded bar. A fresh zero reading draws an empty bar; missing or
-future observation times, unusable readings and a passed reset draw no bar.
-Stale bars remain explicitly last known.
+The meter is the same selected window row used by the menu and CLI: `█` is
+observed use, `▒` is additional use projected by reset, `░` is the remainder of the limit,
+and `┃` marks even pace. Its fixed 0–100% scale never expands to fit overflow;
+the exact used percentage and numeric projected percentage carry that detail.
+The forecast states its average-since-reset basis. A fresh zero reading can draw
+an empty bar with an even-pace marker; it differs from an unknown reading.
+Missing/future observations, unusable readings and passed resets draw no bar.
+Last-known readings retain their explicit freshness qualification, and the
+snapshot decides whether any retained forecast is still usable.
 
-The clicked menu retains the projected percentage and how long before reset the
-quota is estimated to run out. The hover does not repeat that risk three ways.
-Banked resets are inventory rather than active quota, so their full schedule
-stays in the menu. Error fallbacks retain inventory information when no quota
+The clicked menu also retains how long before reset the quota is estimated to
+run out. Banked resets are inventory rather than active quota, so their full
+schedule stays in the menu. Error fallbacks retain inventory information when no quota
 can be displayed. Updates keep their existing tooltip behavior.
 
 Linux transports the title and body separately through StatusNotifierItem.

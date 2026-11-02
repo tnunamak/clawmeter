@@ -8,9 +8,9 @@ import (
 	"github.com/tnunamak/clawmeter/internal/view"
 )
 
-// tooltipUsageBar shares the menu/CLI scale and glyphs. Only observed use is
-// drawn; forecasts remain in words, and stale text qualifies last-known use.
-func tooltipUsageBar(acct *view.Account, window view.Window, at time.Time) string {
+// tooltipBar shares the selected window's menu/CLI bar, including pace
+// and the forecast state already decided by the snapshot.
+func tooltipBar(acct *view.Account, window view.Window, at time.Time) string {
 	if acct.Reading.State != view.ReadingFresh && acct.Reading.State != view.ReadingStale {
 		return ""
 	}
@@ -18,5 +18,12 @@ func tooltipUsageBar(acct *view.Account, window view.Window, at time.Time) strin
 		(window.Reset.Known && window.Reset.In <= 0) || math.IsNaN(window.Used) || math.IsInf(window.Used, 0) {
 		return ""
 	}
-	return meter.BarText(meter.Bar(window.Used, window.Used, 0, false))
+	if window.HasPace && (math.IsNaN(window.Pace) || math.IsInf(window.Pace, 0)) {
+		return ""
+	}
+	if window.Reset.Known && window.Forecast.State == view.ForecastKnown &&
+		(math.IsNaN(window.Forecast.Pct) || math.IsInf(window.Forecast.Pct, 0)) {
+		return ""
+	}
+	return meter.BarText(window.Row(false).Bar)
 }

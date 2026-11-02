@@ -157,7 +157,7 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 		lines = append(lines, staleLine(acct))
 		usage = "Last known " + usage
 	}
-	if bar := tooltipUsageBar(acct, w, snap.At); bar != "" {
+	if bar := tooltipBar(acct, w, snap.At); bar != "" {
 		usage += "  " + bar
 	}
 	lines = append(lines,
@@ -165,11 +165,11 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 		exhaustionLine(w, snap.At),
 		resetLine(w),
 	)
-	// The menu retains the full forecast percentage and blocked interval.
-	// Hover gives one estimate and its basis, without repeating the same risk.
-	if w.Exhaustion.State == view.ExhaustionRunsOut || w.Exhaustion.State == view.ExhaustionLasts {
-		lines = append(lines, "Average pace since reset")
-	} else if w.Forecast.State != view.ForecastKnown && acct.Reading.State != view.ReadingStale {
+	// Numeric forecast context preserves the full meter's fixed-scale meaning,
+	// including projections above 100%. The menu retains the blocked interval.
+	if w.Forecast.State == view.ForecastKnown {
+		lines = append(lines, "Est. "+format.Percent(w.Forecast.Pct)+" at reset (avg. since reset)")
+	} else if acct.Reading.State != view.ReadingStale {
 		if words := w.ForecastWords(); words != "" {
 			lines = append(lines, words)
 		}
