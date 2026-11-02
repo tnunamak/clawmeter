@@ -49,10 +49,12 @@ Consumers should:
 - impose their own timeout when invoking Clawmeter.
 
 A fresh usage reading can still have an unknown forecast. In particular, a
-monthly quota with an unknown start reports `usage.stale=false` and legacy
-`indicator="unknown"`. Consumers must not treat its `projected_pct=0` as a
-prediction of zero use. Prefer the matching window in that source's evaluated
-`view`: require `forecast.state="known"` and a present `forecast.pct`; otherwise
+monthly quota with an unknown start can omit `usage.stale` and report legacy
+`indicator="unknown"`. An absent `usage.stale` means false; use the source's
+evaluated `view.reading.state` as the freshness field. Consumers must not treat
+`projected_pct=0` as a prediction of zero use. Prefer the matching window in
+that source's evaluated `view`: require `forecast.state="known"` and a present
+`forecast.pct`; otherwise
 map the forecast to null in the consumer. Legacy-only consumers must validate
 the percentage indicator before reading `projected_pct`, rejecting `unknown`
 and `stale`. No legacy field is renamed or removed.
