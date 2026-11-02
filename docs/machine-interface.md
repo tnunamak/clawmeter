@@ -76,6 +76,38 @@ The diagnostic never invokes quota-reset redemption or other quota-consuming act
 Providers that normally refresh expired local OAuth credentials may do so during a live
 probe, just as they do during an ordinary Clawmeter refresh.
 
+## Usage history
+
+```bash
+clawmeter history --json [--since 168h] [--provider claude]
+```
+
+The command prints one JSON object per line and reads only local files. Each line
+follows [`history-v1.schema.json`](schemas/history-v1.schema.json). `reading_time` is
+when the provider reading was fetched; `recorded_at` is when Clawmeter wrote it;
+`age_seconds` records the reading's age at write time. `account` is the source label
+shown by Clawmeter, falling back to its source ID. `source` is that source ID. The
+history does not contain credentials, account IDs, or email addresses. A zero
+`window_minutes` means Clawmeter has no duration for that quota window.
+
+Clawmeter records successful readings by default in monthly JSONL files beside
+`usage.json`, with mode `0600`, a 50 MB total cap, and hourly heartbeats for unchanged
+windows. Turn recording off with `clawmeter config set usage_history false`; use
+`--no-history` on a status refresh to suppress recording for that invocation.
+Re-enable it with `clawmeter config set usage_history true`.
+
+A malformed final record without a newline is treated as an interrupted write:
+reads skip it, and the next append truncates only those final bytes under the
+history lock. Complete records without a final newline are preserved and given a
+newline before appending. Malformed newline-terminated records, interior corruption,
+and unsupported schema versions return an error without changing history files.
+
+After a clock rollback, future `recorded_at` values remain in the history but do
+not control deduplication. The latest record at or before the current time is the
+heartbeat anchor; if none exists, the next successful observation starts one.
+Retention removes non-current month files in filename order, including future
+months, before trimming the current month to the total byte cap.
+
 ## Compatibility policy
 
 Both interfaces use an integer major `schema_version`:

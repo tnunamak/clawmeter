@@ -2,6 +2,7 @@ package antigravity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -108,7 +110,8 @@ func TestCLIUsageCleansRedirectedDescendantsAfterSuccess(t *testing.T) {
 	}
 	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-		if os.IsNotExist(err) {
+		// A process reaped during the read can return ESRCH instead of ENOENT.
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 			return
 		}
 		if err != nil {
