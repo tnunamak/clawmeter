@@ -48,16 +48,19 @@ var (
 	ProviderAlibaba []byte
 	//go:embed provider-deepseek.png
 	ProviderDeepSeek []byte
+	//go:embed provider-opencode.png
+	ProviderOpenCode []byte
 )
 
 // ProviderLogos maps provider name to its embedded logo PNG.
 var ProviderLogos = map[string][]byte{
-	"antigravity": ProviderAntigravity,
-	"claude":      ProviderClaude,
-	"claude_api":  ProviderClaude,
-	"openai":      ProviderOpenAI,
-	"gemini":      ProviderGemini,
-	"kimi":        ProviderKimi,
+	"opencode_free": ProviderOpenCode,
+	"antigravity":   ProviderAntigravity,
+	"claude":        ProviderClaude,
+	"claude_api":    ProviderClaude,
+	"openai":        ProviderOpenAI,
+	"gemini":        ProviderGemini,
+	"kimi":          ProviderKimi,
 	// Kimi K2 is a model/service under the Kimi provider identity.
 	"kimik2":        ProviderKimi,
 	"codex":         ProviderCodex,
@@ -82,6 +85,7 @@ type logoTreatment struct {
 // they don't disappear on dark trays. Colorful marks (claude, gemini, kimi)
 // are left alone so their brand color survives.
 var providerLogoTreatments = map[string]logoTreatment{
+	"opencode_free": {contrastPlate: true},
 	"codex":         {contrastPlate: true},
 	"copilot":       {contrastPlate: true},
 	"openai":        {contrastPlate: true},

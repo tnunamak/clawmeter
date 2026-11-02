@@ -633,6 +633,7 @@ type UsageData struct {
 	Windows            []UsageWindow      `json:"windows"`                   // Usage windows (providers may have 1 or more)
 	Balances           []UsageBalance     `json:"balances,omitempty"`        // Non-resetting balances
 	CreditGrants       []UsageCreditGrant `json:"credit_grants,omitempty"`   // Expiring, non-renewing allowances
+	LocalModels        []LocalModelUsage  `json:"local_models,omitempty"`    // Local activity, never a measured quota.
 	CreditPools        []UsageCreditPool  `json:"credit_pools,omitempty"`    // Prepaid API credit pools
 	ResetCredits       *UsageResetCredits `json:"reset_credits,omitempty"`   // Optional banked usage-limit reset metadata
 	AnnouncedReset     *ResetAnnouncement `json:"announced_reset,omitempty"` // Unofficial announced reset that bears on this account
@@ -792,6 +793,16 @@ func (u *UsageData) Clone() *UsageData {
 		return nil
 	}
 	clone := *u
+	clone.LocalModels = append([]LocalModelUsage(nil), u.LocalModels...)
+	for i := range clone.LocalModels {
+		m := &clone.LocalModels[i]
+		for _, p := range []**int64{&m.AssistantMessages, &m.InputTokens, &m.OutputTokens, &m.ReasoningTokens, &m.CacheReadTokens, &m.CacheWriteTokens} {
+			if *p != nil {
+				n := **p
+				*p = &n
+			}
+		}
+	}
 	if u.Windows != nil {
 		clone.Windows = append([]UsageWindow(nil), u.Windows...)
 	}
@@ -833,7 +844,7 @@ func (u *UsageData) HasPresentableUsage() bool {
 	if u == nil || u.IsExpired {
 		return false
 	}
-	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 {
+	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 || len(u.LocalModels) > 0 {
 		return true
 	}
 	// API credit pools are browser snapshots too: they keep a failed row
