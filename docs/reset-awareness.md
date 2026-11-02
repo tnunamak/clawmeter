@@ -115,7 +115,13 @@ inventory, that provider-native inventory is shown and the browser observation
 is dropped for display (Claude Code does not report one today).
 
 Presentation. CLI and tray share one row: `Resets: 1 · expires Oct 22`, or
-`Resets: 2 · next expires Oct 22` for several. A browser reading more than
+`Resets: 3 · expire Nov 6 ×2, Nov 7` for several. Up to four distinct
+deadlines appear together; larger inventories show the first three with an
+explicit overflow count. Same-day deadlines include their times. The native
+**Expiry schedule** submenu and plain/table output retain every known deadline
+with local time, year and zone offset, plus explicit unknown expiry dates.
+The supported provider's Usage page remains a direct action on the tray row.
+A browser reading more than
 five minutes old adds ` · not updated since 11:30 · open claude.ai in your
 browser` (a date instead of a time when it is older than today). Nothing shows
 when no reset is available. JSON keeps the full fields; `--agent` prints
@@ -199,14 +205,15 @@ raw responses or credentials.
 - Endpoint shape changes: ignore malformed entries and omit the reset-credit UI
   if a safe summary cannot be produced.
 - `available_count` disagrees with `credits[]`: display the first-party count
-  but compute the earliest expiry from usable available, unconsumed, unexpired
-  credit entries.
+  and retain all usable, unconsumed, unexpired listed deadlines. Missing
+  entries have unknown expiry dates. If the list exceeds the provider count,
+  label the discrepancy and show the dates as listed observations.
 - Consumed, expired, unknown-status, or invalid-timestamp credits: do not use
   them for earliest-expiry guidance.
 - Time zones and daylight savings: store provider timestamps as absolute times
   and display in local time.
 - Multiple credits with the same expiry: sort deterministically and show the
-  earliest expiry.
+  shared deadline once with its count; distinct absolute instants remain separate.
 - Claude browser observations are snapshots. Keep a separate observation per
   local Claude source, keep its full observation time, and never infer a match
   from browser organization identifiers.

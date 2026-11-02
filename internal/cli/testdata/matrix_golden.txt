@@ -162,17 +162,22 @@ agent: Quota: worst=Claude 5h; current=100%; projected_at_reset=166.7%; reset_in
 json[claude]: reading=fresh window=5h[forecast=known exhaustion=out reset_known=true shown=true projected_pct=167 early_by_s=7200 out_since=2026-10-22T10:00:00-05:00]
 
 ## reset credits, money and announcement
-tooltip: "Claude 5-Hour\nCurrent 30%\nAt average pace since reset: lasts to reset\nResets in 3h00m\nEst. 75% at reset (average since reset)\nResets: 2 · next expires Oct 31"
+tooltip: "Claude 5-Hour\nCurrent 30%\nAt average pace since reset: lasts to reset\nResets in 3h00m\nEst. 75% at reset (average since reset)\nResets: 2 · expire Oct 31 · 1 expiry unknown"
 icon: provider=claude usage=30 expected=40 risk=75 show_expected=true label="5H"
 menu[claude]: "5h    ███▒┃▒▒▒▒░░    \u200730% used    \u200775% at reset    resets in 3h; forecasts: average since reset"
 color: "PROVIDER  WINDOW  USAGE        USED  AT RESET  RESETS IN  RUNS OUT IN"
 color: "Claude    5h      ███▒┃▒▒▒▒░░   30%       75%         3h"
 color: "          Org: $199.88 left · spent $0.11 this month · est. $9.37 more spent before it expires Nov 7 11:00 · checked 12:00"
-color: "          Resets: 2 · next expires Oct 31"
+color: "          Resets: 2 · expire Oct 31 · 1 expiry unknown"
+color: "            1 reset · Oct 31, 2026 at 12:00 CDT (UTC-05:00)"
+color: "            1 expiry unknown"
 color: "Forecasts: average since reset"
-plain[claude]: Claude: 5h: 30% (resets 3h00m, est. 75% at reset (average since reset))  Resets: 2 · next expires Oct 31  Org: $199.88 left · spent $0.11 this month · est. $9.37 more spent before it expires Nov 7 11:00 · checked 12:00
+plain[claude]: Claude: 5h: 30% (resets 3h00m, est. 75% at reset (average since reset))  Resets: 2 · expire Oct 31 · 1 expiry unknown  Org: $199.88 left · spent $0.11 this month · est. $9.37 more spent before it expires Nov 7 11:00 · checked 12:00
+  Expiry schedule:
+    1 reset · Oct 31, 2026 at 12:00 CDT (UTC-05:00)
+    1 expiry unknown
 statusline: CM Claude 5h est. 75% (average since reset) reset 3h00m
-agent: Quota: worst=Claude 5h; current=30%; projected_at_reset=75%; reset_in_seconds=10800; reset_in=3h00m; status=on_track; forecast_basis=average_since_reset; quotas=[Claude 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track,forecast_basis=average_since_reset)]; reset_credits=[Claude available=2 earliest_expires_at=2026-10-31T12:00:00-05:00 earliest_expires_in=9d0h]; api_credits=[Claude · Org currency=USD balance=199.88 spent_this_month=0.11 burn_per_day=0.59 burn_basis_days=2 expires_at=2026-11-07T11:00:00-06:00 expires_in=16d0h expiring_amount=199.88 projected_spend_before_expiry=9.37 projected_unused_at_expiry=190.51 live=false updated_at=2026-10-22T12:00:00-05:00 last_observed_at=2026-10-22T12:00:00-05:00 snapshot=true].
+agent: Quota: worst=Claude 5h; current=30%; projected_at_reset=75%; reset_in_seconds=10800; reset_in=3h00m; status=on_track; forecast_basis=average_since_reset; quotas=[Claude 5h(current=30%,projected_at_reset=75%,reset_in=3h00m,status=on_track,forecast_basis=average_since_reset)]; reset_credits=[Claude available=2 earliest_expires_at=2026-10-31T12:00:00-05:00 earliest_expires_in=9d0h expiry_schedule={"count":2,"groups":[{"expires_at":"2026-10-31T12:00:00-05:00","count":1}],"unknown_count":1,"listed_count":1,"reported_count":2,"conflicting_count":false}]; api_credits=[Claude · Org currency=USD balance=199.88 spent_this_month=0.11 burn_per_day=0.59 burn_basis_days=2 expires_at=2026-11-07T11:00:00-06:00 expires_in=16d0h expiring_amount=199.88 projected_spend_before_expiry=9.37 projected_unused_at_expiry=190.51 live=false updated_at=2026-10-22T12:00:00-05:00 last_observed_at=2026-10-22T12:00:00-05:00 snapshot=true].
 money row[claude]: Org: $199.88 left · est. $190.51 unused at expiry Nov 7 11:00 · checked 12:00
 json[claude]: reading=fresh window=5h[forecast=known exhaustion=lasts reset_known=true shown=true projected_pct=75]
 

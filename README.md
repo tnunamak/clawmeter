@@ -67,7 +67,7 @@ Releases from v0.40.0 on sign `SHA256SUMS.txt` with [minisign](https://jedisct1.
 
 - See your riskiest quota without opening provider dashboards.
 - Compare current usage with expected pace for the reset window.
-- See reset credits and their earliest expiry under the matching provider source.
+- See reset credits and their expiry schedule under the matching provider source.
 - Pin the tray icon to one provider/quota window, or let it follow the most at-risk one.
 - Reuse existing credentials. When required, Clawmeter refreshes short-lived
   access tokens against the provider's own OAuth service. Claude file-backed
@@ -93,6 +93,16 @@ dropped.
 The result shows under its Claude source as `Resets: 1 · expires Oct 22`. A
 reading more than five minutes old adds when it was read and
 `open claude.ai signed in to this account`.
+
+Multiple banked resets show their expiry dates together, for example
+`Resets: 3 · expire Nov 6 ×2, Nov 7`. Different times on the same day stay
+separate. The tray's **Expiry schedule** submenu lists every known deadline
+with its local time and time zone; the reset row opens Usage for supported
+providers. Check that the browser is signed in to the intended account.
+Unknown expiry dates and conflicting inventory counts are labelled explicitly.
+Plain and table output include the exact schedule; agent output adds
+`expiry_schedule`, and evaluated JSON includes `reset_credits.schedule`.
+Saved observations do not establish whether a reset has since been spent.
 
 ### Announced Codex Resets (opt-in)
 
@@ -302,7 +312,7 @@ Provider maturity is binary and intentionally kept out of quota rows and the tra
 
 Automation should use the versioned [`--json` machine interface](docs/machine-interface.md), not parse terminal output. Its schemas, compatibility policy, diagnostic command, and consumer guidance are published with the repository.
 
-Codex reset-credit visibility is read-only. Clawmeter shows available count and earliest expiry when Codex exposes banked resets locally, but it never redeems resets. Design notes and provider coverage are in [Reset awareness](docs/reset-awareness.md).
+Codex reset-credit visibility is read-only. Clawmeter shows the available count and observed expiry schedule when Codex exposes banked resets locally, but it never redeems resets. Design notes and provider coverage are in [Reset awareness](docs/reset-awareness.md).
 
 ## Details
 
