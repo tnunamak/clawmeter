@@ -93,3 +93,21 @@ func TestOpenCodeLocalActivityDoesNotHideMissingQuota(t *testing.T) {
 		t.Fatalf("missing quota was hidden: %+v", menu.statusState)
 	}
 }
+
+func TestOpenCodePrimaryStatusNamesTheObservedModelLimit(t *testing.T) {
+	defer systray.ResetMenu()
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: "opencode_free"}, false, nil, false)
+	now := time.Now()
+	event := now.Add(-time.Hour)
+	s.mu.Lock()
+	old := s.lastResults
+	s.lastResults = map[string]*provider.UsageData{"opencode_free": {Provider: "opencode_free", FetchedAt: now, LocalModels: []provider.LocalModelUsage{{Model: "model-a", Label: "Model A", Day: now.UTC().Format("2006-01-02"), LimitHitAt: event, RetryAt: now.Add(-time.Minute)}}}}
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.lastResults = old; s.mu.Unlock() }()
+	updateUI(nil, nil, map[string]*providerMenuItems{"opencode_free": menu}, systray.AddMenuItem("reauth", ""), newIconPicker(), systray.AddMenuItem("empty", ""), systray.AddMenuItem("setup", ""))
+	for _, want := range []string{"Latest recorded model limit: Model A", event.UTC().Format("Jan 2 15:04 UTC"), "remaining quota and reset unknown"} {
+		if !strings.Contains(menu.statusState.title, want) {
+			t.Fatalf("primary tray status lacks %q: %+v", want, menu.statusState)
+		}
+	}
+}

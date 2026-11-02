@@ -214,6 +214,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 				addSpan(benefit.Text)
 			}
 		}
+		if acct.LocalModelStatus != nil {
+			addSpan(acct.LocalModelStatus.Text)
+		}
 		for _, model := range acct.LocalModels {
 			addSpan(model.Summary())
 		}
@@ -252,6 +255,9 @@ func (v outputView) colorLines(i int, layout tableLayout) []string {
 			if benefit.Text != "" {
 				addSpan(benefit.Text)
 			}
+		}
+		if acct.LocalModelStatus != nil {
+			addSpan(acct.LocalModelStatus.Text)
 		}
 		for _, model := range acct.LocalModels {
 			addSpan(model.Summary())
@@ -345,6 +351,9 @@ func (v outputView) plainLine(i int) string {
 				line += "  " + benefit.Text
 			}
 		}
+		if acct.LocalModelStatus != nil {
+			line += "  " + acct.LocalModelStatus.Text
+		}
 		for _, model := range acct.LocalModels {
 			line += "  " + model.Summary()
 		}
@@ -379,6 +388,9 @@ func (v outputView) plainLine(i int) string {
 		if benefit.Text != "" {
 			parts = append(parts, benefit.Text)
 		}
+	}
+	if acct.LocalModelStatus != nil {
+		parts = append(parts, acct.LocalModelStatus.Text)
 	}
 	for _, model := range acct.LocalModels {
 		parts = append(parts, model.Summary())
@@ -635,6 +647,9 @@ func (v outputView) agentLine() string {
 		if benefits := v.agentCreditBenefits(); benefits != "" {
 			extra += "; credit_benefits=" + benefits
 		}
+		if status := v.agentLocalModelStatuses(); status != "" {
+			extra += "; local_model_status=" + status
+		}
 		if models := v.agentLocalModels(); models != "" {
 			extra += "; local_models=" + models
 		}
@@ -664,6 +679,9 @@ func (v outputView) agentLine() string {
 
 	if benefits := v.agentCreditBenefits(); benefits != "" {
 		parts = append(parts, "credit_benefits="+benefits)
+	}
+	if status := v.agentLocalModelStatuses(); status != "" {
+		parts = append(parts, "local_model_status="+status)
 	}
 	if models := v.agentLocalModels(); models != "" {
 		parts = append(parts, "local_models="+models)
@@ -1988,6 +2006,20 @@ func (v outputView) agentAPIBalances() string {
 		return ""
 	}
 	b, _ := json.Marshal(balances)
+	return string(b)
+}
+
+func (v outputView) agentLocalModelStatuses() string {
+	statuses := map[string]provider.LocalModelStatus{}
+	for _, acct := range v.snap.Accounts {
+		if acct.LocalModelStatus != nil {
+			statuses[acct.Key] = *acct.LocalModelStatus
+		}
+	}
+	if len(statuses) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(statuses)
 	return string(b)
 }
 

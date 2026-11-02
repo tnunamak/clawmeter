@@ -55,6 +55,7 @@ type Account struct {
 	CreditBenefits    []CreditBenefit
 	APICreditBalances []APIBalance
 	LocalModels       []provider.LocalModelUsage
+	LocalModelStatus  *provider.LocalModelStatus
 	// Announcement is the announced reset the source carries, or nil.
 	Announcement *provider.ResetAnnouncement
 }
@@ -270,6 +271,10 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 		account.CreditBenefits = append(account.CreditBenefits, buildCreditBenefit(benefit, at))
 	}
 	account.LocalModels = provider.LocalModelsAt(data.LocalModels, data.FetchedAt, at, account.Reading.State == ReadingFresh && !data.FetchedAt.IsZero() && at.Sub(data.FetchedAt) <= in.MaxReadingAge)
+	if len(account.LocalModels) > 0 && len(data.Windows) == 0 {
+		status := provider.SummarizeLocalModelStatus(account.LocalModels, at)
+		account.LocalModelStatus = &status
+	}
 	age := at.Sub(data.FetchedAt)
 	validAge := !data.FetchedAt.IsZero() && age >= 0 && age <= in.MaxReadingAge
 	if len(data.Windows) > 0 && account.Reading.State == ReadingFresh && !validAge {
