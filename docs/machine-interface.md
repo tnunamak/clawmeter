@@ -14,6 +14,8 @@ The response follows [`status-v1.schema.json`](schemas/status-v1.schema.json). T
 the interface for quota-aware tools such as agent orchestrators and status-line helpers.
 Provider failures are represented inside the affected provider's `usage` object; a
 successful process exit does not imply that every provider refreshed successfully.
+With no active providers, the v1 envelope contains `providers: {}` and
+`error: "no active providers"`; the process still exits successfully.
 Status JSON is local automation data, not a redacted issue-report artifact; use the
 diagnostic command below when sharing troubleshooting output.
 

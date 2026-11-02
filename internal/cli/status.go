@@ -893,6 +893,7 @@ const JSONSchemaVersion = 1
 // JSONOutput represents the JSON structure for multi-provider output.
 type JSONOutput struct {
 	SchemaVersion int                            `json:"schema_version"`
+	Error         string                         `json:"error,omitempty"`
 	Providers     map[string]*ProviderJSONOutput `json:"providers"`
 	FetchedAt     time.Time                      `json:"fetched_at,omitempty"`
 	Cache         *CacheInfo                     `json:"cache,omitempty"`
@@ -964,6 +965,10 @@ func (v outputView) jsonDocument(cacheEntry *cache.Entry, now time.Time) ([]byte
 		SchemaVersion: JSONSchemaVersion,
 		Providers:     make(map[string]*ProviderJSONOutput),
 		View:          v.jsonView(),
+	}
+
+	if len(v.entries) == 0 {
+		out.Error = "no active providers"
 	}
 
 	if cacheEntry != nil {
@@ -1806,7 +1811,7 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 	// Check if no providers are configured
 	if len(output.Providers) == 0 {
 		if jsonMode {
-			fmt.Println(`{"error": "no active providers"}`)
+			output.PrintJSON(cacheEntry)
 		} else {
 			fmt.Println("no active providers")
 		}

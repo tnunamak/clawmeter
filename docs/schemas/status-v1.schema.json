@@ -6,6 +6,7 @@
   "required": ["schema_version", "providers"],
   "properties": {
     "schema_version": { "const": 1 },
+    "error": { "type": "string" },
     "fetched_at": { "type": "string", "format": "date-time" },
     "providers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/provider" } },
     "cache": {
@@ -98,7 +99,14 @@
               "display_name": { "type": "string" },
               "utilization": { "type": "number" },
               "resets_at": { "type": "string", "format": "date-time" },
-              "reset_policy": { "type": "string" }
+              "reset_policy": { "type": "string" },
+              "scope": { "type": "string" },
+              "description": { "type": "string" },
+              "currency": { "type": "string" },
+              "window_length_seconds": { "type": "number" },
+              "limit": { "type": "integer" },
+              "used": { "type": "integer" },
+              "window_length_unknown": { "type": "boolean" }
             },
             "additionalProperties": true
           }
@@ -107,12 +115,24 @@
         "stale": { "type": "boolean" },
         "warning": { "type": "string" },
         "is_expired": { "type": "boolean" },
+        "reset_credits_target": { "type": "string" },
+        "balances": { "type": "array", "items": { "$ref": "#/$defs/usage_balance" } },
+        "announced_reset": { "$ref": "#/$defs/announced_reset" },
+        "credit_grants": { "type": "array", "items": { "$ref": "#/$defs/credit_grant" } },
+        "credit_benefits": { "type": "array", "items": { "$ref": "#/$defs/credit_benefit" } },
+        "local_models": { "type": "array", "items": { "$ref": "#/$defs/local_model" } },
+        "api_credit_balances": { "type": "array", "items": { "$ref": "#/$defs/api_credit_balance" } },
+        "credit_pools": { "type": "array", "items": { "$ref": "#/$defs/credit_pool" } },
         "reset_credits": {
           "type": "object",
           "required": ["available_count"],
           "properties": {
             "available_count": { "type": "integer", "minimum": 0 },
-            "fetched_at": { "type": "string", "format": "date-time" }
+            "fetched_at": { "type": "string", "format": "date-time" },
+            "warning": { "type": "string" },
+            "snapshot": { "type": "boolean" },
+            "earliest_expires_at": { "type": "string", "format": "date-time" },
+            "credits": { "type": "array", "items": { "$ref": "#/$defs/reset_credit" } }
           },
           "additionalProperties": true
         }
@@ -147,6 +167,11 @@
       "type": "object",
       "required": ["reading", "windows"],
       "properties": {
+        "credit_grants": { "type": "array", "items": { "$ref": "#/$defs/credit_grant_view" } },
+        "credit_benefits": { "type": "array", "items": { "$ref": "#/$defs/credit_benefit_view" } },
+        "api_credit_balances": { "type": "array", "items": { "$ref": "#/$defs/api_credit_balance_view" } },
+        "local_models": { "type": "array", "items": { "$ref": "#/$defs/local_model" } },
+        "local_model_status": { "$ref": "#/$defs/local_model_status" },
         "reading": {
           "type": "object",
           "required": ["state"],
@@ -213,6 +238,205 @@
           "else": { "not": { "required": ["at"] } },
           "additionalProperties": true
         }
+      },
+      "additionalProperties": true
+    },
+    "reset_credit": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "consumed_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "usage_balance": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "display_name": { "type": "string" },
+        "total": { "type": "number" },
+        "used": { "type": "number" },
+        "remaining": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "announced_reset": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string" },
+        "feed": { "type": "string" },
+        "source_url": { "type": "string" },
+        "official": { "type": "boolean" },
+        "approximate": { "type": "boolean" },
+        "announced_at": { "type": "string", "format": "date-time" },
+        "scheduled_for": { "type": "string", "format": "date-time" },
+        "feed_checked_at": { "type": "string", "format": "date-time" },
+        "shown_until": { "type": "string", "format": "date-time" },
+        "windows": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "credit_grant": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "display_name": { "type": "string" },
+        "scope": { "type": "string" },
+        "currency": { "type": "string" },
+        "used": { "type": "number" },
+        "limit": { "type": "number" },
+        "utilization": { "type": "number" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "credit_benefit": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "pool": { "type": "string" },
+        "eligibility": { "type": "string" },
+        "link_state": { "type": "string" },
+        "currency": { "type": "string" },
+        "cadence": { "type": "string" },
+        "claimable": { "type": "integer" },
+        "period_credit": { "type": "integer" },
+        "link_observed_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "observed_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "local_model": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string" },
+        "label": { "type": "string" },
+        "day_utc": { "type": "string" },
+        "assistant_messages": { "type": "integer" },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "reasoning_tokens": { "type": "integer" },
+        "cache_read_tokens": { "type": "integer" },
+        "cache_write_tokens": { "type": "integer" },
+        "limit_hit_at": { "type": "string", "format": "date-time" },
+        "retry_hint_at": { "type": "string", "format": "date-time" },
+        "reset_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "api_credit_balance": {
+      "type": "object",
+      "properties": {
+        "pool": { "type": "string" },
+        "name": { "type": "string" },
+        "currency": { "type": "string" },
+        "balance": { "type": "integer" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "grants": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/api_credit_expiry" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "api_credit_expiry": {
+      "type": "object",
+      "properties": {
+        "remaining": { "type": "integer" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "credit_pool": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "organization": { "type": "string" },
+        "claude_source": { "type": "string" },
+        "plan": { "type": "string" },
+        "currency": { "type": "string" },
+        "observation_source": { "type": "string" },
+        "burn_per_day": { "type": "number" },
+        "monthly_credit": { "type": "integer" },
+        "balance": { "type": "integer" },
+        "month_spend": { "type": "integer" },
+        "expiring": { "type": "integer" },
+        "burn_days": { "type": "integer" },
+        "projected_spend_before_expiry": { "type": "integer" },
+        "projected_unused_at_expiry": { "type": "integer" },
+        "live": { "type": "boolean" },
+        "signed_out": { "type": "boolean" },
+        "month_resets_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "extension_contact_at": { "type": "string", "format": "date-time" },
+        "runs_out_at": { "type": "string", "format": "date-time" },
+        "next_credit_at": { "type": "string", "format": "date-time" },
+        "expired_since_check": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "credit_grant_view": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "label": { "type": "string" },
+        "scope": { "type": "string" },
+        "currency": { "type": "string" },
+        "used": { "type": "number" },
+        "limit": { "type": "number" },
+        "remaining": { "type": "number" },
+        "last_observed_remaining": { "type": "number" },
+        "utilization": { "type": "number" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "state": { "type": "string", "enum": ["unknown", "available", "depleted", "stale", "expired"] }
+      },
+      "additionalProperties": true
+    },
+    "credit_benefit_view": {
+      "allOf": [
+        { "$ref": "#/$defs/credit_benefit" },
+        {
+          "type": "object",
+          "properties": {
+            "state": { "type": "string", "enum": ["linked", "unknown", "stale", "ineligible", "expired", "claimable"] },
+            "text": { "type": "string" },
+            "action_url": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "api_credit_balance_view": {
+      "allOf": [
+        { "$ref": "#/$defs/api_credit_balance" },
+        {
+          "type": "object",
+          "properties": {
+            "state": { "type": "string", "enum": ["expired_since_check", "stale", "current"] },
+            "available": { "type": "integer" },
+            "text": { "type": "string" },
+            "action_url": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "local_model_status": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "latest_limit_model": { "type": "string" },
+        "latest_limit_label": { "type": "string" },
+        "remaining_quota_known": { "type": "boolean" },
+        "reset_known": { "type": "boolean" },
+        "latest_limit_at": { "type": "string", "format": "date-time" }
       },
       "additionalProperties": true
     }
