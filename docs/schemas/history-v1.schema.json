@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tnunamak.github.io/clawmeter/schemas/history-v1.schema.json",
+  "title": "Clawmeter usage history line",
+  "description": "One locally recorded quota window reading from clawmeter history --json.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "reading_time",
+    "recorded_at",
+    "provider",
+    "account",
+    "source",
+    "window",
+    "window_minutes",
+    "used_percent",
+    "resets_at",
+    "age_seconds"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "reading_time": { "type": "string", "format": "date-time" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "provider": { "type": "string", "minLength": 1 },
+    "account": { "type": "string", "minLength": 1 },
+    "source": { "type": "string", "minLength": 1 },
+    "window": { "type": "string", "minLength": 1 },
+    "window_minutes": { "type": "integer", "minimum": 0 },
+    "used_percent": { "type": "number", "minimum": 0 },
+    "resets_at": { "type": "string", "format": "date-time" },
+    "age_seconds": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}
