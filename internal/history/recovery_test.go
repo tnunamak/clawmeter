@@ -3,6 +3,7 @@ package history
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -494,5 +495,162 @@ func assertHistorySizeAndLines(t *testing.T, dir string) {
 	}
 	if total > maxHistoryBytes {
 		t.Fatalf("history bytes = %d, cap = %d", total, maxHistoryBytes)
+	}
+}
+
+// TestHistoryLockDeadlineChild holds the production OS lock until its parent
+// closes stdin. It is selected explicitly in a fresh test-binary process.
+func TestHistoryLockDeadlineChild(t *testing.T) {
+	dir := os.Getenv("CLAWMETER_LOCK_DEADLINE_CHILD")
+	if dir == "" {
+		return
+	}
+	lock, err := acquireLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	fmt.Println("locked")
+	_, _ = bufio.NewReader(os.Stdin).ReadByte()
+}
+
+func TestHistoryLockDeadlineIncludesProcessGate(t *testing.T) {
+	// Isolate the scenario so a broken gate cannot strand callers or poison
+	// other tests. The parent can terminate this whole scenario on its deadline.
+	if os.Getenv("CLAWMETER_LOCK_DEADLINE_SCENARIO") != "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHistoryLockDeadlineIncludesProcessGate$")
+		cmd.Env = append(os.Environ(), "CLAWMETER_LOCK_DEADLINE_SCENARIO=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("deadline scenario: %v (context: %v): %s", err, ctx.Err(), output)
+		}
+		return
+	}
+	dir := t.TempDir()
+	// Unsupported platforms fail closed; there is no production OS lock to test.
+	probe, err := os.OpenFile(filepath.Join(dir, ".usage-history.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, probeErr := tryFileLock(probe)
+	if locked {
+		_ = unlockFile(probe)
+	}
+	_ = probe.Close()
+	if errors.Is(probeErr, os.ErrInvalid) {
+		t.Skip("history locking is unsupported on this platform")
+	}
+	if probeErr != nil || !locked {
+		t.Fatalf("probe production lock: locked=%t, err=%v", locked, probeErr)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHistoryLockDeadlineChild$")
+	cmd.Env = append(os.Environ(), "CLAWMETER_LOCK_DEADLINE_CHILD="+dir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		_ = stdin.Close()
+		if !waited {
+			cancel()
+			_ = cmd.Wait()
+		}
+	}()
+	ready := make(chan bool, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		ready <- scanner.Scan() && scanner.Text() == "locked"
+	}()
+	select {
+	case ok := <-ready:
+		if !ok {
+			t.Fatal("child did not acquire the production OS lock")
+		}
+	case <-ctx.Done():
+		t.Fatal("child lock startup timed out")
+	}
+
+	const budget = 400 * time.Millisecond
+	const margin = 150 * time.Millisecond
+	type result struct {
+		elapsed time.Duration
+		err     error
+	}
+	results := make(chan result, 2)
+	acquire := func() {
+		start := time.Now()
+		lock, err := acquireLockWithTimeout(dir, budget)
+		elapsed := time.Since(start)
+		if lock != nil {
+			_ = lock.Close()
+		}
+		results <- result{elapsed: elapsed, err: err}
+	}
+	go acquire()
+	// Observe the first caller owning the process gate before starting the
+	// second. Do not replace the global tryLock hook: even a failing or stuck
+	// caller must never race with test cleanup restoring a function pointer.
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+waitForGate:
+	for {
+		if len(processLock) == 1 {
+			break waitForGate
+		}
+		select {
+		case r := <-results:
+			t.Fatalf("first caller ended before gate observation: %v after %s", r.err, r.elapsed)
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for first caller to take the process gate")
+		}
+	}
+	go acquire()
+	for i := 0; i < 2; i++ {
+		var r result
+		select {
+		case r = <-results:
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for acquisition results")
+		}
+		if r.err == nil || !strings.Contains(r.err.Error(), "timed out waiting for history lock") {
+			t.Errorf("caller %d error = %v, want timeout", i, r.err)
+		}
+		if r.elapsed > budget+margin {
+			t.Errorf("caller %d waited %s, budget %s + margin %s", i, r.elapsed, budget, margin)
+		}
+		if r.elapsed < budget-margin {
+			t.Errorf("caller %d timed out prematurely after %s", i, r.elapsed)
+		}
+	}
+	// Both timed-out callers must release their gate ownership, and the child
+	// must release the real OS lock so a later acquisition can succeed.
+	_ = stdin.Close()
+	err = cmd.Wait()
+	waited = true
+	if err != nil {
+		t.Fatalf("lock child exit: %v: %s", err, stderr.String())
+	}
+	lock, err := acquireLockWithTimeout(dir, budget)
+	if err != nil {
+		t.Fatalf("acquire after timeout and child release: %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
