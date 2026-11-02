@@ -59,13 +59,19 @@ func (m LocalModelUsage) Summary() string {
 func escapeControls(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsControl(r) || r == 0x2028 || r == 0x2029 {
+		if unicode.IsControl(r) || r == 0x2028 || r == 0x2029 || isBidiControl(r) {
 			fmt.Fprintf(&b, `\u%04x`, r)
 			continue
 		}
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// isBidiControl reports the Unicode bidirectional formatting characters, which
+// can make a label display in a different order than it is stored.
+func isBidiControl(r rune) bool {
+	return r == 0x061c || r == 0x200e || r == 0x200f || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 }
 
 // maxDisplayLabelRunes bounds a catalog name in one human line. It matches the

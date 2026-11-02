@@ -46,6 +46,7 @@ func TestLocalModelSummaryEscapesControls(t *testing.T) {
 		{"label", LocalModelUsage{Model: "x-free", Label: "\x1b[2JFORGED\r\nROW", Day: "2026-10-28"}, `\u001b[2JFORGED\u000d\u000aROW: 2026-10-28 UTC · `},
 		{"model fallback", LocalModelUsage{Model: "\x1b[2JFORGED\r\nROW-free", Day: "2026-10-28"}, `\u001b[2JFORGED\u000d\u000aROW-free: 2026-10-28 UTC · `},
 		{"ordinary unicode", LocalModelUsage{Model: "x-free", Label: "Ünïcödé 模型 🦀", Day: "2026-10-28"}, "Ünïcödé 模型 🦀: 2026-10-28 UTC · "},
+		{"bidi controls", LocalModelUsage{Model: "x-free", Label: "A" + string(rune(0x202e)) + "B" + string(rune(0x2066)) + "C" + string(rune(0x200f)) + "D", Day: "2026-10-28"}, "A" + escapedRune(0x202e) + "B" + escapedRune(0x2066) + "C" + escapedRune(0x200f) + "D: 2026-10-28 UTC · "},
 		{"line separators", LocalModelUsage{Model: "x-free", Label: "A" + string(rune(0x2028)) + "B" + string(rune(0x2029)) + "C", Day: "2026-10-28"}, "A" + escapedRune(0x2028) + "B" + escapedRune(0x2029) + "C: 2026-10-28 UTC · "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
