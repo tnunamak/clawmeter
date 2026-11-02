@@ -24,7 +24,7 @@ func TestReview039TrayUsesTypedMonthlyLength(t *testing.T) {
 func TestReview039TrayUnknownIsNotSafe(t *testing.T) {
 	w := provider.UsageWindow{Name: "5h", Utilization: 100,
 		ResetsAt: time.Now().Add(299 * time.Minute)}
-	snap := viewOf(map[string]*provider.UsageData{"claude": {Windows: []provider.UsageWindow{w}}}, time.Now())
+	snap := viewOf(map[string]*provider.UsageData{"claude": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{w}}}, time.Now())
 	got := Tooltip(snap, nil)
 	_, meter := IconState(snap)
 	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est. 0%") || meter.RiskPct < 100 {
@@ -39,7 +39,7 @@ func TestReview039ExpiredResetDoesNotRenotify(t *testing.T) {
 	t.Cleanup(func() { cfg, sendThresholdNotification, s.thresholdUtilization = oldCfg, oldSend, oldHistory })
 	count := 0
 	sendThresholdNotification = func(string, string, string) { count++ }
-	data := map[string]*provider.UsageData{"claude": {Windows: []provider.UsageWindow{{
+	data := map[string]*provider.UsageData{"claude": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{{
 		Name: "5h", Utilization: 96, ResetsAt: time.Now().Add(-time.Minute),
 	}}}}
 	checkThresholds(data, nil)

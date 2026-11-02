@@ -42,7 +42,7 @@ func (p sourceMenuTestProvider) FetchUsage(context.Context) (*provider.UsageData
 }
 
 func TestTrayCacheAndPriorResultsRequireMatchingSourceRevision(t *testing.T) {
-	data := &provider.UsageData{Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: time.Now().Add(time.Hour)}}}
+	data := &provider.UsageData{FetchedAt: time.Now(), Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: time.Now().Add(time.Hour)}}}
 	entry := &cache.Entry{
 		ProviderData:    map[string]*provider.UsageData{"claude": data},
 		SourceRevisions: map[string]string{"claude": "old-profile"},
@@ -69,7 +69,7 @@ func TestTrayCacheAndPriorResultsRequireMatchingSourceRevision(t *testing.T) {
 }
 
 func TestTrayCacheRejectsDataFromAnotherSource(t *testing.T) {
-	data := &provider.UsageData{Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 80}}}
+	data := &provider.UsageData{FetchedAt: time.Now(), Provider: "claude", SourceID: "default", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 80}}}
 	entry := &cache.Entry{
 		ProviderData:    map[string]*provider.UsageData{"claude:odl": data},
 		SourceRevisions: map[string]string{"claude:odl": "same-revision"},
@@ -221,7 +221,8 @@ func TestProviderConnectionMenuState(t *testing.T) {
 			name:         "healthy provider",
 			providerName: tokenPlanProviderName,
 			data: &provider.UsageData{
-				Windows: []provider.UsageWindow{{Name: "5h"}},
+				FetchedAt: time.Now(),
+				Windows:   []provider.UsageWindow{{Name: "5h"}},
 			},
 			wantShow: false,
 		},
@@ -299,13 +300,13 @@ func TestTooltipShowsBlockedGap(t *testing.T) {
 	// 99% used three hours before a reset runs out an hour and a half in,
 	// well before the reset.
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 99, ResetsAt: time.Now().Add(3 * time.Hour)}
-	snap := viewOf(map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	snap := viewOf(map[string]*provider.UsageData{"codex": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}}, time.Now())
 	got := Tooltip(snap, nil)
 
 	for _, want := range []string{
 		"Codex 7-Day",
 		"Current 99%",
-		"Runs out in ",
+		"At average pace since reset: runs out in ",
 		"(",
 		"before reset)",
 		"Resets in",
@@ -319,7 +320,7 @@ func TestTooltipShowsBlockedGap(t *testing.T) {
 
 func TestTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 100, ResetsAt: time.Now().Add(2 * time.Hour)}
-	snap := viewOf(map[string]*provider.UsageData{"codex": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	snap := viewOf(map[string]*provider.UsageData{"codex": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}}, time.Now())
 	if got := Tooltip(snap, nil); !strings.Contains(got, "Out now (2h00m until reset)") {
 		t.Fatalf("Tooltip() = %q, want already-out wait", got)
 	}
@@ -328,7 +329,8 @@ func TestTooltipAlreadyOutShowsWaitUntilReset(t *testing.T) {
 func TestIconMeterStateUsesSoonestBlockingWindowForProviderDefault(t *testing.T) {
 	now := time.Now()
 	data := &provider.UsageData{
-		Provider: "openai",
+		FetchedAt: now,
+		Provider:  "openai",
 		Windows: []provider.UsageWindow{
 			{
 				Name:        "5h",
@@ -392,13 +394,15 @@ func TestWorstUsesTheSoonerRunOut(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
 			},
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 77, ResetsAt: now.Add(87 * time.Minute)},
 			},
@@ -419,7 +423,8 @@ func TestSelectedPrefersUsableQuotaOverErrorOnlyProvider(t *testing.T) {
 			Error:    "failed to fetch codex rate limits",
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 20, ResetsAt: now.Add(2 * time.Hour)},
 			},
@@ -447,14 +452,16 @@ func TestRiskOrderRanksEveryProviderWindowByUrgency(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
 				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
 			},
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 77, ResetsAt: now.Add(87 * time.Minute)},
 				{Name: "7d All", Utilization: 5, ResetsAt: now.Add(8 * time.Hour)},
@@ -484,8 +491,8 @@ func TestRiskOrderRanksEveryProviderWindowByUrgency(t *testing.T) {
 func TestManualIconTargetsIncludeEveryWindowFromMultiSourceFamily(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
-		"claude:a": {Provider: "claude", SourceID: "a", Windows: []provider.UsageWindow{{Name: "low", Utilization: 10, ResetsAt: now.Add(12 * time.Hour)}, {Name: "high", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
-		"claude:b": {Provider: "claude", SourceID: "b", Windows: []provider.UsageWindow{{Name: "only", Utilization: 30, ResetsAt: now.Add(2 * time.Hour)}}},
+		"claude:a": {FetchedAt: now, Provider: "claude", SourceID: "a", Windows: []provider.UsageWindow{{Name: "low", Utilization: 10, ResetsAt: now.Add(12 * time.Hour)}, {Name: "high", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
+		"claude:b": {FetchedAt: now, Provider: "claude", SourceID: "b", Windows: []provider.UsageWindow{{Name: "only", Utilization: 30, ResetsAt: now.Add(2 * time.Hour)}}},
 	}
 	got := manualIconTargets(results)
 	if len(got) != 3 {
@@ -504,14 +511,16 @@ func TestRiskPrefersSoonerRunoutOverHigherProjectedPct(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				// Projected ~115%, but not blocked until about 3d12h from now.
 				{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
 			},
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				// Projected ~106%, but blocked in about 1h35m from now.
 				{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
@@ -547,7 +556,8 @@ func TestManualIconTargetsIncludesFreshAndStaleWindows(t *testing.T) {
 			},
 		},
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)},
 			},
@@ -573,7 +583,7 @@ func TestAutoSelectionStillPrefersFreshOverStale(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {Provider: "claude", Stale: true, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 95, ResetsAt: now.Add(time.Hour)}}},
-		"openai": {Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)}}},
+		"openai": {FetchedAt: now, Provider: "openai", Windows: []provider.UsageWindow{{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)}}},
 	}
 	s.mu.Lock()
 	s.iconTargetOverride = iconTarget{}
@@ -589,7 +599,7 @@ func TestNoResetWindowIsSelectedOnlyWhenNothingElseIs(t *testing.T) {
 	// fresh reset-backed ones. A used-up window with no reset is still usage now.
 	results := map[string]*provider.UsageData{
 		"balance-only":  {Balances: []provider.UsageBalance{{Name: "credits", Remaining: 1}}},
-		"unknown-reset": {Windows: []provider.UsageWindow{{Name: "daily", Utilization: 99}}},
+		"unknown-reset": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{{Name: "daily", Utilization: 99}}},
 	}
 	s.mu.Lock()
 	s.iconTargetOverride = iconTarget{}
@@ -637,7 +647,8 @@ func TestSelectedHonorsManualStaleOverride(t *testing.T) {
 			},
 		},
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 20, ResetsAt: now.Add(5 * 24 * time.Hour)},
 			},
@@ -682,7 +693,8 @@ func TestBackedOffProviderWithPriorWindowsUsesClone(t *testing.T) {
 	gate := provider.NewFailureGate()
 	_ = gate.ShouldSurfaceError("openai", true)
 	prev := &provider.UsageData{
-		Provider: "openai",
+		FetchedAt: time.Now(),
+		Provider:  "openai",
 		Windows: []provider.UsageWindow{
 			{Name: "7d", Utilization: 25, ResetsAt: time.Now().Add(24 * time.Hour)},
 		},
@@ -720,8 +732,9 @@ func TestForceRefreshIgnoresBackoff(t *testing.T) {
 		gate,
 		map[string]*provider.UsageData{
 			"openai": {
-				Provider: "openai",
-				Windows:  []provider.UsageWindow{{Name: "7d", ResetsAt: time.Now().Add(24 * time.Hour)}},
+				FetchedAt: time.Now(),
+				Provider:  "openai",
+				Windows:   []provider.UsageWindow{{Name: "7d", ResetsAt: time.Now().Add(24 * time.Hour)}},
 			},
 		},
 		true,
@@ -739,13 +752,15 @@ func TestSelectedHonorsQuotaOverride(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
 			},
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
 			},
@@ -771,13 +786,15 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 44, ResetsAt: now.Add(4*24*time.Hour + 20*time.Hour)},
 			},
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
 			},
@@ -791,7 +808,7 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 	got := Tooltip(viewNamed(results, names, now), results)
 
 	// Changed on purpose: the used percentage is always stated, before the run-out.
-	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nCurrent 90%\nRuns out in ") {
+	if !strings.HasPrefix(got, "Claude 7-Day Sonnet\nCurrent 90%\nAt average pace since reset: runs out in ") {
 		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out line", got)
 	}
 	if strings.Contains(got, "7S") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
@@ -806,13 +823,15 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
 			},
 		},
 		"claude": {
-			Provider: "claude",
+			FetchedAt: now,
+			Provider:  "claude",
 			Windows: []provider.UsageWindow{
 				{Name: "7d Sonnet", Utilization: 90, ResetsAt: now.Add(6 * 24 * time.Hour)},
 			},
@@ -831,7 +850,7 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 	got := Tooltip(viewNamed(results, names, now), results)
 
 	// Changed on purpose: the used percentage is always stated, before the run-out.
-	if !strings.HasPrefix(got, "Codex 5-Hour\nCurrent 20%\nWon't run out") {
+	if !strings.HasPrefix(got, "Codex 5-Hour\nCurrent 20%\nAt average pace since reset: lasts to reset") {
 		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out state", got)
 	}
 	if strings.Contains(got, "5H") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
@@ -846,7 +865,8 @@ func TestTrayTooltipIncludesResetCreditsForSelectedProvider(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"openai": {
-			Provider: "openai",
+			FetchedAt: now,
+			Provider:  "openai",
 			Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 20, ResetsAt: now.Add(3 * time.Hour)},
 			},
@@ -1073,7 +1093,7 @@ func TestThresholdCheckPreservesRawFoldedResults(t *testing.T) {
 	cfg = config.DefaultConfig()
 	defer func() { cfg = oldCfg; s.lastResults = nil }()
 	raw := map[string]*provider.UsageData{
-		"claude":     {Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 79, ResetsAt: time.Now().Add(time.Hour)}}},
+		"claude":     {FetchedAt: time.Now(), Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: 79, ResetsAt: time.Now().Add(time.Hour)}}},
 		"claude_api": {Provider: "claude_api"},
 	}
 	s.lastResults = raw
@@ -1111,7 +1131,7 @@ func TestThresholdCrossingsNotifyOnceOutsideStateLock(t *testing.T) {
 	}
 	reset := time.Now().Add(time.Hour)
 	for _, pct := range []float64{79, 80, 80, 94, 95, 95} {
-		data := &provider.UsageData{Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: pct, ResetsAt: reset}}}
+		data := &provider.UsageData{FetchedAt: time.Now(), Provider: "claude", Windows: []provider.UsageWindow{{Name: "5h", Utilization: pct, ResetsAt: reset}}}
 		// This is the order used by refresh: publish raw data before rendering.
 		s.lastResults = map[string]*provider.UsageData{"claude": data, "claude_api": {Provider: "claude_api"}}
 		checkThresholds(map[string]*provider.UsageData{"claude": data}, nil)
@@ -1232,7 +1252,7 @@ func TestRedTeamThresholdHistoryRearmsForNewResetWindow(t *testing.T) {
 	reset := time.Now().Add(time.Hour)
 	sample := func(pct float64, resetsAt time.Time) {
 		checkThresholds(map[string]*provider.UsageData{
-			"claude": {Provider: "claude", Windows: []provider.UsageWindow{
+			"claude": {FetchedAt: time.Now(), Provider: "claude", Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: pct, ResetsAt: resetsAt},
 			}},
 		}, nil)
@@ -1300,7 +1320,7 @@ func TestNewResetPeriodIgnoresJitter(t *testing.T) {
 
 func TestTrayTypedMonthlyPresentation(t *testing.T) {
 	window := provider.UsageWindow{Name: "premium", Length: 30 * 24 * time.Hour, Utilization: 60, ResetsAt: time.Now().Add(12 * time.Hour)}
-	data := &provider.UsageData{Windows: []provider.UsageWindow{window}}
+	data := &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}
 	snap := viewOf(map[string]*provider.UsageData{"a": data}, time.Now())
 	w := snap.Accounts[0].Windows[0]
 	if w.Forecast.State != view.ForecastKnown || w.Forecast.Pct < 60 || w.Forecast.Pct > 62 {
@@ -1310,7 +1330,7 @@ func TestTrayTypedMonthlyPresentation(t *testing.T) {
 	if meter.RiskPct < 60 || meter.RiskPct > 62 || meter.ExpectedPct < 98 || meter.ExpectedPct > 99 {
 		t.Fatalf("monthly meter = %+v", meter)
 	}
-	if got := trayWindowText(window); !strings.HasSuffix(got, "\u200760% used    \u200761% at reset    resets in 12h    premium") {
+	if got := trayWindowText(window); !strings.HasSuffix(got, "\u200760% used    \u200761% at reset    resets in 12h    premium; forecasts: average since reset") {
 		t.Fatalf("monthly menu = %q", got)
 	}
 }
@@ -1326,8 +1346,9 @@ func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
 		want []string
 		ban  []string
 	}{
-		{"unknown", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Out now", "forecast soon"}, []string{"Won't run out", "Est. 0%"}},
+		{"unknown", &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Out now", "forecast soon"}, []string{"Won't run out", "Est. 0%"}},
 		{"stale", stale, []string{"Current 100%", "Run-out unknown", "stale"}, []string{"Won't run out", "Est.", "Out now"}},
+		{"missing observation", &provider.UsageData{Windows: []provider.UsageWindow{warming}}, []string{"Current 100%", "Run-out unknown", "observation time unavailable"}, []string{"Est.", "Out now"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := Tooltip(viewNamed(map[string]*provider.UsageData{"t": tc.data}, map[string]string{"t": "Test"}, now), nil)
@@ -1349,9 +1370,9 @@ func TestTrayRiskSelectionPrefersExhaustedUnknownWindow(t *testing.T) {
 	now := time.Now()
 	exhausted := provider.UsageWindow{Name: "5h", Utilization: 100, ResetsAt: now.Add(299 * time.Minute)}
 	projected := provider.UsageWindow{Name: "7d", Utilization: 50, ResetsAt: now.Add(6 * 24 * time.Hour)}
-	data := &provider.UsageData{Windows: []provider.UsageWindow{projected, exhausted}}
+	data := &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{projected, exhausted}}
 	results := map[string]*provider.UsageData{
-		"projected": {Windows: []provider.UsageWindow{projected}},
+		"projected": {FetchedAt: now, Windows: []provider.UsageWindow{projected}},
 		"exhausted": data,
 	}
 	s.mu.Lock()
@@ -1409,7 +1430,7 @@ func TestThresholdsSkipExpiredSamplesWithoutLosingNewPeriod(t *testing.T) {
 	sendThresholdNotification = func(string, string, string) { count++ }
 	sample := func(reset time.Time) {
 		checkThresholds(map[string]*provider.UsageData{
-			"claude": {Windows: []provider.UsageWindow{{Name: "5h", Utilization: 96, ResetsAt: reset}}},
+			"claude": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{{Name: "5h", Utilization: 96, ResetsAt: reset}}},
 		}, nil)
 	}
 	past, future := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)
@@ -1529,7 +1550,7 @@ func TestLocalPublicationWaitsForRefresh(t *testing.T) {
 
 func TestTrayRowLaysLabeledValuesOutInGutteredColumns(t *testing.T) {
 	soon := provider.UsageWindow{Name: "five_hour", Length: 5 * time.Hour, Utilization: 7, ResetsAt: time.Now().Add(3*time.Hour + 30*time.Second)}
-	if got := trayWindowText(soon); got != "5h    █▒░░┃░░░░░░    \u2007\u20077% used    \u200718% at reset    resets in 3h" || strings.Contains(got, "·") {
+	if got := trayWindowText(soon); got != "5h    █▒░░┃░░░░░░    \u2007\u20077% used    \u200718% at reset    resets in 3h; forecasts: average since reset" || strings.Contains(got, "·") {
 		t.Fatalf("row = %q", got)
 	}
 	policy := provider.UsageWindow{Name: "daily", Utilization: 40, ResetPolicy: "resets daily"}
@@ -1572,18 +1593,19 @@ func TestTrayWindowRowStatesForecastUseAtReset(t *testing.T) {
 }
 
 func trayWindowText(window provider.UsageWindow) string {
-	snap := viewOf(map[string]*provider.UsageData{"a": {Windows: []provider.UsageWindow{window}}}, time.Now())
+	snap := viewOf(map[string]*provider.UsageData{"a": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}}, time.Now())
 	return MenuRows(snap, maxWindowItems)["a"][0]
 }
 
 func TestTrayForecastColumnWidensForAnEarlyForecastItShows(t *testing.T) {
+	now := time.Now()
 	// 20% used two hours into a week projects about 1680%.
-	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 20, ResetsAt: time.Now().Add(7*24*time.Hour - 2*time.Hour)}
-	steady := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: time.Now().Add(3 * time.Hour)}
+	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 20, ResetsAt: now.Add(7*24*time.Hour - 2*time.Hour)}
+	steady := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: now.Add(3 * time.Hour)}
 	rows := MenuRows(viewOf(map[string]*provider.UsageData{
-		"a": {Windows: []provider.UsageWindow{early}},
-		"b": {Windows: []provider.UsageWindow{steady}},
-	}, time.Now()), maxWindowItems)
+		"a": {FetchedAt: now, Windows: []provider.UsageWindow{early}},
+		"b": {FetchedAt: now, Windows: []provider.UsageWindow{steady}},
+	}, now), maxWindowItems)
 	forecastEnd := func(row string) int { return len([]rune(row[:strings.Index(row, " at reset")])) }
 	if forecastEnd(rows["a"][0]) != forecastEnd(rows["b"][0]) || !strings.Contains(rows["b"][0], "\u2007100% at reset") {
 		t.Fatalf("forecasts do not line up:\n%q\n%q", rows["a"][0], rows["b"][0])
@@ -1594,7 +1616,7 @@ func TestTrayForecastColumnWidensForAnEarlyForecastItShows(t *testing.T) {
 	for i := range windows {
 		windows[i] = steady
 	}
-	rows = MenuRows(viewOf(map[string]*provider.UsageData{"b": {Windows: append(windows, early)}}, time.Now()), maxWindowItems)
+	rows = MenuRows(viewOf(map[string]*provider.UsageData{"b": {FetchedAt: now, Windows: append(windows, early)}}, now), maxWindowItems)
 	if len(rows["b"]) != maxWindowItems || strings.Contains(rows["b"][0], "\u2007100% at reset") {
 		t.Fatalf("a hidden window widened the column: %q", rows["b"])
 	}
@@ -1674,7 +1696,7 @@ func TestThresholdNotificationsUseSharedForecastWords(t *testing.T) {
 		s.thresholdUtilization = nil
 		var got string
 		sendThresholdNotification = func(_, body, _ string) { got = body }
-		checkThresholds(map[string]*provider.UsageData{"test": {Windows: []provider.UsageWindow{{Name: tc.name, Length: tc.length, Utilization: 80, ResetsAt: time.Now().Add(tc.resetIn)}}}}, nil)
+		checkThresholds(map[string]*provider.UsageData{"test": {FetchedAt: time.Now(), Windows: []provider.UsageWindow{{Name: tc.name, Length: tc.length, Utilization: 80, ResetsAt: time.Now().Add(tc.resetIn)}}}}, nil)
 		if !strings.Contains(got, tc.want) {
 			t.Fatalf("notification=%q, want %q", got, tc.want)
 		}

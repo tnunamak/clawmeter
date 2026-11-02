@@ -40,7 +40,7 @@ func TestBlockedWindowWithLaterNaturalResetIsShown(t *testing.T) {
 	data := codexReading(now, window("7d", 100, 3*24*time.Hour, now))
 	r := announcementAt(now, time.Hour, now)
 
-	got := Visible(data, r, now)
+	got := Visible(data, r, now, 10*time.Minute)
 	if got == nil {
 		t.Fatal("out-of-quota window with a later natural reset: want the announcement")
 	}
@@ -54,7 +54,7 @@ func TestNaturalResetBeforeAnnouncedTimeIsHidden(t *testing.T) {
 	data := codexReading(now, window("5h", 100, 30*time.Minute, now))
 	r := announcementAt(now, 2*time.Hour, now)
 
-	if got := Visible(data, r, now); got != nil {
+	if got := Visible(data, r, now, 10*time.Minute); got != nil {
 		t.Fatalf("window resets before the announced time: got %+v, want nil", got)
 	}
 }
@@ -65,7 +65,7 @@ func TestWindowWithRoomIsHidden(t *testing.T) {
 	data := codexReading(now, window("7d", 20, 3*24*time.Hour, now))
 	r := announcementAt(now, time.Hour, now)
 
-	if got := Visible(data, r, now); got != nil {
+	if got := Visible(data, r, now, 10*time.Minute); got != nil {
 		t.Fatalf("window with room: got %+v, want nil", got)
 	}
 }
@@ -76,7 +76,7 @@ func TestProjectedRunOutBeforeResetBears(t *testing.T) {
 	data := codexReading(now, window("7d", 60, 3*24*time.Hour, now))
 	r := announcementAt(now, time.Hour, now)
 
-	got := Visible(data, r, now)
+	got := Visible(data, r, now, 10*time.Minute)
 	if got == nil || !reflect.DeepEqual(got.Windows, []string{"7d"}) {
 		t.Fatalf("projected run-out before reset: got %+v, want the announcement for 7d", got)
 	}
@@ -93,7 +93,7 @@ func TestStaleOrErroredReadingIsHidden(t *testing.T) {
 		"expired": {Provider: "openai", IsExpired: true, Error: "token expired", Windows: []provider.UsageWindow{blocked}},
 	}
 	for name, data := range cases {
-		if got := Visible(data, r, now); got != nil {
+		if got := Visible(data, r, now, 10*time.Minute); got != nil {
 			t.Errorf("%s reading: got %+v, want nil", name, got)
 		}
 	}
@@ -109,7 +109,7 @@ func TestOneWindowRecoversAndTheOtherStillBears(t *testing.T) {
 	)
 	r := announcementAt(now, 2*time.Hour, now)
 
-	got := Visible(data, r, now)
+	got := Visible(data, r, now, 10*time.Minute)
 	if got == nil {
 		t.Fatal("one window still bears: want the announcement")
 	}
@@ -132,7 +132,7 @@ func TestScheduledTimeRules(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := Visible(codexReading(now, blocked...), announcementAt(now, c.offset, now), now)
+			got := Visible(codexReading(now, blocked...), announcementAt(now, c.offset, now), now, 10*time.Minute)
 			if (got != nil) != c.want {
 				t.Fatalf("visible = %v, want %v (%+v)", got != nil, c.want, got)
 			}
@@ -146,10 +146,10 @@ func TestScheduledTimeRules(t *testing.T) {
 func TestFeedCheckedWithinTwoHours(t *testing.T) {
 	now := time.Now()
 	blocked := []provider.UsageWindow{window("7d", 100, 3*24*time.Hour, now)}
-	if got := Visible(codexReading(now, blocked...), announcementAt(now, time.Hour, now.Add(-119*time.Minute)), now); got == nil {
+	if got := Visible(codexReading(now, blocked...), announcementAt(now, time.Hour, now.Add(-119*time.Minute)), now, 10*time.Minute); got == nil {
 		t.Fatal("feed read 1h59m ago: want the announcement")
 	}
-	if got := Visible(codexReading(now, blocked...), announcementAt(now, time.Hour, now.Add(-2*time.Hour-time.Minute)), now); got != nil {
+	if got := Visible(codexReading(now, blocked...), announcementAt(now, time.Hour, now.Add(-2*time.Hour-time.Minute)), now, 10*time.Minute); got != nil {
 		t.Fatalf("feed read 2h01m ago: got %+v, want nil", got)
 	}
 }
@@ -158,7 +158,7 @@ func TestOnlyCodexSourcesAreAnnounced(t *testing.T) {
 	now := time.Now()
 	blocked := window("7d", 100, 3*24*time.Hour, now)
 	data := &provider.UsageData{Provider: "claude", SourceID: "default", FetchedAt: now, Windows: []provider.UsageWindow{blocked}}
-	if got := Visible(data, announcementAt(now, time.Hour, now), now); got != nil {
+	if got := Visible(data, announcementAt(now, time.Hour, now), now, 10*time.Minute); got != nil {
 		t.Fatalf("claude source: got %+v, want nil", got)
 	}
 }
@@ -172,7 +172,7 @@ func TestAccountsDecideIndependently(t *testing.T) {
 	}
 	results["openai:work"].SourceID = "work"
 
-	out := AnnounceAll(results, r, now)
+	out := AnnounceAll(results, r, now, 10*time.Minute)
 	if out["openai"].AnnouncedReset == nil {
 		t.Fatal("blocked account: want its announcement")
 	}
@@ -191,7 +191,7 @@ func TestAnnouncementFieldsAndNoQuotaChange(t *testing.T) {
 	before := data.Clone()
 	r := announcementAt(now, time.Hour, now.Add(-10*time.Minute))
 
-	got := Announce(data, r, now)
+	got := Announce(data, r, now, 10*time.Minute)
 	if got.AnnouncedReset == nil {
 		t.Fatal("want an announcement")
 	}
@@ -208,13 +208,13 @@ func TestAnnouncementFieldsAndNoQuotaChange(t *testing.T) {
 	if data.AnnouncedReset != nil {
 		t.Fatal("Announce must return a copy, not mutate the input")
 	}
-	if Announce(data, Reading{}, now) != data {
+	if Announce(data, Reading{}, now, 10*time.Minute) != data {
 		t.Fatal("no announcement: want the input unchanged")
 	}
 }
 
 func TestAnnounceAllKeepsNilNil(t *testing.T) {
-	if got := AnnounceAll(nil, Reading{}, time.Now()); got != nil {
+	if got := AnnounceAll(nil, Reading{}, time.Now(), 10*time.Minute); got != nil {
 		t.Fatalf("AnnounceAll(nil) = %v, want nil", got)
 	}
 }
@@ -227,7 +227,7 @@ func TestAPassedAnnouncementIsHiddenForAWindowWithRoom(t *testing.T) {
 	now := time.Now()
 	data := codexReading(now, window("7d", 60, 5*24*time.Hour, now))
 	r := announcementAt(now, -4*time.Hour, now)
-	if got := Visible(data, r, now); got != nil {
+	if got := Visible(data, r, now, 10*time.Minute); got != nil {
 		t.Fatalf("passed announcement, window with room: got %+v, want nil", got)
 	}
 }
@@ -236,7 +236,7 @@ func TestAPassedAnnouncementIsShownWhileTheWindowIsStillOut(t *testing.T) {
 	now := time.Now()
 	data := codexReading(now, window("7d", 100, 3*24*time.Hour, now))
 	r := announcementAt(now, -time.Hour, now)
-	got := Visible(data, r, now)
+	got := Visible(data, r, now, 10*time.Minute)
 	if got == nil || !reflect.DeepEqual(got.Windows, []string{"7d"}) {
 		t.Fatalf("passed announcement, window still out: got %+v, want it for 7d", got)
 	}
@@ -246,7 +246,7 @@ func TestAReadingFromBeforeAPassedAnnouncementDoesNotShowIt(t *testing.T) {
 	now := time.Now()
 	data := codexReading(now.Add(-2*time.Hour), window("7d", 100, 3*24*time.Hour, now))
 	r := announcementAt(now, -time.Hour, now)
-	if got := Visible(data, r, now); got != nil {
+	if got := Visible(data, r, now, 10*time.Minute); got != nil {
 		t.Fatalf("reading from before the announced time: got %+v, want nil", got)
 	}
 }

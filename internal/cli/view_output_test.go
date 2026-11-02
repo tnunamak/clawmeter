@@ -103,7 +103,7 @@ func TestStatusLineSaysOutNowForAForecastableExhaustedWindow(t *testing.T) {
 	}}}
 
 	line := output.StatusLineSummary()
-	if !strings.HasPrefix(line, "CM! Claude 5h est. 125% reset ") || !strings.HasSuffix(line, " out now") {
+	if !strings.HasPrefix(line, "CM! Claude 5h est. 125% (average since reset) reset ") || !strings.HasSuffix(line, " out now") {
 		t.Fatalf("StatusLineSummary() = %q, want an exhausted window to read out now", line)
 	}
 }

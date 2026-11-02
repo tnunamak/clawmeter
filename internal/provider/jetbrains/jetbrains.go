@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -141,7 +142,16 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("credentials: %w", err)
 	}
 
-	xmlData, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read quota file: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat quota file: %w", err)
+	}
+	xmlData, err := io.ReadAll(file)
 	if err != nil {
 		return nil, fmt.Errorf("read quota file: %w", err)
 	}
@@ -151,7 +161,10 @@ func (p *Provider) FetchUsage(ctx context.Context) (*provider.UsageData, error) 
 		return nil, fmt.Errorf("parse quota: %w", err)
 	}
 
-	return p.transformQuota(quota), nil
+	data := p.transformQuota(quota)
+	// Re-reading a local cache is not a new upstream observation.
+	data.FetchedAt = info.ModTime()
+	return data, nil
 }
 
 // findQuotaFile finds the most recent JetBrains AI quota XML file.
@@ -308,13 +321,13 @@ func (p *Provider) transformQuota(quota *quotaData) *provider.UsageData {
 	}
 
 	data.Windows = append(data.Windows, provider.UsageWindow{
-		Name:        "monthly",
-		Length:      30 * 24 * time.Hour,
-		DisplayName: "Monthly Credits",
-		Utilization: usedPct,
-		ResetsAt:    resetsAt,
-		Limit:       quota.MonthlyLimit,
-		Used:        quota.MonthlyUsed,
+		Name:          "monthly",
+		LengthUnknown: true,
+		DisplayName:   "Monthly Credits",
+		Utilization:   usedPct,
+		ResetsAt:      resetsAt,
+		Limit:         quota.MonthlyLimit,
+		Used:          quota.MonthlyUsed,
 	})
 
 	return data

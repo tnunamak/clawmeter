@@ -11,10 +11,10 @@ import (
 func TestSummaryRanksExhaustedUnknownAcrossCriticalProviders(t *testing.T) {
 	now := time.Now()
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
-		{Display: "Projected", Data: &provider.UsageData{Windows: []provider.UsageWindow{
+		{Display: "Projected", Data: &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{
 			{Name: "7d", Utilization: 50, ResetsAt: now.Add(6 * 24 * time.Hour)},
 		}}},
-		{Display: "Exhausted", Data: &provider.UsageData{Windows: []provider.UsageWindow{
+		{Display: "Exhausted", Data: &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{
 			{Name: "5h", Utilization: 100, ResetsAt: now.Add(299 * time.Minute)},
 			{Name: "7d", Utilization: 10, ResetsAt: now.Add(time.Hour)},
 		}}},
@@ -38,7 +38,7 @@ func TestSummaryUsesRetainedReadingForecast(t *testing.T) {
 	for _, age := range []time.Duration{2 * time.Minute, 11 * time.Minute} {
 		output := &MultiProviderOutput{Providers: []ProviderFormatter{
 			fmtr("claude", "Claude", "claude", &provider.UsageData{Stale: true, FetchedAt: now.Add(-age), Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 80, ResetsAt: now.Add(3 * time.Hour)}}}),
-			fmtr("codex", "Codex", "openai", &provider.UsageData{Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 1, ResetsAt: now.Add(time.Hour)}}}),
+			fmtr("codex", "Codex", "openai", &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 1, ResetsAt: now.Add(time.Hour)}}}),
 		}}
 		got := captureStdout(t, func() { output.buildView(now).printSummary(false) })
 		if age <= 10*time.Minute {

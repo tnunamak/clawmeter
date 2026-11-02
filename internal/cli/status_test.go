@@ -127,7 +127,7 @@ func TestAgentSummaryKeepsExactBoundarySeconds(t *testing.T) {
 		{
 			Name:    "openai",
 			Display: "Codex",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 99, ResetsAt: now.Add(59 * time.Second)},
 			}},
 		},
@@ -153,7 +153,7 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 		{
 			Name:    "claude",
 			Display: "Claude",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "5h Sonnet", Utilization: 40, ResetsAt: now.Add(2 * time.Hour)},
 				{Name: "7d All", Utilization: 74, ResetsAt: now.Add(36 * time.Hour)},
 			}},
@@ -161,7 +161,7 @@ func TestAgentSummaryIncludesAllUsableQuotas(t *testing.T) {
 		{
 			Name:    "openai",
 			Display: "Codex",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 16, ResetsAt: now.Add(36 * time.Hour)},
 			}},
 		},
@@ -201,14 +201,14 @@ func TestAgentSummaryWorstQuotaPrefersSoonerRunoutOverHigherProjectedPct(t *test
 		{
 			Name:    "openai",
 			Display: "Codex",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
 			}},
 		},
 		{
 			Name:    "claude",
 			Display: "Claude",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
 			}},
 		},
@@ -270,7 +270,7 @@ func TestAgentSummaryIncludesRunOutEarlyBy(t *testing.T) {
 		{
 			Name:    "openai",
 			Display: "Codex",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
 			}},
 		},
@@ -298,7 +298,7 @@ func TestAgentSummaryAlreadyOutIncludesBlockedWait(t *testing.T) {
 		{
 			Name:    "openai",
 			Display: "Codex",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 100, ResetsAt: now.Add(time.Hour)},
 			}},
 		},
@@ -324,7 +324,7 @@ func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
 	pf := ProviderFormatter{
 		Name:    "openai",
 		Display: "Codex",
-		Data: &provider.UsageData{Windows: []provider.UsageWindow{
+		Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 			{Name: "5h", Utilization: 90, ResetsAt: now.Add(time.Hour)},
 		}},
 	}
@@ -345,7 +345,7 @@ func TestFormatPlainIncludesRunOutEarlyBy(t *testing.T) {
 func TestFormatPlainStatesResetlessExtraUsageIsOutNow(t *testing.T) {
 	pf := ProviderFormatter{
 		Display: "Claude",
-		Data: &provider.UsageData{Windows: []provider.UsageWindow{{
+		Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{{
 			Name: "extra", DisplayName: "Extra usage", Utilization: 100,
 		}}},
 	}
@@ -449,7 +449,7 @@ func TestStatusLineSummaryIsCompact(t *testing.T) {
 		{
 			Name:    "claude",
 			Display: "Claude",
-			Data: &provider.UsageData{Windows: []provider.UsageWindow{
+			Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 				{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
 			}},
 		},
@@ -920,7 +920,7 @@ func TestBuildOutputFromCacheRejectsRotatedSourceCredential(t *testing.T) {
 }
 
 func TestPlainOutputShowsExtraUsageMoney(t *testing.T) {
-	pf := &ProviderFormatter{Display: "Claude", Data: &provider.UsageData{Windows: []provider.UsageWindow{
+	pf := &ProviderFormatter{Display: "Claude", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 		{Name: "extra", DisplayName: "Extra usage", Utilization: 83, Used: 1658, Limit: 2000, Currency: "USD"},
 	}}}
 	if got := pf.FormatPlain(); got != "Claude: Extra usage: $16.58 / $20.00" {
@@ -1068,7 +1068,7 @@ func TestExpiredMessageDoesNotRepeatExpired(t *testing.T) {
 func TestStatusTableRowsUseTheTrayIconColors(t *testing.T) {
 	// 72% used two days into a seven-day window: ahead of an even pace.
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 72, ResetsAt: time.Now().Add(5 * 24 * time.Hour)}
-	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}}
+	pf := ProviderFormatter{Display: "Claude", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}}
 	layout := newTableLayout()
 	for _, row := range shownRowsOf(pf) {
 		layout.fit(rowCells(row))
@@ -1117,8 +1117,8 @@ func TestStatusErrorRowAlignsItsSnapshotDetails(t *testing.T) {
 func TestStatusTableAlignsWideProviderNames(t *testing.T) {
 	window := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 40, ResetsAt: time.Now().Add(3 * 24 * time.Hour)}
 	providers := []ProviderFormatter{
-		{Display: "Claude · 仕事", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}},
-		{Display: "Codex", Data: &provider.UsageData{Windows: []provider.UsageWindow{window}}},
+		{Display: "Claude · 仕事", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}},
+		{Display: "Codex", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{window}}},
 	}
 	layout := newTableLayout()
 	for _, pf := range providers {
