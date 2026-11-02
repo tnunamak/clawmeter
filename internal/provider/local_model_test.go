@@ -1,11 +1,19 @@
 package provider
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 	"unicode"
 )
+
+// breaksLine reports runes that cannot sit in one human line: controls, and
+// the line and paragraph separators U+2028 and U+2029.
+func breaksLine(r rune) bool { return unicode.IsControl(r) || r == 0x2028 || r == 0x2029 }
+
+// escapedRune is how escapeControls shows r in human text.
+func escapedRune(r rune) string { return fmt.Sprintf(`\u%04x`, r) }
 
 func TestLocalModelCacheDoesNotInventResetOrNewDayUsage(t *testing.T) {
 	at := time.Date(2026, 10, 28, 23, 59, 0, 0, time.UTC)
@@ -38,15 +46,24 @@ func TestLocalModelSummaryEscapesControls(t *testing.T) {
 		{"label", LocalModelUsage{Model: "x-free", Label: "\x1b[2JFORGED\r\nROW", Day: "2026-10-28"}, `\u001b[2JFORGED\u000d\u000aROW: 2026-10-28 UTC · `},
 		{"model fallback", LocalModelUsage{Model: "\x1b[2JFORGED\r\nROW-free", Day: "2026-10-28"}, `\u001b[2JFORGED\u000d\u000aROW-free: 2026-10-28 UTC · `},
 		{"ordinary unicode", LocalModelUsage{Model: "x-free", Label: "Ünïcödé 模型 🦀", Day: "2026-10-28"}, "Ünïcödé 模型 🦀: 2026-10-28 UTC · "},
+		{"line separators", LocalModelUsage{Model: "x-free", Label: "A" + string(rune(0x2028)) + "B" + string(rune(0x2029)) + "C", Day: "2026-10-28"}, "A" + escapedRune(0x2028) + "B" + escapedRune(0x2029) + "C: 2026-10-28 UTC · "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := tc.m.Summary()
 			if !strings.HasPrefix(s, tc.want) {
 				t.Fatalf("summary = %q, want prefix %q", s, tc.want)
 			}
-			if strings.IndexFunc(s, unicode.IsControl) >= 0 {
-				t.Fatalf("summary keeps a control character: %q", s)
+			if strings.ContainsFunc(s, breaksLine) {
+				t.Fatalf("summary keeps a control or line separator: %q", s)
 			}
 		})
+	}
+}
+
+func TestLocalModelSummaryBoundsLabel(t *testing.T) {
+	m := LocalModelUsage{Model: "x-free", Label: strings.Repeat("m", 50), Day: "2026-10-28"}
+	want := strings.Repeat("m", 37) + "...: 2026-10-28 UTC · "
+	if s := m.Summary(); !strings.HasPrefix(s, want) {
+		t.Fatalf("summary = %q, want prefix %q", s, want)
 	}
 }

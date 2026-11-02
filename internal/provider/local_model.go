@@ -30,7 +30,7 @@ func (m LocalModelUsage) Summary() string {
 	if label == "" {
 		label = m.Model
 	}
-	label = escapeControls(label)
+	label = displayLabel(label)
 	facts := []string{m.Day + " UTC"}
 	if m.AssistantMessages != nil {
 		facts = append(facts, fmt.Sprintf("%d local assistant messages", *m.AssistantMessages))
@@ -53,19 +53,33 @@ func (m LocalModelUsage) Summary() string {
 	return label + ": " + strings.Join(facts, " · ")
 }
 
-// escapeControls shows control characters from catalog-supplied names as
-// escapes, so they cannot clear a terminal or start a new row in human output.
-// Ordinary Unicode is kept as written.
+// escapeControls shows control characters and line or paragraph separators
+// from catalog-supplied names as escapes, so they cannot clear a terminal, start
+// a new row or split a one-line label. Ordinary Unicode is kept as written.
 func escapeControls(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || r == 0x2028 || r == 0x2029 {
 			fmt.Fprintf(&b, `\u%04x`, r)
 			continue
 		}
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// maxDisplayLabelRunes bounds a catalog name in one human line. It matches the
+// 40-rune cap on source labels in config; JSON keeps the full name.
+const maxDisplayLabelRunes = 40
+
+// displayLabel is a catalog name as one human line: escaped, then cut to
+// maxDisplayLabelRunes with "...".
+func displayLabel(s string) string {
+	r := []rune(escapeControls(s))
+	if len(r) > maxDisplayLabelRunes {
+		return string(r[:maxDisplayLabelRunes-3]) + "..."
+	}
+	return string(r)
 }
 
 // LocalModelsAt withholds yesterday's and failed refresh counts without turning

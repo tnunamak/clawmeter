@@ -2,9 +2,11 @@ package cli
 
 import (
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 func TestLocalModelsVisibleWithoutQuotaClaims(t *testing.T) {
@@ -65,5 +67,25 @@ func TestLocalModelLimitLeadsHumanAndMachineSurfaces(t *testing.T) {
 	}
 	if v.snap.Worst != nil {
 		t.Fatal("historical limit became a current quota/risk measurement")
+	}
+}
+
+func TestLocalModelLimitHumanOutputEscapesControls(t *testing.T) {
+	at := matrixNow
+	data := &provider.UsageData{Provider: "opencode_free", FetchedAt: at, LocalModels: []provider.LocalModelUsage{{Model: "model-a", Label: "Model A\x1b[2J\rFORGED STATUS", Day: at.UTC().Format("2006-01-02"), LimitHitAt: at.Add(-time.Minute)}}}
+	m := &MultiProviderOutput{Providers: []ProviderFormatter{{Name: "opencode_free", DisplayName: "OpenCode Free", Data: data}}}
+	v := m.buildView(at)
+	// The table's SGR color codes are its own styling; no other control byte may reach either output.
+	sgr := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	for name, s := range map[string]string{"plain": v.plainLine(0), "table": strings.Join(v.colorTable(), "\n")} {
+		s = sgr.ReplaceAllString(s, "")
+		if !strings.Contains(s, `Latest recorded model limit: Model A\u001b[2J\u000dFORGED STATUS · `) || !strings.Contains(s, `Model A\u001b[2J\u000dFORGED STATUS: `) {
+			t.Fatalf("%s lacks the escaped label on the status and model rows: %q", name, s)
+		}
+		for _, line := range strings.Split(s, "\n") {
+			if strings.ContainsFunc(line, func(r rune) bool { return unicode.IsControl(r) || r == 0x2028 || r == 0x2029 }) {
+				t.Fatalf("%s prints a control or line separator: %q", name, line)
+			}
+		}
 	}
 }

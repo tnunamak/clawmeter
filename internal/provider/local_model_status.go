@@ -35,8 +35,9 @@ func SummarizeLocalModelStatus(models []LocalModelUsage, at time.Time) LocalMode
 			status.LatestLimitAt = when.UTC()
 		}
 	}
+	// LatestLimitLabel stays the raw catalog name for JSON; Text is the human line.
 	if !status.LatestLimitAt.IsZero() {
-		status.Text = "Latest recorded model limit: " + status.LatestLimitLabel + " · " +
+		status.Text = "Latest recorded model limit: " + displayLabel(status.LatestLimitLabel) + " · " +
 			status.LatestLimitAt.Format("Jan 2 15:04 UTC") + " · remaining quota and reset unknown"
 	}
 	return status

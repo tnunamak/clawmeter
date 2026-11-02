@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,5 +130,66 @@ func TestLocalModelStatusJSONUnknown(t *testing.T) {
 		if _, exists := fields[name]; exists {
 			t.Fatalf("empty event leaked %s: %s", name, data)
 		}
+	}
+}
+
+func TestLocalModelStatusSanitizesDisplayLabel(t *testing.T) {
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	limit := at.Add(-time.Minute)
+	for _, tc := range []struct {
+		name  string
+		model LocalModelUsage
+		want  string // the label as the status line shows it
+	}{
+		{"escape", LocalModelUsage{Model: "model-a", Label: "Model A\x1b[2JFORGED", LimitHitAt: limit}, `Model A\u001b[2JFORGED`},
+		{"carriage return", LocalModelUsage{Model: "model-a", Label: "Model A\rFORGED", LimitHitAt: limit}, `Model A\u000dFORGED`},
+		{"line feed", LocalModelUsage{Model: "model-a", Label: "Model A\nFORGED", LimitHitAt: limit}, `Model A\u000aFORGED`},
+		{"tab", LocalModelUsage{Model: "model-a", Label: "Model A\tFORGED", LimitHitAt: limit}, `Model A\u0009FORGED`},
+		{"delete", LocalModelUsage{Model: "model-a", Label: "Model A\x7fFORGED", LimitHitAt: limit}, `Model A\u007fFORGED`},
+		{"c1 control", LocalModelUsage{Model: "model-a", Label: "Model A" + string(rune(0x9b)) + "FORGED", LimitHitAt: limit}, "Model A" + escapedRune(0x9b) + "FORGED"},
+		{"line separator", LocalModelUsage{Model: "model-a", Label: "Model A" + string(rune(0x2028)) + "FORGED", LimitHitAt: limit}, "Model A" + escapedRune(0x2028) + "FORGED"},
+		{"paragraph separator", LocalModelUsage{Model: "model-a", Label: "Model A" + string(rune(0x2029)) + "FORGED", LimitHitAt: limit}, "Model A" + escapedRune(0x2029) + "FORGED"},
+		{"model fallback", LocalModelUsage{Model: "model-a\x1b[2J\rFORGED", LimitHitAt: limit}, `model-a\u001b[2J\u000dFORGED`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SummarizeLocalModelStatus([]LocalModelUsage{tc.model}, at)
+			prefix := "Latest recorded model limit: " + tc.want + " · Oct 29 11:59 UTC · "
+			if !strings.HasPrefix(got.Text, prefix) {
+				t.Fatalf("text = %q, want prefix %q", got.Text, prefix)
+			}
+			if strings.ContainsFunc(got.Text, breaksLine) {
+				t.Fatalf("text is not one safe line: %q", got.Text)
+			}
+			raw := tc.model.Label
+			if raw == "" {
+				raw = tc.model.Model
+			}
+			if got.LatestLimitLabel != raw {
+				t.Fatalf("typed label = %q, want raw %q", got.LatestLimitLabel, raw)
+			}
+		})
+	}
+}
+
+func TestLocalModelStatusDisplayLabelIsBounded(t *testing.T) {
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	long := strings.Repeat("ü", 60)
+	got := SummarizeLocalModelStatus([]LocalModelUsage{{Model: "model-a", Label: long, LimitHitAt: at}}, at)
+	want := "Latest recorded model limit: " + strings.Repeat("ü", 37) + "... · Oct 29 12:00 UTC · remaining quota and reset unknown"
+	if got.Text != want || got.LatestLimitLabel != long {
+		t.Fatalf("text = %q, typed label kept = %v", got.Text, got.LatestLimitLabel == long)
+	}
+}
+
+func TestLocalModelStatusJSONIsAdditive(t *testing.T) {
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	got := SummarizeLocalModelStatus([]LocalModelUsage{{Model: "model-a", Label: "Model A", LimitHitAt: at.Add(-time.Minute)}}, at)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"text":"Latest recorded model limit: Model A · Oct 29 11:59 UTC · remaining quota and reset unknown","remaining_quota_known":false,"reset_known":false,"latest_limit_model":"model-a","latest_limit_label":"Model A","latest_limit_at":"2026-10-29T11:59:00Z"}`
+	if string(data) != want {
+		t.Fatalf("JSON changed:\n got %s\nwant %s", data, want)
 	}
 }
