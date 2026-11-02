@@ -25,10 +25,10 @@ type UsageCreditBenefit struct {
 
 // State evaluates the claim against the clock, not the provider's last poll.
 func (b UsageCreditBenefit) State(now time.Time) string {
-	// A link only settles the offer while it is observed. An aged link is unknown,
-	// so it cannot hide a fresh offer behind the linked state.
+	// An aged or future link time is unknown, so a stale link cannot hide a fresh
+	// offer behind the linked state. An unstamped link is kept, as the offer path keeps it.
 	if b.LinkState == "linked" {
-		if b.LinkObservedAt.IsZero() || b.LinkObservedAt.After(now) || now.Sub(b.LinkObservedAt) >= 5*time.Minute {
+		if !b.LinkObservedAt.IsZero() && (b.LinkObservedAt.After(now) || now.Sub(b.LinkObservedAt) >= 5*time.Minute) {
 			return "unknown"
 		}
 		return "linked"
