@@ -75,7 +75,7 @@ func (b UsageCreditBenefit) Summary(now time.Time) string {
 			period = "year"
 		}
 		return "Claim " + formatMinorUnits(int(*b.Claimable), b.Currency) + " in API credits (" +
-			formatMinorUnits(int(*b.PeriodCredit), b.Currency) + "/" + period + ")…"
+			formatMinorUnits(int(*b.PeriodCredit), b.Currency) + "/" + period + ") · offer expires " + expiryTime(b.ExpiresAt, now) + "…"
 	case "linked":
 		return "API credit benefit linked"
 	case "ineligible":

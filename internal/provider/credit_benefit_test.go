@@ -11,7 +11,7 @@ func TestCreditBenefitIsAnOfferNotABalance(t *testing.T) {
 	claim, period := int64(3500), int64(7000)
 	b := UsageCreditBenefit{Eligibility: "eligible", LinkState: "unlinked", Currency: "USD",
 		Claimable: &claim, PeriodCredit: &period, Cadence: "monthly", ObservedAt: now, ExpiresAt: now.Add(time.Hour)}
-	if got := b.Summary(now); got != "Claim $35.00 in API credits ($70.00/month)…" {
+	if got := b.Summary(now); got != "Claim $35.00 in API credits ($70.00/month) · offer expires "+expiryTime(b.ExpiresAt, now)+"…" {
 		t.Fatal(got)
 	}
 	if b.ActionURL(now) != OpenAIAPIBillingURL {
@@ -81,5 +81,20 @@ func TestCreditBenefitFreshOfferBeatsStaleLink(t *testing.T) {
 	}
 	if b.Claimable == nil || *b.Claimable != claim {
 		t.Fatal("claimable amount was dropped")
+	}
+}
+
+func TestCreditBenefitSummaryIncludesExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	claim, period := int64(3500), int64(7000)
+	soon := UsageCreditBenefit{Eligibility: "eligible", LinkState: "unlinked", Currency: "USD",
+		Claimable: &claim, PeriodCredit: &period, Cadence: "monthly", ObservedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if got := soon.Summary(now); !strings.Contains(got, "Claim $") || !strings.Contains(got, expiryTime(soon.ExpiresAt, now)) {
+		t.Fatalf("claim summary omits the offer expiry: %q", got)
+	}
+	later := soon
+	later.ExpiresAt = now.Add(300 * 24 * time.Hour)
+	if soon.Summary(now) == later.Summary(now) {
+		t.Fatal("an offer expiring tomorrow reads the same as one expiring in months")
 	}
 }
