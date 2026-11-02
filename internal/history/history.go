@@ -245,12 +245,9 @@ func scanHistoryFile(path string, visit func(Reading)) (tail *historyTail, err e
 			tail = &historyTail{path: path, offset: offset}
 			continue
 		}
-		var reading Reading
-		if err := json.Unmarshal(line, &reading); err != nil {
+		reading, err := decodeReading(line)
+		if err != nil {
 			return nil, fmt.Errorf("decode history line in %s: %w", filepath.Base(path), err)
-		}
-		if reading.SchemaVersion != SchemaVersion {
-			return nil, fmt.Errorf("unsupported history schema version %d", reading.SchemaVersion)
 		}
 		visit(reading)
 		offset += int64(len(line))
@@ -262,6 +259,37 @@ func scanHistoryFile(path string, visit func(Reading)) (tail *historyTail, err e
 		return nil, fmt.Errorf("read history file: %w", err)
 	}
 	return tail, nil
+}
+
+// requiredReadingFields lists the keys history-v1.schema.json requires.
+var requiredReadingFields = []string{"schema_version", "reading_time", "recorded_at", "provider", "account", "source", "window", "window_minutes", "used_percent", "resets_at", "age_seconds"}
+
+// decodeReading applies history-v1.schema.json to one complete line. Unknown
+// fields are ignored, as the compatibility policy requires within version 1.
+func decodeReading(line []byte) (Reading, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(line, &fields); err != nil {
+		return Reading{}, err
+	}
+	var reading Reading
+	if err := json.Unmarshal(line, &reading); err != nil {
+		return Reading{}, err
+	}
+	if reading.SchemaVersion != SchemaVersion {
+		return Reading{}, fmt.Errorf("unsupported history schema version %d", reading.SchemaVersion)
+	}
+	for _, name := range requiredReadingFields {
+		if value, ok := fields[name]; !ok || string(value) == "null" {
+			return Reading{}, fmt.Errorf("missing required field %s", name)
+		}
+	}
+	if reading.Provider == "" || reading.Account == "" || reading.Source == "" || reading.Window == "" {
+		return Reading{}, errors.New("provider, account, source and window must not be empty")
+	}
+	if reading.WindowMinutes < 0 || reading.UsedPercent < 0 || reading.AgeSeconds < 0 {
+		return Reading{}, errors.New("window_minutes, used_percent and age_seconds must not be negative")
+	}
+	return reading, nil
 }
 
 // repair preserves complete records, adds a missing delimiter, or removes only

@@ -50,6 +50,27 @@ func TestHistoryCommandJSONLinesFilters(t *testing.T) {
 	}
 }
 
+func TestHistoryCommandRejectsInvalidV1Record(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	cacheRoot := filepath.Join(home, ".cache")
+	if runtime.GOOS == "windows" {
+		cacheRoot = filepath.Join(home, "AppData", "Local")
+	}
+	historyDir := filepath.Join(cacheRoot, "clawmeter", "history")
+	if err := os.MkdirAll(historyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(historyDir, "usage-"+time.Now().UTC().Format("2006-01")+".jsonl")
+	if err := os.WriteFile(path, []byte("{\"schema_version\":1}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runWithHome(t, bin, home, "history", "--json")
+	if code == 0 || stdout != "" || !strings.Contains(stderr, "read history") {
+		t.Fatalf("invalid v1 history record: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestUsageHistoryConfigSetting(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()

@@ -283,6 +283,84 @@ func TestHistoryRejectsUnsupportedVersionsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestHistoryRejectsInvalidV1RecordsWithoutMutation(t *testing.T) {
+	valid := marshalHistoryRecord(t, validHistoryRecord())
+	cases := []struct {
+		name   string
+		mutate func(record map[string]any)
+	}{
+		{"empty provider", func(r map[string]any) { r["provider"] = "" }},
+		{"null account", func(r map[string]any) { r["account"] = nil }},
+		{"missing source", func(r map[string]any) { delete(r, "source") }},
+		{"empty window", func(r map[string]any) { r["window"] = "" }},
+		{"missing reading_time", func(r map[string]any) { delete(r, "reading_time") }},
+		{"missing resets_at", func(r map[string]any) { delete(r, "resets_at") }},
+		{"missing window_minutes", func(r map[string]any) { delete(r, "window_minutes") }},
+		{"negative window_minutes", func(r map[string]any) { r["window_minutes"] = -1 }},
+		{"negative used_percent", func(r map[string]any) { r["used_percent"] = -0.5 }},
+		{"negative age_seconds", func(r map[string]any) { r["age_seconds"] = -1 }},
+		{"only schema version", func(r map[string]any) {
+			for name := range r {
+				if name != "schema_version" {
+					delete(r, name)
+				}
+			}
+		}},
+	}
+	// The base record must be valid, or every case would fail for the wrong reason.
+	baseDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(baseDir, "usage-2026-10.jsonl"), append(bytes.Clone(valid), '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if readings, err := Read(baseDir, time.Time{}, ""); err != nil || len(readings) != 1 {
+		t.Fatalf("valid base record: %d readings, %v", len(readings), err)
+	}
+	for _, tc := range cases {
+		for _, terminated := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/newline=%t", tc.name, terminated), func(t *testing.T) {
+				record := validHistoryRecord()
+				tc.mutate(record)
+				before := bytes.Join([][]byte{valid, marshalHistoryRecord(t, record)}, []byte{'\n'})
+				if terminated {
+					before = append(before, '\n')
+				}
+				dir := t.TempDir()
+				path := filepath.Join(dir, "usage-2026-10.jsonl")
+				if err := os.WriteFile(path, before, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := Read(dir, time.Time{}, ""); err == nil {
+					t.Fatal("Read accepted invalid v1 record")
+				}
+				if err := Append(dir, nil, time.Date(2026, 10, 27, 11, 0, 0, 0, time.UTC)); err == nil {
+					t.Fatal("Append accepted invalid v1 record")
+				}
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatalf("invalid record changed history: %q, %v", after, err)
+				}
+			})
+		}
+	}
+}
+
+func validHistoryRecord() map[string]any {
+	return map[string]any{
+		"schema_version": 1, "reading_time": "2026-10-27T10:00:00Z", "recorded_at": "2026-10-27T10:00:00Z",
+		"provider": "claude", "account": "Work", "source": "work", "window": "7d Claude 4 Sonnet",
+		"window_minutes": 10080, "used_percent": 20, "resets_at": "2026-10-28T10:00:00Z", "age_seconds": 0,
+	}
+}
+
+func marshalHistoryRecord(t *testing.T, record map[string]any) []byte {
+	t.Helper()
+	line, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line
+}
+
 // compactCrashExit is the status of a child killed after the compacted replacement
 // is synced. os.Exit skips deferred cleanup, as a killed process would.
 const compactCrashExit = 42
