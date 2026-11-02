@@ -86,6 +86,7 @@ type state struct {
 	pendingRelease            *update.Release
 	currentTitle              string
 	currentTooltip            string
+	currentTooltipImage       tooltipImage
 	lastRefreshAt             time.Time
 	iconTargetOverride        iconTarget
 	iconStateKnown            bool
@@ -136,7 +137,10 @@ func Run(ver string) int {
 	// Init through their executable lookup and wait on the same sync.Once.
 	go shellpath.Init()
 	setupIconTheme()
+	setupTooltipColors()
+	defer stopTooltipColors()
 	systray.Run(onReady, func() {
+		stopTooltipColors()
 		cleanupIconTheme()
 	})
 	return 0
@@ -568,6 +572,14 @@ func onReadyWithConfig(loaded *config.Config) {
 	go func() {
 		for {
 			select {
+			case <-tooltipAppearanceChanged:
+				s.mu.Lock()
+				retained, retainedStatuses := s.lastResults, s.statuses
+				s.mu.Unlock()
+				if retained != nil {
+					updateUI(retained, retainedStatuses, providerMenus, mReauth, iconPick, mEmpty, mProviderSetup)
+				}
+
 			case <-ticker.C:
 				// Let the remote refresh start before queuing a local publication.
 				go func() {
@@ -885,6 +897,7 @@ type providerMenuItems struct {
 
 type menuItemState struct {
 	title       string
+	titleStyle  string
 	visible     bool
 	enabled     bool
 	initialized bool
@@ -1325,8 +1338,9 @@ func showProviderProblem(menu *providerMenuItems, problem string) {
 }
 
 func setMenuItemTitle(item *systray.MenuItem, state *menuItemState, title string) {
-	if !state.initialized || state.title != title {
+	if !state.initialized || state.title != title || state.titleStyle != "" {
 		item.SetTitle(title)
+		state.titleStyle = ""
 		state.title = title
 		state.initialized = true
 	}
@@ -1620,7 +1634,7 @@ func updateUI(results map[string]*provider.UsageData, statuses map[string]*statu
 				target = iconTarget{}
 			}
 			setWindowTarget(menu, i, target)
-			setMenuItemTitle(menu.windowItems[i], &menu.windowStates[i], rows[i])
+			setMeterMenuTitle(menu.windowItems[i], &menu.windowStates[i], rows[i], window.Row(false).Bar)
 			// iconPick.update draws the row icon: the risk dot or the pin check.
 			menu.windowAtRisk[i] = AtRisk(window)
 			setMenuItemVisible(menu.windowItems[i], &menu.windowStates[i], true)
@@ -2409,14 +2423,16 @@ func updateTrayTooltip(snap view.Snapshot, data map[string]*provider.UsageData) 
 		version = rel.Version
 	}
 	tooltip := AppendUpdateLine(Tooltip(snap, data), version)
+	image := nativeTooltipImage(snap)
 	s.mu.Lock()
-	changed := tooltip != s.currentTooltip
+	changed := tooltip != s.currentTooltip || image != s.currentTooltipImage
 	if changed {
 		s.currentTooltip = tooltip
+		s.currentTooltipImage = image
 	}
 	s.mu.Unlock()
 	if changed {
-		systray.SetTooltip(tooltip)
+		setNativeTooltip(tooltip, image)
 	}
 }
 

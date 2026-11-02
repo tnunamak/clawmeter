@@ -3,6 +3,7 @@
 package systray
 
 import (
+	"encoding/base64"
 	"image"
 	"image/color"
 	"testing"
@@ -105,6 +106,37 @@ func TestSetTooltipCachesOriginalBeforeRegistration(t *testing.T) {
 		got := instance.createPropSpec()["org.kde.StatusNotifierItem"]["ToolTip"].Value.(tooltip)
 		if text == "Other\n<stale>&" && (got.V2 != "Other" || got.V3 != "<p><b>&lt;stale&gt;&amp;</b></p>") {
 			t.Fatalf("updated tooltip = %#v", got)
+		}
+	}
+}
+
+func TestTooltipSVGCacheAndConversion(t *testing.T) {
+	previous := instance
+	instance = &tray{}
+	t.Cleanup(func() { instance = previous })
+	const text = "Title <plain>\n<b>A&B</b>\nLater <line>"
+	const alt = "<b>A&B</b>"
+	svg := []byte("<svg/>")
+	SetTooltipWithSVG(text, alt, svg)
+	svg[1] = 'X'
+	got := instance.createPropSpec()["org.kde.StatusNotifierItem"]["ToolTip"].Value.(tooltip)
+	image := `<img src="data:image/svg+xml;base64,` + base64.StdEncoding.EncodeToString([]byte("<svg/>")) + `" width="120" height="14" alt="&lt;b&gt;A&amp;B&lt;/b&gt;"/>`
+	want := "<p><b>" + image + "</b><br/>Later &lt;line&gt;</p>"
+	if got.V2 != "Title <plain>" || got.V3 != want || instance.tooltipTitle != text {
+		t.Fatalf("cached tooltip=%#v", got)
+	}
+	SetTooltip(text)
+	if len(instance.tooltipSVG) != 0 || instance.tooltipImageAlt != "" {
+		t.Fatal("plain tooltip kept image")
+	}
+	for _, tc := range []struct{ text, alt string }{
+		{"", "x"}, {"Title", "Title"}, {"Title\n", "x"}, {"Title\na", ""},
+		{"Title\na a", "a"}, {"Title\na", "missing"}, {"Title\na\nb", "a\nb"},
+	} {
+		got := nativeTooltipWithSVG(tc.text, tc.alt, []byte("<svg/>"))
+		plain := nativeTooltip(tc.text)
+		if got.V2 != plain.V2 || got.V3 != plain.V3 {
+			t.Fatalf("unusable replacement changed text: %#v", tc)
 		}
 	}
 }

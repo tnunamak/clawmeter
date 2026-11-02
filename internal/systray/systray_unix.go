@@ -8,6 +8,7 @@ package systray
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"html"
 	"image"
@@ -196,8 +197,17 @@ func SetTitle(t string) {
 
 // SetTooltip sets the native title and body shown when hovering over the icon.
 func SetTooltip(tooltipTitle string) {
+	SetTooltipWithSVG(tooltipTitle, "", nil)
+}
+
+// SetTooltipWithSVG embeds trusted, internally generated SVG in the native body.
+// The caller must not pass untrusted SVG content; base64 is transport, not sanitization.
+// No caller bytes are interpolated into the surrounding rich-text markup.
+func SetTooltipWithSVG(tooltipTitle, alt string, svg []byte) {
 	instance.lock.Lock()
 	instance.tooltipTitle = tooltipTitle
+	instance.tooltipImageAlt = alt
+	instance.tooltipSVG = append([]byte(nil), svg...)
 	props := instance.props
 	conn := instance.conn
 	defer instance.lock.Unlock()
@@ -206,7 +216,7 @@ func SetTooltip(tooltipTitle string) {
 		return
 	}
 	dbusErr := props.Set("org.kde.StatusNotifierItem", "ToolTip",
-		dbus.MakeVariant(nativeTooltip(tooltipTitle)))
+		dbus.MakeVariant(nativeTooltipWithSVG(tooltipTitle, alt, instance.tooltipSVG)))
 	if dbusErr != nil {
 		log.Printf("systray error: failed to set ToolTip prop: %s\n", dbusErr)
 		return
@@ -415,6 +425,8 @@ type tray struct {
 	iconName, iconThemePath string
 	// title and tooltip state
 	title, tooltipTitle string
+	tooltipImageAlt     string
+	tooltipSVG          []byte
 
 	lock             sync.Mutex
 	menu             *menuLayout
@@ -489,7 +501,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 			"ToolTip": {
-				Value:    nativeTooltip(t.tooltipTitle),
+				Value:    nativeTooltipWithSVG(t.tooltipTitle, t.tooltipImageAlt, t.tooltipSVG),
 				Writable: true,
 				Emit:     prop.EmitTrue,
 				Callback: nil,
@@ -515,17 +527,30 @@ type tooltip = struct {
 // nativeTooltip keeps the title plain and makes the description explicit rich
 // text. Provider text is escaped before adding the small supported markup set.
 func nativeTooltip(text string) tooltip {
+	return nativeTooltipWithSVG(text, "", nil)
+}
+
+func nativeTooltipWithSVG(text, alt string, svg []byte) tooltip {
 	title, body, _ := strings.Cut(text, "\n")
 	result := tooltip{V2: title}
 	if body == "" {
 		return result
 	}
-	first, rest, hasRest := strings.Cut(body, "\n")
-	description := "<p><b>" + html.EscapeString(first) + "</b>"
-	if hasRest {
-		description += "<br/>" + strings.ReplaceAll(html.EscapeString(rest), "\n", "<br/>")
+	image := ""
+	if len(svg) > 0 && alt != "" && !strings.ContainsAny(alt, "\n\r") && strings.Count(body, alt) == 1 {
+		image = `<img src="data:image/svg+xml;base64,` + base64.StdEncoding.EncodeToString(svg) + `" width="120" height="14" alt="` + html.EscapeString(alt) + `"/>`
 	}
-	result.V3 = description + "</p>"
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		before, after, found := strings.Cut(line, alt)
+		if image != "" && found {
+			lines[i] = html.EscapeString(before) + image + html.EscapeString(after)
+		} else {
+			lines[i] = html.EscapeString(line)
+		}
+	}
+	lines[0] = "<b>" + lines[0] + "</b>"
+	result.V3 = "<p>" + strings.Join(lines, "<br/>") + "</p>"
 	return result
 }
 

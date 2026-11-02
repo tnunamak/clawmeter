@@ -14,6 +14,7 @@ void setInternalLoop(bool);
 import "C"
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"unsafe"
@@ -132,11 +133,17 @@ func addOrUpdateMenuItem(item *MenuItem) {
 	if item.parent != nil {
 		parentID = item.parent.id
 	}
+	// Native code owns and frees all three C strings. Invalid spans fall back to title.
+	spansJSON, err := json.Marshal(item.titleSpans)
+	if err != nil {
+		spansJSON = nil
+	}
 	C.add_or_update_menu_item(
 		C.int(item.id),
 		C.int(parentID),
 		C.CString(item.title),
 		C.CString(item.tooltip),
+		C.CString(string(spansJSON)),
 		disabled,
 		checked,
 		isCheckable,

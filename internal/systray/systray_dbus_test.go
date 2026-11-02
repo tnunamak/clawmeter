@@ -4,6 +4,7 @@ package systray
 
 import (
 	"bufio"
+	"encoding/base64"
 	"os/exec"
 	"strings"
 	"testing"
@@ -89,5 +90,45 @@ func TestTooltipUpdatesRegisteredPropertyAndNotifiesHost(t *testing.T) {
 		if got := read(); got.V2 != tc.title || got.V3 != tc.body {
 			t.Fatalf("updated tooltip = %#v; want title %q body %q", got, tc.title, tc.body)
 		}
+	}
+
+	// Graphic-only changes retain the exact same text and still notify the host.
+	const sameText = "Quota\n92% used\nResets tomorrow"
+	SetTooltip(sameText)
+	select {
+	case <-signals:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial text notification missing")
+	}
+	for _, svg := range [][]byte{[]byte("<svg/>"), []byte("<svg><rect/></svg>"), nil, []byte("<svg/>")} {
+		SetTooltipWithSVG(sameText, "92% used", svg)
+		select {
+		case signal := <-signals:
+			if signal.Path != path || signal.Name != "org.kde.StatusNotifierItem.NewToolTip" {
+				t.Fatalf("wrong signal: %+v", signal)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("graphic-only notification missing")
+		}
+		want := "<p><b>92% used</b><br/>Resets tomorrow</p>"
+		if len(svg) > 0 {
+			want = `<p><b><img src="data:image/svg+xml;base64,` + base64.StdEncoding.EncodeToString(svg) + `" width="120" height="14" alt="92% used"/></b><br/>Resets tomorrow</p>`
+		}
+
+		if got := read(); got.V2 != "Quota" || got.V3 != want {
+			t.Fatalf("graphic tooltip = %#v, want %q", got, want)
+		}
+	}
+	SetTooltip(sameText)
+	select {
+	case signal := <-signals:
+		if signal.Path != path || signal.Name != "org.kde.StatusNotifierItem.NewToolTip" {
+			t.Fatalf("wrong clear signal: %+v", signal)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("text-only clear notification missing")
+	}
+	if got := read(); got.V3 != "<p><b>92% used</b><br/>Resets tomorrow</p>" {
+		t.Fatalf("graphic survived SetTooltip: %#v", got)
 	}
 }

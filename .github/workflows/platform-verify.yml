@@ -257,6 +257,11 @@ jobs:
       - name: Run macOS shellpath unit tests
         run: go test ./internal/shellpath
 
+      - name: Native attributed menu colors
+        run: |
+          clang -fobjc-arc -framework Cocoa scripts/test_menu_colors.m -o "$RUNNER_TEMP/menu-colors-test"
+          "$RUNNER_TEMP/menu-colors-test"
+
       - name: Build tray binary
         run: go build -tags tray -o /tmp/clawmeter ./cmd/clawmeter
 

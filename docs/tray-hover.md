@@ -40,10 +40,29 @@ Linux transports the title and body separately through StatusNotifierItem.
 The body must encode literal provider/account text safely for hosts that accept
 markup. Emphasize its first line: current usage, or the freshness qualification. The desktop supplies typography, color, spacing, placement and lifetime;
 an HTML illustration is not a guarantee of native pixels. macOS and Windows
-receive the same meter in native text tooltips. There is no desktop-specific
-image renderer. Windows' fixed text capacity still applies; the ordinary pinned
-Codex example above fits its 127 UTF-16-unit limit. Long identities or stale
-explanations can still be truncated by the existing Windows transport.
+receive the same meter in native text tooltips. Windows' fixed text capacity
+still applies; the ordinary pinned Codex example fits its 127 UTF-16-unit
+limit. Long identities or stale explanations can still be truncated by the
+existing Windows transport.
+
+Semantic color follows native capabilities:
+
+| Surface | Meter color |
+| --- | --- |
+| CLI color table and tray icon | Existing color rendering |
+| Plasma hover with known window appearance | Generated colored SVG replaces the same canonical bar; its alt text retains the glyphs |
+| macOS clicked menu | Native attributed text with dynamic red/green colors, muted future cells and an emphasized pace marker |
+| macOS hover, Windows text, other Linux hosts/menu labels | Complete plain meter and numeric values |
+
+Red means usage ahead of even pace; green marks the unused interval before
+that pace. Behind takes precedence over muting for projected/free cells, as in
+the CLI. Color supplements the fixed scale, glyphs and exact numbers.
+The Linux renderer reads window appearance separately from a forced panel icon
+palette, follows portal changes without fetching quotas, and falls back to text
+when the host, appearance or bar replacement is unknown. Provider text is
+escaped; only generated geometry and closed colors enter the SVG. macOS uses
+native disabled text for disabled rows and restores styles when enabled. Plain
+updates clear old styles. Other native APIs receive no ANSI or HTML labels.
 
 Verification must cover fresh, pinned, stale, unknown, exhausted and missing
 readings; literal markup and Unicode; initial registration and later tooltip
