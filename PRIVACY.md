@@ -42,8 +42,11 @@ Clawmeter stores its own configuration and cache locally:
 
 - Config: OS user config directory, for example `~/.config/clawmeter/config.yaml` on Linux.
 - Cache: OS user cache directory, for example `~/.cache/clawmeter/usage.json` on Linux.
+- Usage history: monthly JSONL files under the cache directory's `history/` folder.
 
 The usage cache stores derived quota/status data, recent provider errors, and opaque source-revision fingerprints so the tray and CLI avoid excessive polling and never reuse one account's data for another. For environment-backed sources, that fingerprint is a one-way SHA-256 hash of the selected route and high-entropy API credential. Raw credentials, environment-variable names, credential paths, account IDs, and email addresses are not stored in the cache. The cache file is private to the OS user (`0600` on Unix), and the default cache TTL is 60 seconds.
+
+By default, successful quota refreshes are also appended to `history/usage-YYYY-MM.jsonl`. These local records contain the displayed provider source label/ID, window, used percentage, reset time, reading time, and age. They do not contain credentials, email addresses, account IDs, or source-revision fingerprints. Files are private to the OS user (`0600`), rotate monthly, and share a 50 MB total size cap. Unchanged readings get at most one heartbeat per hour. Disable recording with `clawmeter config set usage_history false`, or skip it for one status refresh with `--no-history`. Read records with `clawmeter history --json`; reading history does not make network requests.
 
 API credit pool snapshots are also stored in the user cache directory as `claude-api-credits-<first 16 hex characters of the pool hash>.json`. They include organization name, currency, balance, credit grants and expiry, month and daily spend, observation time, plan name, and monthly credit. The pool identity is an unsalted SHA-256 hash of `clawmeter-api-pool` plus the organization ID; a plan link uses a salted hash. Neither stores the raw organization ID or browser cookies.
 

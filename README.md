@@ -449,4 +449,8 @@ Tray builds require CGO. Linux also needs `libayatana-appindicator3-dev`.
 
 ## How It Works
 
-Clawmeter reads existing credentials from your AI coding tools and queries their usage APIs. Results are cached at `~/.cache/clawmeter/usage.json` for 60 seconds, so the CLI and tray do not hammer provider APIs. See [Privacy Policy](PRIVACY.md), [Security Policy](SECURITY.md), and [Third-party components](docs/third-party-components.md).
+Clawmeter reads existing credentials from your AI coding tools and queries their usage APIs. Results are cached at `~/.cache/clawmeter/usage.json` for 60 seconds, so the CLI and tray do not hammer provider APIs. It also keeps a local, bounded history of quota readings by default; disable it with `clawmeter config set usage_history false`. The history contains shown source labels and quota values, but no credentials, emails, or account IDs. Read it with `clawmeter history --json`. See [Privacy Policy](PRIVACY.md), [Security Policy](SECURITY.md), and [Third-party components](docs/third-party-components.md).
+
+### Privacy
+
+History stays in the OS user cache, uses private file permissions, and makes no extra network requests. Set `usage_history` to `false` in Clawmeter's config, or pass `--no-history` to skip one status refresh.

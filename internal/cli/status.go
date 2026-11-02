@@ -18,6 +18,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
+	localhistory "github.com/tnunamak/clawmeter/internal/history"
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/provider/all"
@@ -28,6 +29,19 @@ import (
 
 func isTTY() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+func recordUsageHistory(results map[string]*provider.UsageData, cfg *config.Config, noHistory ...bool) {
+	if cfg == nil || !cfg.Settings.ShouldRecordUsageHistory() || len(noHistory) > 0 && noHistory[0] {
+		return
+	}
+	dir, err := cache.Path("history")
+	if err == nil {
+		err = localhistory.Append(dir, results, time.Now())
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: history write failed: %v\n", err)
+	}
 }
 
 const (
@@ -966,8 +980,8 @@ func forecastFor(data *provider.UsageData) *JSONForecast {
 }
 
 // Status fetches and displays usage status for all configured providers.
-func Status(jsonMode, plainMode, showAll bool) int {
-	output, cacheEntry, code := loadStatusOutput(showAll)
+func Status(jsonMode, plainMode, showAll bool, noHistory ...bool) int {
+	output, cacheEntry, code := loadStatusOutput(showAll, noHistory...)
 	if code != 0 {
 		return code
 	}
@@ -986,8 +1000,8 @@ func StatusLine(showAll bool) int {
 }
 
 // StatusAgent prints one precise, token-efficient line for AI agents.
-func StatusAgent(showAll bool) int {
-	output, _, code := loadStatusOutput(showAll)
+func StatusAgent(showAll bool, noHistory ...bool) int {
+	output, _, code := loadStatusOutput(showAll, noHistory...)
 	if code != 0 {
 		return code
 	}
@@ -995,7 +1009,7 @@ func StatusAgent(showAll bool) int {
 	return 0
 }
 
-func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
+func loadStatusOutput(showAll bool, noHistory ...bool) (*MultiProviderOutput, *cache.Entry, int) {
 	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1046,6 +1060,7 @@ func loadStatusOutput(showAll bool) (*MultiProviderOutput, *cache.Entry, int) {
 			}
 		}
 
+		recordUsageHistory(result.Results, cfg, noHistory...)
 		_ = cache.Write(result)
 		done <- struct{}{}
 	}()
@@ -1194,7 +1209,7 @@ func staleSummary(data *provider.UsageData) string {
 }
 
 // Check fetches usage and returns an exit code: 0=healthy, 1=warning, 2=critical/expired/error.
-func Check() int {
+func Check(noHistory ...bool) int {
 	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1228,6 +1243,7 @@ func Check() int {
 				}
 			}
 		}
+		recordUsageHistory(result.Results, cfg, noHistory...)
 		_ = cache.Write(result)
 		output = buildOutputFromResult(registry, cfg, result, nil)
 	}
@@ -1728,7 +1744,7 @@ func SingleProviderStatus(providerName string, jsonMode, plainMode bool) int {
 	return SingleProviderStatusSource(providerName, "", jsonMode, plainMode)
 }
 
-func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMode bool) int {
+func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMode bool, noHistory ...bool) int {
 	cfg, err := config.Load(all.SourceValidator())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
@@ -1799,6 +1815,7 @@ func SingleProviderStatusSource(providerName, sourceID string, jsonMode, plainMo
 	result := provider.FetchProvidersParallel(ctx, fetchSet)
 	cacheEntry, _ := cache.Read()
 	hadFetchError := applySourceFallbacks(providers, result, cacheEntry)
+	recordUsageHistory(result.Results, cfg, noHistory...)
 	result.Results = provider.PresentResetCreditSources(result.Results)
 	var ps *status.ProviderStatus
 	done := make(chan struct{}, 1)
