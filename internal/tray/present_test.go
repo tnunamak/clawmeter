@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -22,7 +23,7 @@ func TestTooltipCompactSummary(t *testing.T) {
 		Key: "codex", Label: "Codex", Provider: "openai",
 		Reading: view.Reading{State: view.ReadingFresh, ObservedAt: at}, Windows: []view.Window{w}, Shown: []string{"7d"},
 	}}}
-	want := "Codex · 7-Day\n92% used\nEst. run-out in 8h27m\nResets in 2d22h\nAverage pace since reset"
+	want := "Codex · 7-Day\n92% used  █████████░\nEst. run-out in 8h27m\nResets in 2d22h\nAverage pace since reset"
 	if got := Tooltip(snap, nil); got != want {
 		t.Fatalf("tooltip = %q; want %q", got, want)
 	}
@@ -33,8 +34,11 @@ func TestTooltipCompactSummary(t *testing.T) {
 		t.Fatalf("menu lost full quota facts: %q", rows)
 	}
 	snap.Selected.Reason = "pinned"
-	if got := Tooltip(snap, nil); !strings.HasPrefix(got, "Pinned · Codex · 7-Day\n92% used\n") {
+	if got := Tooltip(snap, nil); !strings.HasPrefix(got, "Pinned · Codex · 7-Day\n92% used  █████████░\n") {
 		t.Fatalf("pinned target not identified: %q", got)
+	}
+	if n := len(utf16.Encode([]rune(Tooltip(snap, nil)))); n > 127 {
+		t.Fatalf("ordinary pinned hover needs %d UTF-16 units; Windows allows 127", n)
 	}
 }
 

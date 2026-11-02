@@ -806,7 +806,7 @@ func TestTrayTooltipDescribesCurrentAutoTarget(t *testing.T) {
 	got := Tooltip(viewNamed(results, names, now), results)
 
 	// Current usage precedes the single run-out estimate.
-	if !strings.HasPrefix(got, "Claude · 7-Day Sonnet\n90% used\nEst. run-out in ") {
+	if !strings.HasPrefix(got, "Claude · 7-Day Sonnet\n90% used  █████████░\nEst. run-out in ") {
 		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out line", got)
 	}
 	if strings.Contains(got, "7S") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {
@@ -848,7 +848,7 @@ func TestTrayTooltipDescribesPinnedTarget(t *testing.T) {
 	got := Tooltip(viewNamed(results, names, now), results)
 
 	// Current usage precedes the single run-out estimate.
-	if !strings.HasPrefix(got, "Pinned · Codex · 5-Hour\n20% used\nEst. lasts to reset") {
+	if !strings.HasPrefix(got, "Pinned · Codex · 5-Hour\n20% used  ██░░░░░░░░\nEst. lasts to reset") {
 		t.Fatalf("Tooltip() = %q, want full title, used percentage, then run-out state", got)
 	}
 	if strings.Contains(got, "5H") || !strings.Contains(got, "Resets in") || !strings.Contains(got, "Est.") {

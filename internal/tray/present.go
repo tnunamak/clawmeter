@@ -157,6 +157,9 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 		lines = append(lines, staleLine(acct))
 		usage = "Last known " + usage
 	}
+	if bar := tooltipUsageBar(acct, w, snap.At); bar != "" {
+		usage += "  " + bar
+	}
 	lines = append(lines,
 		usage,
 		exhaustionLine(w, snap.At),

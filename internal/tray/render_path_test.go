@@ -66,7 +66,7 @@ func TestRenderPathPinnedStaleWindowKeepsLastKnownMeter(t *testing.T) {
 	}()
 
 	snap := productionView(results, menus, now)
-	const wantTooltip = "Pinned · Claude · 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nLast known 100% used\nRun-out unknown\nResets in 1h00m"
+	const wantTooltip = "Pinned · Claude · 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nLast known 100% used  ██████████\nRun-out unknown\nResets in 1h00m"
 	if got := Tooltip(snap, results); got != wantTooltip {
 		t.Fatalf("tooltip = %q\nwant      %q", got, wantTooltip)
 	}
