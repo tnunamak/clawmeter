@@ -333,6 +333,11 @@ func fresh(t, now time.Time) bool {
 	return !t.Before(now.Add(-5*time.Minute)) && !t.After(now.Add(time.Minute))
 }
 
+func regularPath(path string) bool {
+	st, err := os.Lstat(path)
+	return err == nil && st.Mode().IsRegular()
+}
+
 // Save either persists the entire accepted merge or leaves the existing receipt unchanged.
 func (s *Store) Save(update Snapshot, now time.Time) error {
 	if s == nil {
@@ -356,7 +361,11 @@ func (s *Store) Save(update Snapshot, now time.Time) error {
 	}
 	path := filepath.Join(s.Dir, update.Pool+".json")
 	old, err := readReceipt(path, update.Pool)
-	if err != nil && !os.IsNotExist(err) {
+	// A regular file that fails validation is corrupt, so there is nothing to
+	// merge. The new valid receipt replaces it. Symlinks and other non-regular
+	// paths still fail closed.
+	corrupt := errors.Is(err, errReceipt) && regularPath(path)
+	if err != nil && !os.IsNotExist(err) && !corrupt {
 		return fmt.Errorf("existing receipt cannot be safely merged: %w", err)
 	}
 	if os.IsNotExist(err) {
@@ -387,6 +396,8 @@ func (s *Store) Save(update Snapshot, now time.Time) error {
 		if err := dir.Close(); err != nil {
 			return err
 		}
+	}
+	if err != nil {
 		old = Snapshot{Pool: update.Pool, Name: update.Name}
 	}
 	old = canonical(old)
