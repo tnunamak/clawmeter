@@ -848,6 +848,7 @@ type providerMenuItems struct {
 	// moreItem says how many windows the rows above leave out.
 	moreItem          *systray.MenuItem
 	balanceItems      []*systray.MenuItem
+	balanceMoreItem   *systray.MenuItem
 	localModelsItem   *systray.MenuItem
 	localModelItems   []*systray.MenuItem
 	localModelStates  []menuItemState
@@ -873,6 +874,7 @@ type providerMenuItems struct {
 	windowTargets     []iconTarget // per quota row; guarded by trayRenderMu
 	moreState         menuItemState
 	balanceStates     []menuItemState
+	balanceMoreState  menuItemState
 	balanceActions    []string // per balance row; guarded by trayRenderMu
 	separatorState    menuItemState
 }
@@ -960,6 +962,11 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		balanceStates[i] = menuItemState{visible: false, enabled: false, initialized: true}
 	}
 
+	balanceMoreItem := systray.AddMenuItem("", "")
+	balanceMoreItem.Disable()
+	balanceMoreItem.Hide()
+	setMenuItemIcon(balanceMoreItem, icons.MenuBlank())
+
 	// Quota rows come first, then money, then reset credits.
 	resetItem := systray.AddMenuItem("", "Open Claude Usage in the browser; make sure it is signed in to this source’s account")
 	resetItem.Disable()
@@ -992,6 +999,8 @@ func createProviderMenuItems(p provider.Provider, explicitlyEnabled bool, connec
 		moreItem:          moreItem,
 		moreState:         menuItemState{visible: false, enabled: false, initialized: true},
 		balanceItems:      balanceItems,
+		balanceMoreItem:   balanceMoreItem,
+		balanceMoreState:  menuItemState{visible: false, enabled: false, initialized: true},
 		localModelsItem:   localModelsItem,
 		localModelItems:   localModelItems,
 		localModelStates:  localModelStates,
@@ -1104,7 +1113,7 @@ func hideProviderMenu(menu *providerMenuItems) {
 }
 
 func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []provider.UsageBalance, now time.Time) int {
-	rows := 0
+	rows, more := 0, 0
 	show := func(title, action string) {
 		if rows < len(menu.balanceItems) {
 			setMenuItemTitle(menu.balanceItems[rows], &menu.balanceStates[rows], title)
@@ -1112,6 +1121,16 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 			setMenuItemEnabled(menu.balanceItems[rows], &menu.balanceStates[rows], action != "")
 			menu.balanceActions[rows] = action
 			rows++
+		} else {
+			more++
+		}
+	}
+	// Keep offers visible before the balances they have not funded yet.
+	if acct != nil {
+		for _, benefit := range acct.CreditBenefits {
+			if benefit.Text != "" {
+				show(benefit.Text, benefit.ActionURL)
+			}
 		}
 	}
 	for _, balance := range balances {
@@ -1124,11 +1143,6 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 	if acct != nil {
 		for _, balance := range acct.APICreditBalances {
 			show(balance.Text, balance.ActionURL)
-		}
-		for _, benefit := range acct.CreditBenefits {
-			if benefit.Text != "" {
-				show(benefit.Text, benefit.ActionURL)
-			}
 		}
 		for _, grant := range acct.CreditGrants {
 			show(grant.Summary(), "")
@@ -1155,6 +1169,13 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 		setMenuItemVisible(menu.balanceItems[i], &menu.balanceStates[i], false)
 		setMenuItemEnabled(menu.balanceItems[i], &menu.balanceStates[i], false)
 		menu.balanceActions[i] = ""
+	}
+	if menu.balanceMoreItem != nil {
+		if more > 0 {
+			setMenuItemTitle(menu.balanceMoreItem, &menu.balanceMoreState, MoreText(more))
+			rows++
+		}
+		setMenuItemVisible(menu.balanceMoreItem, &menu.balanceMoreState, more > 0)
 	}
 	if acct != nil && menu.localModelsItem != nil && len(acct.LocalModels) > 0 {
 		return rows + len(acct.LocalModels)
@@ -1233,6 +1254,9 @@ func hideProviderWindows(menu *providerMenuItems) {
 		setWindowTarget(menu, i, iconTarget{})
 	}
 	setMenuItemVisible(menu.moreItem, &menu.moreState, false)
+	if menu.balanceMoreItem != nil {
+		setMenuItemVisible(menu.balanceMoreItem, &menu.balanceMoreState, false)
+	}
 	for i, b := range menu.balanceItems {
 		setMenuItemVisible(b, &menu.balanceStates[i], false)
 		setMenuItemEnabled(b, &menu.balanceStates[i], false)

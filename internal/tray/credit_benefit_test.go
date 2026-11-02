@@ -90,7 +90,7 @@ func TestOpenAIOfflineTimerRepaintsWithoutProviderPoll(t *testing.T) {
 			menu := createProviderMenuItems(sourceMenuTestProvider{name: "openai_api"}, false, nil, false)
 			snap := view.Build(view.Inputs{Results: results}, drawAt)
 			showBalanceRows(menu, accountNamed(snap, "openai_api"), nil, drawAt)
-			if !strings.Contains(menu.balanceStates[1].title, "Claim $35.00") {
+			if !strings.Contains(menu.balanceStates[0].title, "Claim $35.00") {
 				t.Fatal("fixture did not begin with an actionable offer")
 			}
 			trayRenderMu.Lock()
@@ -126,7 +126,7 @@ func TestOpenAIOfflineTimerRepaintsWithoutProviderPoll(t *testing.T) {
 				case <-tick.C:
 					trayRenderMu.Lock()
 					completed := apiCreditsTimerGeneration > generation
-					balance, benefit := menu.balanceStates[0].title, menu.balanceStates[1].title
+					benefit, balance := menu.balanceStates[0].title, menu.balanceStates[1].title
 					trayRenderMu.Unlock()
 					if !completed {
 						continue
