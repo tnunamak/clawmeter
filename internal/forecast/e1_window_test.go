@@ -6,7 +6,7 @@ import (
 )
 
 func TestE1WindowNames(t *testing.T) {
-	for name, want := range map[string]time.Duration{"session_5h": 5 * time.Hour, "search-hourly": time.Hour, "45m": 45 * time.Minute, "daily": 24 * time.Hour, "weekly": 7 * 24 * time.Hour, "monthly": 30 * 24 * time.Hour, "unknown": 0} {
+	for name, want := range map[string]time.Duration{"session_5h": 5 * time.Hour, "search-hourly": time.Hour, "45m": 45 * time.Minute, "daily": 24 * time.Hour, "weekly": 7 * 24 * time.Hour, "monthly": 0, "unknown": 0} {
 		if got := GuessWindowType(name); got != want {
 			t.Errorf("%s: got %v want %v", name, got, want)
 		}

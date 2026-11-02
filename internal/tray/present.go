@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
 	"github.com/tnunamak/clawmeter/internal/meter"
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -152,7 +153,7 @@ func Tooltip(snap view.Snapshot, data map[string]*provider.UsageData) string {
 		lines = append(lines, staleLine(acct))
 	}
 	lines = append(lines,
-		fmt.Sprintf("Current %.0f%%", w.Used),
+		"Current "+format.Percent(w.Used),
 		exhaustionLine(w, snap.At),
 		resetLine(w),
 	)
@@ -207,9 +208,12 @@ func exhaustionLine(w view.Window, at time.Time) string {
 		if w.Exhaustion.State == view.ExhaustionOut {
 			note = ranOutNote(note, w.Exhaustion.OutSince, at)
 		}
+		if w.Exhaustion.State == view.ExhaustionRunsOut {
+			return "At average pace since reset: " + note
+		}
 		return upperFirst(note)
 	case view.ExhaustionLasts:
-		return "Won't run out"
+		return "At average pace since reset: lasts to reset"
 	}
 	return "Run-out unknown"
 }
@@ -332,18 +336,18 @@ func trayRowText(row meter.Row, widths trayWidths, now time.Time) string {
 	if !row.HasPace() {
 		bar += figureSpace // as wide as the pace mark, so the columns still line up
 	}
-	forecast := "no forecast"
+	forecastText := "no forecast"
 	switch {
 	case row.Forecast != "":
-		forecast = meter.Pad(row.Forecast, widths.forecast, figureSpace) + " at reset"
+		forecastText = meter.Pad(row.Forecast, widths.forecast, figureSpace) + " at reset"
 	case row.ForecastState != "":
-		forecast = meter.Pad(row.ForecastState, widths.forecast+len(" at reset"), figureSpace)
+		forecastText = meter.Pad(row.ForecastState, widths.forecast+len(" at reset"), figureSpace)
 	}
 	resets := row.Resets
 	if !row.ResetPolicy {
 		resets = "resets in " + row.Resets
 	}
-	columns := []string{row.Code, bar, meter.Pad(row.Used, widths.used, figureSpace) + " used", forecast, resets}
+	columns := []string{row.Code, bar, meter.Pad(row.Used, widths.used, figureSpace) + " used", forecastText, resets}
 	switch row.RunsOut {
 	case "":
 	case "now":
@@ -356,7 +360,11 @@ func trayRowText(row meter.Row, widths trayWidths, now time.Time) string {
 			columns = append(columns, detail)
 		}
 	}
-	return strings.Join(columns, trayGutter)
+	text := strings.Join(columns, trayGutter)
+	if row.Forecast != "" {
+		text += "; forecasts: " + forecast.AverageBasis
+	}
+	return text
 }
 
 // runOutSince writes when a window ran out: a time of day when it was today,

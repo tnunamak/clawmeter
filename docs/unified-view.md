@@ -50,18 +50,23 @@ Target
 
 ## States, decided once
 
-- Reading. A stale, errored or expired reading keeps its last windows for
-  display, labelled with their age, but establishes nothing current: its
-  windows have Forecast `stale` and Exhaustion `unknown`, and it is never the
-  Worst target while any fresh reset-backed window exists.
-- Exhaustion. `unknown` when the reading is not fresh. Otherwise `out` when
+- Reading. Missing or future observation times and usage older than two poll
+  intervals are stale. A retained reading flagged stale after a failed poll
+  can still forecast within that age allowance. Every usable reading uses its
+  observation time for the rate; rendering only counts down the estimated ETA.
+  Errors and expired credentials establish no forecast or exhaustion. All
+  readings keep their last windows for display. Fresh readings rank first.
+- Exhaustion. `unknown` when the reading is unusable. Otherwise `out` when
   the window is at 100% or more, whatever the forecast says (a window can be
   used up before its forecast warms up); `runs_out` or `lasts` only when the
   forecast is known; `unknown` in every other case (warming up, no reset, a
-  reset already passed). Nothing reads as "lasts" without a forecast.
+  reset already passed, or estimated exhaustion already passed). Nothing reads
+  as "lasts" without a forecast. Estimates assume the average pace since reset
+  continues; they do not measure recent demand.
 - Forecast. `warming` before the window has run long enough to project,
   `none` for a window without a reset, `known` with a percentage otherwise.
-  Machine output never encodes an unknown forecast as a number.
+  The evaluated machine view omits unknown percentages. Legacy JSON retains a
+  zero placeholder, valid only when its indicator is a percentage.
 - Reset. Unknown resets are `unknown`, never zero seconds.
 - Out since. The time comes from the run-out record, which any process may
   read: a reading under 100% followed by one at 100% or more, with a positive
@@ -95,11 +100,10 @@ with "+N more".
 Machine output carries every window, each flagged with whether people see it,
 because an orchestrator routing work needs the idle ones most.
 
-Worst is chosen among fresh windows first, then stale ones, and in each a
-window with a reset before one without, by
-exhaustion (out, then runs out soonest), then forecast, then current use,
-then display order,
-so ties always break the same way.
+Worst is chosen among fresh windows first, then stale ones. Within each group,
+observed exhaustion comes first, even without a reported reset. Known resets
+then rank before unknown ones, followed by estimated exhaustion (soonest first),
+forecast, current use and display order, so ties always break the same way.
 
 ## What each surface shows
 

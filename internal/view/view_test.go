@@ -30,9 +30,9 @@ func namedWindow(name string, used float64, resetIn time.Duration) provider.Usag
 	return w
 }
 
-// fresh is a successful reading fetched a minute ago.
+// fresh is a successful reading observed at the frozen clock.
 func fresh(name string, windows ...provider.UsageWindow) *provider.UsageData {
-	return &provider.UsageData{Provider: name, FetchedAt: at.Add(-time.Minute), Windows: windows}
+	return &provider.UsageData{Provider: name, FetchedAt: at, Windows: windows}
 }
 
 func inputs(results map[string]*provider.UsageData) Inputs {
@@ -275,15 +275,16 @@ func TestShownAllIdleShowsEverything(t *testing.T) {
 	}
 }
 
-func TestWorstRanksClassesFirst(t *testing.T) {
-	// A stale account at 100% must not beat a fresh window with a known reset.
+func TestWorstRanksFreshnessThenObservedExhaustion(t *testing.T) {
+	// A stale account at 100% cannot establish exhaustion. A fresh observed
+	// empty cap outranks a healthy quota even without a reset timestamp.
 	stale := fresh("claude", namedWindow("5h", 100, midWindow))
 	stale.Stale = true
 	fine := fresh("codex", namedWindow("5h", 10, midWindow))
 	noReset := fresh("gemini", provider.UsageWindow{Name: "daily", Utilization: 100})
 	snap := Build(inputs(map[string]*provider.UsageData{"claude": stale, "codex": fine, "gemini": noReset}), at)
-	if snap.Worst == nil || snap.Worst.AccountKey != "codex" {
-		t.Fatalf("worst = %+v, want the fresh codex window", snap.Worst)
+	if snap.Worst == nil || snap.Worst.AccountKey != "gemini" {
+		t.Fatalf("worst = %+v, want the fresh exhausted gemini window", snap.Worst)
 	}
 	if got := findWindow(t, account(t, snap, "claude"), "5h").Risk; got == 1 {
 		t.Errorf("stale window ranked first")
