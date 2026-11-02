@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 func TestLocalModelCacheDoesNotInventResetOrNewDayUsage(t *testing.T) {
@@ -25,5 +26,27 @@ func TestLocalModelCacheDoesNotInventResetOrNewDayUsage(t *testing.T) {
 	}
 	if LocalModelsAt(raw, at, at, false)[0].AssistantMessages != nil {
 		t.Fatal("failed refresh advertised current counts")
+	}
+}
+
+func TestLocalModelSummaryEscapesControls(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		m    LocalModelUsage
+		want string
+	}{
+		{"label", LocalModelUsage{Model: "x-free", Label: "\x1b[2JFORGED\r\nROW", Day: "2026-10-28"}, `\u001b[2JFORGED\u000d\u000aROW: 2026-10-28 UTC · `},
+		{"model fallback", LocalModelUsage{Model: "\x1b[2JFORGED\r\nROW-free", Day: "2026-10-28"}, `\u001b[2JFORGED\u000d\u000aROW-free: 2026-10-28 UTC · `},
+		{"ordinary unicode", LocalModelUsage{Model: "x-free", Label: "Ünïcödé 模型 🦀", Day: "2026-10-28"}, "Ünïcödé 模型 🦀: 2026-10-28 UTC · "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.m.Summary()
+			if !strings.HasPrefix(s, tc.want) {
+				t.Fatalf("summary = %q, want prefix %q", s, tc.want)
+			}
+			if strings.IndexFunc(s, unicode.IsControl) >= 0 {
+				t.Fatalf("summary keeps a control character: %q", s)
+			}
+		})
 	}
 }
