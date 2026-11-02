@@ -120,6 +120,11 @@ function render(status) {
   element("connection-text").textContent = state.text;
   element("claude").replaceChildren(...claude(status?.claude));
   element("console").replaceChildren(...credits(status?.console));
+  if (status?.openai) {
+    const ok = status.openai.delivery === "saved";
+    element("openai").replaceChildren(paragraph(ok ? "Billing reading saved. Balances and offers appear separately in Clawmeter." : "The billing reading couldn't reach Clawmeter. Open the app, then reopen billing.", ok ? "muted" : "warn"));
+    element("open-openai").textContent = "Open OpenAI billing…";
+  }
   element("updated").textContent = status?.at
     ? "Updated " + new Date(status.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
     : "";
@@ -149,3 +154,17 @@ chrome.storage.session.onChanged.addListener(changes => {
 });
 
 void load();
+
+element("open-openai")?.addEventListener("click", async () => {
+  const button = element("open-openai");
+  button.disabled = true;
+  try {
+    // Permission follows an explicit user gesture; upgrades never enable it.
+    const allowed = await chrome.permissions.request({ origins: ["https://platform.openai.com/*"] });
+    if (!allowed) return;
+    const opened = await chrome.runtime.sendMessage("open-openai");
+    element("openai").replaceChildren(paragraph(opened ? "Open Billing overview and Credit grants. Clawmeter reads the page's checks; it never links or claims for you." : "Couldn't open billing. Try again.", opened ? "muted" : "warn"));
+  } catch {
+    element("openai").replaceChildren(paragraph("Couldn't connect OpenAI billing. Try again.", "warn"));
+  } finally { button.disabled = false; }
+});

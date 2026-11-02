@@ -59,6 +59,7 @@ var ProviderLogos = map[string][]byte{
 	"claude":        ProviderClaude,
 	"claude_api":    ProviderClaude,
 	"openai":        ProviderOpenAI,
+	"openai_api":    ProviderOpenAI,
 	"gemini":        ProviderGemini,
 	"kimi":          ProviderKimi,
 	// Kimi K2 is a model/service under the Kimi provider identity.
@@ -89,6 +90,7 @@ var providerLogoTreatments = map[string]logoTreatment{
 	"codex":         {contrastPlate: true},
 	"copilot":       {contrastPlate: true},
 	"openai":        {contrastPlate: true},
+	"openai_api":    {contrastPlate: true},
 	"openrouter":    {contrastPlate: true},
 	"jetbrains":     {darkenMonochrome: true},
 	"synthetic":     {darkenMonochrome: true},
