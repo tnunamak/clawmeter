@@ -26,7 +26,7 @@ func TestCreditBenefitIsAnOfferNotABalance(t *testing.T) {
 	if !strings.Contains(b.Summary(now), "$70.00/year") {
 		t.Fatal("annual issuance was labeled monthly")
 	}
-	b.LinkState, b.LinkObservedAt = "linked", now
+	b.LinkState = "linked"
 	if b.ActionURL(now) != "" || strings.Contains(b.Summary(now), "Claim $") {
 		t.Fatal("linked offer invited a second claim")
 	}
@@ -55,12 +55,16 @@ func TestCreditBenefitUnknownAmountCannotBecomeAClaim(t *testing.T) {
 func TestCreditBenefitLinkedStaleIsUnknown(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	claim, period := int64(3500), int64(7000)
-	for _, linkAt := range []time.Time{{}, now.Add(-6 * time.Minute)} {
-		b := UsageCreditBenefit{Eligibility: "eligible", LinkState: "linked", LinkObservedAt: linkAt, Currency: "USD",
-			Claimable: &claim, PeriodCredit: &period, Cadence: "monthly", ObservedAt: now, ExpiresAt: now.Add(time.Hour)}
-		if got := b.State(now); got != "unknown" {
-			t.Fatalf("link observed at %v: state = %s, want unknown", linkAt, got)
-		}
+	stale := UsageCreditBenefit{Eligibility: "eligible", LinkState: "linked", LinkObservedAt: now.Add(-6 * time.Minute), Currency: "USD",
+		Claimable: &claim, PeriodCredit: &period, Cadence: "monthly", ObservedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if got := stale.State(now); got != "unknown" {
+		t.Fatalf("stale link: state = %s, want unknown", got)
+	}
+	// An unstamped link is kept, as the offer path keeps an unstamped link.
+	unstamped := stale
+	unstamped.LinkObservedAt = time.Time{}
+	if got := unstamped.State(now); got != "linked" {
+		t.Fatalf("unstamped link: state = %s, want linked", got)
 	}
 	fresh := UsageCreditBenefit{LinkState: "linked", LinkObservedAt: now.Add(-time.Minute)}
 	if got := fresh.State(now); got != "linked" {
