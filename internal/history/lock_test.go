@@ -80,6 +80,9 @@ func TestHistoryProcess(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if os.Getenv("CLAWMETER_HISTORY_CRASH") == "before-rename" {
+		beforeCompactRename = func() { os.Exit(compactCrashExit) }
+	}
 	at := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
 	used := 20.0
 	if value := os.Getenv("CLAWMETER_HISTORY_USED"); value != "" {

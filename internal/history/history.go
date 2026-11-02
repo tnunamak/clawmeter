@@ -25,6 +25,10 @@ const (
 
 var maxHistoryBytes int64 = MaxBytes
 
+// beforeCompactRename runs after a compacted replacement is synced and before it
+// renames over the month file. Tests use it to simulate a crash at that point.
+var beforeCompactRename = func() {}
+
 // Reading is the stable line format written to the local history.
 type Reading struct {
 	SchemaVersion int       `json:"schema_version"`
@@ -57,6 +61,9 @@ func Append(dir string, results map[string]*provider.UsageData, now time.Time) e
 	}
 	last, tails, err := latestByKey(dir, now)
 	if err != nil {
+		return err
+	}
+	if err := removeAbandonedCompactTemps(dir); err != nil {
 		return err
 	}
 	// Validate every file before repairing tails, so unsupported versions or
@@ -344,7 +351,7 @@ func trimOldestLines(path string, limit int64) error {
 	if newline := bytes.IndexByte(data[start:], '\n'); newline >= 0 {
 		start += newline + 1
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".history-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), compactTempPrefix+"*")
 	if err != nil {
 		return err
 	}
@@ -364,7 +371,35 @@ func trimOldestLines(path string, limit int64) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	beforeCompactRename()
 	return os.Rename(tmp.Name(), path)
+}
+
+// compactTempPrefix names the temp files trimOldestLines creates. os.CreateTemp
+// appends a decimal suffix, so isCompactTempName matches exactly that shape.
+const compactTempPrefix = ".history-"
+
+// removeAbandonedCompactTemps deletes regular files that an interrupted compaction
+// left behind. The caller holds the history lock, so no live compaction owns them.
+func removeAbandonedCompactTemps(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !isCompactTempName(entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove abandoned history temp file: %w", err)
+		}
+	}
+	return nil
+}
+
+func isCompactTempName(name string) bool {
+	suffix, found := strings.CutPrefix(name, compactTempPrefix)
+	return found && suffix != "" && strings.Trim(suffix, "0123456789") == ""
 }
 
 func historyKey(reading Reading) string {

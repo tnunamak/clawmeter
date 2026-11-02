@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -280,6 +281,111 @@ func TestHistoryRejectsUnsupportedVersionsWithoutMutation(t *testing.T) {
 			})
 		}
 	}
+}
+
+// compactCrashExit is the status of a child killed after the compacted replacement
+// is synced. os.Exit skips deferred cleanup, as a killed process would.
+const compactCrashExit = 42
+
+func TestHistoryRecoversInterruptedCompaction(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
+	path := filepath.Join(dir, "usage-2026-10.jsonl")
+	oldCap := maxHistoryBytes
+	t.Cleanup(func() { maxHistoryBytes = oldCap })
+	maxHistoryBytes = 400
+	if err := Append(dir, map[string]*provider.UsageData{"work": dataAt(20, base)}, base); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := startHistoryProcess(t, dir, "append", "CLAWMETER_HISTORY_CAP=400", "CLAWMETER_HISTORY_USED=22", "CLAWMETER_HISTORY_CRASH=before-rename")
+	child.expect(t, "acquired")
+	var exitErr *exec.ExitError
+	if err := child.cmd.Wait(); !errors.As(err, &exitErr) || exitErr.ExitCode() != compactCrashExit {
+		t.Fatalf("crash child exit = %v, want status %d: %s", err, compactCrashExit, child.stderr.String())
+	}
+	if got := leftoverCompactTemps(t, dir); len(got) != 1 {
+		t.Fatalf("crash left temp files %v, want exactly one", got)
+	}
+	crashed, err := os.ReadFile(path)
+	if err != nil || !bytes.HasPrefix(crashed, committed) || len(crashed) <= 400 {
+		t.Fatalf("crash replaced or truncated the month file: %q, %v", crashed, err)
+	}
+	at := base.Add(time.Minute)
+	if err := Append(dir, map[string]*provider.UsageData{"work": dataAt(23, at)}, at); err != nil {
+		t.Fatal(err)
+	}
+	if got := leftoverCompactTemps(t, dir); len(got) != 0 {
+		t.Fatalf("recovery left temp files %v", got)
+	}
+	readings, err := Read(dir, time.Time{}, "")
+	if err != nil || len(readings) != 1 || readings[0].UsedPercent != 23 {
+		t.Fatalf("recovered compaction history: %#v, %v; want one 23%% reading", readings, err)
+	}
+	assertHistorySizeAndLines(t, dir)
+}
+
+func TestHistoryCompactionCleanupPreservesUnknownEntries(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".history-4242"), []byte("abandoned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	keep := []string{".history-", ".history-abc", ".history-42.tmp", ".history-42x", "history-42", "x.history-42"}
+	for _, name := range keep {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".history-77"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, ".history-88")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := Append(dir, map[string]*provider.UsageData{"work": dataAt(20, at)}, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".history-4242")); !os.IsNotExist(err) {
+		t.Fatalf("abandoned regular temp file not removed: %v", err)
+	}
+	for _, name := range keep {
+		if data, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(data) != name {
+			t.Fatalf("lookalike %s changed: %q, %v", name, data, err)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(dir, ".history-77")); err != nil || !info.IsDir() {
+		t.Fatalf("directory with temp-like name changed: %v, %v", info, err)
+	}
+	if info, err := os.Lstat(filepath.Join(dir, ".history-88")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink with temp-like name changed: %v, %v", info, err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside" {
+		t.Fatalf("symlink target changed: %q, %v", data, err)
+	}
+}
+
+// leftoverCompactTemps lists entries named like an interrupted compaction temp file.
+func leftoverCompactTemps(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".history-") {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
 }
 
 func assertHistorySizeAndLines(t *testing.T, dir string) {
