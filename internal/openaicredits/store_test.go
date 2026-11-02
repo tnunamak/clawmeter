@@ -271,3 +271,20 @@ func TestConcurrentIndependentMergesAndReads(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreSaveReplacesCorruptExisting(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	mustSave(t, s, receipt(1))
+	path := filepath.Join(s.Dir, fmt.Sprintf("%064x.json", 1))
+	if err := os.WriteFile(path, []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fresh := receipt(1)
+	fresh.Credits.Balance = 1000
+	if err := s.Save(fresh, clock()); err != nil {
+		t.Fatalf("valid receipt could not replace a corrupt one: %v", err)
+	}
+	if got := one(t, s); got.Credits == nil || got.Credits.Balance != 1000 {
+		t.Fatalf("replacement not stored: %+v", got.Credits)
+	}
+}

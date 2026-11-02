@@ -33,10 +33,12 @@ agent output as `retry_hint_at`, not a verified reset time. Passing midnight or
 a retry hint never clears an account's quota. Failed reads, old observations and
 a new reporting date do not turn unknown data into fresh zero usage.
 
-The tray lists candidates in a local-observations submenu. Detailed plain,
-table, agent and JSON output carry the same observations. These facts do not
-enter percentage bars, forecasts, quota risk selection or pinning.
-Reading is limited to five seconds, 8 MiB of catalog data and 4 MiB of selected
-SQLite output. Unsupported schemas or oversized results fail visibly. SQLite
+The tray's local-observations submenu lists only models with recorded activity
+or a dated limit event. Detailed plain, table, agent and JSON output also list
+unused catalog candidates, with the same observations. These facts do not enter
+percentage bars, forecasts, quota risk selection or pinning.
+SQLite reads are limited to five seconds, catalog data to 8 MiB and selected
+SQLite output to 4 MiB. A catalog that is not a regular file fails without
+waiting. Unsupported schemas or oversized results fail visibly. SQLite
 and catalog format changes may require adapter updates. No log-only or
 unassigned error is attributed to a model.

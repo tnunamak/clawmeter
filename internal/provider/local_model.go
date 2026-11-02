@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // LocalModelUsage is local activity, not a measured allowance or proof that a
@@ -29,6 +30,7 @@ func (m LocalModelUsage) Summary() string {
 	if label == "" {
 		label = m.Model
 	}
+	label = escapeControls(label)
 	facts := []string{m.Day + " UTC"}
 	if m.AssistantMessages != nil {
 		facts = append(facts, fmt.Sprintf("%d local assistant messages", *m.AssistantMessages))
@@ -49,6 +51,21 @@ func (m LocalModelUsage) Summary() string {
 		facts = append(facts, "resets "+m.ResetAt.UTC().Format("Jan 2 15:04 UTC"))
 	}
 	return label + ": " + strings.Join(facts, " · ")
+}
+
+// escapeControls shows control characters from catalog-supplied names as
+// escapes, so they cannot clear a terminal or start a new row in human output.
+// Ordinary Unicode is kept as written.
+func escapeControls(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&b, `\u%04x`, r)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // LocalModelsAt withholds yesterday's and failed refresh counts without turning

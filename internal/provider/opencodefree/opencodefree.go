@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/provider"
@@ -296,7 +297,9 @@ func (m modelInfo) ZeroCost() bool {
 }
 func zeroOrAbsent(n *float64) bool { return n == nil || *n == 0 }
 func readCatalog(path string) (map[string]modelInfo, error) {
-	f, err := os.Open(path)
+	// O_NONBLOCK lets open return at once even if setup saw a regular file and
+	// collection now finds a FIFO. The descriptor check below rejects it.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("read OpenCode model catalog: %w", err)
 	}
