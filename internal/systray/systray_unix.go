@@ -9,11 +9,13 @@ package systray
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"image"
 	"image/color"
 	_ "image/png" // used only here
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -192,8 +194,7 @@ func SetTitle(t string) {
 	}
 }
 
-// SetTooltip sets the systray tooltip to display on mouse hover of the tray icon,
-// only available on Mac and Windows.
+// SetTooltip sets the native title and body shown when hovering over the icon.
 func SetTooltip(tooltipTitle string) {
 	instance.lock.Lock()
 	instance.tooltipTitle = tooltipTitle
@@ -205,7 +206,7 @@ func SetTooltip(tooltipTitle string) {
 		return
 	}
 	dbusErr := props.Set("org.kde.StatusNotifierItem", "ToolTip",
-		dbus.MakeVariant(tooltip{V2: tooltipTitle}))
+		dbus.MakeVariant(nativeTooltip(tooltipTitle)))
 	if dbusErr != nil {
 		log.Printf("systray error: failed to set ToolTip prop: %s\n", dbusErr)
 		return
@@ -488,7 +489,7 @@ func (t *tray) createPropSpec() map[string]map[string]*prop.Prop {
 				Callback: nil,
 			},
 			"ToolTip": {
-				Value:    tooltip{V2: t.tooltipTitle},
+				Value:    nativeTooltip(t.tooltipTitle),
 				Writable: true,
 				Emit:     prop.EmitTrue,
 				Callback: nil,
@@ -509,6 +510,23 @@ type tooltip = struct {
 	V1 []PX   // icons
 	V2 string // title
 	V3 string // description
+}
+
+// nativeTooltip keeps the title plain and makes the description explicit rich
+// text. Provider text is escaped before adding the small supported markup set.
+func nativeTooltip(text string) tooltip {
+	title, body, _ := strings.Cut(text, "\n")
+	result := tooltip{V2: title}
+	if body == "" {
+		return result
+	}
+	first, rest, hasRest := strings.Cut(body, "\n")
+	description := "<p><b>" + html.EscapeString(first) + "</b>"
+	if hasRest {
+		description += "<br/>" + strings.ReplaceAll(html.EscapeString(rest), "\n", "<br/>")
+	}
+	result.V3 = description + "</p>"
+	return result
 }
 
 func convertToPixels(data []byte) PX {
