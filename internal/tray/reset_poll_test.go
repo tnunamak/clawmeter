@@ -13,7 +13,24 @@ import (
 	"github.com/tnunamak/clawmeter/internal/status"
 )
 
-func TestNextResetPollFollowsTheEarliestResetAhead(t *testing.T) {
+// A reset that passed less than resetPollDelay ago still has its poll ahead, so
+// the timer must be armed for it.
+func TestResetPollAtKeepsAPollStillAhead(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	results := map[string]*provider.UsageData{
+		"claude": {Windows: []provider.UsageWindow{
+			{Name: "5h", ResetsAt: now.Add(-10 * time.Second)},
+		}},
+	}
+	got, ok := resetPollAt(results, nil, nil, now)
+	if want := now.Add(20 * time.Second); !ok || !got.Equal(want) {
+		t.Fatalf("resetPollAt = %v, %v; want %v, true", got, ok, want)
+	}
+}
+
+// The reset poll follows the earliest poll still ahead. A source fetched since a
+// poll time has that poll served, so it does not count.
+func TestResetPollAtFollowsTheEarliestPollAhead(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	results := map[string]*provider.UsageData{
 		"claude": {Windows: []provider.UsageWindow{
@@ -25,28 +42,33 @@ func TestNextResetPollFollowsTheEarliestResetAhead(t *testing.T) {
 		}},
 		"absent": nil,
 	}
-	got, ok := nextResetPoll(results, now)
+	servedAt := map[string]time.Time{"claude": now, "codex": now}
+	got, ok := resetPollAt(results, servedAt, nil, now)
 	if want := now.Add(time.Hour + resetPollDelay); !ok || !got.Equal(want) {
-		t.Fatalf("nextResetPoll = %v, %v; want %v, true", got, ok, want)
+		t.Fatalf("resetPollAt = %v, %v; want %v, true", got, ok, want)
 	}
 }
 
-// A reset that passed less than resetPollDelay ago still has its poll ahead, so
-// the timer must be armed for it.
-func TestNextResetPollKeepsAPollStillAhead(t *testing.T) {
+// A source fetched less than resetPollDelay ago waits out the spacing even when its
+// poll time is still ahead. Otherwise a reading that reports a just-passed reset
+// could make the tray fetch back to back.
+func TestResetPollAtSpacesAFuturePollFromTheLastFetch(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	results := map[string]*provider.UsageData{
-		"claude": {Windows: []provider.UsageWindow{
-			{Name: "5h", ResetsAt: now.Add(-10 * time.Second)},
-		}},
+		"claude": {Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: now.Add(-20 * time.Second)}}},
 	}
-	got, ok := nextResetPoll(results, now)
-	if want := now.Add(20 * time.Second); !ok || !got.Equal(want) {
-		t.Fatalf("nextResetPoll = %v, %v; want %v, true", got, ok, want)
+	// The poll time is 10 s ahead, but the last fetch began at now.
+	servedAt := map[string]time.Time{"claude": now}
+	got, ok := resetPollAt(results, servedAt, nil, now)
+	if want := now.Add(resetPollDelay); !ok || !got.Equal(want) {
+		t.Fatalf("resetPollAt = %v, %v; want %v, true, the end of the spacing", got, ok, want)
+	}
+	if due := dueResetSources(results, servedAt, nil, now); len(due) != 0 {
+		t.Fatalf("dueResetSources = %v; want none inside the spacing", due)
 	}
 }
 
-func TestNextResetPollWithNoPollAhead(t *testing.T) {
+func TestResetPollAtWithEveryPollServed(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	results := map[string]*provider.UsageData{
 		"claude": {Windows: []provider.UsageWindow{
@@ -55,8 +77,9 @@ func TestNextResetPollWithNoPollAhead(t *testing.T) {
 			{Name: "1d", ResetsAt: now.Add(-resetPollDelay)},
 		}},
 	}
-	if got, ok := nextResetPoll(results, now); ok {
-		t.Fatalf("nextResetPoll = %v; want none, since every reset's poll has passed", got)
+	servedAt := map[string]time.Time{"claude": now}
+	if got, ok := resetPollAt(results, servedAt, nil, now); ok {
+		t.Fatalf("resetPollAt = %v; want none, since the fetch at now is at or past every poll time", got)
 	}
 }
 
@@ -260,9 +283,24 @@ func (p resetPollStub) FetchUsage(ctx context.Context) (*provider.UsageData, err
 	}, nil
 }
 
+// fakeClock is a time source that a test moves by hand, so that a test decides
+// exactly which poll times have passed, and when.
+type fakeClock struct{ ns atomic.Int64 }
+
+func newFakeClock(at time.Time) *fakeClock {
+	c := &fakeClock{}
+	c.set(at)
+	return c
+}
+
+func (c *fakeClock) set(at time.Time) { c.ns.Store(at.UnixNano()) }
+
+func (c *fakeClock) now() time.Time { return time.Unix(0, c.ns.Load()) }
+
 // newResetPollFixture returns a refresher over the stub sources, starting from
-// lastResults. The shared refresh state and config are restored when the test ends.
-func newResetPollFixture(t *testing.T, lastResults map[string]*provider.UsageData, stubs ...resetPollStub) *usageRefresher {
+// lastResults, that reads time from clock. The shared refresh state, the config and
+// the refresh clock are restored when the test ends.
+func newResetPollFixture(t *testing.T, clock *fakeClock, lastResults map[string]*provider.UsageData, stubs ...resetPollStub) *usageRefresher {
 	t.Helper()
 	oldCfg := cfg
 	cfg = config.DefaultConfig()
@@ -292,35 +330,42 @@ func newResetPollFixture(t *testing.T, lastResults map[string]*provider.UsageDat
 		finished:     func(time.Time) {},
 		resetGen:     1,
 	}
+	oldClock := refreshClock
+	refreshClock = clock.now
 	// Cleanups run last-in first-out, so a cleanup a test registers after this one
 	// runs first. Each test that holds a fetch open must release it there, before
-	// the timer cleanup below takes r.mu.
+	// the timer cleanup below takes r.mu. That cleanup restores the clock under
+	// r.mu, so no timer still waiting on the lock reads a stale clock.
 	t.Cleanup(func() {
 		r.mu.Lock()
+		defer r.mu.Unlock()
 		if r.resetPoll != nil {
 			r.resetPoll.Stop()
+			r.resetPoll = nil
 		}
-		r.mu.Unlock()
+		r.resetGen++ // a timer that fires from here on finds a stale generation
+		refreshClock = oldClock
 	})
 	return r
 }
 
 // A reset that passes while another source's refresh is running must not be lost.
-// alpha's reset poll starts a refresh that alpha holds open. While it is held,
-// beta's poll time passes. When alpha's refresh ends, beta has not been fetched
-// since that poll time, so the tray must fetch beta again.
+// alpha's reset poll starts a refresh that alpha holds open. While it is held, the
+// clock passes beta's poll time. When alpha's refresh ends, beta has not been
+// fetched since that poll time, so the tray must fetch beta again, once.
 func TestResetPollCatchesUpAResetThatPassedDuringAnotherSourcesRefresh(t *testing.T) {
-	// alpha's poll is due now. beta's poll is a second ahead, so the poll that
+	t0 := time.Now().Round(0)
+	clock := newFakeClock(t0)
+	// alpha's poll is due now. beta's poll is 10 s ahead, so the reset poll that
 	// alpha's reset starts does not fetch beta.
-	now := time.Now()
-	betaPoll := now.Add(time.Second)
+	betaPoll := t0.Add(10 * time.Second)
 	var alphaFetches, betaFetches atomic.Int32
 	alphaStarted := make(chan struct{}, 1)
 	betaStarted := make(chan struct{}, 1)
 	release := make(chan struct{})
-	r := newResetPollFixture(t, map[string]*provider.UsageData{
-		"alpha": {Provider: "alpha", FetchedAt: now.Add(-time.Minute), Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: now.Add(-31 * time.Second)}}},
-		"beta":  {Provider: "beta", FetchedAt: now.Add(-time.Minute), Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: betaPoll.Add(-resetPollDelay)}}},
+	r := newResetPollFixture(t, clock, map[string]*provider.UsageData{
+		"alpha": {Provider: "alpha", FetchedAt: t0.Add(-time.Minute), Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: t0.Add(-31 * time.Second)}}},
+		"beta":  {Provider: "beta", FetchedAt: t0.Add(-time.Minute), Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: betaPoll.Add(-resetPollDelay)}}},
 	},
 		resetPollStub{name: "alpha", fetches: &alphaFetches, started: alphaStarted, hold: release},
 		resetPollStub{name: "beta", fetches: &betaFetches, started: betaStarted},
@@ -347,8 +392,8 @@ func TestResetPollCatchesUpAResetThatPassedDuringAnotherSourcesRefresh(t *testin
 		t.Fatalf("beta was fetched %d times before its poll time, want 0", n)
 	}
 
-	// Hold alpha's refresh until beta's poll time has passed.
-	time.Sleep(time.Until(betaPoll.Add(50 * time.Millisecond)))
+	// Move the clock past beta's poll time while alpha's refresh is held, then end it.
+	clock.set(betaPoll.Add(time.Second))
 	close(release)
 	select {
 	case <-fired:
@@ -362,20 +407,75 @@ func TestResetPollCatchesUpAResetThatPassedDuringAnotherSourcesRefresh(t *testin
 	}
 	r.mu.Lock() // the catch-up refresh holds r.mu until it ends
 	r.mu.Unlock()
-	time.Sleep(100 * time.Millisecond) // a repeated catch-up would fetch within this time
 	if a, b := alphaFetches.Load(), betaFetches.Load(); a != 1 || b != 1 {
 		t.Fatalf("fetches: alpha %d, beta %d; want 1 and 1", a, b)
+	}
+
+	// Nothing is owed after the catch-up, so a poll at the same time fetches nothing.
+	r.mu.Lock()
+	gen := r.resetGen
+	r.mu.Unlock()
+	r.fireResetPoll(gen)
+	if a, b := alphaFetches.Load(), betaFetches.Load(); a != 1 || b != 1 {
+		t.Fatalf("a poll after the catch-up fetched again: alpha %d, beta %d; want 1 and 1", a, b)
+	}
+}
+
+// A poll that fires for one source must not fetch another source still inside its
+// spacing. beta's poll time has passed, but beta was fetched 5 s ago, so the poll
+// fetches only alpha. beta is fetched once its spacing has ended.
+func TestResetPollFiresOnlyTheSourcesPastTheirSpacing(t *testing.T) {
+	t0 := time.Now().Round(0)
+	clock := newFakeClock(t0)
+	var alphaFetches, betaFetches atomic.Int32
+	r := newResetPollFixture(t, clock, map[string]*provider.UsageData{
+		"alpha": {Provider: "alpha", FetchedAt: t0.Add(-time.Minute), Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: t0.Add(-31 * time.Second)}}},
+		"beta":  {Provider: "beta", FetchedAt: t0.Add(-time.Minute), Windows: []provider.UsageWindow{{Name: "5h", ResetsAt: t0.Add(-31 * time.Second)}}},
+	},
+		resetPollStub{name: "alpha", fetches: &alphaFetches},
+		resetPollStub{name: "beta", fetches: &betaFetches},
+	)
+	r.servedAt = map[string]time.Time{"beta": t0.Add(-5 * time.Second)}
+
+	r.fireResetPoll(1)
+	if a, b := alphaFetches.Load(), betaFetches.Load(); a != 1 || b != 0 {
+		t.Fatalf("fetches: alpha %d, beta %d; want 1 and 0, since beta is inside its spacing", a, b)
+	}
+
+	// The next owed poll is beta's spacing end, 25 s after t0.
+	r.mu.Lock()
+	s.mu.Lock()
+	at, ok := resetPollAt(s.lastResults, r.servedAt, s.failureGate, t0)
+	s.mu.Unlock()
+	r.mu.Unlock()
+	if want := t0.Add(resetPollDelay - 5*time.Second); !ok || !at.Equal(want) {
+		t.Fatalf("resetPollAt = %v, %v; want %v, true, when beta's spacing ends", at, ok, want)
+	}
+
+	// At that time the poll fetches beta, once.
+	clock.set(t0.Add(resetPollDelay - 5*time.Second))
+	r.mu.Lock()
+	gen := r.resetGen
+	if r.resetPoll != nil {
+		r.resetPoll.Stop()
+	}
+	r.mu.Unlock()
+	r.fireResetPoll(gen)
+	if a, b := alphaFetches.Load(), betaFetches.Load(); a != 1 || b != 1 {
+		t.Fatalf("after beta's spacing ended: alpha %d, beta %d; want 1 and 1", a, b)
 	}
 }
 
 // The reset poll compares a source's last fetch with its poll time, so a refresh
-// must stamp each fetch with the time it started. A fetch that ends after a poll
-// time may have read the window before its reset.
+// stamps each fetch with the time it started. A fetch that ends after a poll time
+// may have read the window before its reset.
 func TestRunStampsAFetchWithItsStart(t *testing.T) {
+	t0 := time.Now().Round(0)
+	clock := newFakeClock(t0)
 	var fetches atomic.Int32
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
-	r := newResetPollFixture(t, nil, resetPollStub{name: "alpha", fetches: &fetches, started: started, hold: release})
+	r := newResetPollFixture(t, clock, nil, resetPollStub{name: "alpha", fetches: &fetches, started: started, hold: release})
 	t.Cleanup(func() {
 		select {
 		case <-release:
@@ -396,8 +496,7 @@ func TestRunStampsAFetchWithItsStart(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("alpha's fetch did not start")
 	}
-	began := time.Now()
-	time.Sleep(50 * time.Millisecond)
+	clock.set(t0.Add(50 * time.Millisecond)) // the fetch ends 50 ms after it began
 	close(release)
 	select {
 	case <-done:
@@ -407,7 +506,7 @@ func TestRunStampsAFetchWithItsStart(t *testing.T) {
 	r.mu.Lock()
 	served, ok := r.servedAt["alpha"]
 	r.mu.Unlock()
-	if !ok || served.After(began) {
-		t.Fatalf("alpha's fetch stamped %v (recorded %v), want at or before %v, when it began", served, ok, began)
+	if !ok || !served.Equal(t0) {
+		t.Fatalf("alpha's fetch stamped %v (recorded %v), want %v, when it began", served, ok, t0)
 	}
 }
