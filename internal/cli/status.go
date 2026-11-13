@@ -1550,7 +1550,8 @@ func sourceDisplay(p provider.Provider, counts map[string]int) string {
 	return p.DisplayName() + " · " + label
 }
 
-// providerUrgency classifies a provider for ordering and check exit codes.
+// providerUrgency orders the --json providers, most urgent first. The summary
+// line and the check exit code use summaryUrgency.
 type providerUrgency struct {
 	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
 	maxProjectedPct float64
@@ -1583,9 +1584,10 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 	var runsOutIn time.Duration
 	var runsOutEarlyBy time.Duration
 	stale := pf.Data.Stale
+	lapsed := false
 	for _, w := range pf.Data.PresentationWindows() {
 		if !w.ResetsAt.IsZero() && !w.ResetsAt.After(time.Now()) {
-			stale = true
+			lapsed = true
 			continue
 		}
 		if w.Utilization >= 100 && maxPct < w.Utilization {
@@ -1605,11 +1607,13 @@ func classifyProvider(pf *ProviderFormatter) providerUrgency {
 		}
 	}
 
+	// Only a fresh reading can be critical, as in summaryUrgency. A retained
+	// reading's full window is a warning.
 	tier := 4
 	switch {
-	case maxPct >= 100:
+	case maxPct >= 100 && !stale:
 		tier = 2
-	case maxPct >= 90 || stale:
+	case maxPct >= 90 || stale || lapsed:
 		tier = 3
 	}
 
