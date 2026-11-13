@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/filelock"
 )
 
 // RateLimitError is how a provider reports that its upstream answered HTTP
@@ -126,8 +129,11 @@ func backoffKey(p Provider) string {
 // the last good reading and mark it stale.
 func FetchSource(ctx context.Context, p Provider) (*UsageData, error) {
 	key := backoffKey(p)
-	if until, ok := backoffUntil(key); ok {
-		return rateLimitedData(p, until), nil
+	// One read both gates the fetch and records the state it was sent under, so a
+	// success can tell whether a 429 landed while the request was in flight.
+	before, _ := readBackoff(key)
+	if backoffNow().Before(before.Until) {
+		return rateLimitedData(p, before.Until), nil
 	}
 	data, err := p.FetchUsage(ctx)
 	var limited *RateLimitError
@@ -139,7 +145,7 @@ func FetchSource(ctx context.Context, p Provider) (*UsageData, error) {
 		return data, nil
 	}
 	if err == nil && data != nil && data.Error == "" {
-		clearBackoff(key)
+		clearBackoff(key, before)
 	}
 	return data, err
 }
@@ -148,19 +154,33 @@ func rateLimitedData(p Provider, until time.Time) *UsageData {
 	return &UsageData{
 		Provider: p.Name(), SourceID: SourceID(p), SourceLabel: SourceLabel(p),
 		FetchedAt: time.Now(),
-		Error:     "rate limited (429), next try " + until.Local().Format("15:04"),
+		Error:     "rate limited (429), next try " + nextTryLabel(until, backoffNow()),
 	}
 }
 
+// nextTryLabel says when fetching may resume. A cooldown that ends on a later
+// calendar day carries its date, so a multi-day quota wait does not read as a time
+// today.
+func nextTryLabel(until, now time.Time) string {
+	until, now = until.Local(), now.Local()
+	if until.Year() == now.Year() && until.YearDay() == now.YearDay() {
+		return until.Format("15:04")
+	}
+	return until.Format("Jan 2 15:04")
+}
+
+// backoffState is one source's stored backoff. ID is drawn at random for every
+// recorded 429, so it identifies one cooldown. A success clears only the cooldown
+// its request saw, and a 429 recorded during the request leaves a new ID behind.
+// Zero means no ID: nothing was stored, or a build without IDs wrote the state.
 type backoffState struct {
 	Until    time.Time `json:"until"`
 	Failures int       `json:"failures"`
+	ID       uint64    `json:"id"`
 }
 
-// backoffPath gives each source its own file, so concurrent 429s from
-// different sources (or from the CLI and the tray) never rewrite each other's
-// state. Two writers for the same source compute near-identical state, so last
-// writer wins is acceptable there.
+// backoffPath gives each source and credential route its own state file. Every
+// read and write of these files holds the one backoff lock (see lockBackoff).
 func backoffPath(key string) (string, error) {
 	dir, err := backoffDir()
 	if err != nil {
@@ -169,7 +189,18 @@ func backoffPath(key string) (string, error) {
 	return filepath.Join(dir, fmt.Sprintf("%x.json", sha256.Sum256([]byte(key)))), nil
 }
 
+// readBackoff returns the stored state for key, and whether there is one. It holds
+// the backoff lock, so a read never overlaps a writer's rename.
 func readBackoff(key string) (backoffState, bool) {
+	unlock, _ := lockBackoff()
+	defer unlock()
+	return loadBackoff(key)
+}
+
+// loadBackoff reads the stored state without taking the lock. Call it only while
+// holding the lock. The lock is not reentrant, so calling readBackoff inside it
+// would wait out backoffLockWait and then read without the lock.
+func loadBackoff(key string) (backoffState, bool) {
 	var state backoffState
 	path, err := backoffPath(key)
 	if err != nil {
@@ -202,20 +233,38 @@ func writeBackoff(key string, state backoffState) {
 	}
 }
 
-// backoffUntil returns the time before which the source must not be fetched.
-func backoffUntil(key string) (time.Time, bool) {
-	state, ok := readBackoff(key)
-	if !ok || !backoffNow().Before(state.Until) {
-		return time.Time{}, false
+// backoffLockWait bounds how long a read or write waits for the backoff lock. The
+// holder keeps it for one small file read and write, so a longer wait means a
+// stalled disk or a suspended process.
+const backoffLockWait = 2 * time.Second
+
+// lockBackoff takes the backoff lock, one lock file shared by all sources. It orders
+// reads and read-modify-writes of backoff state across processes, because the CLI
+// and the tray can both record a 429 for one source. It is never held across a
+// fetch. ok is false when no lock could be taken: no writable cache directory, no
+// file locks on this platform, or a holder that kept the lock past backoffLockWait.
+func lockBackoff() (unlock func(), ok bool) {
+	dir, err := backoffDir()
+	if err != nil || os.MkdirAll(dir, 0o755) != nil {
+		return func() {}, false
 	}
-	return state.Until, true
+	release, err := filelock.Acquire(filepath.Join(dir, ".lock"), backoffLockWait)
+	if err != nil {
+		return func() {}, false
+	}
+	return release, true
 }
 
 // recordRateLimit starts or extends the backoff after a 429 and returns when
-// fetching may resume.
+// fetching may resume. The read, the new cooldown and the write happen under the
+// backoff lock, so an overlapping writer's longer cooldown is not overwritten. If
+// no lock can be taken, the write still happens, as it did before the lock existed.
 func recordRateLimit(key string, retryAfter time.Duration) time.Time {
-	state, _ := readBackoff(key)
+	unlock, _ := lockBackoff()
+	defer unlock()
+	state, _ := loadBackoff(key)
 	state.Failures++
+	state.ID = rand.Uint64()
 	delay := backoffFloor
 	for i := 1; i < state.Failures && delay < backoffCap; i++ {
 		delay *= 2
@@ -228,7 +277,26 @@ func recordRateLimit(key string, retryAfter time.Duration) time.Time {
 	return state.Until
 }
 
-func clearBackoff(key string) {
+// clearBackoff ends a backoff after a clean reading, but only the backoff that was
+// in effect when the request was sent. A 429 recorded while the request was in
+// flight is newer, and its cooldown still applies after this success, which shows
+// only that the request was answered. A zero ID means the request saw no state, or
+// saw a state written by a build without IDs. Such a state cannot be matched to this
+// request, so a success leaves it alone. If the lock cannot be taken, nothing is
+// cleared, and a later clean reading tries again.
+func clearBackoff(key string, before backoffState) {
+	if before.ID == 0 {
+		return
+	}
+	unlock, ok := lockBackoff()
+	defer unlock()
+	if !ok {
+		return
+	}
+	now, ok := loadBackoff(key)
+	if !ok || now.ID != before.ID {
+		return
+	}
 	if path, err := backoffPath(key); err == nil {
 		_ = os.Remove(path)
 	}

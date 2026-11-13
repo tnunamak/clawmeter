@@ -2,14 +2,19 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/filelock"
 )
 
 // TestMain keeps every test in this package away from the user's real backoff
@@ -164,7 +169,7 @@ func TestSuccessClearsBackoff(t *testing.T) {
 	clock := isolateBackoff(t)
 	p := &limitedProvider{name: "claude", id: "work"}
 	recordRateLimit(SourceKey(p), 0)
-	if _, ok := backoffUntil(backoffKey(p)); !ok {
+	if _, ok := readBackoff(backoffKey(p)); !ok {
 		t.Fatal("backoff not recorded")
 	}
 	*clock = clock.Add(10 * time.Minute)
@@ -172,7 +177,7 @@ func TestSuccessClearsBackoff(t *testing.T) {
 		t.Fatalf("fetch after backoff: %q", data.Error)
 	}
 	*clock = clock.Add(-10 * time.Minute)
-	if _, ok := backoffUntil(backoffKey(p)); ok {
+	if _, ok := readBackoff(backoffKey(p)); ok {
 		t.Fatal("successful fetch did not clear backoff")
 	}
 	if state, ok := readBackoff(backoffKey(p)); ok {
@@ -222,7 +227,7 @@ func TestConcurrentRateLimitsKeepEverySourcesBackoff(t *testing.T) {
 		if data := result.Results[key]; data == nil || !strings.Contains(data.Error, "rate limited") || result.Errors[key] != nil {
 			t.Fatalf("source %s result = %#v, err = %v", key, data, result.Errors[key])
 		}
-		if _, ok := backoffUntil(key); !ok {
+		if _, ok := readBackoff(key); !ok {
 			t.Fatalf("source %s lost its backoff after concurrent 429s", key)
 		}
 	}
@@ -248,8 +253,202 @@ func TestPartialReadingWithRateLimitIsKeptAndBacksOff(t *testing.T) {
 	if err != nil || data == nil || len(data.Windows) != 1 || data.Error != "" {
 		t.Fatalf("partial reading = %#v, %v; want it kept", data, err)
 	}
-	if _, ok := backoffUntil(backoffKey(p)); !ok {
+	if _, ok := readBackoff(backoffKey(p)); !ok {
 		t.Fatal("partial reading with a 429 did not start a backoff")
 	}
 	fetchExpectingCalls(t, &p.limitedProvider, 1, "after partial 429")
+}
+
+// Overlapping writers for one source must not drop each other's cooldown. Each
+// recordRateLimit reads the stored state, adds its own cooldown and writes it
+// back. Without a lock around that read-modify-write, a writer that read before
+// the longest cooldown was stored would overwrite it with a shorter one.
+func TestOverlappingRecordsKeepTheLongestCooldown(t *testing.T) {
+	clock := isolateBackoff(t)
+	const longest = 3 * time.Hour
+	for round := 0; round < 20; round++ {
+		key := fmt.Sprintf("claude:round-%d", round)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < 32; i++ {
+			retryAfter := time.Duration(i+1) * 5 * time.Minute
+			if i == 17 {
+				retryAfter = longest
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				recordRateLimit(key, retryAfter)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		state, ok := readBackoff(key)
+		if want := clock.Add(longest); !ok || !state.Until.Equal(want) {
+			t.Fatalf("round %d: stored cooldown ends %v (found %v), want %v: an overlapping write dropped the longest one", round, state.Until, ok, want)
+		}
+	}
+}
+
+// gatedProvider's fetch starts and then waits for release, so a test can write to
+// the backoff state while the request is in flight.
+type gatedProvider struct {
+	limitedProvider
+	started, release chan struct{}
+}
+
+func (p *gatedProvider) FetchUsage(context.Context) (*UsageData, error) {
+	close(p.started)
+	<-p.release
+	return &UsageData{Windows: []UsageWindow{{Name: "5h", Utilization: 10}}}, nil
+}
+
+// A 429 recorded while a request is in flight must survive that request's success.
+// The success shows only that the request was answered; the cooldown the server set
+// still applies. The second case has an expired state from before the request, so
+// the clear has to compare states, not just check whether one existed.
+func TestSuccessKeepsCooldownRecordedWhileItsRequestWasInFlight(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		expired bool
+	}{
+		{"no earlier state", false},
+		{"expired earlier state", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := isolateBackoff(t)
+			p := &gatedProvider{
+				limitedProvider: limitedProvider{name: "claude", id: "work"},
+				started:         make(chan struct{}),
+				release:         make(chan struct{}),
+			}
+			key := backoffKey(p)
+			if tc.expired {
+				recordRateLimit(key, 0)
+				*clock = clock.Add(time.Hour)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := FetchSource(context.Background(), p)
+				done <- err
+			}()
+			select {
+			case <-p.started:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the fetch never started")
+			}
+			want := clock.Add(2 * time.Hour)
+			recordRateLimit(key, 2*time.Hour) // another process's 429, while our request is in flight
+			close(p.release)
+			if err := <-done; err != nil {
+				t.Fatalf("FetchSource: %v", err)
+			}
+			if state, ok := readBackoff(key); !ok || !state.Until.Equal(want) {
+				t.Fatalf("after success the stored cooldown ends %v (found %v), want %v", state.Until, ok, want)
+			}
+		})
+	}
+}
+
+// The retry time names the day when it falls on a later day, so a wait of several
+// days does not read as a time today.
+func TestRateLimitedMessageDatesACooldownThatEndsAnotherDay(t *testing.T) {
+	clock := isolateBackoff(t)
+	*clock = time.Date(2026, 10, 7, 9, 0, 0, 0, time.Local)
+	p := &limitedProvider{name: "claude", id: "work"}
+	for _, tc := range []struct {
+		after time.Duration
+		want  string
+	}{
+		{3 * time.Hour, "rate limited (429), next try 12:00"},
+		{72 * time.Hour, "rate limited (429), next try Oct 10 09:00"},
+	} {
+		if data := rateLimitedData(p, clock.Add(tc.after)); data.Error != tc.want {
+			t.Errorf("after %v: Error = %q, want %q", tc.after, data.Error, tc.want)
+		}
+	}
+}
+
+// A later, shorter cooldown must not shorten one still running. A 429 can extend
+// the backoff, never end it sooner. A regression guard: it passes on the old code.
+func TestLaterShorterCooldownDoesNotShortenAnActiveOne(t *testing.T) {
+	clock := isolateBackoff(t)
+	key := "claude:work"
+	recordRateLimit(key, 2*time.Hour)
+	recordRateLimit(key, 0) // the 5-minute floor, which is shorter
+	state, ok := readBackoff(key)
+	if want := clock.Add(2 * time.Hour); !ok || !state.Until.Equal(want) {
+		t.Fatalf("stored cooldown ends %v (found %v), want %v", state.Until, ok, want)
+	}
+}
+
+// holdBackoffLock takes the backoff lock from outside the code under test, so a test
+// can check what a call does while another process holds it.
+func holdBackoffLock(t *testing.T) (release func()) {
+	t.Helper()
+	dir, err := backoffDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err = filelock.Acquire(filepath.Join(dir, ".lock"), time.Second)
+	if errors.Is(err, filelock.ErrUnsupported) {
+		t.Skip("no file locks on this platform")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return release
+}
+
+// Reads take the backoff lock too, so a read never overlaps a writer's rename. That
+// matters on Windows, which can refuse to replace a file that another handle has open.
+func TestReadWaitsForTheBackoffLock(t *testing.T) {
+	isolateBackoff(t)
+	release := holdBackoffLock(t)
+	done := make(chan struct{})
+	go func() {
+		readBackoff("claude:work")
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("a read returned while another holder had the backoff lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	<-done
+}
+
+// A success must not end a backoff while another holder has the backoff lock. The
+// clear waits for the lock, and when the lock stays busy it leaves the state alone.
+// A later clean reading then tries again.
+func TestClearLeavesTheBackoffWhenTheLockStaysBusy(t *testing.T) {
+	clock := isolateBackoff(t)
+	key := "claude:work"
+	recordRateLimit(key, 0)
+	before, _ := readBackoff(key)
+	*clock = clock.Add(time.Hour)
+	release := holdBackoffLock(t)
+	clearBackoff(key, before)
+	release()
+	if _, ok := readBackoff(key); !ok {
+		t.Fatal("a success ended the backoff while another holder had the lock")
+	}
+}
+
+// A state written by a build without IDs cannot be matched to the request that saw
+// it, so a success leaves it alone. The next 429 replaces it with an ID-bearing state.
+func TestSuccessLeavesAStateWithoutAnIDAlone(t *testing.T) {
+	clock := isolateBackoff(t)
+	key := "claude:work"
+	writeBackoff(key, backoffState{Until: clock.Add(time.Hour), Failures: 1})
+	before, ok := readBackoff(key)
+	if !ok {
+		t.Fatal("the stored state without an ID was not read")
+	}
+	clearBackoff(key, before)
+	if _, ok := readBackoff(key); !ok {
+		t.Fatal("a success cleared a state that has no ID")
+	}
 }
