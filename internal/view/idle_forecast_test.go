@@ -10,7 +10,7 @@ import (
 func TestIdleMovingResetDoesNotPromiseForecastSoon(t *testing.T) {
 	for _, at := range []time.Time{time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)} {
 		w := provider.UsageWindow{Name: "pool", Length: 7 * 24 * time.Hour, ResetsAt: at.Add(7 * 24 * time.Hour)}
-		got := buildWindow(Inputs{}, "antigravity", w, true, at, at)
+		got := buildWindow(Inputs{}, "antigravity", w, true, true, at, at)
 		if got.ForecastWords() != "no usage yet" {
 			t.Fatalf("words=%q forecast=%+v", got.ForecastWords(), got.Forecast)
 		}
@@ -30,7 +30,7 @@ func TestZeroMatureAndPositiveYoungForecastsUnchanged(t *testing.T) {
 		{0, 6 * 24 * time.Hour, "est. 0% at reset (average since reset)"},
 		{3, 7*24*time.Hour - 10*time.Minute, "forecast soon"},
 	} {
-		got := buildWindow(Inputs{}, "a", provider.UsageWindow{Name: "pool", Length: 7 * 24 * time.Hour, Utilization: tc.used, ResetsAt: at.Add(tc.left)}, true, at, at)
+		got := buildWindow(Inputs{}, "a", provider.UsageWindow{Name: "pool", Length: 7 * 24 * time.Hour, Utilization: tc.used, ResetsAt: at.Add(tc.left)}, true, true, at, at)
 		if got.ForecastWords() != tc.words {
 			t.Fatalf("used=%v words=%q", tc.used, got.ForecastWords())
 		}

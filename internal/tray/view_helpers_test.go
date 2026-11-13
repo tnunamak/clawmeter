@@ -28,6 +28,7 @@ func viewOf(results map[string]*provider.UsageData, now time.Time) view.Snapshot
 func viewNamed(results map[string]*provider.UsageData, names map[string]string, now time.Time) view.Snapshot {
 	in := view.Inputs{
 		MaxReadingAge:      config.ReadingMaxAge(0),
+		RetainedForecast:   view.RetainedForecastAge,
 		Results:            make(map[string]*provider.UsageData, len(names)),
 		DisplayNames:       make(map[string]string, len(names)),
 		SourceLabels:       make(map[string]string, len(names)),

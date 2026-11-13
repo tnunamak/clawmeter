@@ -8,8 +8,9 @@ Keep the existing native desktop appearance. The title identifies the account
 and window, including a pin when present. The body states usage beside a
 ten-cell meter, one run-out estimate, the reset horizon and the forecast amount
 with its average-since-reset basis. Last-known usage is labelled beside the
-value, after its freshness qualification. Missing or stale forecasts never
-become reassuring estimates.
+value, after its freshness qualification. A forecast from a reading past two
+poll intervals is labelled with that reading's time and drawn for up to one
+hour; past that hour, or without a reset, no forecast is drawn.
 
 For example, a frozen quota snapshot renders:
 

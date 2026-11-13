@@ -221,9 +221,11 @@ The status table and the tray menu show the same values. The bar runs from 0 to 
 
 `forecast soon` means too little of the window has elapsed: forecasting needs
 10% of the window, capped at one hour. `no forecast` means the reset time or
-window length is unknown. `forecast stale` means the reading cannot support a
-current forecast, or its reset has passed. After a failed poll, a reading no
-older than two configured poll intervals keeps its forecast and run-out estimate.
+window length is unknown. `forecast stale` means the reading is more than an
+hour old. `forecast pending` means the window reset after the last reading, so
+its forecast waits for the next one. A reading past two poll intervals, such as
+one left by a failed poll, keeps its forecast and run-out estimate for up to an
+hour, and the output names the time of that reading (`last good HH:MM`).
 The forecast uses the rate at the time of that reading; the run-out countdown
 subtracts its age. If that estimated run-out has passed, run-out is unknown
 until another reading confirms usage. The last-good-data message still shows

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/cache"
 	"github.com/tnunamak/clawmeter/internal/config"
 	"github.com/tnunamak/clawmeter/internal/provider"
+	"github.com/tnunamak/clawmeter/internal/view"
 )
 
 // The cache constructor also consults the wall clock for its independent
@@ -50,31 +52,37 @@ func pollIntervalCachedJSON(t *testing.T, pollSeconds int, age time.Duration, re
 	return jpath(t, doc, "providers", "claude").(map[string]any)
 }
 
+// The poll interval sets when a reading is fresh. A stale reading still
+// forecasts within view.RetainedForecastAge, so the cache withholds a forecast
+// only beyond that horizon, whatever the poll interval.
 func TestCachedJSONUsesConfiguredPollInterval(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		poll  int
-		age   time.Duration
-		fresh bool
+		name     string
+		poll     int
+		age      time.Duration
+		fresh    bool
+		withheld bool
 	}{
-		{"configured_15_minutes", 600, 15 * time.Minute, true},
-		{"configured_exact_limit", 600, 20 * time.Minute, true},
-		{"configured_past_limit", 600, 20*time.Minute + time.Nanosecond, false},
-		{"configured_21_minutes", 600, 21 * time.Minute, false},
-		{"default_15_minutes", 300, 15 * time.Minute, false},
+		{"configured_15_minutes", 600, 15 * time.Minute, true, false},
+		{"configured_exact_limit", 600, 20 * time.Minute, true, false},
+		{"configured_past_limit", 600, 20*time.Minute + time.Nanosecond, false, false},
+		{"configured_21_minutes", 600, 21 * time.Minute, false, false},
+		{"default_15_minutes", 300, 15 * time.Minute, false, false},
+		{"past_retained_horizon", 300, view.RetainedForecastAge + time.Minute, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := pollIntervalCachedJSON(t, tc.poll, tc.age, "", false)
 			state := jpath(t, p, "view", "reading", "state")
-			if !tc.fresh {
-				if state != "stale" {
-					t.Fatalf("reading state = %v, want stale", state)
-				}
+			wantState := "stale"
+			if tc.fresh {
+				wantState = "fresh"
+			}
+			if state != wantState {
+				t.Fatalf("reading state = %v, want %s", state, wantState)
+			}
+			if tc.withheld {
 				assertCachedJSONWithholdsForecast(t, p)
 				return
-			}
-			if state != "fresh" {
-				t.Fatalf("reading state = %v, want fresh", state)
 			}
 			legacy := jpath(t, p, "forecast", "windows", "5h").(map[string]any)
 			if legacy["projected_pct"] != float64(200) || legacy["indicator"] == "stale" || legacy["indicator"] == "unknown" {
@@ -85,7 +93,7 @@ func TestCachedJSONUsesConfiguredPollInterval(t *testing.T) {
 				t.Fatalf("fresh view forecast = %#v", f)
 			}
 			e := jpath(t, p, "view", "windows", 0, "exhaustion").(map[string]any)
-			wantSeconds := float64((30*time.Minute - tc.age) / time.Second)
+			wantSeconds := math.Round((30*time.Minute - tc.age).Seconds())
 			if e["state"] != "runs_out" || e["runs_out_in_seconds"] != wantSeconds {
 				t.Fatalf("fresh exhaustion = %#v, want runs_out in %v seconds", e, wantSeconds)
 			}

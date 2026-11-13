@@ -53,7 +53,9 @@ Consumers should:
 A fresh usage reading can still have an unknown forecast. In particular, a
 monthly quota with an unknown start can omit `usage.stale` and report legacy
 `indicator="unknown"`. An absent `usage.stale` means false; use the source's
-evaluated `view.reading.state` as the freshness field. Consumers must not treat
+evaluated `view.reading.state` as the freshness field. A stale reading can carry a known forecast for up to
+one hour after its observation time. That estimate uses the earlier reading, so
+check the state before acting on it. Consumers must not treat
 `projected_pct=0` as a prediction of zero use. Prefer the matching window in
 that source's evaluated `view`: require `forecast.state="known"` and a present
 `forecast.pct`; otherwise
@@ -76,8 +78,8 @@ forecast and exhaustion states rather than derive states from rounded numbers.
 Re-rendering a cached reading preserves its rate and projected percentage;
 the exhaustion estimate counts down from its observation time. Once that
 estimate passes, exhaustion is `unknown` until another reading establishes it.
-Reset-announcement eligibility uses the same evaluated window and configured
-age allowance. Feed expiry and announcement timing still use the render clock.
+Reset-announcement eligibility uses the same evaluated window and the configured
+reading age, not the one-hour retained horizon above. Feed expiry and announcement timing still use the render clock.
 Usage readings older than two configured poll intervals, or with missing or
 future observation timestamps, cannot establish a forecast or exhaustion.
 Copilot's UTC calendar quotas use the actual month length. Other monthly quotas

@@ -19,6 +19,8 @@ func (w Window) ForecastWords() string {
 			return "no usage yet"
 		}
 		return "forecast soon"
+	case ForecastPending:
+		return "forecast pending"
 	case ForecastNone:
 		return "no forecast"
 	}

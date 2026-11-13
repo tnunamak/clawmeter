@@ -607,7 +607,11 @@ func (v outputView) statusLine() string {
 	}
 	display := v.display(acct.Key)
 
-	if acct.Reading.State != view.ReadingFresh && window.Forecast.State == view.ForecastStale {
+	known := window.Forecast.State == view.ForecastKnown
+	outNow := window.Exhaustion.State == view.ExhaustionOut
+	// A retained reading with no forecast and no run-out claim says only what it
+	// last saw. A claim of out now keeps the full line, so it stays visible.
+	if acct.Reading.State != view.ReadingFresh && !known && !outNow {
 		return fmt.Sprintf("CM~ %s %s last %s %s", display, window.Name, format.Percent(window.Used), acct.Reading.State)
 	}
 
@@ -616,13 +620,11 @@ func (v outputView) statusLine() string {
 		readingNote = " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
 	}
 
-	known := window.Forecast.State == view.ForecastKnown
-	outNow := window.Exhaustion.State == view.ExhaustionOut
 	prefix := "CM"
 	switch {
 	case outNow || (known && window.Forecast.Pct >= 100):
 		prefix = "CM!"
-	case (known && window.Forecast.Pct >= 90) || window.Forecast.State == view.ForecastStale:
+	case (known && window.Forecast.Pct >= 90) || window.Forecast.State.Lapsed():
 		prefix = "CM~"
 	}
 
@@ -1087,7 +1089,9 @@ func forecastFor(acct *view.Account) *JSONForecast {
 		case view.ForecastKnown:
 			projection.ProjectedPct = roundPct(window.Forecast.Pct)
 			projection.Indicator = format.Percent(window.Forecast.Pct)
-		case view.ForecastStale:
+		case view.ForecastStale, view.ForecastPending:
+			// A pending projection is not current either. The legacy indicator has
+			// always called a reset-passed window stale, so consumers keep that value.
 			projection.Indicator = "stale"
 		}
 		result.Windows[window.Name] = projection
@@ -1670,7 +1674,7 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	var maxPct float64
 	stale := acct.Reading.State != view.ReadingFresh
 	for _, w := range acct.Windows {
-		stale = stale || w.Forecast.State == view.ForecastStale
+		stale = stale || w.Forecast.State.Lapsed()
 		if w.Forecast.State == view.ForecastKnown {
 			maxPct = max(maxPct, w.Forecast.Pct)
 		}

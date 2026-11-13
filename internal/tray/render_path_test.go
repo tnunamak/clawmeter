@@ -3,6 +3,7 @@
 package tray
 
 import (
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,16 +67,17 @@ func TestRenderPathPinnedStaleWindowKeepsLastKnownMeter(t *testing.T) {
 	}()
 
 	snap := productionView(results, menus, now)
-	const wantTooltip = "Pinned · Claude · 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nLast known 100% used  ████████┃██\nRun-out unknown\nResets in 1h00m"
+	const wantTooltip = "Pinned · Claude · 5-Hour\nstale - showing last good data from Oct 22, 2026 11:00 AM (rate limited)\nLast known 100% used  ████████┃██\nOut now\nResets in 1h00m\nEst. 167% at reset (avg. since reset)"
 	if got := Tooltip(snap, results); got != wantTooltip {
 		t.Fatalf("tooltip = %q\nwant      %q", got, wantTooltip)
 	}
-	if _, meter := IconState(snap); meter.UsagePct != 100 || meter.RiskPct != 0 || !meter.ShowExpected || meter.Label != "5H" {
-		t.Fatalf("icon for a pinned stale window = %+v; retain usage and identity without inventing a forecast", meter)
+	// The icon carries the retained forecast's risk, the same 167% the tooltip shows.
+	if _, meter := IconState(snap); meter.UsagePct != 100 || math.Round(meter.RiskPct) != 167 || !meter.ShowExpected || meter.Label != "5H" {
+		t.Fatalf("icon for a pinned stale window = %+v; want last known usage with the retained 167%% risk", meter)
 	}
 	rows := MenuRows(snap, maxWindowItems)
-	if got := strings.Join(rows["claude"], " | "); !strings.Contains(got, "forecast stale") || strings.Contains(got, "out now") {
-		t.Fatalf("stale menu row = %q", got)
+	if got := strings.Join(rows["claude"], " | "); !strings.Contains(got, "167% at reset") || !strings.Contains(got, "out now") || !strings.HasSuffix(got, "(last good 11:00)") {
+		t.Fatalf("stale menu row = %q, want the retained forecast marked with its last good time", got)
 	}
 }
 

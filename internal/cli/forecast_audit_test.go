@@ -17,7 +17,11 @@ import (
 func TestAuditM1LegacyForecastMatchesSnapshot(t *testing.T) {
 	for _, now := range []time.Time{time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC), time.Now()} {
 		for _, ids := range [][]string{{"default"}, {"default", "work"}, {"one", "two"}} {
-			for _, age := range []time.Duration{11 * time.Minute, 2 * time.Minute} {
+			for _, sample := range []struct {
+				age time.Duration
+				pct float64 // projected at reset; unused beyond the retained horizon
+			}{{2 * time.Minute, 203.39}, {11 * time.Minute, 220.18}, {view.RetainedForecastAge + time.Minute, 0}} {
+				age := sample.age
 				output := MultiProviderOutput{PollInterval: 300}
 				for _, id := range ids {
 					data := &provider.UsageData{Provider: "claude", SourceID: id, Stale: true, FetchedAt: now.Add(-age), Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 80, ResetsAt: now.Add(3 * time.Hour)}}}
@@ -39,11 +43,12 @@ func TestAuditM1LegacyForecastMatchesSnapshot(t *testing.T) {
 					}
 					got := f.Windows["5h"]
 					w := v.Windows[0]
-					if age > 10*time.Minute {
+					if age > view.RetainedForecastAge {
+						// Beyond the retained horizon a stale reading makes no forecast.
 						if got.Indicator != "stale" || got.ProjectedPct != 0 || w.Forecast.State != "stale" || w.Forecast.Pct != nil {
 							t.Errorf("old sample: legacy=%+v view=%+v", got, w.Forecast)
 						}
-					} else if w.Forecast.Pct == nil || got.Indicator == "stale" || got.Indicator == "unknown" || math.Abs(got.ProjectedPct-203.39) > 1e-9 || got.ProjectedPct != *w.Forecast.Pct {
+					} else if w.Forecast.Pct == nil || got.Indicator == "stale" || got.Indicator == "unknown" || math.Abs(got.ProjectedPct-sample.pct) > 1e-9 || got.ProjectedPct != *w.Forecast.Pct {
 						t.Errorf("retained sample: legacy=%+v view=%+v", got, w.Forecast)
 					}
 				}
@@ -190,7 +195,7 @@ func TestForecastBasisOnlyEmittedWhenKnown(t *testing.T) {
 			case "warming":
 				data.Windows[0].ResetsAt = now.Add(299 * time.Minute)
 			case "stale":
-				data.FetchedAt = now.Add(-11 * time.Minute)
+				data.FetchedAt = now.Add(-(view.RetainedForecastAge + time.Minute))
 			case "none":
 				data.Windows[0].ResetsAt = time.Time{}
 			}
@@ -283,7 +288,7 @@ func TestResetlessExhaustionAcrossSurfaces(t *testing.T) {
 				w := jpath(t, src, "view", "windows", 0)
 				state, forecast := "out", "none"
 				if aged {
-					state, forecast = "unknown", "stale"
+					state, forecast = "unknown", "none"
 				}
 				reset := jpath(t, w, "reset")
 				if jpath(t, w, "exhaustion", "state") != state || jpath(t, w, "forecast", "state") != forecast || hasKey(jpath(t, w, "forecast"), "pct") || hasKey(jpath(t, w, "exhaustion"), "runs_out_in_seconds") || jpath(t, reset, "known") != false || hasKey(reset, "at") || hasKey(reset, "in_seconds") {

@@ -39,7 +39,7 @@ Account
 Window
   Name, Code, Qualifier, Label
   Used          percent
-  Forecast      State known | warming | stale | none; Pct when known
+  Forecast      State known | warming | stale | pending | none; Pct when known
   Exhaustion    State out | runs_out | lasts | unknown;
                 RunsOutIn, EarlyBy when runs_out; OutSince when out and observed
   Risk          the rank Worst is chosen by
@@ -51,22 +51,31 @@ Target
 ## States, decided once
 
 - Reading. Missing or future observation times and usage older than two poll
-  intervals are stale. A retained reading flagged stale after a failed poll
-  can still forecast within that age allowance. Every usable reading uses its
-  observation time for the rate; rendering only counts down the estimated ETA.
-  Errors and expired credentials establish no forecast or exhaustion. All
-  readings keep their last windows for display. Fresh readings rank first.
-- Exhaustion. `unknown` when the reading is unusable. Otherwise `out` when
-  the window is at 100% or more, whatever the forecast says (a window can be
-  used up before its forecast warms up); `runs_out` or `lasts` only when the
-  forecast is known; `unknown` in every other case (warming up, no reset, a
-  reset already passed, or estimated exhaustion already passed). Nothing reads
-  as "lasts" without a forecast. Estimates assume the average pace since reset
-  continues; they do not measure recent demand.
-- Forecast. `warming` before the window has run long enough to project,
-  `none` for a window without a reset, `known` with a percentage otherwise.
-  The evaluated machine view omits unknown percentages. Legacy JSON retains a
-  zero placeholder, valid only when its indicator is a percentage.
+  intervals are stale. A stale reading still forecasts up to one hour old
+  (`view.RetainedForecastAge`) on a surface that opts in through
+  `Inputs.RetainedForecast`: the tray and CLI do; the reset feed does not.
+  Every usable reading uses its observation time for the rate; rendering only
+  counts down the estimated ETA. Errors and expired credentials establish no
+  forecast or exhaustion. All readings keep their last windows for display.
+  Fresh readings rank first.
+- Exhaustion. `unknown` when the reading is unusable, or when it is stale and
+  the window has no reset: a retained reading at the limit holds only until its
+  reset, so without one it says nothing about now. Otherwise `out` when the
+  window is at 100% or more, whatever the forecast says (a window can be used up
+  before its forecast warms up); `runs_out` or `lasts` only when the forecast is
+  known; `unknown` in every other case (warming up, no reset, a reset already
+  passed, or estimated exhaustion already passed). Nothing reads as "lasts"
+  without a forecast. Estimates assume the average pace since reset continues;
+  they do not measure recent demand.
+- Forecast. `stale` when the reading is too old to forecast; `pending` when the
+  window reset after the reading was taken, until the next reading; `warming`
+  before the window has run long enough to project; `none` for a window without
+  a reset; `known` with a percentage otherwise. `stale` and `pending` are
+  lapsed: their usage is not current, so no projection or run-out reads as live,
+  and agent status reports `stale` for both. The evaluated machine view omits
+  unknown percentages. Legacy JSON retains a zero placeholder, valid only when
+  its indicator is a percentage. `pending` keeps the `stale` indicator it has
+  always had.
 - Reset. Unknown resets are `unknown`, never zero seconds.
 - Out since. The time comes from the run-out record, which any process may
   read: a reading under 100% followed by one at 100% or more, with a positive
@@ -108,7 +117,9 @@ forecast, current use and display order, so ties always break the same way.
 ## What each surface shows
 
 - Tray menu and CLI plain/color: every account, window, credit, pool and
-  announcement, with actions (clickable in the tray, text in the CLI).
+  announcement, with actions (clickable in the tray, text in the CLI). In the
+  tray menu, window rows of a stale account end with `(last good HH:MM)`, or
+  `(stale)` when the reading has no time.
 - Tooltip, icon and statusline: the Selected target (the pin when present,
   otherwise Worst), with current usage and the reading's freshness. The tooltip
   gives one run-out/lasting estimate and its average-since-reset basis, or the

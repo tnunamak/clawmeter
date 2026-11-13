@@ -60,7 +60,7 @@ func TestE1StatusLineUnknownAndStale(t *testing.T) {
 		want  string
 	}{
 		{time.Now().Add(298 * time.Minute), "forecast soon"},
-		{time.Now().Add(-time.Hour), "stale"},
+		{time.Now().Add(-time.Hour), "forecast pending"},
 	} {
 		output := MultiProviderOutput{Providers: []ProviderFormatter{{Display: "Test", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{{Name: "5h", Utilization: 3, ResetsAt: tt.reset}}}}}}
 		got := output.StatusLineSummary()

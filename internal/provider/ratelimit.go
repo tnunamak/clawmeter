@@ -49,11 +49,12 @@ func parseRetryAfter(value string) time.Duration {
 // Some usage endpoints are shared with the vendor's own tools and answer 429
 // with "retry-after: 0" (Claude does). Honoring that literally would make every
 // CLI call retry at once, so after a 429 a source is not called again for a
-// floor of 5 minutes, doubling per consecutive 429 up to 1 hour. A longer
-// Retry-After wins, up to the same cap. The state lives on disk because the CLI
-// and the tray are separate processes.
+// floor of 1 minute, doubling per consecutive 429 up to 1 hour. The floor is
+// shorter than the default poll interval so one 429 does not cost the next
+// scheduled poll. A longer Retry-After wins, up to the same cap. The state lives
+// on disk because the CLI and the tray are separate processes.
 const (
-	backoffFloor = 5 * time.Minute
+	backoffFloor = time.Minute
 	backoffCap   = time.Hour
 )
 

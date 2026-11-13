@@ -79,16 +79,16 @@ func TestRateLimitBacksOffAndHonorsFloor(t *testing.T) {
 	if !strings.HasPrefix(data.Error, "rate limited (429), next try ") || data.Provider != "claude" || data.SourceID != "work" {
 		t.Fatalf("rate-limited data = %#v", data)
 	}
-	*clock = clock.Add(4 * time.Minute)
-	if data := fetchExpectingCalls(t, p, 1, "inside 5m floor"); !strings.Contains(data.Error, "rate limited") {
+	*clock = clock.Add(30 * time.Second)
+	if data := fetchExpectingCalls(t, p, 1, "inside 1m floor"); !strings.Contains(data.Error, "rate limited") {
 		t.Fatalf("backed-off data = %#v", data)
 	}
-	*clock = clock.Add(2 * time.Minute) // 6 min after first 429, past the floor
+	*clock = clock.Add(31 * time.Second) // 61s after the first 429, past the floor
 	fetchExpectingCalls(t, p, 2, "after floor")
-	// Second consecutive 429 doubles the delay to 10 minutes.
-	*clock = clock.Add(8 * time.Minute)
-	fetchExpectingCalls(t, p, 2, "inside doubled 10m backoff")
-	*clock = clock.Add(3 * time.Minute)
+	// Second consecutive 429 doubles the delay to 2 minutes.
+	*clock = clock.Add(2*time.Minute - time.Second)
+	fetchExpectingCalls(t, p, 2, "inside doubled 2m backoff")
+	*clock = clock.Add(time.Second)
 	fetchExpectingCalls(t, p, 3, "after doubled backoff")
 }
 

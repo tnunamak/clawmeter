@@ -613,14 +613,19 @@ func TestFailureGate_PerProvider(t *testing.T) {
 func TestFailureGate_BackoffGrows(t *testing.T) {
 	g := NewFailureGate()
 
-	g.ShouldSurfaceError("claude", true) // backoff = 5m
-	g.ShouldSurfaceError("claude", true) // backoff = 10m
-	g.ShouldSurfaceError("claude", true) // backoff = 20m
-	g.ShouldSurfaceError("claude", true) // backoff = 30m (cap)
-	g.ShouldSurfaceError("claude", true) // backoff = 30m (stays capped)
-
-	if g.backoffs["claude"] != maxBackoff {
-		t.Errorf("backoff = %v, want %v", g.backoffs["claude"], maxBackoff)
+	// Failures before the threshold leave the next poll alone.
+	for i := 1; i < skipAfterFailures; i++ {
+		g.ShouldSurfaceError("claude", true)
+		if _, ok := g.backoffs["claude"]; ok {
+			t.Fatalf("backoff set after %d failures, before the threshold of %d", i, skipAfterFailures)
+		}
+	}
+	// From the threshold on, the backoff doubles and stays at maxBackoff.
+	for _, want := range []time.Duration{baseBackoff, 2 * baseBackoff, 4 * baseBackoff, maxBackoff, maxBackoff} {
+		g.ShouldSurfaceError("claude", true)
+		if g.backoffs["claude"] != want {
+			t.Errorf("backoff = %v, want %v", g.backoffs["claude"], want)
+		}
 	}
 }
 
@@ -631,10 +636,16 @@ func TestFailureGate_InBackoff(t *testing.T) {
 		t.Error("should not be in backoff initially")
 	}
 
-	g.ShouldSurfaceError("claude", false) // sets nextPoll ~5m from now
-
+	// A lone failure leaves the next poll alone.
+	g.ShouldSurfaceError("claude", false)
+	if g.InBackoff("claude") {
+		t.Error("one failure should not start a backoff")
+	}
+	for i := 1; i < skipAfterFailures; i++ {
+		g.ShouldSurfaceError("claude", false)
+	}
 	if !g.InBackoff("claude") {
-		t.Error("should be in backoff after failure")
+		t.Error("should be in backoff at the failure threshold")
 	}
 
 	// Simulate time passing by directly setting nextPoll to the past
@@ -648,12 +659,16 @@ func TestFailureGate_InBackoff(t *testing.T) {
 func TestFailureGate_SuccessResetsBackoff(t *testing.T) {
 	g := NewFailureGate()
 
-	g.ShouldSurfaceError("claude", false) // sets backoff
+	for i := 0; i < skipAfterFailures; i++ {
+		g.ShouldSurfaceError("claude", false)
+	}
 	if !g.InBackoff("claude") {
 		t.Fatal("should be in backoff")
 	}
 
-	g.RecordSuccess("claude")
+	if ended := g.RecordSuccess("claude"); ended != skipAfterFailures {
+		t.Errorf("RecordSuccess ended streak %d, want %d", ended, skipAfterFailures)
+	}
 
 	if g.InBackoff("claude") {
 		t.Error("backoff should be cleared after success")

@@ -1858,6 +1858,8 @@ type usageRefresher struct {
 	pollSeconds  func() int
 	render       func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus)
 	finished     func(at time.Time)
+	// resetPoll polls again just after the next window reset. Guarded by mu.
+	resetPoll *time.Timer
 }
 
 // refresh polls now unless another refresh is running; it reports false then.
@@ -1876,6 +1878,45 @@ func (r *usageRefresher) refreshWhenFree(force bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.run(force)
+}
+
+// resetPollDelay is how long after a window's reset the tray polls again, so the
+// window's first reading arrives soon after the reset instead of on the next tick.
+const resetPollDelay = 30 * time.Second
+
+// nextResetPoll returns when to poll after the earliest reset still ahead of now.
+// It reports false when no window has a reset ahead.
+func nextResetPoll(results map[string]*provider.UsageData, now time.Time) (time.Time, bool) {
+	var next time.Time
+	for _, data := range results {
+		if data == nil {
+			continue
+		}
+		for _, w := range data.Windows {
+			if w.ResetsAt.IsZero() || !w.ResetsAt.After(now) {
+				continue
+			}
+			if at := w.ResetsAt.Add(resetPollDelay); next.IsZero() || at.Before(next) {
+				next = at
+			}
+		}
+	}
+	return next, !next.IsZero()
+}
+
+// scheduleResetPoll replaces the pending reset poll with one for the next reset.
+// The caller holds r.mu. The poll it arms takes the lock when it fires, so it
+// waits for any refresh still running.
+func (r *usageRefresher) scheduleResetPoll(results map[string]*provider.UsageData, now time.Time) {
+	if r.resetPoll != nil {
+		r.resetPoll.Stop()
+		r.resetPoll = nil
+	}
+	at, ok := nextResetPoll(results, now)
+	if !ok {
+		return
+	}
+	r.resetPoll = time.AfterFunc(at.Sub(now), func() { r.refreshWhenFree(false) })
 }
 
 // run polls and redraws. The caller holds r.mu.
@@ -1909,6 +1950,14 @@ func (r *usageRefresher) run(force bool) {
 		}
 	}
 
+	if len(skipped) > 0 {
+		names := make([]string, 0, len(skipped))
+		for name := range skipped {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		log.Printf("provider refresh skipped in backoff: %s", strings.Join(names, ", "))
+	}
 	// Merge in cached data for backed-off providers
 	for name, cached := range skipped {
 		result.Results[name] = cached
@@ -1931,7 +1980,9 @@ func (r *usageRefresher) run(force bool) {
 		}
 
 		if data.Error == "" && !data.IsExpired {
-			s.failureGate.RecordSuccess(name)
+			if failed := s.failureGate.RecordSuccess(name); failed > 0 {
+				log.Printf("provider refresh recovered: provider=%s after %d failed polls", name, failed)
+			}
 			continue
 		}
 		// Provider errored — keep showing last good windows, but label them
@@ -1987,6 +2038,7 @@ func (r *usageRefresher) run(force bool) {
 	statuses := s.statuses // reuse last known statuses
 	s.mu.Unlock()
 
+	r.scheduleResetPoll(result.Results, now)
 	r.render(result.Results, statuses)
 	r.finished(now)
 }
@@ -2260,6 +2312,7 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 	s.mu.Unlock()
 	in := view.Inputs{
 		MaxReadingAge:      config.ReadingMaxAge(pollSeconds),
+		RetainedForecast:   view.RetainedForecastAge,
 		Results:            make(map[string]*provider.UsageData, len(shown)),
 		DisplayNames:       make(map[string]string, len(menus)),
 		SourceLabels:       make(map[string]string, len(menus)),

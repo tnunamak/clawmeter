@@ -244,6 +244,7 @@ func resetLine(w view.Window) string {
 
 func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 	byAccount := make(map[string][]meter.Row, len(snap.Accounts))
+	retained := make(map[string]string, len(snap.Accounts))
 	var shown []meter.Row
 	for i := range snap.Accounts {
 		acct := &snap.Accounts[i]
@@ -255,16 +256,29 @@ func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 			rows = rows[:limit]
 		}
 		byAccount[acct.Key] = rows
+		retained[acct.Key] = retainedNote(acct)
 		shown = append(shown, rows...)
 	}
 	widths := trayColumnWidths(shown)
 	out := make(map[string][]string, len(byAccount))
 	for key, rows := range byAccount {
 		for _, row := range rows {
-			out[key] = append(out[key], trayRowText(row, widths, snap.At))
+			out[key] = append(out[key], trayRowText(row, widths, snap.At)+retained[key])
 		}
 	}
 	return out
+}
+
+// retainedNote marks the rows of a stale account with when its last good reading
+// was taken, so a forecast drawn from that reading is not read as live.
+func retainedNote(acct *view.Account) string {
+	if acct.Reading.State != view.ReadingStale {
+		return ""
+	}
+	if acct.Reading.ObservedAt.IsZero() {
+		return " (stale)"
+	}
+	return " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
 }
 
 // MenuMore counts, per account, the shown windows past the menu's row limit.
