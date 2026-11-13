@@ -1567,9 +1567,11 @@ func sortProvidersByName(providers []ProviderFormatter) {
 }
 
 // sortProvidersByUrgency orders output's providers most urgent first. It grades
-// them with summaryUrgency on one snapshot, the one the summary line and the
-// check exit code read, so the order agrees with them. Within a tier, the
-// account whose most at-risk window ranks first in the snapshot comes first.
+// each one with summaryUrgency, the rule the summary line and the check exit code
+// also use. It reads its own view, built now, and does not share a view with
+// them, so a reading that changes between the calls can put the order out of step
+// with their grades. Within a tier, the account whose most at-risk window ranks
+// first in that view's Worst order comes first.
 func sortProvidersByUrgency(output *MultiProviderOutput) {
 	v := output.buildView(time.Now())
 	grades := make([]summaryState, len(v.entries))
@@ -1593,7 +1595,7 @@ func sortProvidersByUrgency(output *MultiProviderOutput) {
 }
 
 // worstWindowPlace is the place of an account's most at-risk window in the
-// snapshot's Worst order. An account with no window sorts last.
+// view's Worst order. An account with no window sorts last.
 func worstWindowPlace(g summaryState) int {
 	if g.window.Risk == 0 {
 		return math.MaxInt
