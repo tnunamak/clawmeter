@@ -71,7 +71,7 @@ func TestAuditM3CachedJSONCountsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := &cache.Entry{FetchedAt: now, ProviderData: map[string]*provider.UsageData{"claude": data}, SourceRevisions: map[string]string{"claude": "test"}}
-	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	if len(output.Providers) != 1 || output.Providers[0].Data == nil || output.Providers[0].Data.Stale {
 		t.Fatalf("expected successful cached sample: %+v", output.Providers)
 	}
@@ -235,7 +235,7 @@ func TestResetlessExhaustionAcrossSurfaces(t *testing.T) {
 			healthy := &provider.UsageData{Provider: "claude", SourceID: "one", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 20, ResetsAt: now.Add(3 * time.Hour)}}}
 			exhausted := &provider.UsageData{Provider: "claude", SourceID: "two", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 100}}}
 			if aged {
-				exhausted.FetchedAt = now.Add(-10*time.Minute - time.Nanosecond)
+				exhausted.FetchedAt = now.Add(-config.ReadingMaxAge(300) - time.Nanosecond)
 			}
 			output := MultiProviderOutput{PollInterval: 300, Providers: []ProviderFormatter{
 				{Name: "claude:one", DisplayName: "Claude", Family: "claude", SourceID: "one", SourceLabel: "One", SourceCount: 2, Data: healthy},

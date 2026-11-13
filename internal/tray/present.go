@@ -80,7 +80,7 @@ func readingMeter(acct *view.Account, w view.Window) icons.MeterState {
 		return icons.MeterState{
 			UsagePct:     w.Used,
 			ExpectedPct:  w.Pace,
-			RiskPct:      riskPct(w),
+			RiskPct:      riskPct(w, acct.Reading.State == view.ReadingFresh),
 			ShowExpected: w.HasPace,
 			Label:        windowBadgeLabel(w.Label),
 		}
@@ -116,12 +116,20 @@ func fallbackAccount(snap view.Snapshot) *view.Account {
 	return best
 }
 
-// riskPct is the projected use the icon's risk channel draws. An exhausted
-// window keeps its risk even while its forecast is still warming up.
-func riskPct(w view.Window) float64 {
+// nonFreshRiskCap keeps a retained reading's projection just below critical:
+// a stale reading warns, and only a fresh one reads critical.
+const nonFreshRiskCap = 99
+
+// riskPct is the projected use the icon's risk channel carries. An exhausted
+// window keeps its risk even while its forecast is still warming up. A
+// projection from a reading that is not fresh is capped at nonFreshRiskCap.
+func riskPct(w view.Window, fresh bool) float64 {
 	risk := 0.0
 	if w.Forecast.State == view.ForecastKnown {
 		risk = w.Forecast.Pct
+	}
+	if !fresh {
+		risk = min(risk, nonFreshRiskCap)
 	}
 	if w.Exhaustion.State == view.ExhaustionOut && w.Used > risk {
 		risk = w.Used

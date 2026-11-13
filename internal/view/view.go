@@ -119,8 +119,9 @@ const (
 	ForecastWarming ForecastState = "warming"
 	// ForecastStale means the reading is too old to forecast, or unusable.
 	ForecastStale ForecastState = "stale"
-	// ForecastPending means the window reset after the reading was taken, so its
-	// forecast waits for the next reading.
+	// ForecastPending means the window's reset has passed, so the reading describes
+	// a window that has ended. Its forecast waits for a reading that reports the
+	// next reset.
 	ForecastPending ForecastState = "pending"
 	// ForecastNone means the window has no reset, or no known length.
 	ForecastNone ForecastState = "none"
@@ -411,9 +412,10 @@ func reading(data *provider.UsageData) Reading {
 }
 
 // forecastable reports whether a reading may forecast at its age. A fresh
-// reading forecasts within the poll allowance. A retained reading, stale from a
-// failed poll or from age, forecasts within RetainedForecast when the caller
-// allows retained forecasts at all. Errors and expired credentials never forecast.
+// reading forecasts within MaxReadingAge. A retained reading, stale from a failed
+// poll or from age, forecasts within RetainedForecast, or within MaxReadingAge
+// when RetainedForecast is zero, as Inputs documents. Errors and expired
+// credentials never forecast.
 func forecastable(in Inputs, state ReadingState, observedAt time.Time, age time.Duration) bool {
 	if observedAt.IsZero() || age < 0 {
 		return false
@@ -422,7 +424,11 @@ func forecastable(in Inputs, state ReadingState, observedAt time.Time, age time.
 	case ReadingFresh:
 		return age <= in.MaxReadingAge
 	case ReadingStale:
-		return in.MaxReadingAge > 0 && age <= max(in.MaxReadingAge, in.RetainedForecast)
+		limit := in.RetainedForecast
+		if limit == 0 {
+			limit = in.MaxReadingAge
+		}
+		return in.MaxReadingAge > 0 && age <= limit
 	}
 	return false
 }
@@ -459,12 +465,14 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, usable, fresh bo
 	}
 	var proj forecast.Projection
 	switch {
+	case !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
+		// The window's reset has passed, so the reading describes a window that has
+		// ended, however fresh the reading is.
+		out.Forecast.State = ForecastPending
 	case !usable:
 		out.Forecast.State = ForecastStale
 	case w.ResetsAt.IsZero():
 		out.Forecast.State = ForecastNone
-	case !w.ResetsAt.After(at):
-		out.Forecast.State = ForecastPending
 	case length <= 0:
 		out.Forecast.State = ForecastNone
 	default:
@@ -486,9 +494,10 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, usable, fresh bo
 	case !usable, !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
 		// A reading from before the window's reset says nothing about now.
 		out.Exhaustion.State = ExhaustionUnknown
-	case !fresh && w.ResetsAt.IsZero():
-		// A retained reading at the limit holds only until the reset. With no
-		// reset it may be stale, so it says nothing about now.
+	case !fresh && (w.ResetsAt.IsZero() || w.Utilization >= 100):
+		// A retained reading cannot say that a window is at its limit now. Some
+		// windows are rolling, and their usage falls before the reset, so a stale
+		// 100% may already be below it.
 		out.Exhaustion.State = ExhaustionUnknown
 	case w.Utilization >= 100:
 		out.Exhaustion.State = ExhaustionOut

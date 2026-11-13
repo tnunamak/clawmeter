@@ -37,11 +37,15 @@ func RateLimitFromResponse(resp *http.Response) error {
 
 func parseRetryAfter(value string) time.Duration {
 	value = strings.TrimSpace(value)
-	if secs, err := strconv.Atoi(value); err == nil {
-		return max(time.Duration(secs)*time.Second, 0)
+	if secs, err := strconv.ParseInt(value, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		if secs <= 0 {
+			return 0
+		}
+		// Clamp the count before multiplying, so a huge value cannot overflow.
+		return time.Duration(min(secs, int64(maxRetryAfter/time.Second))) * time.Second
 	}
 	if at, err := http.ParseTime(value); err == nil {
-		return max(at.Sub(backoffNow()), 0)
+		return min(max(at.Sub(backoffNow()), 0), maxRetryAfter)
 	}
 	return 0
 }
@@ -49,13 +53,15 @@ func parseRetryAfter(value string) time.Duration {
 // Some usage endpoints are shared with the vendor's own tools and answer 429
 // with "retry-after: 0" (Claude does). Honoring that literally would make every
 // CLI call retry at once, so after a 429 a source is not called again for a
-// floor of 1 minute, doubling per consecutive 429 up to 1 hour. The floor is
-// shorter than the default poll interval so one 429 does not cost the next
-// scheduled poll. A longer Retry-After wins, up to the same cap. The state lives
-// on disk because the CLI and the tray are separate processes.
+// floor of 5 minutes, doubling per consecutive 429 up to 1 hour. The floor equals
+// the default poll interval, so after a 429 the next scheduled poll is usually
+// skipped. A longer Retry-After wins, up to maxRetryAfter, so a server's own
+// cooldown is not cut short at the local cap. The state lives on disk because
+// the CLI and the tray are separate processes.
 const (
-	backoffFloor = time.Minute
-	backoffCap   = time.Hour
+	backoffFloor  = 5 * time.Minute
+	backoffCap    = time.Hour
+	maxRetryAfter = 24 * time.Hour
 )
 
 var (
@@ -210,7 +216,7 @@ func recordRateLimit(key string, retryAfter time.Duration) time.Time {
 	for i := 1; i < state.Failures && delay < backoffCap; i++ {
 		delay *= 2
 	}
-	delay = min(max(delay, retryAfter), backoffCap)
+	delay = max(min(delay, backoffCap), min(retryAfter, maxRetryAfter))
 	if until := backoffNow().Add(delay); until.After(state.Until) {
 		state.Until = until
 	}

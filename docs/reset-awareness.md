@@ -326,7 +326,7 @@ divan (`ai-quota-monitoring/quota-trays-should-not-toast-or-mark-the-icon-for-un
 found no case for interrupting with an unofficial, approximate announcement,
 and the icon's small dot already means an update is available. The opt-in
 notification Clawmeter does offer comes from the account itself: when the tray
-saw an account run out and a later reading, within two poll intervals of the
+saw an account run out and a later reading, within the reading age of the
 last full one, shows room in every window, it says `Codex quota available
 again`, once per episode.
 

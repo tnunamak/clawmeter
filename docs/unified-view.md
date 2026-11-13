@@ -50,37 +50,41 @@ Target
 
 ## States, decided once
 
-- Reading. Missing or future observation times and usage older than two poll
-  intervals are stale. A stale reading still forecasts up to one hour old
+- Reading. Missing or future observation times, and usage older than the reading
+  age (`config.ReadingMaxAge`: two poll intervals plus one minute of slack), are
+  stale. A stale reading still forecasts up to one hour old
   (`view.RetainedForecastAge`) on a surface that opts in through
   `Inputs.RetainedForecast`: the tray and CLI do; the reset feed does not.
   Every usable reading uses its observation time for the rate; rendering only
   counts down the estimated ETA. Errors and expired credentials establish no
   forecast or exhaustion. All readings keep their last windows for display.
   Fresh readings rank first.
-- Exhaustion. `unknown` when the reading is unusable, or when it is stale and
-  the window has no reset: a retained reading at the limit holds only until its
-  reset, so without one it says nothing about now. Otherwise `out` when the
-  window is at 100% or more, whatever the forecast says (a window can be used up
+- Exhaustion. `unknown` when the reading is unusable. A stale reading that is at
+  100% or more, or has no reset, is also `unknown`: a retained reading cannot say
+  the window is out now, because the reading may predate the exhaustion. `out`
+  needs a fresh reading at 100% or more, whatever the forecast says (a window can be used up
   before its forecast warms up); `runs_out` or `lasts` only when the forecast is
   known; `unknown` in every other case (warming up, no reset, a reset already
   passed, or estimated exhaustion already passed). Nothing reads as "lasts"
   without a forecast. Estimates assume the average pace since reset continues;
   they do not measure recent demand.
 - Forecast. `stale` when the reading is too old to forecast; `pending` when the
-  window reset after the reading was taken, until the next reading; `warming`
+  window's reset has passed, so the reading describes a window that has ended,
+  until a reading reports the next reset; `warming`
   before the window has run long enough to project; `none` for a window without
   a reset; `known` with a percentage otherwise. `stale` and `pending` are
   lapsed: their usage is not current, so no projection or run-out reads as live,
   and agent status reports `stale` for both. The evaluated machine view omits
   unknown percentages. Legacy JSON retains a zero placeholder, valid only when
-  its indicator is a percentage. `pending` keeps the `stale` indicator it has
-  always had.
+  its indicator is a percentage. Machine output reports `pending` as `stale`, as
+  the legacy indicator always has, because the published v1 enum has no
+  `pending` value.
 - Reset. Unknown resets are `unknown`, never zero seconds.
 - Out since. The time comes from the run-out record, which any process may
   read: a reading under 100% followed by one at 100% or more, with a positive
-  gap of at most two poll intervals, for the account's current identity and
-  reset period, and a last observation no older than two poll intervals. A
+  gap of at most the reading age (`config.ReadingMaxAge`), for the account's
+  current identity and reset period, and a last observation no older than the
+  reading age. A
   corrupt record or a time in the future fails closed. It is the first full
   reading the tray saw, not a time the provider reported.
 - Money. A projected figure is labelled as an estimate everywhere

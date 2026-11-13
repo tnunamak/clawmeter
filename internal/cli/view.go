@@ -382,6 +382,16 @@ func (v outputView) jsonAccount(key string) *JSONAccountView {
 	return out
 }
 
+// jsonForecastState is the forecast state machine output reports. The published
+// v1 enum has no pending value. A pending window is lapsed like a stale one, and
+// the legacy indicator has always called it stale, so it reads as stale here.
+func jsonForecastState(s view.ForecastState) string {
+	if s == view.ForecastPending {
+		return string(view.ForecastStale)
+	}
+	return string(s)
+}
+
 func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 	out := JSONViewWindow{
 		Name:       w.Name,
@@ -389,7 +399,7 @@ func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 		Label:      w.Label,
 		Scope:      w.Scope,
 		Used:       w.Used,
-		Forecast:   JSONViewForecast{State: string(w.Forecast.State), Reason: w.Forecast.Reason},
+		Forecast:   JSONViewForecast{State: jsonForecastState(w.Forecast.State), Reason: w.Forecast.Reason},
 		Exhaustion: JSONViewExhaustion{State: string(w.Exhaustion.State)},
 		Reset:      JSONViewReset{Policy: w.Reset.Policy, Known: w.Reset.Known},
 		Shown:      shown,

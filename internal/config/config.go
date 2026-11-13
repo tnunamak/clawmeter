@@ -19,10 +19,17 @@ import (
 // remain available when the user needs an immediate reading.
 const MinimumPollIntervalSeconds = 300
 
-// ReadingMaxAge is the maximum age of a retained reading served as current
-// by the hub or used for a forecast after a failed poll.
+// ReadingSlack is operational slack on top of two poll intervals. It covers the
+// poll's network deadline, the tray's scheduling jitter, and the gap between a
+// fetch and its observation. It is not a guarantee: a suspended machine can
+// exceed it, and then the reading is reported stale.
+const ReadingSlack = time.Minute
+
+// ReadingMaxAge is the age past which a reading is no longer fresh: the hub
+// stops serving it as current and the view stops calling it fresh. Two poll
+// intervals tolerate one missed poll.
 func ReadingMaxAge(pollSeconds int) time.Duration {
-	return 2 * PollInterval(pollSeconds)
+	return 2*PollInterval(pollSeconds) + ReadingSlack
 }
 
 // PollInterval is how often the tray polls for a configured number of

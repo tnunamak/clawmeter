@@ -913,7 +913,7 @@ func TestBuildOutputFromCacheRejectsRotatedSourceCredential(t *testing.T) {
 		}},
 		SourceRevisions: map[string]string{"claude:work": "account-a"},
 	}
-	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	if len(output.Providers) != 1 || output.Providers[0].Data != nil {
 		t.Fatalf("rotated source reused cached account data: %#v", output.Providers)
 	}
@@ -997,7 +997,7 @@ func TestBuildOutputKeepsBrowserResetUnderClaudeWhenUsageIsUnavailable(t *testin
 			"claude_web": provider.SourceRevision(sourcedClaudeWebCLIProvider{id: "default"}),
 		},
 	}
-	cached := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	cached := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	if len(cached.Providers) != 1 || cached.Providers[0].Name != "claude" || cached.Providers[0].Data.ResetCredits == nil {
 		t.Fatalf("cached reset-only Claude row = %#v, want one row under Claude", cached.Providers)
 	}
@@ -1027,7 +1027,7 @@ func TestBuildOutputFromCacheDropsResetSnapshotWhenClaudeSourceChanged(t *testin
 		},
 	}
 
-	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	var claude *ProviderFormatter
 	for i := range output.Providers {
 		switch output.Providers[i].Name {

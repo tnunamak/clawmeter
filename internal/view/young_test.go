@@ -17,7 +17,7 @@ func TestRetainedReadingForecast(t *testing.T) {
 		exhaustion ExhaustionState
 	}{
 		{"just fetched", 0, 80, 3 * time.Hour, ForecastKnown, ExhaustionRunsOut},
-		{"observed out", 2 * time.Minute, 100, 3 * time.Hour, ForecastKnown, ExhaustionOut},
+		{"retained 100% is unknown", 2 * time.Minute, 100, 3 * time.Hour, ForecastKnown, ExhaustionUnknown},
 		{"young", 2 * time.Minute, 80, 3 * time.Hour, ForecastKnown, ExhaustionRunsOut},
 		{"at limit", 10 * time.Minute, 80, 3 * time.Hour, ForecastKnown, ExhaustionRunsOut},
 		{"older", 10*time.Minute + time.Nanosecond, 80, 3 * time.Hour, ForecastStale, ExhaustionUnknown},

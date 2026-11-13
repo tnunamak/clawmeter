@@ -12,11 +12,6 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
-const defaultTTL = 60 * time.Second
-
-// Allow one missed refresh before cached-only output is marked stale.
-const staleMargin = time.Minute
-
 // schemaVersion invalidates caches whose values changed meaning. Version 2:
 // Claude extra-usage Used/Limit were written 100x too large before; entries
 // without this version are dropped on read, including stale fallbacks.
@@ -75,29 +70,30 @@ func Read() (*Entry, error) {
 	return &entry, nil
 }
 
-// IsValid returns true if the cache entry is fresh (within TTL).
-func (e *Entry) IsValid() bool {
-	return time.Since(e.FetchedAt) < defaultTTL
+// IsFresh reports whether the entry was fetched within maxAge.
+func (e *Entry) IsFresh(maxAge time.Duration) bool {
+	return time.Since(e.FetchedAt) < maxAge
 }
 
-// IsStale reports when cached-only output must warn about its age.
-func (e *Entry) IsStale() bool {
-	return time.Since(e.FetchedAt) >= defaultTTL+staleMargin
-}
-
-// IsProviderStale uses the reading's own timestamp so a local update neither
-// inherits nor refreshes another source's age. Legacy readings without a
-// timestamp fall back to the aggregate age; a missing timestamp stays stale.
-func (e *Entry) IsProviderStale(name string) bool {
+// IsProviderStale reports whether a source's reading is older than maxAge at
+// now. A reading exactly maxAge old is still fresh, as the view treats it. The
+// caller passes now, so the marking and the view it feeds share one clock. The
+// reading's own timestamp decides, so a local update neither inherits nor
+// refreshes another source's age. Legacy readings without a timestamp fall back
+// to the aggregate age; a missing timestamp stays stale.
+func (e *Entry) IsProviderStale(name string, maxAge time.Duration, now time.Time) bool {
 	fetchedAt := e.FetchedAt
 	if data := e.ProviderData[name]; data != nil && !data.FetchedAt.IsZero() {
 		fetchedAt = data.FetchedAt
 	}
-	return time.Since(fetchedAt) >= defaultTTL+staleMargin
+	if fetchedAt.IsZero() {
+		return true
+	}
+	return now.Sub(fetchedAt) > maxAge
 }
 
 // Covers reports whether the cache contains an entry — error or data — for
-// every name in want. Callers use this in addition to IsValid to avoid
+// every name in want. Callers use this in addition to IsFresh to avoid
 // serving a stale cache that pre-dates a provider becoming configured:
 // e.g. the user runs `codex login` after a stale cache was written; without
 // this check, status would return empty until the TTL expired.
@@ -132,16 +128,6 @@ func SourceRevisionMatches(cached map[string]string, name, current string) bool 
 	}
 	hasCurrent := current != ""
 	return hadPrevious == hasCurrent && (!hasCurrent || previous == current)
-}
-
-// HasStaleData reports whether any requested provider is cached fallback data.
-func (e *Entry) HasStaleData(want []string) bool {
-	for _, name := range want {
-		if data := e.ProviderData[name]; data != nil && data.Stale {
-			return true
-		}
-	}
-	return false
 }
 
 // GetProvider retrieves usage data for a specific provider.

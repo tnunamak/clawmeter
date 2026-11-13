@@ -79,15 +79,15 @@ func TestRateLimitBacksOffAndHonorsFloor(t *testing.T) {
 	if !strings.HasPrefix(data.Error, "rate limited (429), next try ") || data.Provider != "claude" || data.SourceID != "work" {
 		t.Fatalf("rate-limited data = %#v", data)
 	}
-	*clock = clock.Add(30 * time.Second)
-	if data := fetchExpectingCalls(t, p, 1, "inside 1m floor"); !strings.Contains(data.Error, "rate limited") {
+	*clock = clock.Add(4 * time.Minute)
+	if data := fetchExpectingCalls(t, p, 1, "inside 5m floor"); !strings.Contains(data.Error, "rate limited") {
 		t.Fatalf("backed-off data = %#v", data)
 	}
-	*clock = clock.Add(31 * time.Second) // 61s after the first 429, past the floor
+	*clock = clock.Add(time.Minute + time.Second) // 5m1s after the first 429, past the floor
 	fetchExpectingCalls(t, p, 2, "after floor")
-	// Second consecutive 429 doubles the delay to 2 minutes.
-	*clock = clock.Add(2*time.Minute - time.Second)
-	fetchExpectingCalls(t, p, 2, "inside doubled 2m backoff")
+	// Second consecutive 429 doubles the delay to 10 minutes.
+	*clock = clock.Add(10*time.Minute - time.Second)
+	fetchExpectingCalls(t, p, 2, "inside doubled 10m backoff")
 	*clock = clock.Add(time.Second)
 	fetchExpectingCalls(t, p, 3, "after doubled backoff")
 }
@@ -104,14 +104,15 @@ func TestRateLimitBackoffCapsAtOneHour(t *testing.T) {
 	}
 }
 
-func TestRateLimitHonorsLongRetryAfterUpToCap(t *testing.T) {
+func TestRateLimitHonorsRetryAfterUpToItsBound(t *testing.T) {
 	for _, tc := range []struct {
 		retryAfter, want time.Duration
 	}{
 		{0, backoffFloor},
 		{30 * time.Second, backoffFloor},
 		{30 * time.Minute, 30 * time.Minute},
-		{2 * time.Hour, backoffCap},
+		{2 * time.Hour, 2 * time.Hour},
+		{30 * time.Hour, maxRetryAfter},
 	} {
 		clock := isolateBackoff(t)
 		if got := recordRateLimit("claude:work", tc.retryAfter).Sub(*clock); got != tc.want {
@@ -123,13 +124,18 @@ func TestRateLimitHonorsLongRetryAfterUpToCap(t *testing.T) {
 func TestParseRetryAfter(t *testing.T) {
 	clock := isolateBackoff(t)
 	for value, want := range map[string]time.Duration{
-		"":     0,
-		"0":    0,
-		"-5":   0,
-		"120":  2 * time.Minute,
-		" 60":  time.Minute,
-		"soon": 0,
+		"":                      0,
+		"0":                     0,
+		"-5":                    0,
+		"120":                   2 * time.Minute,
+		" 60":                   time.Minute,
+		"soon":                  0,
+		"86400":                 24 * time.Hour,
+		"172800":                maxRetryAfter,
+		"99999999999999999999":  maxRetryAfter,
+		"-99999999999999999999": 0,
 		clock.Add(20 * time.Minute).Format(http.TimeFormat): 20 * time.Minute,
+		clock.Add(48 * time.Hour).Format(http.TimeFormat):   maxRetryAfter,
 		clock.Add(-time.Minute).Format(http.TimeFormat):     0,
 	} {
 		if got := parseRetryAfter(value); got != want {

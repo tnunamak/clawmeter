@@ -107,9 +107,9 @@ func matrixCases(now time.Time) []matrixCase {
 				Provider: "claude", Stale: true, Warning: "rate limited", FetchedAt: now.Add(-time.Hour),
 				Windows: claude5h(100, time.Hour),
 			})},
-			// An hour old is inside the retained horizon, so the 100% window is out now and
-			// its forecast is labelled with the last good time, not withheld.
-			forbidden: []string{"Won't run out", "Run-out unknown", "runs out", "Runs out", "projected_at_reset=75"},
+			// An hour old is inside the retained horizon: its forecast stays, but a stale 100%
+			// cannot say the window is out now, so it warns with its run-out unknown.
+			forbidden: []string{"Won't run out", "out now", "Out now", "runs out", "Runs out", "projected_at_reset=75"},
 		},
 		{
 			name: "fresh healthy with a known forecast",
@@ -264,7 +264,7 @@ func matrixCases(now time.Time) []matrixCase {
 				}),
 			},
 			pin:       &view.Target{AccountKey: "claude", Window: "5h"},
-			forbidden: []string{"Est. 100%", "Won't run out", "Run-out unknown"},
+			forbidden: []string{"Est. 100%", "Won't run out", "out now", "Out now"},
 		},
 	}
 }

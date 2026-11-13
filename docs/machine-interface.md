@@ -80,8 +80,10 @@ the exhaustion estimate counts down from its observation time. Once that
 estimate passes, exhaustion is `unknown` until another reading establishes it.
 Reset-announcement eligibility uses the same evaluated window and the configured
 reading age, not the one-hour retained horizon above. Feed expiry and announcement timing still use the render clock.
-Usage readings older than two configured poll intervals, or with missing or
-future observation timestamps, cannot establish a forecast or exhaustion.
+Usage readings with missing or future observation timestamps cannot establish a
+forecast or exhaustion. A reading older than the reading age (`config.ReadingMaxAge`:
+two configured poll intervals plus one minute) is stale: it keeps a forecast only as
+the one-hour retained forecast above, and it never reports a window out now.
 Copilot's UTC calendar quotas use the actual month length. Other monthly quotas
 without an established start withhold forecasts; the word `monthly` does not
 establish a 30-day interval.

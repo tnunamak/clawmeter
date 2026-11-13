@@ -1858,8 +1858,11 @@ type usageRefresher struct {
 	pollSeconds  func() int
 	render       func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus)
 	finished     func(at time.Time)
-	// resetPoll polls again just after the next window reset. Guarded by mu.
+	// resetPoll polls again just after the next window reset. resetGen counts the
+	// arms, so a timer that fires after a newer arm finds an old generation and
+	// does nothing. Both are guarded by mu.
 	resetPoll *time.Timer
+	resetGen  uint64
 }
 
 // refresh polls now unless another refresh is running; it reports false then.
@@ -1868,7 +1871,7 @@ func (r *usageRefresher) refresh(force bool) bool {
 		return false
 	}
 	defer r.mu.Unlock()
-	r.run(force)
+	r.run(force, nil)
 	return true
 }
 
@@ -1877,15 +1880,16 @@ func (r *usageRefresher) refresh(force bool) bool {
 func (r *usageRefresher) refreshWhenFree(force bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.run(force)
+	r.run(force, nil)
 }
 
 // resetPollDelay is how long after a window's reset the tray polls again, so the
 // window's first reading arrives soon after the reset instead of on the next tick.
 const resetPollDelay = 30 * time.Second
 
-// nextResetPoll returns when to poll after the earliest reset still ahead of now.
-// It reports false when no window has a reset ahead.
+// nextResetPoll returns when to poll after the earliest reset still ahead of
+// now, counting resetPollDelay from each reset. A reset whose poll time has
+// passed is not scheduled again. It reports false when no poll is still ahead.
 func nextResetPoll(results map[string]*provider.UsageData, now time.Time) (time.Time, bool) {
 	var next time.Time
 	for _, data := range results {
@@ -1893,10 +1897,14 @@ func nextResetPoll(results map[string]*provider.UsageData, now time.Time) (time.
 			continue
 		}
 		for _, w := range data.Windows {
-			if w.ResetsAt.IsZero() || !w.ResetsAt.After(now) {
+			if w.ResetsAt.IsZero() {
 				continue
 			}
-			if at := w.ResetsAt.Add(resetPollDelay); next.IsZero() || at.Before(next) {
+			at := w.ResetsAt.Add(resetPollDelay)
+			if !at.After(now) {
+				continue
+			}
+			if next.IsZero() || at.Before(next) {
 				next = at
 			}
 		}
@@ -1904,23 +1912,67 @@ func nextResetPoll(results map[string]*provider.UsageData, now time.Time) (time.
 	return next, !next.IsZero()
 }
 
+// dueResetSources names the sources with a window whose reset poll is due at
+// now. A reset poll fetches only those sources. The others keep their last
+// readings, because their resets have not yet reached their poll time.
+func dueResetSources(results map[string]*provider.UsageData, now time.Time) map[string]bool {
+	due := make(map[string]bool)
+	for name, data := range results {
+		if data == nil {
+			continue
+		}
+		for _, w := range data.Windows {
+			if !w.ResetsAt.IsZero() && !w.ResetsAt.Add(resetPollDelay).After(now) {
+				due[name] = true
+				break
+			}
+		}
+	}
+	return due
+}
+
 // scheduleResetPoll replaces the pending reset poll with one for the next reset.
-// The caller holds r.mu. The poll it arms takes the lock when it fires, so it
-// waits for any refresh still running.
+// The caller holds r.mu. Each arm gets a new generation, so a timer that fired
+// before a later arm can tell it has been superseded.
 func (r *usageRefresher) scheduleResetPoll(results map[string]*provider.UsageData, now time.Time) {
 	if r.resetPoll != nil {
 		r.resetPoll.Stop()
 		r.resetPoll = nil
 	}
+	r.resetGen++
 	at, ok := nextResetPoll(results, now)
 	if !ok {
 		return
 	}
-	r.resetPoll = time.AfterFunc(at.Sub(now), func() { r.refreshWhenFree(false) })
+	gen := r.resetGen
+	r.resetPoll = time.AfterFunc(at.Sub(now), func() { r.fireResetPoll(gen) })
 }
 
-// run polls and redraws. The caller holds r.mu.
-func (r *usageRefresher) run(force bool) {
+// fireResetPoll runs the reset poll armed as gen, after any refresh in progress
+// ends. A refresh that ran while the timer waited for the lock has re-armed the
+// poll, and it has already read the reset, so the superseded timer does nothing.
+func (r *usageRefresher) fireResetPoll(gen uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if gen != r.resetGen {
+		return
+	}
+	r.resetPoll = nil
+	s.mu.Lock()
+	results := s.lastResults
+	s.mu.Unlock()
+	now := time.Now()
+	due := dueResetSources(results, now)
+	if len(due) == 0 {
+		r.scheduleResetPoll(results, now)
+		return
+	}
+	r.run(false, due)
+}
+
+// run polls and redraws. The caller holds r.mu. A non-nil only limits the fetch
+// to those sources; the others keep their last readings.
+func (r *usageRefresher) run(force bool, only map[string]bool) {
 	r.reloadConfig()
 
 	// Refresh already runs off the tray event loop. Complete executable-path
@@ -1932,6 +1984,9 @@ func (r *usageRefresher) run(force bool) {
 	s.mu.Lock()
 	priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
 	toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
+	if only != nil {
+		toFetch, skipped = limitToDueSources(toFetch, skipped, priorResults, only)
+	}
 	priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
 	s.mu.Unlock()
 
@@ -1941,6 +1996,9 @@ func (r *usageRefresher) run(force bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Trackers stamp observations with the fetch start, the earliest a reading
+	// can have been taken, so they never place a reading newer than it is.
+	fetchStart := time.Now()
 	result := provider.FetchProvidersParallel(ctx, toFetch)
 	if cfg != nil && cfg.Settings.ShouldRecordUsageHistory() {
 		if dir, err := cache.Path("history"); err == nil {
@@ -1956,7 +2014,7 @@ func (r *usageRefresher) run(force bool) {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		log.Printf("provider refresh skipped in backoff: %s", strings.Join(names, ", "))
+		log.Printf("provider refresh kept last reading (in backoff or not due): %s", strings.Join(names, ", "))
 	}
 	// Merge in cached data for backed-off providers
 	for name, cached := range skipped {
@@ -2010,9 +2068,9 @@ func (r *usageRefresher) run(force bool) {
 	s.mu.Unlock()
 
 	identities := sourceIdentities(configured, result.SourceRevisions)
-	maxGap := 2 * config.PollInterval(r.pollSeconds())
-	windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
-	available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
+	maxGap := config.ReadingMaxAge(r.pollSeconds())
+	windowExhaustion.observeFetched(result.Results, skipped, identities, fetchStart, maxGap)
+	available := quotaRecovery.observe(result.Results, skipped, identities, fetchStart, maxGap)
 	_ = cache.Write(result)
 
 	// The feed is read after the usage cache is written: announcements
@@ -2732,6 +2790,24 @@ func splitProvidersForRefresh(providers []provider.Provider, gate *provider.Fail
 		toFetch = append(toFetch, p)
 	}
 	return toFetch, skipped
+}
+
+// limitToDueSources keeps only the due sources in the fetch. Each other source
+// with a last reading moves to skipped and keeps that reading, as a source in
+// backoff does. A source with no last reading is still fetched, since there is
+// nothing to keep.
+func limitToDueSources(toFetch []provider.Provider, skipped map[string]*provider.UsageData, lastResults map[string]*provider.UsageData, due map[string]bool) ([]provider.Provider, map[string]*provider.UsageData) {
+	fetch := make([]provider.Provider, 0, len(toFetch))
+	for _, p := range toFetch {
+		name := provider.SourceKey(p)
+		prev := lastResults[name]
+		if due[name] || prev == nil {
+			fetch = append(fetch, p)
+			continue
+		}
+		skipped[name] = prev.Clone()
+	}
+	return fetch, skipped
 }
 
 // newResetPeriod reports whether a window's reset time starts a new period.

@@ -112,7 +112,9 @@ const (
 
 // MeterState is the provider-agnostic state rendered by the Clawmeter overlay.
 // UsagePct controls how many bits are lit, ExpectedPct marks where usage should
-// be by now in the reset window, and RiskPct controls the lit-bit severity color.
+// be by now in the reset window. RiskPct is the projected use at reset. The
+// raster only clamps it; nothing draws from it, since lit bits compare UsagePct
+// with ExpectedPct.
 type MeterState struct {
 	UsagePct        float64
 	ExpectedPct     float64

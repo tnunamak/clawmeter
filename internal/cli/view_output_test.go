@@ -294,14 +294,15 @@ func TestJSONViewCarriesEveryAccountAndTheWorstTarget(t *testing.T) {
 	}
 }
 
-func TestRetainedWarmReadingStillSaysOutNowInStatusline(t *testing.T) {
+// A retained 100% reading does not claim out now: only a fresh reading can.
+func TestRetainedWarmReadingDoesNotClaimOutNow(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
 		Provider: "claude", Stale: true, FetchedAt: now.Add(-time.Minute),
 		Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: now.Add(298 * time.Minute)}},
 	})}}
 	got := output.buildView(now).statusLine()
-	if want := "CM! Claude 5h current 100% forecast soon out now (last good 11:59)"; got != want {
+	if want := "CM~ Claude 5h last 100% stale"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
@@ -310,7 +311,7 @@ func TestRetainedWarmReadingStillSaysOutNowInStatusline(t *testing.T) {
 // forecasts within view.RetainedForecastAge under any poll interval, and not beyond.
 func TestViewUsesConfiguredPollIntervalForRetainedReadings(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
-	for _, poll := range []int{600, 300} {
+	for _, poll := range []int{600, 300, 3600} {
 		for _, tc := range []struct {
 			age  time.Duration
 			want view.ForecastState

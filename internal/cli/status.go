@@ -609,23 +609,24 @@ func (v outputView) statusLine() string {
 
 	known := window.Forecast.State == view.ForecastKnown
 	outNow := window.Exhaustion.State == view.ExhaustionOut
+	// The prefix is the account's summary tier, so the statusline, the summary and
+	// the exit code agree: CM! only for a fresh critical account.
+	prefix := "CM"
+	switch v.summaryTier(acct.Key) {
+	case 2:
+		prefix = "CM!"
+	case 3:
+		prefix = "CM~"
+	}
 	// A retained reading with no forecast and no run-out claim says only what it
 	// last saw. A claim of out now keeps the full line, so it stays visible.
 	if acct.Reading.State != view.ReadingFresh && !known && !outNow {
-		return fmt.Sprintf("CM~ %s %s last %s %s", display, window.Name, format.Percent(window.Used), acct.Reading.State)
+		return fmt.Sprintf("%s %s %s last %s %s", prefix, display, window.Name, format.Percent(window.Used), acct.Reading.State)
 	}
 
 	readingNote := ""
 	if acct.Reading.State == view.ReadingStale {
 		readingNote = " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
-	}
-
-	prefix := "CM"
-	switch {
-	case outNow || (known && window.Forecast.Pct >= 100):
-		prefix = "CM!"
-	case (known && window.Forecast.Pct >= 90) || window.Forecast.State.Lapsed():
-		prefix = "CM~"
 	}
 
 	if !known {
@@ -1144,13 +1145,12 @@ func loadStatusOutput(showAll bool, noHistory ...bool) (*MultiProviderOutput, *c
 
 	all.Register(registry, cfg)
 
-	// Try cache first — but only if it covers everything currently
-	// configured. Otherwise (e.g., a provider became configured via
-	// `codex login` after the last fetch) we'd return stale-by-membership
-	// data and the user would see nothing for ~60s.
-	configuredNames := registry.ConfiguredNames()
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
-		output := buildOutputFromCache(registry, cfg, cacheEntry)
+	// Serve the cache when it can answer this read. Otherwise hold the fetch
+	// marker until the fetched data is written, so concurrent reads share a fetch.
+	cacheEntry, releaseFetch := readUsageCache(registry, cfg)
+	defer releaseFetch()
+	if cacheEntry != nil {
+		output := buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
 		attachResetAnnouncements(output, registry, cfg, time.Now())
 		if showAll {
 			output.IncludeAllProviders(registry, cfg)
@@ -1253,7 +1253,7 @@ func loadCachedStatusOutput(showAll bool) (*MultiProviderOutput, int) {
 		return &MultiProviderOutput{}, 0
 	}
 
-	output := buildOutputFromCache(registry, cfg, cacheEntry)
+	output := buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
 	if showAll {
 		output.IncludeAllProviders(registry, cfg)
 	} else {
@@ -1347,12 +1347,13 @@ func Check(noHistory ...bool) int {
 		return 2
 	}
 
-	// Try cache first — but skip if a newly-configured provider has no
-	// cached entry yet (same stale-by-membership concern as Status()).
-	configuredNames := registry.ConfiguredNames()
+	// Serve the cache when it can answer this check; otherwise hold the fetch
+	// marker until the fetched data is written, so concurrent checks share a fetch.
 	var output *MultiProviderOutput
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
-		output = buildOutputFromCache(registry, cfg, cacheEntry)
+	cacheEntry, releaseFetch := readUsageCache(registry, cfg)
+	defer releaseFetch()
+	if cacheEntry != nil {
+		output = buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -1402,7 +1403,7 @@ func statusCheckExitCode(output *MultiProviderOutput) int {
 }
 
 // buildOutputFromCache creates output from cached data.
-func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cacheEntry *cache.Entry) *MultiProviderOutput {
+func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cacheEntry *cache.Entry, now time.Time) *MultiProviderOutput {
 	output := &MultiProviderOutput{
 		PollInterval: cfg.Settings.PollInterval,
 		Providers:    make([]ProviderFormatter, 0),
@@ -1418,7 +1419,7 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 			!cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
 		}
-		if data != nil && cacheEntry.IsProviderStale(key) && data.HasPresentableUsage() {
+		if data != nil && cacheEntry.IsProviderStale(key, config.ReadingMaxAge(cfg.Settings.PollInterval), now) && data.HasPresentableUsage() {
 			data = data.Clone()
 			data.MarkStale("cache expired")
 		}
@@ -1653,7 +1654,9 @@ type summaryState struct {
 	exhausted bool
 }
 
-// summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
+// summaryUrgency grades an account for the summary and the exit code. Only a
+// fresh reading can be critical. A retained reading warns when its last position
+// is near the limit or a forecast has lapsed, and reads healthy otherwise.
 func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	u := summaryState{tier: 4}
 	if pf.Data != nil && (len(pf.Data.LocalModels) > 0 || len(pf.Data.CreditBenefits) > 0) && len(acct.Windows) == 0 {
@@ -1672,15 +1675,20 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 		return summaryState{tier: 1}
 	}
 	var maxPct float64
-	stale := acct.Reading.State != view.ReadingFresh
+	fresh := acct.Reading.State == view.ReadingFresh
+	lapsed := false
 	for _, w := range acct.Windows {
-		stale = stale || w.Forecast.State.Lapsed()
+		lapsed = lapsed || w.Forecast.State.Lapsed()
 		if w.Forecast.State == view.ForecastKnown {
 			maxPct = max(maxPct, w.Forecast.Pct)
 		}
-		// Use cannot fall before a reset, so a quota seen used up stays used
-		// up until its reset, however old the reading.
-		exhausted := w.Used >= 100 && (!w.Reset.Known || w.Reset.In > 0)
+		// A retained reading cannot project the window now, so its last position
+		// stands in. Under 90 it still reads as healthy.
+		if !fresh {
+			maxPct = max(maxPct, w.Used)
+		}
+		// Only the view calls a window out now, and only from a fresh reading.
+		exhausted := w.Exhaustion.State == view.ExhaustionOut
 		if exhausted {
 			maxPct = max(maxPct, w.Used)
 		}
@@ -1691,12 +1699,22 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 		}
 	}
 	switch {
-	case maxPct >= 100:
+	case fresh && maxPct >= 100:
 		u.tier = 2
-	case maxPct >= 90 || stale:
+	case maxPct >= 90 || lapsed:
 		u.tier = 3
 	}
 	return u
+}
+
+// summaryTier is the account's summary tier. The summary line, the exit code and
+// the statusline prefix all read it, so they agree.
+func (v outputView) summaryTier(key string) int {
+	pf, acct := v.formatter(key), v.account(key)
+	if pf == nil || acct == nil {
+		return 4
+	}
+	return summaryUrgency(pf, acct).tier
 }
 
 // printSummary prints a one-line summary before the per-provider details.

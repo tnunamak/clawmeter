@@ -135,7 +135,7 @@ clawmeter config set notify_quota_available true
 ```
 
 When the tray has seen an account run out and a later reading of the same
-account, within two poll intervals, shows room in every window that was out,
+account, within the reading age (two poll intervals plus a minute), shows room in every window that was out,
 it sends one desktop notification, for
 example `Codex quota available again` with `Codex: 5h 0% used, 7d 4% used` and
 the time of the reading. It comes from the account's own reading, never from an
@@ -223,7 +223,7 @@ The status table and the tray menu show the same values. The bar runs from 0 to 
 10% of the window, capped at one hour. `no forecast` means the reset time or
 window length is unknown. `forecast stale` means the reading is more than an
 hour old. `forecast pending` means the window reset after the last reading, so
-its forecast waits for the next one. A reading past two poll intervals, such as
+its forecast waits for the next one. A reading past the reading age (two poll intervals plus a minute), such as
 one left by a failed poll, keeps its forecast and run-out estimate for up to an
 hour, and the output names the time of that reading (`last good HH:MM`).
 The forecast uses the rate at the time of that reading; the run-out countdown

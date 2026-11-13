@@ -151,7 +151,7 @@ func TestResetSnapshotShowsUnderClaudeInEveryOutputFromCache(t *testing.T) {
 			if usage != nil {
 				entry.ProviderData["claude"] = usage
 			}
-			output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+			output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 			output.HideUnavailable()
 			assertResetUnderClaude(t, output, state)
 			// The status line reads the same cache path; it must not crash or

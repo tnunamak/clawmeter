@@ -11,7 +11,7 @@ import (
 func TestReview039SummaryNamesExhaustedWindow(t *testing.T) {
 	reset := time.Now().Add(time.Hour)
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{
-		{Display: "Test", Data: &provider.UsageData{Windows: []provider.UsageWindow{
+		{Display: "Test", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{
 			{Name: "5h", Utilization: 100, ResetsAt: time.Now().Add(299 * time.Minute)},
 			{Name: "7d", Utilization: 10, ResetsAt: reset},
 		}}},
