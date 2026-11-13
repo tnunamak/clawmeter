@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -104,7 +105,9 @@ func TestRateLimitBackoffCapsAtOneHour(t *testing.T) {
 	}
 }
 
-func TestRateLimitHonorsRetryAfterUpToItsBound(t *testing.T) {
+// A server's Retry-After is its own cooldown, and the local cap does not shorten
+// it. A monthly quota can send days, and retrying before its reset is refused.
+func TestRateLimitHonorsRetryAfterInFull(t *testing.T) {
 	for _, tc := range []struct {
 		retryAfter, want time.Duration
 	}{
@@ -112,7 +115,9 @@ func TestRateLimitHonorsRetryAfterUpToItsBound(t *testing.T) {
 		{30 * time.Second, backoffFloor},
 		{30 * time.Minute, 30 * time.Minute},
 		{2 * time.Hour, 2 * time.Hour},
-		{30 * time.Hour, maxRetryAfter},
+		{30 * time.Hour, 30 * time.Hour},
+		{48 * time.Hour, 48 * time.Hour},
+		{30 * 24 * time.Hour, 30 * 24 * time.Hour},
 	} {
 		clock := isolateBackoff(t)
 		if got := recordRateLimit("claude:work", tc.retryAfter).Sub(*clock); got != tc.want {
@@ -131,11 +136,11 @@ func TestParseRetryAfter(t *testing.T) {
 		" 60":                   time.Minute,
 		"soon":                  0,
 		"86400":                 24 * time.Hour,
-		"172800":                maxRetryAfter,
-		"99999999999999999999":  maxRetryAfter,
+		"172800":                48 * time.Hour,
+		"99999999999999999999":  time.Duration(math.MaxInt64/int64(time.Second)) * time.Second,
 		"-99999999999999999999": 0,
 		clock.Add(20 * time.Minute).Format(http.TimeFormat): 20 * time.Minute,
-		clock.Add(48 * time.Hour).Format(http.TimeFormat):   maxRetryAfter,
+		clock.Add(48 * time.Hour).Format(http.TimeFormat):   48 * time.Hour,
 		clock.Add(-time.Minute).Format(http.TimeFormat):     0,
 	} {
 		if got := parseRetryAfter(value); got != want {
