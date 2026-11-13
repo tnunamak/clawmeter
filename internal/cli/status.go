@@ -1550,84 +1550,6 @@ func sourceDisplay(p provider.Provider, counts map[string]int) string {
 	return p.DisplayName() + " · " + label
 }
 
-// providerUrgency orders the --json providers, most urgent first. The summary
-// line and the check exit code use summaryUrgency.
-type providerUrgency struct {
-	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
-	maxProjectedPct float64
-	worstWindow     string
-	worstUsage      provider.UsageWindow
-	worstProjection forecast.Projection
-	runsOutIn       time.Duration
-	runsOutEarlyBy  time.Duration
-}
-
-func classifyProvider(pf *ProviderFormatter) providerUrgency {
-	if pf.Data == nil {
-		if pf.ExplicitlyEnabled {
-			return providerUrgency{tier: 1} // enabled but missing data => actionable setup issue
-		}
-		return providerUrgency{tier: 5} // passive unavailable providers belong at the bottom of --all
-	}
-	if pf.Data.IsExpired {
-		return providerUrgency{tier: 0, maxProjectedPct: 100}
-	}
-	if pf.Data.Error != "" && !pf.Data.HasPresentableUsage() {
-		return providerUrgency{tier: 1}
-	}
-
-	var maxPct float64
-	var worstWindow string
-	var worstUsage provider.UsageWindow
-	var worstProjection forecast.Projection
-	var hasWorstProjection bool
-	var runsOutIn time.Duration
-	var runsOutEarlyBy time.Duration
-	stale := pf.Data.Stale
-	lapsed := false
-	for _, w := range pf.Data.PresentationWindows() {
-		if !w.ResetsAt.IsZero() && !w.ResetsAt.After(time.Now()) {
-			lapsed = true
-			continue
-		}
-		if w.Utilization >= 100 && maxPct < w.Utilization {
-			maxPct = w.Utilization
-		}
-		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.WindowLength(w))
-		if proj.ProjectedPct > maxPct {
-			maxPct = proj.ProjectedPct
-		}
-		if !hasWorstProjection || forecast.CompareWindowRisk(w, proj, worstUsage, worstProjection) < 0 {
-			worstWindow = w.Name
-			worstUsage = w
-			worstProjection = proj
-			hasWorstProjection = true
-			runsOutIn = proj.RunsOutIn
-			runsOutEarlyBy = proj.RunsOutEarlyBy
-		}
-	}
-
-	// Only a fresh reading can be critical, as in summaryUrgency. A retained
-	// reading's full window is a warning.
-	tier := 4
-	switch {
-	case maxPct >= 100 && !stale:
-		tier = 2
-	case maxPct >= 90 || stale || lapsed:
-		tier = 3
-	}
-
-	return providerUrgency{
-		tier:            tier,
-		maxProjectedPct: maxPct,
-		worstWindow:     worstWindow,
-		worstUsage:      worstUsage,
-		worstProjection: worstProjection,
-		runsOutIn:       runsOutIn,
-		runsOutEarlyBy:  runsOutEarlyBy,
-	}
-}
-
 // sortProvidersByName sorts providers by the name they show, as the tray
 // menu does.
 func sortProvidersByName(providers []ProviderFormatter) {
@@ -1636,19 +1558,39 @@ func sortProvidersByName(providers []ProviderFormatter) {
 	})
 }
 
-// sortProvidersByUrgency sorts providers so the most urgent appear first.
-func sortProvidersByUrgency(providers []ProviderFormatter) {
-	sort.SliceStable(providers, func(i, j int) bool {
-		ui := classifyProvider(&providers[i])
-		uj := classifyProvider(&providers[j])
-		if ui.tier != uj.tier {
-			return ui.tier < uj.tier
+// sortProvidersByUrgency orders output's providers most urgent first. It grades
+// them with summaryUrgency on one snapshot, the one the summary line and the
+// check exit code read, so the order agrees with them. Within a tier, the
+// account whose most at-risk window ranks first in the snapshot comes first.
+func sortProvidersByUrgency(output *MultiProviderOutput) {
+	v := output.buildView(time.Now())
+	grades := make([]summaryState, len(v.entries))
+	order := make([]int, len(v.entries))
+	for i, e := range v.entries {
+		grades[i] = summaryUrgency(e.pf, v.account(e.key))
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		ga, gb := grades[order[a]], grades[order[b]]
+		if ga.tier != gb.tier {
+			return ga.tier < gb.tier
 		}
-		if cmp := forecast.CompareWindowRisk(ui.worstUsage, ui.worstProjection, uj.worstUsage, uj.worstProjection); cmp != 0 {
-			return cmp < 0
-		}
-		return ui.maxProjectedPct > uj.maxProjectedPct
+		return worstWindowPlace(ga) < worstWindowPlace(gb)
 	})
+	sorted := make([]ProviderFormatter, len(order))
+	for k, i := range order {
+		sorted[k] = output.Providers[i]
+	}
+	output.Providers = sorted
+}
+
+// worstWindowPlace is the place of an account's most at-risk window in the
+// snapshot's Worst order. An account with no window sorts last.
+func worstWindowPlace(g summaryState) int {
+	if g.window.Risk == 0 {
+		return math.MaxInt
+	}
+	return g.window.Risk
 }
 
 // summaryState is the snapshot-based state of one account in the summary.
@@ -1872,10 +1814,11 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 		return
 	}
 
-	// JSON keeps the most urgent provider first; people read the table in
-	// the same alphabetical order as the tray menu.
+	// The JSON document keys its providers by family in a map, so the urgency
+	// order sorted here is not visible in it. The table reads alphabetically,
+	// as the tray menu does.
 	if jsonMode {
-		sortProvidersByUrgency(output.Providers)
+		sortProvidersByUrgency(output)
 		output.PrintJSON(cacheEntry)
 		return
 	}

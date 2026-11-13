@@ -24,7 +24,7 @@ func TestSummaryRanksExhaustedUnknownAcrossCriticalProviders(t *testing.T) {
 	if !strings.Contains(got, "Exhausted 5h current 100% forecast soon") {
 		t.Fatalf("summary = %q", got)
 	}
-	sortProvidersByUrgency(output.Providers)
+	sortProvidersByUrgency(output)
 	if output.Providers[0].Display != "Exhausted" {
 		t.Fatalf("provider order = %+v", output.Providers)
 	}

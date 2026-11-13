@@ -7,9 +7,10 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
-// The --json provider order uses classifyProvider's tier. Only a fresh reading
-// may be critical, as the summary line and the check exit code decide it.
-func TestClassifyProviderOnlyFreshFullWindowIsCritical(t *testing.T) {
+// Only a fresh reading may be critical. A retained reading's full window is a
+// warning, and so is one with no observation time, because the reading cannot
+// be fresh. The JSON order and the summary both read this tier.
+func TestOnlyFreshFullWindowIsCritical(t *testing.T) {
 	now := time.Now()
 	full := func(retained bool) ProviderFormatter {
 		data := &provider.UsageData{FetchedAt: now, Windows: []provider.UsageWindow{{
@@ -22,11 +23,11 @@ func TestClassifyProviderOnlyFreshFullWindowIsCritical(t *testing.T) {
 	}
 
 	fresh := full(false)
-	if got := classifyProvider(&fresh).tier; got != 2 {
+	if got := summaryTierOf(&fresh); got != 2 {
 		t.Errorf("fresh full window: tier = %d, want 2 (critical)", got)
 	}
 	retained := full(true)
-	if got := classifyProvider(&retained).tier; got != 3 {
+	if got := summaryTierOf(&retained); got != 3 {
 		t.Errorf("retained full window: tier = %d, want 3 (warning)", got)
 	}
 
@@ -36,7 +37,14 @@ func TestClassifyProviderOnlyFreshFullWindowIsCritical(t *testing.T) {
 		{Name: "5h", Utilization: 100, ResetsAt: now.Add(30 * time.Minute)},
 		{Name: "7d", Utilization: 10, ResetsAt: now.Add(-time.Minute)},
 	}}}
-	if got := classifyProvider(&mixed).tier; got != 2 {
+	if got := summaryTierOf(&mixed); got != 2 {
 		t.Errorf("fresh full window beside a passed reset: tier = %d, want 2 (critical)", got)
+	}
+
+	unstamped := ProviderFormatter{Name: "test", Data: &provider.UsageData{Windows: []provider.UsageWindow{
+		{Name: "5h", Utilization: 100, ResetsAt: now.Add(30 * time.Minute)},
+	}}}
+	if got := summaryTierOf(&unstamped); got != 3 {
+		t.Errorf("unstamped full window: tier = %d, want 3 (warning)", got)
 	}
 }

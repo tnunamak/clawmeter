@@ -43,7 +43,7 @@ func TestE1WindowClassification(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			pf := ProviderFormatter{Display: "Test", Data: &provider.UsageData{FetchedAt: time.Now(), Windows: []provider.UsageWindow{tt.w}}}
-			if got := classifyProvider(&pf).tier; got != tt.tier {
+			if got := summaryTierOf(&pf); got != tt.tier {
 				t.Errorf("tier=%d want %d", got, tt.tier)
 			}
 			output := MultiProviderOutput{Providers: []ProviderFormatter{pf}}
