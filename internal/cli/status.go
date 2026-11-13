@@ -1147,7 +1147,11 @@ func loadStatusOutput(showAll bool, noHistory ...bool) (*MultiProviderOutput, *c
 
 	// Serve the cache when it can answer this read. Otherwise hold the fetch
 	// marker until the fetched data is written, so concurrent reads share a fetch.
-	cacheEntry, releaseFetch := readUsageCache(registry, cfg)
+	cacheEntry, releaseFetch, err := readUsageCache(registry, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return nil, nil, 1
+	}
 	defer releaseFetch()
 	if cacheEntry != nil {
 		output := buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
@@ -1350,7 +1354,11 @@ func Check(noHistory ...bool) int {
 	// Serve the cache when it can answer this check; otherwise hold the fetch
 	// marker until the fetched data is written, so concurrent checks share a fetch.
 	var output *MultiProviderOutput
-	cacheEntry, releaseFetch := readUsageCache(registry, cfg)
+	cacheEntry, releaseFetch, err := readUsageCache(registry, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 2
+	}
 	defer releaseFetch()
 	if cacheEntry != nil {
 		output = buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
