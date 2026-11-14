@@ -412,8 +412,8 @@ func holdBackoffLock(t *testing.T) (release func()) {
 // lock because Windows can refuse to replace a file another handle has open. The holder here
 // stands in for another process: it writes a newer cooldown while it holds the lock, then
 // releases it. The read must keep waiting while the lock is held, and must return that
-// cooldown after the release. The wait is far beyond the test, so the read cannot give up
-// and read unlocked.
+// cooldown after the release. The one-minute wait allows normal scheduling delays. The outcome
+// assertion rejects any read that gives up and reads unlocked.
 func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	isolateBackoff(t)
 	setBackoffLockWait(t, time.Minute)
