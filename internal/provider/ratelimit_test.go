@@ -408,23 +408,54 @@ func holdBackoffLock(t *testing.T) (release func()) {
 	return release
 }
 
-// Reads take the backoff lock too, so a read never overlaps a writer's rename. That
-// matters on Windows, which can refuse to replace a file that another handle has open.
+// A read waits for the backoff lock, so it sees what the lock holder wrote. Reads take the
+// lock because Windows can refuse to replace a file another handle has open. The holder here
+// stands in for another process: it writes a newer cooldown while it holds the lock, then
+// releases it. The read must return that cooldown, and must not return before the release.
+// The deadline is far beyond the test, so the read cannot give up and read unlocked.
 func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	isolateBackoff(t)
+	setBackoffLockWait(t, time.Minute)
+	attempted := make(chan struct{})
+	var attemptOnce sync.Once
+	oldHook := onBackoffLockAttempt
+	onBackoffLockAttempt = func() { attemptOnce.Do(func() { close(attempted) }) }
+	t.Cleanup(func() { onBackoffLockAttempt = oldHook })
+
+	key := "claude:work"
 	release := holdBackoffLock(t)
-	done := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseLock := func() { releaseOnce.Do(release) }
+	defer releaseLock()
+
+	got := make(chan backoffState, 1)
 	go func() {
-		readBackoff("claude:work")
-		close(done)
+		state, _ := readBackoff(key)
+		got <- state
 	}()
 	select {
-	case <-done:
-		t.Fatal("a read returned while another holder had the backoff lock")
-	case <-time.After(200 * time.Millisecond):
+	case <-attempted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read never tried the backoff lock")
 	}
-	release()
-	<-done
+	newer := backoffState{Until: backoffNow().Add(time.Hour), Failures: 1, ID: 7}
+	if !writeBackoff(key, newer) {
+		t.Fatal("the lock holder could not write its cooldown")
+	}
+	select {
+	case state := <-got:
+		t.Fatalf("the read returned %#v while another holder had the lock", state)
+	default:
+	}
+	releaseLock()
+	select {
+	case state := <-got:
+		if state.ID != newer.ID {
+			t.Fatalf("the read returned %#v, want the cooldown the holder wrote", state)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read did not return after the lock was released")
+	}
 }
 
 // A success must not end a backoff while another holder has the backoff lock. The
@@ -463,9 +494,14 @@ func TestSuccessLeavesAStateWithoutAnIDAlone(t *testing.T) {
 // shortBackoffLockWait makes a busy lock fail fast. The tests that use it hold the lock
 // for the whole call, so the outcome does not depend on the wait.
 func shortBackoffLockWait(t *testing.T) {
+	setBackoffLockWait(t, 20*time.Millisecond)
+}
+
+// setBackoffLockWait sets how long a call waits for a busy backoff lock, for one test.
+func setBackoffLockWait(t *testing.T, wait time.Duration) {
 	t.Helper()
 	old := backoffLockWait
-	backoffLockWait = 20 * time.Millisecond
+	backoffLockWait = wait
 	t.Cleanup(func() { backoffLockWait = old })
 }
 
@@ -475,6 +511,14 @@ func resetUnwritten() {
 	unwritten.Lock()
 	defer unwritten.Unlock()
 	unwritten.byKey = map[string]backoffState{}
+}
+
+// peekUnwritten returns the cooldown held in memory for key, if any.
+func peekUnwritten(key string) (backoffState, bool) {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	state, ok := unwritten.byKey[key]
+	return state, ok
 }
 
 // While another process holds the backoff lock, a 429 does not reach the file. This
@@ -538,6 +582,32 @@ func TestBusyLockSuccessDropsOnlyTheCooldownItsRequestSaw(t *testing.T) {
 		t.Fatal("a success that saw the held cooldown did not drop it")
 	}
 	release()
+}
+
+// Recordings that cannot take the backoff lock must each count. Each 429 doubles the
+// cooldown, so a lost failure gives a shorter cooldown than the repeated 429s call for.
+// The recordings start together, so they overlap on the held cooldown.
+func TestBusyLockRecordingsCountEveryFailure(t *testing.T) {
+	isolateBackoff(t)
+	shortBackoffLockWait(t)
+	key := "claude:work"
+	defer holdBackoffLock(t)()
+	const n = 64
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			recordRateLimit(key, 0)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if state, ok := peekUnwritten(key); !ok || state.Failures != n {
+		t.Fatalf("held cooldown counts %d failures (found %v), want %d", state.Failures, ok, n)
+	}
 }
 
 // A 429 that lands while a request is in flight, and is held because the lock is busy,
