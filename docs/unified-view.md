@@ -126,10 +126,11 @@ forecast, current use and display order, so ties always break the same way.
   `(stale)` when the reading has no time.
 - Tooltip, icon and statusline: the Selected target (the pin when present,
   otherwise Worst), with current usage and the reading's freshness. The tooltip
-  gives one run-out/lasting estimate and its average-since-reset basis, or the
-  unknown state, followed by the reset. The full projected percentage, blocked
-  interval and reset inventory remain in the clicked menu and CLI. Error
-  fallbacks can still include reset inventory when no quota can be shown.
+  gives one run-out or lasting estimate, or the unknown state, then the reset.
+  When a forecast is known, it adds the projected percentage at reset with its
+  average-since-reset basis. The blocked interval and reset inventory remain in
+  the clicked menu and CLI. Error fallbacks can still include reset inventory
+  when no quota can be shown.
 - `--json`: every existing v1 field keeps its type and meaning (including
   `projected_pct`, which stays numeric). Each provider object, and each entry
   of its `sources` array, adds an optional `view` object with the account's

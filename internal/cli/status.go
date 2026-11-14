@@ -609,8 +609,8 @@ func (v outputView) statusLine() string {
 
 	known := window.Forecast.State == view.ForecastKnown
 	outNow := window.Exhaustion.State == view.ExhaustionOut
-	// The prefix is the account's summary tier, so the statusline, the summary and
-	// the exit code agree: CM! only for a fresh critical account.
+	// The prefix is the account's summary tier: CM! only for a fresh critical account.
+	// The summary line and the exit code use the same rule, each on its own snapshot.
 	prefix := "CM"
 	switch v.summaryTier(acct.Key) {
 	case 2:
@@ -1388,8 +1388,8 @@ func Check(noHistory ...bool) int {
 	return statusCheckExitCode(output)
 }
 
-// statusCheckExitCode grades the same snapshot the display shows, so a
-// retained reading's forecast decides the exit code as it decides the words.
+// statusCheckExitCode grades with the rule the summary line uses. It builds its own view
+// when it runs, so separately timed snapshots may disagree.
 func statusCheckExitCode(output *MultiProviderOutput) int {
 	worstTier := 4
 	v := output.buildView(time.Now())
@@ -1663,8 +1663,9 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	return u
 }
 
-// summaryTier is the account's summary tier. The summary line, the exit code and
-// the statusline prefix all read it, so they agree.
+// summaryTier is the account's summary tier, the one the statusline prefix shows. The summary
+// line and the exit code grade with summaryUrgency on their own views, so they follow the same
+// rule but may be timed apart.
 func (v outputView) summaryTier(key string) int {
 	pf, acct := v.formatter(key), v.account(key)
 	if pf == nil || acct == nil {
