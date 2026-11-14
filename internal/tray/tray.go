@@ -310,6 +310,28 @@ func onReadyWithConfig(loaded *config.Config) {
 	showHidden := newShowHiddenMenu(mSettings, providerMenus)
 	showHidden.forward(providerShowRequests)
 	showHidden.update(providerMenus)
+	// Pre-created hidden, like the other Settings items: the fork cannot
+	// insert items later. starRepo shows it only when gh can star the repo.
+	mStar := mSettings.AddSubMenuItem("Star clawmeter on GitHub", "")
+	mStar.Hide()
+	starRepo := newStarRepo(func(shown bool) {
+		trayRenderMu.Lock()
+		defer trayRenderMu.Unlock()
+		if shown {
+			mStar.Show()
+		} else {
+			mStar.Hide()
+		}
+	})
+	go func() {
+		shellpath.Init()
+		starRepo.Check()
+	}()
+	go func() {
+		for range systray.TrayOpenedCh {
+			go starRepo.RecheckIfStale()
+		}
+	}()
 	mSettings.AddSubMenuItem(fmt.Sprintf("Clawmeter %s", version), "").Disable()
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
@@ -366,6 +388,7 @@ func onReadyWithConfig(loaded *config.Config) {
 
 	// Refresh status pages (heavier, runs less often)
 	refreshStatus := func() {
+		go starRepo.RecheckIfStale()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -644,6 +667,13 @@ func onReadyWithConfig(loaded *config.Config) {
 				go applyUpdate()
 			case <-mAutostart.ClickedCh:
 				go toggleAutostart(mAutostart)
+			case <-mStar.ClickedCh:
+				go func() {
+					if err := starRepo.Star(); err != nil {
+						log.Printf("star clawmeter: %v", err)
+						notify("Clawmeter", "Couldn't star clawmeter: "+err.Error(), "normal")
+					}
+				}()
 			case <-mQuit.ClickedCh:
 				stopExtension()
 				trayRenderMu.Lock()
