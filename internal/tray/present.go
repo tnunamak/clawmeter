@@ -116,12 +116,13 @@ func fallbackAccount(snap view.Snapshot) *view.Account {
 	return best
 }
 
-// nonFreshRiskCap keeps a retained reading's projection just below critical:
-// a stale reading warns, and only a fresh one reads critical.
+// nonFreshRiskCap caps the projection a retained reading carries. The icon does not
+// draw that value (see icons.MeterState), so the cap has no visible effect. The summary
+// grade counts critical only from a fresh reading.
 const nonFreshRiskCap = 99
 
-// riskPct is the projected use the icon's risk channel carries. An exhausted
-// window keeps its risk even while its forecast is still warming up. A
+// riskPct is the projected use carried in icons.MeterState. The icon does not draw it.
+// An exhausted window keeps its risk even while its forecast is still warming up. A
 // projection from a reading that is not fresh is capped at nonFreshRiskCap.
 func riskPct(w view.Window, fresh bool) float64 {
 	risk := 0.0
