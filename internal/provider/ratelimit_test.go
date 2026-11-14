@@ -678,8 +678,9 @@ func TestStoredStateIsReadUnderTheMutex(t *testing.T) {
 	recordRateLimit(key, 0)
 	before, _ := readBackoff(key)
 	clearBackoff(key, before)
-	// With the lock held by another descriptor: the record is held in memory, the read merges
-	// it, and the clear reads nothing because its ID is not the held one.
+	// With the file lock held elsewhere, the record is held in memory and the read merges it
+	// with the stored state. The clear cannot take the file lock, so it reads no stored state.
+	// Its ID is not the held ID, so the held cooldown survives.
 	release := holdBackoffLock(t)
 	recordRateLimit(key, 0)
 	readBackoff(key)
