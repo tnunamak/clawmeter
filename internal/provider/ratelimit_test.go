@@ -675,9 +675,11 @@ func TestStoredStateIsReadUnderTheMutex(t *testing.T) {
 
 	key := "claude:work"
 	// With the lock free: a record, a read and a clear, each of which reads the stored state.
+	// The clear takes a literal nonzero ID, because clearBackoff skips its read for a zero ID,
+	// and a random ID could be zero.
 	recordRateLimit(key, 0)
-	before, _ := readBackoff(key)
-	clearBackoff(key, before)
+	readBackoff(key)
+	clearBackoff(key, backoffState{ID: 1})
 	// With the file lock held elsewhere, the record is held in memory and the read merges it
 	// with the stored state. The clear cannot take the file lock, so it reads no stored state.
 	release := holdBackoffLock(t)
