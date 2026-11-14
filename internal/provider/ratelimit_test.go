@@ -411,37 +411,61 @@ func holdBackoffLock(t *testing.T) (release func()) {
 // A read waits for the backoff lock, so it sees what the lock holder wrote. Reads take the
 // lock because Windows can refuse to replace a file another handle has open. The holder here
 // stands in for another process: it writes a newer cooldown while it holds the lock, then
-// releases it. The read must return that cooldown, and must not return before the release.
-// The deadline is far beyond the test, so the read cannot give up and read unlocked.
+// releases it. The read must keep waiting while the lock is held, and must return that
+// cooldown after the release. The wait is far beyond the test, so the read cannot give up
+// and read unlocked.
 func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	isolateBackoff(t)
 	setBackoffLockWait(t, time.Minute)
-	attempted := make(chan struct{})
-	var attemptOnce sync.Once
-	oldHook := onBackoffLockAttempt
-	onBackoffLockAttempt = func() { attemptOnce.Do(func() { close(attempted) }) }
-	t.Cleanup(func() { onBackoffLockAttempt = oldHook })
+	busy := make(chan struct{}, 1)
+	oldHook := onBackoffLockBusy
+	onBackoffLockBusy = func() {
+		select {
+		case busy <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { onBackoffLockBusy = oldHook })
 
 	key := "claude:work"
 	release := holdBackoffLock(t)
 	var releaseOnce sync.Once
 	releaseLock := func() { releaseOnce.Do(release) }
-	defer releaseLock()
 
 	got := make(chan backoffState, 1)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		state, _ := readBackoff(key)
 		got <- state
 	}()
-	select {
-	case <-attempted:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the read never tried the backoff lock")
+	// Cleanups run in reverse order, so this one runs before the globals set above are
+	// restored. A reader still running then would read the real cache directory.
+	t.Cleanup(func() {
+		releaseLock()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("the read did not finish after the lock was released")
+		}
+	})
+	waitForBusy := func(point string) {
+		t.Helper()
+		select {
+		case <-busy:
+		case <-done:
+			t.Fatalf("the read returned before %s", point)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the read did not reach %s", point)
+		}
 	}
+	waitForBusy("its first wait on the lock")
 	newer := backoffState{Until: backoffNow().Add(time.Hour), Failures: 1, ID: 7}
 	if !writeBackoff(key, newer) {
 		t.Fatal("the lock holder could not write its cooldown")
 	}
+	// A read that gave up would not try again, so a second busy attempt shows it is still waiting.
+	waitForBusy("a second attempt while the lock is held")
 	select {
 	case state := <-got:
 		t.Fatalf("the read returned %#v while another holder had the lock", state)
@@ -586,7 +610,8 @@ func TestBusyLockSuccessDropsOnlyTheCooldownItsRequestSaw(t *testing.T) {
 
 // Recordings that cannot take the backoff lock must each count. Each 429 doubles the
 // cooldown, so a lost failure gives a shorter cooldown than the repeated 429s call for.
-// The recordings start together, so they overlap on the held cooldown.
+// The goroutines are released together, so they usually overlap on the held cooldown.
+// Nothing forces an overlap, so this is a concurrent stress test, not proof that one happened.
 func TestBusyLockRecordingsCountEveryFailure(t *testing.T) {
 	isolateBackoff(t)
 	shortBackoffLockWait(t)
@@ -607,6 +632,44 @@ func TestBusyLockRecordingsCountEveryFailure(t *testing.T) {
 	wg.Wait()
 	if state, ok := peekUnwritten(key); !ok || state.Failures != n {
 		t.Fatalf("held cooldown counts %d failures (found %v), want %d", state.Failures, ok, n)
+	}
+}
+
+// Every read of the stored state runs while the caller holds unwritten. The stored state and
+// the held cooldowns are then one snapshot: no write from this process lands between the two
+// reads, because each write also holds the mutex. The hook runs inside loadBackoff, so a free
+// mutex there means that read happened outside the critical section.
+func TestStoredStateIsReadUnderTheMutex(t *testing.T) {
+	isolateBackoff(t)
+	shortBackoffLockWait(t)
+	var reads, unguarded int
+	oldHook := onBackoffSnapshot
+	onBackoffSnapshot = func() {
+		reads++
+		if unwritten.TryLock() {
+			unwritten.Unlock()
+			unguarded++
+		}
+	}
+	t.Cleanup(func() { onBackoffSnapshot = oldHook })
+
+	key := "claude:work"
+	// With the lock free: a record, a read and a clear, each of which reads the stored state.
+	recordRateLimit(key, 0)
+	before, _ := readBackoff(key)
+	clearBackoff(key, before)
+	// With the lock held by another descriptor: the record is held in memory, the read merges
+	// it, and the clear reads nothing because its ID is not the held one.
+	release := holdBackoffLock(t)
+	recordRateLimit(key, 0)
+	readBackoff(key)
+	clearBackoff(key, backoffState{ID: 1})
+	release()
+	if reads < 5 {
+		t.Fatalf("the stored state was read %d times, want at least 5", reads)
+	}
+	if unguarded != 0 {
+		t.Fatalf("%d of %d stored-state reads ran with the mutex free", unguarded, reads)
 	}
 }
 

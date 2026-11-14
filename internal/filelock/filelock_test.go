@@ -70,3 +70,37 @@ func TestAcquireGivesUpWhenTheLockStaysBusy(t *testing.T) {
 		t.Fatalf("Acquire waited %v for a 50ms bound", elapsed)
 	}
 }
+
+// AcquireWatched reports each attempt that finds the lock held. A holder that never
+// releases gets at least one report before ErrBusy, so the caller knows it reached the wait.
+func TestAcquireWatchedReportsBusyAttempts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	release, err := Acquire(path, time.Second)
+	skipWithoutLocks(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	busy := 0
+	if _, err := AcquireWatched(path, 20*time.Millisecond, func() { busy++ }); !errors.Is(err, ErrBusy) {
+		t.Fatalf("AcquireWatched on a held lock = %v, want ErrBusy", err)
+	}
+	if busy == 0 {
+		t.Fatal("no busy attempt was reported")
+	}
+}
+
+// A free lock is taken without a busy report.
+func TestAcquireWatchedStaysQuietOnAFreeLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	busy := 0
+	release, err := AcquireWatched(path, time.Second, func() { busy++ })
+	skipWithoutLocks(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if busy != 0 {
+		t.Fatalf("a free lock reported %d busy attempts", busy)
+	}
+}

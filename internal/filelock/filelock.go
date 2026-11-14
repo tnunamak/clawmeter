@@ -27,6 +27,13 @@ const pollInterval = time.Millisecond
 // create and lock a new file at the same path while the first still holds the
 // old one, so two holders would each believe they had the lock.
 func Acquire(path string, wait time.Duration) (release func(), err error) {
+	return AcquireWatched(path, wait, nil)
+}
+
+// AcquireWatched is Acquire, and calls onBusy after each attempt that finds the lock
+// held, before it pauses or gives up. A caller uses it to learn that it is waiting on
+// the lock, not merely that it started. A nil onBusy is not called.
+func AcquireWatched(path string, wait time.Duration, onBusy func()) (release func(), err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -43,6 +50,9 @@ func Acquire(path string, wait time.Duration) (release func(), err error) {
 				_ = Unlock(f)
 				_ = f.Close()
 			}, nil
+		}
+		if onBusy != nil {
+			onBusy()
 		}
 		if !time.Now().Before(deadline) {
 			_ = f.Close()

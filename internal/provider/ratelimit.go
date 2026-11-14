@@ -197,10 +197,11 @@ func mergeBackoff(a, b backoffState) backoffState {
 // them, and the next read or record that holds the lock writes them. A cooldown leaves
 // memory when the file holds it, or when a success clears it.
 //
-// The mutex guards the map and each read-modify-write that uses it, and each of those is one
-// critical section, so two recordings never build on the same held state. Code that needs
-// both locks takes the backoff lock first. Nothing takes the backoff lock while it holds this
-// mutex.
+// The mutex guards the map. Each read-modify-write of the map is one critical section, and it
+// includes the stored state it merges with, so two recordings never build on the same held
+// state, and no write from this process lands between the stored state and the held cooldowns
+// that a call reads. Code that needs both locks takes the backoff lock first. Nothing takes the
+// backoff lock while it holds this mutex.
 var unwritten = struct {
 	sync.Mutex
 	byKey map[string]backoffState
@@ -236,9 +237,9 @@ func backoffPath(key string) (string, error) {
 func readBackoff(key string) (backoffState, bool) {
 	unlock, locked := lockBackoff()
 	defer unlock()
-	state, ok := loadBackoff(key)
 	unwritten.Lock()
 	defer unwritten.Unlock()
+	state, ok := loadBackoff(key)
 	held, had := unwritten.byKey[key]
 	if !had {
 		return state, ok
@@ -251,10 +252,12 @@ func readBackoff(key string) (backoffState, bool) {
 	return state, true
 }
 
-// loadBackoff reads the stored state without taking the lock. Code that already holds
-// the lock uses it. The lock is not reentrant, so readBackoff inside the lock would wait
-// out backoffLockWait and then read without it.
+// loadBackoff reads the stored state without taking the backoff lock. Code that already
+// holds the lock uses it, because the lock is not reentrant: readBackoff inside the lock
+// would wait out backoffLockWait and then read without it. Callers also hold unwritten, so
+// the stored state and the held cooldowns are read as one snapshot.
 func loadBackoff(key string) (backoffState, bool) {
+	onBackoffSnapshot()
 	var state backoffState
 	path, err := backoffPath(key)
 	if err != nil {
@@ -295,9 +298,15 @@ func writeBackoff(key string, state backoffState) bool {
 // disk or a suspended process. Tests shorten it.
 var backoffLockWait = 2 * time.Second
 
-// onBackoffLockAttempt runs just before a call tries the backoff lock. Tests use it to
-// learn that a call has reached the lock. Production leaves it empty.
-var onBackoffLockAttempt = func() {}
+// onBackoffLockBusy runs after each attempt that finds the backoff lock held, before the
+// caller waits again. Tests use it to learn that a call is waiting on the lock. Production
+// leaves it empty.
+var onBackoffLockBusy = func() {}
+
+// onBackoffSnapshot runs in loadBackoff, which callers reach while they hold unwritten. Tests
+// use it to check that every stored-state read happens under that mutex. Production leaves it
+// empty.
+var onBackoffSnapshot = func() {}
 
 // lockBackoff takes the backoff lock, one lock file shared by all sources. It orders
 // reads and read-modify-writes of backoff state across processes, because the CLI
@@ -309,8 +318,7 @@ func lockBackoff() (unlock func(), ok bool) {
 	if err != nil || os.MkdirAll(dir, 0o755) != nil {
 		return func() {}, false
 	}
-	onBackoffLockAttempt()
-	release, err := filelock.Acquire(filepath.Join(dir, ".lock"), backoffLockWait)
+	release, err := filelock.AcquireWatched(filepath.Join(dir, ".lock"), backoffLockWait, onBackoffLockBusy)
 	if err != nil {
 		return func() {}, false
 	}
@@ -325,12 +333,12 @@ func lockBackoff() (unlock func(), ok bool) {
 func recordRateLimit(key string, retryAfter time.Duration) time.Time {
 	unlock, locked := lockBackoff()
 	defer unlock()
-	state, _ := loadBackoff(key)
 	unwritten.Lock()
 	defer unwritten.Unlock()
-	// Reading the held cooldown, counting this failure and storing the result are one
-	// critical section. Otherwise two recordings could count from the same held state, and
-	// both would store the same failure count.
+	// Reading the stored state and the held cooldown, counting this failure and storing the
+	// result are one critical section. Otherwise two recordings could count from the same
+	// state, and both would store the same failure count.
+	state, _ := loadBackoff(key)
 	if held, had := unwritten.byKey[key]; had {
 		state = mergeBackoff(state, held)
 	}
@@ -369,9 +377,9 @@ func clearBackoff(key string, before backoffState) {
 		dropUnwrittenWithID(key, before.ID)
 		return
 	}
-	state, _ := loadBackoff(key)
 	unwritten.Lock()
 	defer unwritten.Unlock()
+	state, _ := loadBackoff(key)
 	held, hadHeld := unwritten.byKey[key]
 	if hadHeld {
 		state = mergeBackoff(state, held)
