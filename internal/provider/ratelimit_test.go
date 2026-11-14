@@ -408,12 +408,13 @@ func holdBackoffLock(t *testing.T) (release func()) {
 	return release
 }
 
-// A read waits for the backoff lock, so it sees what the lock holder wrote. Reads take the
-// lock because Windows can refuse to replace a file another handle has open. The holder here
-// stands in for another process: it writes a newer cooldown while it holds the lock, then
-// releases it. The read must keep waiting while the lock is held, and must return that
-// cooldown after the release. The one-minute wait allows normal scheduling delays. The outcome
-// assertion rejects any read that gives up and reads unlocked.
+// A read waits for the backoff lock, so it sees what the lock holder wrote before it released
+// the lock, unless the wait runs out first. Reads take the lock because Windows can refuse to
+// replace a file another handle has open. The holder here stands in for another process: it
+// writes a newer cooldown while it holds the lock, then releases it. The read must keep waiting
+// while the lock is held, and must return that cooldown after the release. The one-minute wait
+// allows normal scheduling delays. The outcome assertion rejects any read that gives up and reads
+// unlocked.
 func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	isolateBackoff(t)
 	setBackoffLockWait(t, time.Minute)
@@ -471,8 +472,8 @@ func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	if !writeBackoff(key, newer) {
 		t.Fatal("the lock holder could not write its cooldown")
 	}
-	// The second busy attempt shows the read is still trying after the write. The outcome
-	// check after the release shows it took the lock.
+	// The second report establishes repeated contention. The outcome check after the release
+	// establishes successful acquisition.
 	waitForBusy("a second attempt while the lock is held")
 	select {
 	case state := <-got:
@@ -488,8 +489,9 @@ func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the read did not return after the lock was released")
 	}
-	// A read that gave up and read the file unlocked would return the same cooldown, so the
-	// outcome of its lock attempt is what shows that it waited.
+	// A read that gave up after the write and then read the file unlocked would return the same
+	// cooldown. The cooldown check cannot show that it waited, but the outcome of its lock
+	// attempt can.
 	select {
 	case locked := <-outcomes:
 		if !locked {
