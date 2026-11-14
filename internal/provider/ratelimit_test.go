@@ -426,6 +426,15 @@ func TestReadWaitsForTheBackoffLock(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { onBackoffLockBusy = oldHook })
+	outcomes := make(chan bool, 1)
+	oldOutcome := onBackoffLockOutcome
+	onBackoffLockOutcome = func(locked bool) {
+		select {
+		case outcomes <- locked:
+		default:
+		}
+	}
+	t.Cleanup(func() { onBackoffLockOutcome = oldOutcome })
 
 	key := "claude:work"
 	release := holdBackoffLock(t)
@@ -440,14 +449,12 @@ func TestReadWaitsForTheBackoffLock(t *testing.T) {
 		got <- state
 	}()
 	// Cleanups run in reverse order, so this one runs before the globals set above are
-	// restored. A reader still running then would read the real cache directory.
+	// restored. The read reads those globals, so it must finish first. Once the lock is
+	// released, a read that is waiting takes it and returns, so this wait blocks only when
+	// the read itself is stuck. Then go test's timeout reports it.
 	t.Cleanup(func() {
 		releaseLock()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			t.Error("the read did not finish after the lock was released")
-		}
+		<-done
 	})
 	waitForBusy := func(point string) {
 		t.Helper()
@@ -464,7 +471,8 @@ func TestReadWaitsForTheBackoffLock(t *testing.T) {
 	if !writeBackoff(key, newer) {
 		t.Fatal("the lock holder could not write its cooldown")
 	}
-	// A read that gave up would not try again, so a second busy attempt shows it is still waiting.
+	// The second busy attempt shows the read is still trying after the write. The outcome
+	// check after the release shows it took the lock.
 	waitForBusy("a second attempt while the lock is held")
 	select {
 	case state := <-got:
@@ -479,6 +487,16 @@ func TestReadWaitsForTheBackoffLock(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the read did not return after the lock was released")
+	}
+	// A read that gave up and read the file unlocked would return the same cooldown, so the
+	// outcome of its lock attempt is what shows that it waited.
+	select {
+	case locked := <-outcomes:
+		if !locked {
+			t.Fatal("the read gave up on the busy backoff lock and read without it")
+		}
+	default:
+		t.Fatal("the read did not attempt the backoff lock")
 	}
 }
 

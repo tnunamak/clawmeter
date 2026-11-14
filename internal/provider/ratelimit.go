@@ -308,6 +308,11 @@ var onBackoffLockBusy = func() {}
 // empty.
 var onBackoffSnapshot = func() {}
 
+// onBackoffLockOutcome runs after each attempt to take the backoff lock, with whether the
+// attempt succeeded. Tests use it to check that a read which waited on a busy lock took it
+// instead of giving up. Production leaves it empty.
+var onBackoffLockOutcome = func(locked bool) {}
+
 // lockBackoff takes the backoff lock, one lock file shared by all sources. It orders
 // reads and read-modify-writes of backoff state across processes, because the CLI
 // and the tray can both record a 429 for one source. It is never held across a
@@ -319,6 +324,7 @@ func lockBackoff() (unlock func(), ok bool) {
 		return func() {}, false
 	}
 	release, err := filelock.AcquireWatched(filepath.Join(dir, ".lock"), backoffLockWait, onBackoffLockBusy)
+	onBackoffLockOutcome(err == nil)
 	if err != nil {
 		return func() {}, false
 	}
