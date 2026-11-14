@@ -54,17 +54,23 @@ func (p *limitedProvider) FetchUsage(context.Context) (*UsageData, error) {
 	return &UsageData{Windows: []UsageWindow{{Name: "5h", Utilization: 10}}}, nil
 }
 
-// isolateBackoff gives the test its own backoff dir and a controllable clock.
+// isolateBackoff gives the test its own backoff dir, a controllable clock, and cooldown IDs
+// that count up from 1, so each recorded cooldown's ID is known and nonzero.
 func isolateBackoff(t *testing.T) *time.Time {
 	t.Helper()
 	dir := t.TempDir()
-	oldDir, oldNow := backoffDir, backoffNow
+	oldDir, oldNow, oldID := backoffDir, backoffNow, newBackoffID
 	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	var lastID uint64
 	backoffDir = func() (string, error) { return dir, nil }
 	backoffNow = func() time.Time { return clock }
+	newBackoffID = func() uint64 {
+		lastID++
+		return lastID
+	}
 	resetUnwritten()
 	t.Cleanup(func() {
-		backoffDir, backoffNow = oldDir, oldNow
+		backoffDir, backoffNow, newBackoffID = oldDir, oldNow, oldID
 		resetUnwritten()
 	})
 	return &clock
@@ -675,8 +681,8 @@ func TestStoredStateIsReadUnderTheMutex(t *testing.T) {
 
 	key := "claude:work"
 	// With the lock free: a record, a read and a clear, each of which reads the stored state.
-	// The clear takes a literal nonzero ID, because clearBackoff skips its read for a zero ID,
-	// and a random ID could be zero.
+	// The record's ID is 1, the first ID isolateBackoff counts from. The clear uses that ID:
+	// clearBackoff returns before its read for a zero ID, which would make the count four.
 	recordRateLimit(key, 0)
 	readBackoff(key)
 	clearBackoff(key, backoffState{ID: 1})

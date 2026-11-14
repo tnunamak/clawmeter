@@ -81,6 +81,9 @@ var (
 		}
 		return filepath.Join(dir, "clawmeter", "backoff"), nil
 	}
+	// newBackoffID returns the ID of a new cooldown. recordRateLimit calls it while it holds
+	// unwritten. Tests replace it with a counter, so each cooldown's ID is known.
+	newBackoffID = rand.Uint64
 )
 
 // CredentialRouteCapability is implemented by sources whose credential route
@@ -349,7 +352,7 @@ func recordRateLimit(key string, retryAfter time.Duration) time.Time {
 		state = mergeBackoff(state, held)
 	}
 	state.Failures++
-	state.ID = rand.Uint64()
+	state.ID = newBackoffID()
 	delay := backoffFloor
 	for i := 1; i < state.Failures && delay < backoffCap; i++ {
 		delay *= 2
