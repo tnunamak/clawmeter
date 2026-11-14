@@ -145,7 +145,7 @@ func viewJSON(t *testing.T) map[string]any {
 		},
 		{
 			Name: "claude:odl", Display: "Claude · ODL", DisplayName: "Claude", SourceLabel: "ODL", SourceID: "odl", Family: "claude", SourceCount: 2,
-			Data: &provider.UsageData{Provider: "claude", SourceID: "odl", SourceLabel: "ODL", FetchedAt: now.Add(-time.Hour), Stale: true, Warning: "rate limited",
+			Data: &provider.UsageData{Provider: "claude", SourceID: "odl", SourceLabel: "ODL", FetchedAt: now.Add(-(view.RetainedForecastAge + time.Minute)), Stale: true, Warning: "rate limited",
 				Windows: []provider.UsageWindow{{Name: "5h", Utilization: 100, ResetsAt: now.Add(time.Hour)}}},
 		},
 		{
@@ -294,29 +294,38 @@ func TestJSONViewCarriesEveryAccountAndTheWorstTarget(t *testing.T) {
 	}
 }
 
-func TestRetainedWarmReadingStillSaysOutNowInStatusline(t *testing.T) {
+// A retained 100% reading does not claim out now: only a fresh reading can.
+func TestRetainedWarmReadingDoesNotClaimOutNow(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.Local)
 	output := &MultiProviderOutput{Providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
 		Provider: "claude", Stale: true, FetchedAt: now.Add(-time.Minute),
 		Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: now.Add(298 * time.Minute)}},
 	})}}
 	got := output.buildView(now).statusLine()
-	if want := "CM! Claude 5h current 100% forecast soon out now (last good 11:59)"; got != want {
+	if want := "CM~ Claude 5h last 100% stale"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 
+// The poll interval decides only whether a reading is fresh. A retained reading
+// forecasts within view.RetainedForecastAge under any poll interval, and not beyond.
 func TestViewUsesConfiguredPollIntervalForRetainedReadings(t *testing.T) {
 	now := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
-	output := &MultiProviderOutput{PollInterval: 600, Providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
-		Provider: "claude", Stale: true, FetchedAt: now.Add(-15 * time.Minute),
-		Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 80, ResetsAt: now.Add(3 * time.Hour)}},
-	})}}
-	if got := output.buildView(now).snap.Accounts[0].Windows[0].Forecast.State; got != view.ForecastKnown {
-		t.Fatalf("custom poll interval forecast=%s", got)
-	}
-	output.PollInterval = 300
-	if got := output.buildView(now).snap.Accounts[0].Windows[0].Forecast.State; got != view.ForecastStale {
-		t.Fatalf("default poll interval forecast=%s", got)
+	for _, poll := range []int{600, 300, 3600} {
+		for _, tc := range []struct {
+			age  time.Duration
+			want view.ForecastState
+		}{
+			{15 * time.Minute, view.ForecastKnown},
+			{view.RetainedForecastAge + time.Minute, view.ForecastStale},
+		} {
+			output := &MultiProviderOutput{PollInterval: poll, Providers: []ProviderFormatter{fmtr("claude", "Claude", "claude", &provider.UsageData{
+				Provider: "claude", Stale: true, FetchedAt: now.Add(-tc.age),
+				Windows: []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 80, ResetsAt: now.Add(3 * time.Hour)}},
+			})}}
+			if got := output.buildView(now).snap.Accounts[0].Windows[0].Forecast.State; got != tc.want {
+				t.Fatalf("poll=%d age=%v forecast=%s, want %s", poll, tc.age, got, tc.want)
+			}
+		}
 	}
 }

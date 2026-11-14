@@ -32,9 +32,14 @@ func TestRevisionAnnouncementUsesConfiguredAgeAllowance(t *testing.T) {
 	if got := Visible(data, reading, now, 20*time.Minute); got == nil {
 		t.Fatal("valid reading lost configured age allowance")
 	}
+	// A retained 100% is usable, but the shared view cannot call it out now, so
+	// an announcement that rests on out-now does not bear on it.
 	data.Stale = true
-	if got := Visible(data, reading, now, 20*time.Minute); got == nil {
-		t.Fatal("usable retained reading disagrees with shared view")
+	if w := view.Build(view.Inputs{Results: map[string]*provider.UsageData{"source": data}, MaxReadingAge: 20 * time.Minute}, now).Accounts[0].Windows[0]; w.Exhaustion.State != view.ExhaustionUnknown {
+		t.Fatalf("retained 100%% exhaustion = %s, want unknown", w.Exhaustion.State)
+	}
+	if got := Visible(data, reading, now, 20*time.Minute); got != nil {
+		t.Fatal("retained 100% announced out now")
 	}
 }
 

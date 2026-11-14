@@ -38,9 +38,9 @@ func TestCloudCreditFactsAgreeAcrossFullDetailSurfaces(t *testing.T) {
 			case "future timestamp":
 				data.FetchedAt = now.Add(time.Minute)
 			case "age boundary":
-				data.FetchedAt = now.Add(-10 * time.Minute)
+				data.FetchedAt = now.Add(-11 * time.Minute) // the freshness ceiling of the default 5-minute poll
 			case "aged":
-				data.FetchedAt = now.Add(-10*time.Minute - time.Nanosecond)
+				data.FetchedAt = now.Add(-11*time.Minute - time.Nanosecond)
 			}
 			m := &MultiProviderOutput{Providers: []ProviderFormatter{
 				{Name: "claude", DisplayName: "Claude", Family: "claude", SourceID: "default", SourceLabel: "Default", SourceCount: 2, Data: data},

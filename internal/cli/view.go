@@ -42,6 +42,7 @@ func (m *MultiProviderOutput) buildViewTuned(now time.Time, tune func(*view.Inpu
 	keys := m.sourceKeys()
 	in := view.Inputs{
 		MaxReadingAge:      config.ReadingMaxAge(m.PollInterval),
+		RetainedForecast:   view.RetainedForecastAge,
 		Results:            make(map[string]*provider.UsageData, len(keys)),
 		DisplayNames:       make(map[string]string, len(keys)),
 		SourceLabels:       make(map[string]string, len(keys)),
@@ -143,12 +144,13 @@ func (v outputView) worst() (*view.Account, view.Window, bool) {
 	return nil, view.Window{}, false
 }
 
-// agentStatus is the status word of a window. stale covers a reading that is
-// not fresh and a reset that has passed. at_risk is used up or projected past
-// 100%, tight is projected past 90%, and unknown means the forecast cannot say.
+// agentStatus is the status word of a window. stale covers data that is not
+// current: a reading that is not fresh, or a window whose reset has passed and
+// awaits its next reading. at_risk is used up or projected past 100%, tight is
+// projected past 90%, and unknown means the forecast cannot say.
 func agentStatus(acct *view.Account, w view.Window) string {
 	switch {
-	case acct.Reading.State != view.ReadingFresh, w.Forecast.State == view.ForecastStale:
+	case acct.Reading.State != view.ReadingFresh, w.Forecast.State.Lapsed():
 		return "stale"
 	case w.Exhaustion.State == view.ExhaustionOut:
 		return "at_risk"
@@ -380,6 +382,16 @@ func (v outputView) jsonAccount(key string) *JSONAccountView {
 	return out
 }
 
+// jsonForecastState is the forecast state machine output reports. The published
+// v1 enum has no pending value. A pending window is lapsed like a stale one, and
+// the legacy indicator has always called it stale, so it reads as stale here.
+func jsonForecastState(s view.ForecastState) string {
+	if s == view.ForecastPending {
+		return string(view.ForecastStale)
+	}
+	return string(s)
+}
+
 func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 	out := JSONViewWindow{
 		Name:       w.Name,
@@ -387,7 +399,7 @@ func jsonWindowView(w view.Window, shown bool) JSONViewWindow {
 		Label:      w.Label,
 		Scope:      w.Scope,
 		Used:       w.Used,
-		Forecast:   JSONViewForecast{State: string(w.Forecast.State), Reason: w.Forecast.Reason},
+		Forecast:   JSONViewForecast{State: jsonForecastState(w.Forecast.State), Reason: w.Forecast.Reason},
 		Exhaustion: JSONViewExhaustion{State: string(w.Exhaustion.State)},
 		Reset:      JSONViewReset{Policy: w.Reset.Policy, Known: w.Reset.Known},
 		Shown:      shown,

@@ -1231,8 +1231,13 @@ type FailureGate struct {
 }
 
 const (
-	baseBackoff = 5 * time.Minute
-	maxBackoff  = 30 * time.Minute
+	// skipAfterFailures is how many consecutive failed polls a provider gets
+	// before a backoff starts. A lone failure is retried on the next tick: a
+	// backoff that skips the tick after it turns one blip into a poll interval
+	// of stale data.
+	skipAfterFailures = 3
+	baseBackoff       = 5 * time.Minute
+	maxBackoff        = 30 * time.Minute
 )
 
 // NewFailureGate creates a new failure gate.
@@ -1244,32 +1249,38 @@ func NewFailureGate() *FailureGate {
 	}
 }
 
-// RecordSuccess resets the failure streak and backoff for a provider.
-func (g *FailureGate) RecordSuccess(name string) {
+// RecordSuccess resets the failure streak and backoff for a provider. It
+// returns how many failed polls the success ended.
+func (g *FailureGate) RecordSuccess(name string) int {
+	ended := g.streaks[name]
 	g.streaks[name] = 0
 	delete(g.backoffs, name)
 	delete(g.nextPoll, name)
+	return ended
 }
 
 // ShouldSurfaceError increments the failure streak and returns true if the
 // error should be shown to the user. On the first failure with prior data,
-// the error is suppressed (returns false) to absorb transient blips.
-// Also sets an exponential backoff for the next poll.
+// the error is suppressed (returns false) to absorb transient blips. From the
+// third consecutive failure it also sets an exponential backoff for the next
+// poll; earlier failures leave the next tick alone.
 func (g *FailureGate) ShouldSurfaceError(name string, hasPriorData bool) bool {
 	g.streaks[name]++
 
-	// Set exponential backoff: 5m, 10m, 20m, 30m (cap)
-	b := g.backoffs[name]
-	if b == 0 {
-		b = baseBackoff
-	} else {
-		b *= 2
+	if g.streaks[name] >= skipAfterFailures {
+		// Backoff: 5m, 10m, 20m, 30m (cap)
+		b := g.backoffs[name]
+		if b == 0 {
+			b = baseBackoff
+		} else {
+			b *= 2
+		}
+		if b > maxBackoff {
+			b = maxBackoff
+		}
+		g.backoffs[name] = b
+		g.nextPoll[name] = time.Now().Add(b)
 	}
-	if b > maxBackoff {
-		b = maxBackoff
-	}
-	g.backoffs[name] = b
-	g.nextPoll[name] = time.Now().Add(b)
 
 	if hasPriorData && g.streaks[name] == 1 {
 		return false

@@ -607,23 +607,26 @@ func (v outputView) statusLine() string {
 	}
 	display := v.display(acct.Key)
 
-	if acct.Reading.State != view.ReadingFresh && window.Forecast.State == view.ForecastStale {
-		return fmt.Sprintf("CM~ %s %s last %s %s", display, window.Name, format.Percent(window.Used), acct.Reading.State)
+	known := window.Forecast.State == view.ForecastKnown
+	outNow := window.Exhaustion.State == view.ExhaustionOut
+	// The prefix is the account's summary tier: CM! only for a fresh critical account.
+	// The summary line and the exit code use the same rule, each on its own snapshot.
+	prefix := "CM"
+	switch v.summaryTier(acct.Key) {
+	case 2:
+		prefix = "CM!"
+	case 3:
+		prefix = "CM~"
+	}
+	// A retained reading with no forecast and no run-out claim says only what it
+	// last saw. A claim of out now keeps the full line, so it stays visible.
+	if acct.Reading.State != view.ReadingFresh && !known && !outNow {
+		return fmt.Sprintf("%s %s %s last %s %s", prefix, display, window.Name, format.Percent(window.Used), acct.Reading.State)
 	}
 
 	readingNote := ""
 	if acct.Reading.State == view.ReadingStale {
 		readingNote = " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
-	}
-
-	known := window.Forecast.State == view.ForecastKnown
-	outNow := window.Exhaustion.State == view.ExhaustionOut
-	prefix := "CM"
-	switch {
-	case outNow || (known && window.Forecast.Pct >= 100):
-		prefix = "CM!"
-	case (known && window.Forecast.Pct >= 90) || window.Forecast.State == view.ForecastStale:
-		prefix = "CM~"
 	}
 
 	if !known {
@@ -1087,7 +1090,9 @@ func forecastFor(acct *view.Account) *JSONForecast {
 		case view.ForecastKnown:
 			projection.ProjectedPct = roundPct(window.Forecast.Pct)
 			projection.Indicator = format.Percent(window.Forecast.Pct)
-		case view.ForecastStale:
+		case view.ForecastStale, view.ForecastPending:
+			// A pending projection is not current either. The legacy indicator has
+			// always called a reset-passed window stale, so consumers keep that value.
 			projection.Indicator = "stale"
 		}
 		result.Windows[window.Name] = projection
@@ -1140,13 +1145,16 @@ func loadStatusOutput(showAll bool, noHistory ...bool) (*MultiProviderOutput, *c
 
 	all.Register(registry, cfg)
 
-	// Try cache first — but only if it covers everything currently
-	// configured. Otherwise (e.g., a provider became configured via
-	// `codex login` after the last fetch) we'd return stale-by-membership
-	// data and the user would see nothing for ~60s.
-	configuredNames := registry.ConfiguredNames()
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
-		output := buildOutputFromCache(registry, cfg, cacheEntry)
+	// Serve the cache when it can answer this read. Otherwise hold the fetch
+	// marker until the fetched data is written, so concurrent reads share a fetch.
+	cacheEntry, releaseFetch, err := readUsageCache(registry, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return nil, nil, 1
+	}
+	defer releaseFetch()
+	if cacheEntry != nil {
+		output := buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
 		attachResetAnnouncements(output, registry, cfg, time.Now())
 		if showAll {
 			output.IncludeAllProviders(registry, cfg)
@@ -1249,7 +1257,7 @@ func loadCachedStatusOutput(showAll bool) (*MultiProviderOutput, int) {
 		return &MultiProviderOutput{}, 0
 	}
 
-	output := buildOutputFromCache(registry, cfg, cacheEntry)
+	output := buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
 	if showAll {
 		output.IncludeAllProviders(registry, cfg)
 	} else {
@@ -1343,12 +1351,17 @@ func Check(noHistory ...bool) int {
 		return 2
 	}
 
-	// Try cache first — but skip if a newly-configured provider has no
-	// cached entry yet (same stale-by-membership concern as Status()).
-	configuredNames := registry.ConfiguredNames()
+	// Serve the cache when it can answer this check; otherwise hold the fetch
+	// marker until the fetched data is written, so concurrent checks share a fetch.
 	var output *MultiProviderOutput
-	if cacheEntry, err := cache.Read(); err == nil && cacheEntry.IsValid() && cacheEntry.CoversCurrent(configuredNames, sourceRevisions(registry.GetConfigured())) && !cacheEntry.HasStaleData(configuredNames) {
-		output = buildOutputFromCache(registry, cfg, cacheEntry)
+	cacheEntry, releaseFetch, err := readUsageCache(registry, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clawmeter: %v\n", err)
+		return 2
+	}
+	defer releaseFetch()
+	if cacheEntry != nil {
+		output = buildOutputFromCache(registry, cfg, cacheEntry, time.Now())
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -1375,8 +1388,8 @@ func Check(noHistory ...bool) int {
 	return statusCheckExitCode(output)
 }
 
-// statusCheckExitCode grades the same snapshot the display shows, so a
-// retained reading's forecast decides the exit code as it decides the words.
+// statusCheckExitCode grades with the rule the summary line uses. It builds its own view
+// when it runs, so separately timed snapshots may disagree.
 func statusCheckExitCode(output *MultiProviderOutput) int {
 	worstTier := 4
 	v := output.buildView(time.Now())
@@ -1398,7 +1411,7 @@ func statusCheckExitCode(output *MultiProviderOutput) int {
 }
 
 // buildOutputFromCache creates output from cached data.
-func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cacheEntry *cache.Entry) *MultiProviderOutput {
+func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cacheEntry *cache.Entry, now time.Time) *MultiProviderOutput {
 	output := &MultiProviderOutput{
 		PollInterval: cfg.Settings.PollInterval,
 		Providers:    make([]ProviderFormatter, 0),
@@ -1414,7 +1427,7 @@ func buildOutputFromCache(registry *provider.Registry, cfg *config.Config, cache
 			!cache.SourceRevisionMatches(cacheEntry.SourceRevisions, key, provider.SourceRevision(p)) {
 			data = nil
 		}
-		if data != nil && cacheEntry.IsProviderStale(key) && data.HasPresentableUsage() {
+		if data != nil && cacheEntry.IsProviderStale(key, config.ReadingMaxAge(cfg.Settings.PollInterval), now) && data.HasPresentableUsage() {
 			data = data.Clone()
 			data.MarkStale("cache expired")
 		}
@@ -1545,80 +1558,6 @@ func sourceDisplay(p provider.Provider, counts map[string]int) string {
 	return p.DisplayName() + " · " + label
 }
 
-// providerUrgency classifies a provider for ordering and check exit codes.
-type providerUrgency struct {
-	tier            int // 0=expired, 1=errored, 2=critical(>=100%), 3=warning(>=90%), 4=healthy
-	maxProjectedPct float64
-	worstWindow     string
-	worstUsage      provider.UsageWindow
-	worstProjection forecast.Projection
-	runsOutIn       time.Duration
-	runsOutEarlyBy  time.Duration
-}
-
-func classifyProvider(pf *ProviderFormatter) providerUrgency {
-	if pf.Data == nil {
-		if pf.ExplicitlyEnabled {
-			return providerUrgency{tier: 1} // enabled but missing data => actionable setup issue
-		}
-		return providerUrgency{tier: 5} // passive unavailable providers belong at the bottom of --all
-	}
-	if pf.Data.IsExpired {
-		return providerUrgency{tier: 0, maxProjectedPct: 100}
-	}
-	if pf.Data.Error != "" && !pf.Data.HasPresentableUsage() {
-		return providerUrgency{tier: 1}
-	}
-
-	var maxPct float64
-	var worstWindow string
-	var worstUsage provider.UsageWindow
-	var worstProjection forecast.Projection
-	var hasWorstProjection bool
-	var runsOutIn time.Duration
-	var runsOutEarlyBy time.Duration
-	stale := pf.Data.Stale
-	for _, w := range pf.Data.PresentationWindows() {
-		if !w.ResetsAt.IsZero() && !w.ResetsAt.After(time.Now()) {
-			stale = true
-			continue
-		}
-		if w.Utilization >= 100 && maxPct < w.Utilization {
-			maxPct = w.Utilization
-		}
-		proj := forecast.Project(w.Utilization, w.ResetsAt, forecast.WindowLength(w))
-		if proj.ProjectedPct > maxPct {
-			maxPct = proj.ProjectedPct
-		}
-		if !hasWorstProjection || forecast.CompareWindowRisk(w, proj, worstUsage, worstProjection) < 0 {
-			worstWindow = w.Name
-			worstUsage = w
-			worstProjection = proj
-			hasWorstProjection = true
-			runsOutIn = proj.RunsOutIn
-			runsOutEarlyBy = proj.RunsOutEarlyBy
-		}
-	}
-
-	tier := 4
-	switch {
-	case maxPct >= 100:
-		tier = 2
-	case maxPct >= 90 || stale:
-		tier = 3
-	}
-
-	return providerUrgency{
-		tier:            tier,
-		maxProjectedPct: maxPct,
-		worstWindow:     worstWindow,
-		worstUsage:      worstUsage,
-		worstProjection: worstProjection,
-		runsOutIn:       runsOutIn,
-		runsOutEarlyBy:  runsOutEarlyBy,
-	}
-}
-
 // sortProvidersByName sorts providers by the name they show, as the tray
 // menu does.
 func sortProvidersByName(providers []ProviderFormatter) {
@@ -1627,19 +1566,41 @@ func sortProvidersByName(providers []ProviderFormatter) {
 	})
 }
 
-// sortProvidersByUrgency sorts providers so the most urgent appear first.
-func sortProvidersByUrgency(providers []ProviderFormatter) {
-	sort.SliceStable(providers, func(i, j int) bool {
-		ui := classifyProvider(&providers[i])
-		uj := classifyProvider(&providers[j])
-		if ui.tier != uj.tier {
-			return ui.tier < uj.tier
+// sortProvidersByUrgency orders output's providers most urgent first. It grades
+// each one with summaryUrgency, the rule the summary line and the check exit code
+// also use. It reads its own view, built now, and does not share a view with
+// them, so a reading that changes between the calls can put the order out of step
+// with their grades. Within a tier, the account whose most at-risk window ranks
+// first in that view's Worst order comes first.
+func sortProvidersByUrgency(output *MultiProviderOutput) {
+	v := output.buildView(time.Now())
+	grades := make([]summaryState, len(v.entries))
+	order := make([]int, len(v.entries))
+	for i, e := range v.entries {
+		grades[i] = summaryUrgency(e.pf, v.account(e.key))
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		ga, gb := grades[order[a]], grades[order[b]]
+		if ga.tier != gb.tier {
+			return ga.tier < gb.tier
 		}
-		if cmp := forecast.CompareWindowRisk(ui.worstUsage, ui.worstProjection, uj.worstUsage, uj.worstProjection); cmp != 0 {
-			return cmp < 0
-		}
-		return ui.maxProjectedPct > uj.maxProjectedPct
+		return worstWindowPlace(ga) < worstWindowPlace(gb)
 	})
+	sorted := make([]ProviderFormatter, len(order))
+	for k, i := range order {
+		sorted[k] = output.Providers[i]
+	}
+	output.Providers = sorted
+}
+
+// worstWindowPlace is the place of an account's most at-risk window in the
+// view's Worst order. An account with no window sorts last.
+func worstWindowPlace(g summaryState) int {
+	if g.window.Risk == 0 {
+		return math.MaxInt
+	}
+	return g.window.Risk
 }
 
 // summaryState is the snapshot-based state of one account in the summary.
@@ -1649,7 +1610,9 @@ type summaryState struct {
 	exhausted bool
 }
 
-// summaryUrgency uses the snapshot's forecast and run-out, including retained readings.
+// summaryUrgency grades an account for the summary and the exit code. Only a
+// fresh reading can be critical. A retained reading warns when its last position
+// is near the limit or a forecast has lapsed, and reads healthy otherwise.
 func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 	u := summaryState{tier: 4}
 	if pf.Data != nil && (len(pf.Data.LocalModels) > 0 || len(pf.Data.CreditBenefits) > 0) && len(acct.Windows) == 0 {
@@ -1668,15 +1631,20 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 		return summaryState{tier: 1}
 	}
 	var maxPct float64
-	stale := acct.Reading.State != view.ReadingFresh
+	fresh := acct.Reading.State == view.ReadingFresh
+	lapsed := false
 	for _, w := range acct.Windows {
-		stale = stale || w.Forecast.State == view.ForecastStale
+		lapsed = lapsed || w.Forecast.State.Lapsed()
 		if w.Forecast.State == view.ForecastKnown {
 			maxPct = max(maxPct, w.Forecast.Pct)
 		}
-		// Use cannot fall before a reset, so a quota seen used up stays used
-		// up until its reset, however old the reading.
-		exhausted := w.Used >= 100 && (!w.Reset.Known || w.Reset.In > 0)
+		// A retained reading cannot project the window now, so its last position
+		// stands in. Under 90 it still reads as healthy.
+		if !fresh {
+			maxPct = max(maxPct, w.Used)
+		}
+		// Only the view calls a window out now, and only from a fresh reading.
+		exhausted := w.Exhaustion.State == view.ExhaustionOut
 		if exhausted {
 			maxPct = max(maxPct, w.Used)
 		}
@@ -1687,12 +1655,23 @@ func summaryUrgency(pf *ProviderFormatter, acct *view.Account) summaryState {
 		}
 	}
 	switch {
-	case maxPct >= 100:
+	case fresh && maxPct >= 100:
 		u.tier = 2
-	case maxPct >= 90 || stale:
+	case maxPct >= 90 || lapsed:
 		u.tier = 3
 	}
 	return u
+}
+
+// summaryTier is the account's summary tier, the one the statusline prefix shows. The summary
+// line and the exit code grade with summaryUrgency on their own views, so they follow the same
+// rule but may be timed apart.
+func (v outputView) summaryTier(key string) int {
+	pf, acct := v.formatter(key), v.account(key)
+	if pf == nil || acct == nil {
+		return 4
+	}
+	return summaryUrgency(pf, acct).tier
 }
 
 // printSummary prints a one-line summary before the per-provider details.
@@ -1846,10 +1825,11 @@ func printOutput(output *MultiProviderOutput, jsonMode, plainMode bool, cacheEnt
 		return
 	}
 
-	// JSON keeps the most urgent provider first; people read the table in
-	// the same alphabetical order as the tray menu.
+	// The JSON document keys its providers by family in a map, so the urgency
+	// order sorted here is not visible in it. The table reads alphabetically,
+	// as the tray menu does.
 	if jsonMode {
-		sortProvidersByUrgency(output.Providers)
+		sortProvidersByUrgency(output)
 		output.PrintJSON(cacheEntry)
 		return
 	}

@@ -76,7 +76,7 @@ func TestFoldedCreditPoolsLeaveNoEmptyRow(t *testing.T) {
 	entry := &cache.Entry{ProviderData: results, SourceRevisions: map[string]string{}}
 	for name, output := range map[string]*MultiProviderOutput{
 		"fresh":  buildOutputFromResult(registry, cfg, &provider.MultiFetchResult{Results: results}, nil),
-		"cached": buildOutputFromCache(registry, cfg, entry),
+		"cached": buildOutputFromCache(registry, cfg, entry, time.Now()),
 	} {
 		output.HideUnavailable()
 		if len(output.Providers) != 1 || output.Providers[0].Name != "claude" || len(output.Providers[0].Data.CreditPools) != 1 {

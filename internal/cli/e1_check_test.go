@@ -80,8 +80,8 @@ func TestCheckUsesRetainedReadingForecast(t *testing.T) {
 	if acct := young.buildView(now).snap.Accounts[0]; acct.Windows[0].Exhaustion.State != view.ExhaustionRunsOut {
 		t.Fatalf("young reading exhaustion = %s, want runs_out", acct.Windows[0].Exhaustion.State)
 	}
-	if got := statusCheckExitCode(young); got != 2 {
-		t.Fatalf("young retained reading exit=%d want 2", got)
+	if got := statusCheckExitCode(young); got != 1 { // a retained projection warns; only a fresh reading is critical
+		t.Fatalf("young retained reading exit=%d want 1", got)
 	}
 	// Older than two polls: no forecast, so stale is a warning.
 	if got := statusCheckExitCode(reading(time.Hour)); got != 1 {

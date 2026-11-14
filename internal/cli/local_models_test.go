@@ -33,7 +33,8 @@ func TestLocalModelsVisibleWithoutQuotaClaims(t *testing.T) {
 	if strings.Count(string(b), `"local_models"`) != 2 || !strings.Contains(string(b), `"assistant_messages": 0`) {
 		t.Fatalf("raw and evaluated JSON lost observations: %s", b)
 	}
-	later := m.buildView(at.Add(11 * time.Minute))
+	// Past the 11-minute freshness bound of the default poll interval.
+	later := m.buildView(at.Add(12 * time.Minute))
 	if later.snap.Accounts[0].LocalModels[0].AssistantMessages != nil {
 		t.Fatal("old cache advertised current activity")
 	}

@@ -154,7 +154,7 @@ func TestPinnedRetainedIconAgreesWithTheSharedWindow(t *testing.T) {
 			}
 			wantRisk := 0.0
 			if w.Forecast.State == view.ForecastKnown {
-				wantRisk = w.Forecast.Pct
+				wantRisk = min(w.Forecast.Pct, nonFreshRiskCap) // every case here is a stale reading
 			}
 			if got.UsagePct != w.Used || got.ExpectedPct != w.Pace || got.ShowExpected != w.HasPace || got.RiskPct != wantRisk || got.Label != "5H" {
 				t.Fatalf("icon = %+v, shared window = %+v", got, w)

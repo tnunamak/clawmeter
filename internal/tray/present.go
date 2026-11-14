@@ -80,7 +80,7 @@ func readingMeter(acct *view.Account, w view.Window) icons.MeterState {
 		return icons.MeterState{
 			UsagePct:     w.Used,
 			ExpectedPct:  w.Pace,
-			RiskPct:      riskPct(w),
+			RiskPct:      riskPct(w, acct.Reading.State == view.ReadingFresh),
 			ShowExpected: w.HasPace,
 			Label:        windowBadgeLabel(w.Label),
 		}
@@ -116,12 +116,21 @@ func fallbackAccount(snap view.Snapshot) *view.Account {
 	return best
 }
 
-// riskPct is the projected use the icon's risk channel draws. An exhausted
-// window keeps its risk even while its forecast is still warming up.
-func riskPct(w view.Window) float64 {
+// nonFreshRiskCap caps the projection a retained reading carries. The icon does not
+// draw that value (see icons.MeterState), so the cap has no visible effect. The summary
+// grade counts critical only from a fresh reading.
+const nonFreshRiskCap = 99
+
+// riskPct is the projected use carried in icons.MeterState. The icon does not draw it.
+// An exhausted window keeps its risk even while its forecast is still warming up. A
+// projection from a reading that is not fresh is capped at nonFreshRiskCap.
+func riskPct(w view.Window, fresh bool) float64 {
 	risk := 0.0
 	if w.Forecast.State == view.ForecastKnown {
 		risk = w.Forecast.Pct
+	}
+	if !fresh {
+		risk = min(risk, nonFreshRiskCap)
 	}
 	if w.Exhaustion.State == view.ExhaustionOut && w.Used > risk {
 		risk = w.Used
@@ -244,6 +253,7 @@ func resetLine(w view.Window) string {
 
 func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 	byAccount := make(map[string][]meter.Row, len(snap.Accounts))
+	retained := make(map[string]string, len(snap.Accounts))
 	var shown []meter.Row
 	for i := range snap.Accounts {
 		acct := &snap.Accounts[i]
@@ -255,16 +265,29 @@ func MenuRows(snap view.Snapshot, limit int) map[string][]string {
 			rows = rows[:limit]
 		}
 		byAccount[acct.Key] = rows
+		retained[acct.Key] = retainedNote(acct)
 		shown = append(shown, rows...)
 	}
 	widths := trayColumnWidths(shown)
 	out := make(map[string][]string, len(byAccount))
 	for key, rows := range byAccount {
 		for _, row := range rows {
-			out[key] = append(out[key], trayRowText(row, widths, snap.At))
+			out[key] = append(out[key], trayRowText(row, widths, snap.At)+retained[key])
 		}
 	}
 	return out
+}
+
+// retainedNote marks the rows of a stale account with when its last good reading
+// was taken, so a forecast drawn from that reading is not read as live.
+func retainedNote(acct *view.Account) string {
+	if acct.Reading.State != view.ReadingStale {
+		return ""
+	}
+	if acct.Reading.ObservedAt.IsZero() {
+		return " (stale)"
+	}
+	return " (last good " + acct.Reading.ObservedAt.Local().Format("15:04") + ")"
 }
 
 // MenuMore counts, per account, the shown windows past the menu's row limit.

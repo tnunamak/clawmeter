@@ -134,7 +134,7 @@ func TestExhaustionAndForecast(t *testing.T) {
 		{"warming below 100", fiveHour(10, warmWindow), ForecastWarming, ExhaustionUnknown},
 		{"no reset", provider.UsageWindow{Name: "5h", Length: forecast.FiveHourWindow, Utilization: 20}, ForecastNone, ExhaustionUnknown},
 		{"no reset and out", provider.UsageWindow{Name: "5h", Length: forecast.FiveHourWindow, Utilization: 100}, ForecastNone, ExhaustionOut},
-		{"reset already passed", fiveHour(50, -time.Minute), ForecastStale, ExhaustionUnknown},
+		{"reset already passed", fiveHour(50, -time.Minute), ForecastPending, ExhaustionUnknown},
 		{"no known window length", provider.UsageWindow{Name: "usage", Utilization: 20, ResetsAt: at.Add(midWindow)}, ForecastNone, ExhaustionUnknown},
 	}
 	for _, tt := range tests {

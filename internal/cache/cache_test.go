@@ -68,23 +68,50 @@ func TestInvalidatingErrorRoundTripCannotResurrectUsage(t *testing.T) {
 	}
 }
 
-func TestIsValid(t *testing.T) {
+func TestIsFresh(t *testing.T) {
 	cases := []struct {
 		name  string
 		entry Entry
 		want  bool
 	}{
 		{"fresh", Entry{FetchedAt: time.Now()}, true},
-		{"30s old", Entry{FetchedAt: time.Now().Add(-30 * time.Second)}, true},
-		{"61s old (stale)", Entry{FetchedAt: time.Now().Add(-61 * time.Second)}, false},
-		{"5m old (stale)", Entry{FetchedAt: time.Now().Add(-5 * time.Minute)}, false},
+		{"4m old", Entry{FetchedAt: time.Now().Add(-4 * time.Minute)}, true},
+		{"5m old (not fresh)", Entry{FetchedAt: time.Now().Add(-5 * time.Minute)}, false},
+		{"10m old (not fresh)", Entry{FetchedAt: time.Now().Add(-10 * time.Minute)}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := c.entry.IsValid(); got != c.want {
-				t.Fatalf("IsValid() = %v, want %v", got, c.want)
+			if got := c.entry.IsFresh(5 * time.Minute); got != c.want {
+				t.Fatalf("IsFresh(5m) = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// A healthy reading from a 5-minute poll is 3 minutes old between polls. It must
+// not be marked expired under the freshness bound the caller passes. A reading
+// exactly at the bound is still fresh, as the view treats it.
+func TestIsProviderStaleUsesTheGivenBound(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	at := now.Add(-3 * time.Minute)
+	entry := Entry{FetchedAt: at, ProviderData: map[string]*provider.UsageData{
+		"claude": {FetchedAt: at},
+	}}
+	if entry.IsProviderStale("claude", 11*time.Minute, now) {
+		t.Fatal("a 3 minute old reading is stale under an 11 minute bound")
+	}
+	if !entry.IsProviderStale("claude", 2*time.Minute, now) {
+		t.Fatal("a 3 minute old reading is fresh under a 2 minute bound")
+	}
+
+	atBound := Entry{ProviderData: map[string]*provider.UsageData{
+		"claude": {FetchedAt: now.Add(-11 * time.Minute)},
+	}}
+	if atBound.IsProviderStale("claude", 11*time.Minute, now) {
+		t.Fatal("a reading exactly at the bound is stale; the view calls it fresh")
+	}
+	if !atBound.IsProviderStale("claude", 11*time.Minute, now.Add(time.Nanosecond)) {
+		t.Fatal("a reading past the bound is fresh")
 	}
 }
 
@@ -138,10 +165,10 @@ func TestSourceEntriesRemainIndependent(t *testing.T) {
 	if !entry.Covers([]string{"claude:personal", "claude:work"}) {
 		t.Fatal("source cache entries should both be covered")
 	}
-	if entry.HasStaleData([]string{"claude:personal"}) {
+	if entry.ProviderData["claude:personal"].Stale {
 		t.Fatal("work stale state leaked into personal")
 	}
-	if !entry.HasStaleData([]string{"claude:work"}) {
+	if !entry.ProviderData["claude:work"].Stale {
 		t.Fatal("work stale state was lost")
 	}
 }
@@ -203,25 +230,6 @@ func contains(s, needle string) bool {
 		}
 	}
 	return false
-}
-
-func TestHasStaleData(t *testing.T) {
-	entry := Entry{
-		ProviderData: map[string]*provider.UsageData{
-			"openai": {Provider: "openai"},
-			"claude": {Provider: "claude", Stale: true},
-		},
-	}
-
-	if !entry.HasStaleData([]string{"claude"}) {
-		t.Fatal("HasStaleData(claude) = false, want true")
-	}
-	if entry.HasStaleData([]string{"openai"}) {
-		t.Fatal("HasStaleData(openai) = true, want false")
-	}
-	if entry.HasStaleData([]string{"gemini"}) {
-		t.Fatal("HasStaleData(missing) = true, want false")
-	}
 }
 
 // Entries written before the schema version existed hold Claude extra-usage

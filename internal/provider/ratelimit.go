@@ -6,12 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/tnunamak/clawmeter/internal/filelock"
 )
 
 // RateLimitError is how a provider reports that its upstream answered HTTP
@@ -37,8 +42,12 @@ func RateLimitFromResponse(resp *http.Response) error {
 
 func parseRetryAfter(value string) time.Duration {
 	value = strings.TrimSpace(value)
-	if secs, err := strconv.Atoi(value); err == nil {
-		return max(time.Duration(secs)*time.Second, 0)
+	if secs, err := strconv.ParseInt(value, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		if secs <= 0 {
+			return 0
+		}
+		// Clamp the count before multiplying, so a huge value cannot overflow.
+		return time.Duration(min(secs, maxRetryAfterSeconds)) * time.Second
 	}
 	if at, err := http.ParseTime(value); err == nil {
 		return max(at.Sub(backoffNow()), 0)
@@ -49,12 +58,18 @@ func parseRetryAfter(value string) time.Duration {
 // Some usage endpoints are shared with the vendor's own tools and answer 429
 // with "retry-after: 0" (Claude does). Honoring that literally would make every
 // CLI call retry at once, so after a 429 a source is not called again for a
-// floor of 5 minutes, doubling per consecutive 429 up to 1 hour. A longer
-// Retry-After wins, up to the same cap. The state lives on disk because the CLI
-// and the tray are separate processes.
+// floor of 5 minutes, doubling per consecutive 429 up to 1 hour. The floor equals
+// the default poll interval, so after a 429 the next scheduled poll is usually
+// skipped. A Retry-After from the server is the server's own cooldown, so it wins
+// over the local cap and is honored in full, up to the largest time.Duration (about
+// 292 years). A monthly quota can send days, and a retry before its reset is refused
+// again. The state lives on disk because the CLI and the tray are separate processes.
 const (
 	backoffFloor = 5 * time.Minute
 	backoffCap   = time.Hour
+	// maxRetryAfterSeconds is the largest delay-seconds value a time.Duration
+	// holds. A larger value is clamped to it instead of overflowing.
+	maxRetryAfterSeconds = math.MaxInt64 / int64(time.Second)
 )
 
 var (
@@ -66,6 +81,9 @@ var (
 		}
 		return filepath.Join(dir, "clawmeter", "backoff"), nil
 	}
+	// newBackoffID returns the ID of a new cooldown. recordRateLimit calls it while it holds
+	// unwritten. Tests replace it with a counter, so each cooldown's ID is known.
+	newBackoffID = rand.Uint64
 )
 
 // CredentialRouteCapability is implemented by sources whose credential route
@@ -115,8 +133,11 @@ func backoffKey(p Provider) string {
 // the last good reading and mark it stale.
 func FetchSource(ctx context.Context, p Provider) (*UsageData, error) {
 	key := backoffKey(p)
-	if until, ok := backoffUntil(key); ok {
-		return rateLimitedData(p, until), nil
+	// One read both gates the fetch and records the state it was sent under, so a
+	// success can tell whether a 429 landed while the request was in flight.
+	before, _ := readBackoff(key)
+	if backoffNow().Before(before.Until) {
+		return rateLimitedData(p, before.Until), nil
 	}
 	data, err := p.FetchUsage(ctx)
 	var limited *RateLimitError
@@ -128,7 +149,7 @@ func FetchSource(ctx context.Context, p Provider) (*UsageData, error) {
 		return data, nil
 	}
 	if err == nil && data != nil && data.Error == "" {
-		clearBackoff(key)
+		clearBackoff(key, before)
 	}
 	return data, err
 }
@@ -137,19 +158,72 @@ func rateLimitedData(p Provider, until time.Time) *UsageData {
 	return &UsageData{
 		Provider: p.Name(), SourceID: SourceID(p), SourceLabel: SourceLabel(p),
 		FetchedAt: time.Now(),
-		Error:     "rate limited (429), next try " + until.Local().Format("15:04"),
+		Error:     "rate limited (429), next try " + nextTryLabel(until, backoffNow()),
 	}
 }
 
+// nextTryLabel says when fetching may resume. A cooldown that ends on a later
+// calendar day carries its date, so a multi-day quota wait does not read as a time
+// today.
+func nextTryLabel(until, now time.Time) string {
+	until, now = until.Local(), now.Local()
+	if until.Year() == now.Year() && until.YearDay() == now.YearDay() {
+		return until.Format("15:04")
+	}
+	return until.Format("Jan 2 15:04")
+}
+
+// backoffState is one source's stored backoff. ID is drawn at random for every
+// recorded 429, so it identifies one cooldown. A success clears only the cooldown
+// its request saw, and a 429 recorded during the request leaves a new ID behind.
+// Zero means no ID: nothing was stored, or a build without IDs wrote the state.
 type backoffState struct {
 	Until    time.Time `json:"until"`
 	Failures int       `json:"failures"`
+	ID       uint64    `json:"id"`
 }
 
-// backoffPath gives each source its own file, so concurrent 429s from
-// different sources (or from the CLI and the tray) never rewrite each other's
-// state. Two writers for the same source compute near-identical state, so last
-// writer wins is acceptable there.
+// mergeBackoff combines two states for one source. It keeps the later end time, with
+// the ID of the 429 that set it, and the larger failure count, so a merge never
+// shortens a cooldown or restarts the doubling.
+func mergeBackoff(a, b backoffState) backoffState {
+	if b.Until.After(a.Until) {
+		a.Until, a.ID = b.Until, b.ID
+	}
+	a.Failures = max(a.Failures, b.Failures)
+	return a
+}
+
+// unwritten holds, by key, the cooldowns this process recorded while it could not take
+// the backoff lock. Writing them without the lock could drop a longer cooldown that
+// another process had just stored, so they stay in memory. The process still honors
+// them, and the next read or record that holds the lock writes them. A cooldown leaves
+// memory when the file holds it, or when a success clears it.
+//
+// The mutex guards the map. Each read-modify-write of the map is one critical section, and it
+// includes the stored state it merges with, so two recordings never build on the same held
+// state, and no write from this process lands between the stored state and the held cooldowns
+// that a call reads. Code that needs both locks takes the backoff lock first. Nothing takes the
+// backoff lock while it holds this mutex.
+var unwritten = struct {
+	sync.Mutex
+	byKey map[string]backoffState
+}{byKey: map[string]backoffState{}}
+
+// dropUnwrittenWithID releases the cooldown held for key only if it has this ID. A
+// success calls it without the lock, so it cannot touch the file. A held cooldown that
+// the success did not see stays in force.
+func dropUnwrittenWithID(key string, id uint64) {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	if state, ok := unwritten.byKey[key]; ok && state.ID == id {
+		delete(unwritten.byKey, key)
+	}
+}
+
+// backoffPath gives each source and credential route its own state file. Writes hold
+// the one backoff lock (see lockBackoff). Reads hold it too, except when it cannot be
+// taken (see readBackoff).
 func backoffPath(key string) (string, error) {
 	dir, err := backoffDir()
 	if err != nil {
@@ -158,7 +232,35 @@ func backoffPath(key string) (string, error) {
 	return filepath.Join(dir, fmt.Sprintf("%x.json", sha256.Sum256([]byte(key)))), nil
 }
 
+// readBackoff returns the cooldown in force for key, and whether there is one. It takes
+// the backoff lock so a read does not overlap a writer's rename, which Windows can
+// refuse while the file is open. With the lock, it also writes any unwritten cooldown
+// this process holds. Without it, the file is only read, and a rename in progress can
+// make the read miss the stored cooldown.
 func readBackoff(key string) (backoffState, bool) {
+	unlock, locked := lockBackoff()
+	defer unlock()
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	state, ok := loadBackoff(key)
+	held, had := unwritten.byKey[key]
+	if !had {
+		return state, ok
+	}
+	state = mergeBackoff(state, held)
+	// Only the lock holder writes. Without the lock, the held cooldown stays in memory.
+	if locked && writeBackoff(key, state) {
+		delete(unwritten.byKey, key)
+	}
+	return state, true
+}
+
+// loadBackoff reads the stored state without taking the backoff lock. Code that already
+// holds the lock uses it, because the lock is not reentrant: readBackoff inside the lock
+// would wait out backoffLockWait and then read without it. Callers also hold unwritten, so
+// the stored state and the held cooldowns are read as one snapshot.
+func loadBackoff(key string) (backoffState, bool) {
+	onBackoffSnapshot()
 	var state backoffState
 	path, err := backoffPath(key)
 	if err != nil {
@@ -171,54 +273,134 @@ func readBackoff(key string) (backoffState, bool) {
 	return state, true
 }
 
-func writeBackoff(key string, state backoffState) {
+// writeBackoff replaces the stored state for key, and reports whether it did.
+func writeBackoff(key string, state backoffState) bool {
 	path, err := backoffPath(key)
 	if err != nil {
-		return
+		return false
 	}
 	data, err := json.Marshal(state)
 	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
-		return
+		return false
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".backoff-*")
 	if err != nil {
-		return
+		return false
 	}
 	_, werr := tmp.Write(data)
 	cerr := tmp.Close()
 	if werr != nil || cerr != nil || os.Rename(tmp.Name(), path) != nil {
 		_ = os.Remove(tmp.Name())
+		return false
 	}
+	return true
 }
 
-// backoffUntil returns the time before which the source must not be fetched.
-func backoffUntil(key string) (time.Time, bool) {
-	state, ok := readBackoff(key)
-	if !ok || !backoffNow().Before(state.Until) {
-		return time.Time{}, false
+// backoffLockWait bounds how long a read or write waits for the backoff lock. The
+// holder keeps it for one small file read and write, so a longer wait means a stalled
+// disk or a suspended process. Tests shorten it.
+var backoffLockWait = 2 * time.Second
+
+// onBackoffLockBusy runs after each attempt that finds the backoff lock held, before the
+// caller waits again. Tests use it to learn that a call is waiting on the lock. Production
+// leaves it empty.
+var onBackoffLockBusy = func() {}
+
+// onBackoffSnapshot runs in loadBackoff, which callers reach while they hold unwritten. Tests
+// use it to check that every stored-state read happens under that mutex. Production leaves it
+// empty.
+var onBackoffSnapshot = func() {}
+
+// onBackoffLockOutcome runs after each attempt to take the backoff lock, with whether the
+// attempt succeeded. Tests use it to check that a read which waited on a busy lock took it
+// instead of giving up. Production leaves it empty.
+var onBackoffLockOutcome = func(locked bool) {}
+
+// lockBackoff takes the backoff lock, one lock file shared by all sources. It orders
+// reads and read-modify-writes of backoff state across processes, because the CLI
+// and the tray can both record a 429 for one source. It is never held across a
+// fetch. ok is false when no lock could be taken: no writable cache directory, no
+// file locks on this platform, or a holder that kept the lock past backoffLockWait.
+func lockBackoff() (unlock func(), ok bool) {
+	dir, err := backoffDir()
+	if err != nil || os.MkdirAll(dir, 0o755) != nil {
+		return func() {}, false
 	}
-	return state.Until, true
+	release, err := filelock.AcquireWatched(filepath.Join(dir, ".lock"), backoffLockWait, onBackoffLockBusy)
+	onBackoffLockOutcome(err == nil)
+	if err != nil {
+		return func() {}, false
+	}
+	return release, true
 }
 
-// recordRateLimit starts or extends the backoff after a 429 and returns when
-// fetching may resume.
+// recordRateLimit starts or extends the backoff after a 429 and returns when fetching
+// may resume. With the lock, the read, the new cooldown and the write happen together,
+// so an overlapping writer's longer cooldown is not overwritten. Without it, the
+// cooldown is kept in memory, and the next read or record that holds the lock writes
+// it. Nothing is written without the lock.
 func recordRateLimit(key string, retryAfter time.Duration) time.Time {
-	state, _ := readBackoff(key)
+	unlock, locked := lockBackoff()
+	defer unlock()
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	// Reading the stored state and the held cooldown, counting this failure and storing the
+	// result are one critical section. Otherwise two recordings could count from the same
+	// state, and both would store the same failure count.
+	state, _ := loadBackoff(key)
+	if held, had := unwritten.byKey[key]; had {
+		state = mergeBackoff(state, held)
+	}
 	state.Failures++
+	state.ID = newBackoffID()
 	delay := backoffFloor
 	for i := 1; i < state.Failures && delay < backoffCap; i++ {
 		delay *= 2
 	}
-	delay = min(max(delay, retryAfter), backoffCap)
+	delay = max(min(delay, backoffCap), retryAfter)
 	if until := backoffNow().Add(delay); until.After(state.Until) {
 		state.Until = until
 	}
-	writeBackoff(key, state)
+	if locked && writeBackoff(key, state) {
+		delete(unwritten.byKey, key)
+	} else {
+		unwritten.byKey[key] = state
+	}
 	return state.Until
 }
 
-func clearBackoff(key string) {
-	if path, err := backoffPath(key); err == nil {
-		_ = os.Remove(path)
+// clearBackoff ends a backoff after a clean reading, but only the backoff that was in
+// effect when the request was sent. A 429 recorded while the request was in flight is
+// newer, and its cooldown still applies after this success, which shows only that the
+// request was answered. A zero ID means the request saw no state, or saw a state written
+// by a build without IDs. Such a state cannot be matched to this request, so a success
+// leaves it alone. Without the lock, the file is not touched, and only a held cooldown
+// with the same ID is dropped.
+func clearBackoff(key string, before backoffState) {
+	if before.ID == 0 {
+		return
+	}
+	unlock, locked := lockBackoff()
+	defer unlock()
+	if !locked {
+		dropUnwrittenWithID(key, before.ID)
+		return
+	}
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	state, _ := loadBackoff(key)
+	held, hadHeld := unwritten.byKey[key]
+	if hadHeld {
+		state = mergeBackoff(state, held)
+	}
+	if state.ID == before.ID {
+		if path, err := backoffPath(key); err == nil {
+			_ = os.Remove(path)
+		}
+		delete(unwritten.byKey, key)
+		return
+	}
+	if hadHeld && writeBackoff(key, state) {
+		delete(unwritten.byKey, key)
 	}
 }

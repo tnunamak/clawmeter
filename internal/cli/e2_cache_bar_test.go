@@ -20,7 +20,7 @@ func TestCachedStatusMarksOldReadingsStale(t *testing.T) {
 		registry.Register(cliStubProvider{name: "claude"})
 		data := &provider.UsageData{Provider: "claude", FetchedAt: time.Now().Add(-age), Windows: []provider.UsageWindow{{Name: "5h", Utilization: 30, ResetsAt: time.Now().Add(time.Hour)}}}
 		entry := &cache.Entry{FetchedAt: time.Now().Add(-age), ProviderData: map[string]*provider.UsageData{"claude": data}}
-		output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+		output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 		stale := age > 2*time.Minute
 		if len(output.Providers) != 1 {
 			t.Fatalf("providers: %#v", output.Providers)
@@ -187,7 +187,7 @@ func TestE2RedteamFreshLocalUpdateInOldCacheIsNotStale(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	if len(output.Providers) != 2 {
 		t.Fatalf("providers = %#v", output.Providers)
 	}
@@ -285,7 +285,7 @@ func TestE2CachedFreshnessUsesIndividualTimestampAndLegacyFallback(t *testing.T)
 			}
 			data := &provider.UsageData{Provider: "claude", FetchedAt: tc.fetched, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 25}}}
 			entry := &cache.Entry{FetchedAt: tc.aggregate, ProviderData: map[string]*provider.UsageData{"claude": data}}
-			output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+			output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 			if len(output.Providers) != 1 || output.Providers[0].Data == nil || output.Providers[0].Data.Stale != tc.stale {
 				t.Fatalf("cached output = %#v, want stale=%v", output.Providers, tc.stale)
 			}

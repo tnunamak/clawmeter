@@ -24,7 +24,7 @@ func TestAuditM2CalendarMonthForecast(t *testing.T) {
 		{"first hour", "2026-10-01T00:30:00Z", "2026-11-01T00:00:00Z", 1, 0, 31, view.ForecastWarming, view.ExhaustionUnknown},
 		{"warm at one hour", "2026-10-01T01:00:00Z", "2026-11-01T00:00:00Z", 1, 744, 31, view.ForecastKnown, view.ExhaustionRunsOut},
 		{"last hour", "2026-02-28T23:00:00Z", "2026-03-01T00:00:00Z", 50, 50 * 672.0 / 671, 28, view.ForecastKnown, view.ExhaustionLasts},
-		{"at reset", "2026-03-01T00:00:00Z", "2026-03-01T00:00:00Z", 50, 0, 28, view.ForecastStale, view.ExhaustionUnknown},
+		{"at reset", "2026-03-01T00:00:00Z", "2026-03-01T00:00:00Z", 50, 0, 28, view.ForecastPending, view.ExhaustionUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now, _ := time.Parse(time.RFC3339, tc.observed)

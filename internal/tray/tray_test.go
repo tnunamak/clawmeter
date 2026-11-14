@@ -689,7 +689,13 @@ func TestBackedOffProviderWithoutPriorWindowsStillFetches(t *testing.T) {
 
 func TestBackedOffProviderWithPriorWindowsUsesClone(t *testing.T) {
 	gate := provider.NewFailureGate()
-	_ = gate.ShouldSurfaceError("openai", true)
+	// Fail until the failure threshold starts the backoff this test needs.
+	for i := 0; i < 10 && !gate.InBackoff("openai"); i++ {
+		_ = gate.ShouldSurfaceError("openai", true)
+	}
+	if !gate.InBackoff("openai") {
+		t.Fatal("no backoff after repeated failures")
+	}
 	prev := &provider.UsageData{
 		FetchedAt: time.Now(),
 		Provider:  "openai",
@@ -925,7 +931,10 @@ func TestTrayTooltipShowsClaudeResetSnapshotWhenUsageIsErroredAndNeverNamesTheSu
 	}
 }
 
-func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.T) {
+// A reading within the retained horizon is forecast, and its stale line says the
+// estimate rests on the last good data. Reset in 3h puts the reading 1h45m into
+// its window, past the warm-up.
+func TestTrayTooltipForecastsRetainedReadingWithStaleLine(t *testing.T) {
 	now := time.Now()
 	results := map[string]*provider.UsageData{
 		"claude": {
@@ -934,7 +943,7 @@ func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.
 			Warning:   "rate limited (429)",
 			FetchedAt: now.Add(-15 * time.Minute),
 			Windows: []provider.UsageWindow{
-				{Name: "5h", Utilization: 11, ResetsAt: now.Add(4 * time.Hour)},
+				{Name: "5h", Utilization: 11, ResetsAt: now.Add(3 * time.Hour)},
 			},
 		},
 	}
@@ -945,15 +954,19 @@ func TestTrayTooltipDescribesStaleFallbackWithoutForecastingItAsLive(t *testing.
 	got := Tooltip(viewNamed(results, map[string]string{"claude": "Claude"}, now), results)
 
 	// The stale window is named, with its freshness on the
-	// line after its title. It is not forecast.
+	// line after its title. Its estimate rests on that last good reading.
 	if !strings.HasPrefix(got, "Claude · 5-Hour\nstale - showing last good data from ") {
 		t.Fatalf("Tooltip() = %q, want the window title then the stale line", got)
 	}
 	if !strings.Contains(got, "rate limited") || !strings.Contains(got, "Last known 11% used") {
 		t.Fatalf("Tooltip() = %q, want the stale reason and the last used percentage", got)
 	}
-	if strings.Contains(got, "Won't run out") || strings.Contains(got, "Est.") || strings.Contains(got, "Runs out") {
-		t.Fatalf("Tooltip() = %q, should not forecast stale data like live usage", got)
+	// The estimate carries its basis, and is not a live claim: 11% used cannot be out now.
+	if !strings.Contains(got, "Est.") || !strings.Contains(got, "(avg. since reset)") {
+		t.Fatalf("Tooltip() = %q, want the retained reading's estimate with its basis", got)
+	}
+	if strings.Contains(got, "Out now") {
+		t.Fatalf("Tooltip() = %q, an 11%% reading cannot be out now", got)
 	}
 }
 
@@ -1338,7 +1351,8 @@ func TestTrayUnknownAndStaleTooltipsShowCurrentUsage(t *testing.T) {
 	now := time.Now()
 	// A fresh window used up in warm-up has no forecast, but is out now.
 	warming := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 100, ResetsAt: now.Add(299 * time.Minute)}
-	stale := &provider.UsageData{Stale: true, Warning: "rate limited", FetchedAt: now.Add(-time.Hour), Windows: []provider.UsageWindow{warming}}
+	// Past the retained horizon the reading claims nothing about now.
+	stale := &provider.UsageData{Stale: true, Warning: "rate limited", FetchedAt: now.Add(-(view.RetainedForecastAge + time.Minute)), Windows: []provider.UsageWindow{warming}}
 	for _, tc := range []struct {
 		name string
 		data *provider.UsageData

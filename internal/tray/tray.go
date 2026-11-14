@@ -1849,6 +1849,10 @@ var quotaRecovery recoveryWatch
 // resetFeedClient is replaced by tests so that no request leaves the process.
 var resetFeedClient = resetfeed.Default
 
+// refreshClock is the time a refresh starts and ends, and the time the reset poll
+// checks. Tests replace it to move time forward by hand.
+var refreshClock = time.Now
+
 // usageRefresher polls the configured providers and redraws the menu.
 type usageRefresher struct {
 	mu           sync.Mutex // held for the whole of one refresh
@@ -1858,6 +1862,13 @@ type usageRefresher struct {
 	pollSeconds  func() int
 	render       func(results map[string]*provider.UsageData, statuses map[string]*status.ProviderStatus)
 	finished     func(at time.Time)
+	// resetPoll polls again just after the next window reset. resetGen counts the
+	// arms, so a timer that fires after a newer arm finds an old generation and
+	// does nothing. servedAt holds when each source's latest fetch started. All
+	// three are guarded by mu.
+	resetPoll *time.Timer
+	resetGen  uint64
+	servedAt  map[string]time.Time
 }
 
 // refresh polls now unless another refresh is running; it reports false then.
@@ -1866,7 +1877,7 @@ func (r *usageRefresher) refresh(force bool) bool {
 		return false
 	}
 	defer r.mu.Unlock()
-	r.run(force)
+	r.run(force, nil)
 	return true
 }
 
@@ -1875,11 +1886,128 @@ func (r *usageRefresher) refresh(force bool) bool {
 func (r *usageRefresher) refreshWhenFree(force bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.run(force)
+	r.run(force, nil)
 }
 
-// run polls and redraws. The caller holds r.mu.
-func (r *usageRefresher) run(force bool) {
+// resetPollDelay is how long after a window's reset the tray polls again, so the
+// window's first reading arrives soon after the reset instead of on the next tick.
+const resetPollDelay = 30 * time.Second
+
+// resetFetchTimes returns, for each source the reset poll may fetch, when that
+// source is owed a fetch. A window's poll time is resetPollDelay after its reset.
+// A source is owed a fetch at its earliest poll time that no fetch has started at
+// or after. A fetch may not start less than resetPollDelay after the source's last
+// fetch began, so an owed time that falls sooner is pushed back to that point. The
+// spacing keeps a reading that keeps reporting a just-passed reset from making the
+// tray fetch back to back. A source in failure backoff is left out, because the
+// failure gate, not the reset poll, decides when it is asked again. The caller
+// holds s.mu, which guards gate.
+func resetFetchTimes(results map[string]*provider.UsageData, servedAt map[string]time.Time, gate *provider.FailureGate) map[string]time.Time {
+	fetchAt := make(map[string]time.Time)
+	for name, data := range results {
+		if data == nil || (gate != nil && gate.InBackoff(name)) {
+			continue
+		}
+		served, fetched := servedAt[name]
+		var owed time.Time
+		for _, w := range data.Windows {
+			if w.ResetsAt.IsZero() {
+				continue
+			}
+			poll := w.ResetsAt.Add(resetPollDelay)
+			if fetched && !served.Before(poll) {
+				continue // a fetch that started at or after this poll time reads the window after its reset
+			}
+			if owed.IsZero() || poll.Before(owed) {
+				owed = poll
+			}
+		}
+		if owed.IsZero() {
+			continue
+		}
+		if fetched && served.Add(resetPollDelay).After(owed) {
+			owed = served.Add(resetPollDelay)
+		}
+		fetchAt[name] = owed
+	}
+	return fetchAt
+}
+
+// dueResetSources names the sources whose owed fetch (see resetFetchTimes) is no
+// later than now, so the reset poll fetches them now. The caller holds s.mu, which
+// guards gate.
+func dueResetSources(results map[string]*provider.UsageData, servedAt map[string]time.Time, gate *provider.FailureGate, now time.Time) map[string]bool {
+	due := make(map[string]bool)
+	for name, at := range resetFetchTimes(results, servedAt, gate) {
+		if !at.After(now) {
+			due[name] = true
+		}
+	}
+	return due
+}
+
+// resetPollAt returns when the reset poll should next run, and false when no fetch
+// is owed. An owed fetch that is already due reports now. The caller holds s.mu,
+// which guards gate.
+func resetPollAt(results map[string]*provider.UsageData, servedAt map[string]time.Time, gate *provider.FailureGate, now time.Time) (time.Time, bool) {
+	var next time.Time
+	ok := false
+	for _, at := range resetFetchTimes(results, servedAt, gate) {
+		if at.Before(now) {
+			at = now
+		}
+		if !ok || at.Before(next) {
+			next, ok = at, true
+		}
+	}
+	return next, ok
+}
+
+// scheduleResetPoll replaces the pending reset poll with the next one that is
+// needed. The caller holds r.mu. Each arm gets a new generation, so a timer that
+// fired before a later arm can tell it has been superseded.
+func (r *usageRefresher) scheduleResetPoll(results map[string]*provider.UsageData, now time.Time) {
+	if r.resetPoll != nil {
+		r.resetPoll.Stop()
+		r.resetPoll = nil
+	}
+	r.resetGen++
+	s.mu.Lock()
+	at, ok := resetPollAt(results, r.servedAt, s.failureGate, now)
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	gen := r.resetGen
+	r.resetPoll = time.AfterFunc(at.Sub(now), func() { r.fireResetPoll(gen) })
+}
+
+// fireResetPoll runs the reset poll armed as gen, after any refresh in progress
+// ends. A refresh that ran while the timer waited for the lock armed a newer poll,
+// so this timer's generation is stale and it does nothing. Whether a source is
+// still owed a fetch is decided from the fetch stamps, not from this timer.
+func (r *usageRefresher) fireResetPoll(gen uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if gen != r.resetGen {
+		return
+	}
+	r.resetPoll = nil
+	s.mu.Lock()
+	results := s.lastResults
+	now := refreshClock()
+	due := dueResetSources(results, r.servedAt, s.failureGate, now)
+	s.mu.Unlock()
+	if len(due) == 0 {
+		r.scheduleResetPoll(results, now)
+		return
+	}
+	r.run(false, due)
+}
+
+// run polls and redraws. The caller holds r.mu. A non-nil only limits the fetch
+// to those sources; the others keep their last readings.
+func (r *usageRefresher) run(force bool, only map[string]bool) {
 	r.reloadConfig()
 
 	// Refresh already runs off the tray event loop. Complete executable-path
@@ -1891,6 +2019,9 @@ func (r *usageRefresher) run(force bool) {
 	s.mu.Lock()
 	priorResults := resultsMatchingSourceRevisions(s.lastResults, s.lastSourceRevisions, currentRevisions)
 	toFetch, skipped := splitProvidersForRefresh(configured, s.failureGate, priorResults, force)
+	if only != nil {
+		toFetch, skipped = limitToDueSources(toFetch, skipped, priorResults, only)
+	}
 	priorRevisions := cloneSourceRevisions(s.lastSourceRevisions)
 	s.mu.Unlock()
 
@@ -1900,6 +2031,16 @@ func (r *usageRefresher) run(force bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Trackers stamp observations with the fetch start, the earliest a reading
+	// can have been taken, so they never place a reading newer than it is. The
+	// reset poll reads the same stamp, for the same reason.
+	fetchStart := refreshClock()
+	if r.servedAt == nil {
+		r.servedAt = make(map[string]time.Time, len(toFetch))
+	}
+	for _, p := range toFetch {
+		r.servedAt[provider.SourceKey(p)] = fetchStart
+	}
 	result := provider.FetchProvidersParallel(ctx, toFetch)
 	if cfg != nil && cfg.Settings.ShouldRecordUsageHistory() {
 		if dir, err := cache.Path("history"); err == nil {
@@ -1909,6 +2050,14 @@ func (r *usageRefresher) run(force bool) {
 		}
 	}
 
+	if len(skipped) > 0 {
+		names := make([]string, 0, len(skipped))
+		for name := range skipped {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		log.Printf("provider refresh kept last reading (in backoff or not due): %s", strings.Join(names, ", "))
+	}
 	// Merge in cached data for backed-off providers
 	for name, cached := range skipped {
 		result.Results[name] = cached
@@ -1931,7 +2080,9 @@ func (r *usageRefresher) run(force bool) {
 		}
 
 		if data.Error == "" && !data.IsExpired {
-			s.failureGate.RecordSuccess(name)
+			if failed := s.failureGate.RecordSuccess(name); failed > 0 {
+				log.Printf("provider refresh recovered: provider=%s after %d failed polls", name, failed)
+			}
 			continue
 		}
 		// Provider errored — keep showing last good windows, but label them
@@ -1959,9 +2110,9 @@ func (r *usageRefresher) run(force bool) {
 	s.mu.Unlock()
 
 	identities := sourceIdentities(configured, result.SourceRevisions)
-	maxGap := 2 * config.PollInterval(r.pollSeconds())
-	windowExhaustion.observeFetched(result.Results, skipped, identities, time.Now(), maxGap)
-	available := quotaRecovery.observe(result.Results, skipped, identities, time.Now(), maxGap)
+	maxGap := config.ReadingMaxAge(r.pollSeconds())
+	windowExhaustion.observeFetched(result.Results, skipped, identities, fetchStart, maxGap)
+	available := quotaRecovery.observe(result.Results, skipped, identities, fetchStart, maxGap)
 	_ = cache.Write(result)
 
 	// The feed is read after the usage cache is written: announcements
@@ -1979,7 +2130,7 @@ func (r *usageRefresher) run(force bool) {
 	s.feedReading = feed
 	s.mu.Unlock()
 
-	now := time.Now()
+	now := refreshClock()
 	s.mu.Lock()
 	s.lastResults = result.Results
 	s.lastSourceRevisions = result.SourceRevisions
@@ -1987,6 +2138,7 @@ func (r *usageRefresher) run(force bool) {
 	statuses := s.statuses // reuse last known statuses
 	s.mu.Unlock()
 
+	r.scheduleResetPoll(result.Results, now)
 	r.render(result.Results, statuses)
 	r.finished(now)
 }
@@ -2260,6 +2412,7 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 	s.mu.Unlock()
 	in := view.Inputs{
 		MaxReadingAge:      config.ReadingMaxAge(pollSeconds),
+		RetainedForecast:   view.RetainedForecastAge,
 		Results:            make(map[string]*provider.UsageData, len(shown)),
 		DisplayNames:       make(map[string]string, len(menus)),
 		SourceLabels:       make(map[string]string, len(menus)),
@@ -2679,6 +2832,24 @@ func splitProvidersForRefresh(providers []provider.Provider, gate *provider.Fail
 		toFetch = append(toFetch, p)
 	}
 	return toFetch, skipped
+}
+
+// limitToDueSources keeps only the due sources in the fetch. Each other source
+// with a last reading moves to skipped and keeps that reading, as a source in
+// backoff does. A source with no last reading is still fetched, since there is
+// nothing to keep.
+func limitToDueSources(toFetch []provider.Provider, skipped map[string]*provider.UsageData, lastResults map[string]*provider.UsageData, due map[string]bool) ([]provider.Provider, map[string]*provider.UsageData) {
+	fetch := make([]provider.Provider, 0, len(toFetch))
+	for _, p := range toFetch {
+		name := provider.SourceKey(p)
+		prev := lastResults[name]
+		if due[name] || prev == nil {
+			fetch = append(fetch, p)
+			continue
+		}
+		skipped[name] = prev.Clone()
+	}
+	return fetch, skipped
 }
 
 // newResetPeriod reports whether a window's reset time starts a new period.

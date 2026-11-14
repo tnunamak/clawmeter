@@ -8,7 +8,9 @@ import (
 )
 
 // Visible returns the announcement that bears on one Codex reading at now, or
-// nil. It uses the same evaluated window and age allowance as the display.
+// nil. It evaluates the window with the configured reading age alone, not the
+// retained-forecast horizon the display adds (view.Inputs.RetainedForecast), so
+// an announcement never rests on a reading older than that age.
 //
 // A window bears on the announcement when it is out now, or is projected to
 // run out before its own reset, and its own reset comes after the announced

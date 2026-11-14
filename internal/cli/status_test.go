@@ -106,17 +106,18 @@ func TestFormatPlainShowsBalanceNameWhenDisplayNameEmpty(t *testing.T) {
 }
 
 func TestNonForecastableFactsDoNotAffectCheckSeverity(t *testing.T) {
+	now := time.Now()
 	for _, data := range []*provider.UsageData{
-		{Balances: []provider.UsageBalance{{Name: "credits", Remaining: 0}}},
-		{Windows: []provider.UsageWindow{{Name: "daily", Utilization: 100}}},
+		{FetchedAt: now, Balances: []provider.UsageBalance{{Name: "credits", Remaining: 0}}},
+		{FetchedAt: now, Windows: []provider.UsageWindow{{Name: "daily", Utilization: 100}}},
 	} {
-		got := classifyProvider(&ProviderFormatter{Data: data})
+		got := summaryTierOf(&ProviderFormatter{Data: data})
 		want := 4
 		if len(data.Windows) > 0 {
 			want = 2
 		}
-		if got.tier != want {
-			t.Fatalf("classifyProvider(%+v) tier = %d, want %d", data, got.tier, want)
+		if got != want {
+			t.Fatalf("summaryTierOf(%+v) = %d, want %d", data, got, want)
 		}
 	}
 }
@@ -357,8 +358,8 @@ func TestFormatPlainStatesResetlessExtraUsageIsOutNow(t *testing.T) {
 	if strings.Contains(got, "reset unknown") || strings.Contains(got, "resets unknown") {
 		t.Fatalf("FormatPlain() = %q, should not present resetless usage as a warning", got)
 	}
-	if got := classifyProvider(&pf); got.tier != 2 {
-		t.Fatalf("classifyProvider() tier = %d, want exhausted tier 2", got.tier)
+	if got := summaryTierOf(&pf); got != 2 {
+		t.Fatalf("summary tier = %d, want exhausted tier 2", got)
 	}
 }
 
@@ -466,18 +467,24 @@ func TestStatusLineSummaryIsCompact(t *testing.T) {
 	}
 }
 
-func TestClassifyProvider(t *testing.T) {
+func TestSummaryTier(t *testing.T) {
 	now := time.Now()
+	freshData := func(windows ...provider.UsageWindow) *provider.UsageData {
+		return &provider.UsageData{FetchedAt: now, Windows: windows}
+	}
+	retainedData := func(windows ...provider.UsageWindow) *provider.UsageData {
+		d := &provider.UsageData{FetchedAt: now, Windows: windows}
+		d.MarkStale("cache expired")
+		return d
+	}
+	window := func(used float64, resetsIn time.Duration) provider.UsageWindow {
+		return provider.UsageWindow{Name: "5h", Utilization: used, ResetsAt: now.Add(resetsIn)}
+	}
 
-	// classifyProvider uses forecast.Project which calls time.Until
-	// internally, so there is microsecond drift. Use values that are
-	// clearly in one tier, not on boundaries.
 	tests := []struct {
-		name            string
-		pf              ProviderFormatter
-		wantTier        int
-		wantProjectedLo float64 // lower bound for maxProjectedPct (0 to skip check)
-		wantProjectedHi float64 // upper bound for maxProjectedPct (0 to skip check)
+		name     string
+		pf       ProviderFormatter
+		wantTier int
 	}{
 		{
 			name:     "passive nil data → tier 5 (unavailable)",
@@ -490,114 +497,62 @@ func TestClassifyProvider(t *testing.T) {
 			wantTier: 1,
 		},
 		{
-			name: "expired data → tier 0",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{IsExpired: true},
-			},
-			wantTier:        0,
-			wantProjectedLo: 100,
-			wantProjectedHi: 100,
+			name:     "expired data → tier 0",
+			pf:       ProviderFormatter{Name: "test", Data: &provider.UsageData{IsExpired: true}},
+			wantTier: 0,
 		},
 		{
-			name: "errored with no windows → tier 1",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{Error: "connection refused"},
-			},
+			name:     "errored with no windows → tier 1",
+			pf:       ProviderFormatter{Name: "test", Data: &provider.UsageData{Error: "connection refused"}},
 			wantTier: 1,
 		},
 		{
-			name: "stale windows → tier 3",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{
-					Stale:   true,
-					Warning: "usage unavailable",
-					Windows: []provider.UsageWindow{
-						// 10% with 4h remaining of 5h: elapsed=1h, rate=10/3600, projected=50
-						{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
-					},
-				},
-			},
-			wantTier:        3, // stale-but-readable data should be visible as a warning
-			wantProjectedLo: 45,
-			wantProjectedHi: 55,
+			// 10% with 4h remaining of 5h projects to about 50.
+			name:     "retained healthy window → tier 4 (healthy, not a warning)",
+			pf:       ProviderFormatter{Name: "test", Data: retainedData(window(10, 4*time.Hour))},
+			wantTier: 4,
 		},
 		{
-			name: "high projected → tier 2 (critical)",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{
-					Windows: []provider.UsageWindow{
-						// 90% with 1h remaining of 5h: elapsed=4h, rate=90/14400, projected=112.5
-						{Name: "5h", Utilization: 90, ResetsAt: now.Add(1 * time.Hour)},
-					},
-				},
-			},
-			wantTier:        2,
-			wantProjectedLo: 110,
-			wantProjectedHi: 115,
+			// 75% with 1h remaining of 5h projects to about 93.75.
+			name:     "retained window projected past 90 → tier 3 (warning)",
+			pf:       ProviderFormatter{Name: "test", Data: retainedData(window(75, time.Hour))},
+			wantTier: 3,
 		},
 		{
-			name: "moderate projected (~94%) → tier 3 (warning)",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{
-					Windows: []provider.UsageWindow{
-						// 75% with 1h remaining of 5h: elapsed=4h, rate=75/14400, projected=93.75
-						{Name: "5h", Utilization: 75, ResetsAt: now.Add(1 * time.Hour)},
-					},
-				},
-			},
-			wantTier:        3,
-			wantProjectedLo: 92,
-			wantProjectedHi: 95,
+			name:     "retained full window → tier 3 (warning, never critical)",
+			pf:       ProviderFormatter{Name: "test", Data: retainedData(window(100, 30*time.Minute))},
+			wantTier: 3,
 		},
 		{
-			name: "low projected (50%) → tier 4 (healthy)",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{
-					Windows: []provider.UsageWindow{
-						// 25% with 2.5h remaining of 5h: elapsed=2.5h, projected=50
-						{Name: "5h", Utilization: 25, ResetsAt: now.Add(150 * time.Minute)},
-					},
-				},
-			},
-			wantTier:        4,
-			wantProjectedLo: 49,
-			wantProjectedHi: 51,
+			// 90% with 1h remaining of 5h projects to about 112.5.
+			name:     "high projected → tier 2 (critical)",
+			pf:       ProviderFormatter{Name: "test", Data: freshData(window(90, time.Hour))},
+			wantTier: 2,
 		},
 		{
-			name: "multiple windows — worst window determines tier",
-			pf: ProviderFormatter{
-				Name: "test",
-				Data: &provider.UsageData{
-					Windows: []provider.UsageWindow{
-						// healthy window: 10% with 4h remaining → projected ~50
-						{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
-						// critical window: 95% with 30min remaining of 5h → projected ~105.6
-						{Name: "5h", Utilization: 95, ResetsAt: now.Add(30 * time.Minute)},
-					},
-				},
-			},
-			wantTier:        2,
-			wantProjectedLo: 105,
-			wantProjectedHi: 110,
+			// 75% with 1h remaining of 5h projects to about 93.75.
+			name:     "moderate projected (~94%) → tier 3 (warning)",
+			pf:       ProviderFormatter{Name: "test", Data: freshData(window(75, time.Hour))},
+			wantTier: 3,
+		},
+		{
+			// 25% with 2.5h remaining of 5h projects to 50.
+			name:     "low projected (50%) → tier 4 (healthy)",
+			pf:       ProviderFormatter{Name: "test", Data: freshData(window(25, 150*time.Minute))},
+			wantTier: 4,
+		},
+		{
+			// A healthy 10% window with 4h remaining, and a critical 95% window
+			// with 30 min remaining that projects to about 105.6.
+			name:     "multiple windows — worst window determines tier",
+			pf:       ProviderFormatter{Name: "test", Data: freshData(window(10, 4*time.Hour), window(95, 30*time.Minute))},
+			wantTier: 2,
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			u := classifyProvider(&tt.pf)
-			if u.tier != tt.wantTier {
-				t.Errorf("tier = %d, want %d (maxProjectedPct=%.2f)", u.tier, tt.wantTier, u.maxProjectedPct)
-			}
-			if tt.wantProjectedHi > 0 {
-				if u.maxProjectedPct < tt.wantProjectedLo || u.maxProjectedPct > tt.wantProjectedHi {
-					t.Errorf("maxProjectedPct = %.2f, want [%.0f, %.0f]", u.maxProjectedPct, tt.wantProjectedLo, tt.wantProjectedHi)
-				}
+			if got := summaryTierOf(&tt.pf); got != tt.wantTier {
+				t.Errorf("summary tier = %d, want %d", got, tt.wantTier)
 			}
 		})
 	}
@@ -605,104 +560,86 @@ func TestClassifyProvider(t *testing.T) {
 
 func TestSortProvidersByUrgency(t *testing.T) {
 	now := time.Now()
+	freshData := func(windows ...provider.UsageWindow) *provider.UsageData {
+		return &provider.UsageData{FetchedAt: now, Windows: windows}
+	}
+	window := func(used float64, resetsIn time.Duration) provider.UsageWindow {
+		return provider.UsageWindow{Name: "5h", Utilization: used, ResetsAt: now.Add(resetsIn)}
+	}
 
 	t.Run("sorts by tier: expired, errored, critical, warning, healthy", func(t *testing.T) {
-		providers := []ProviderFormatter{
-			{Name: "healthy", Display: "Healthy", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// 10% with 4h remaining → projected ~50 → tier 4
-					{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
-				},
-			}},
+		out := &MultiProviderOutput{Providers: []ProviderFormatter{
+			// 10% with 4h remaining → projected ~50 → tier 4
+			{Name: "healthy", Display: "Healthy", Data: freshData(window(10, 4*time.Hour))},
 			{Name: "expired", Display: "Expired", Data: &provider.UsageData{IsExpired: true}},
-			{Name: "critical", Display: "Critical", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// 90% with 1h remaining → projected ~112.5 → tier 2
-					{Name: "5h", Utilization: 90, ResetsAt: now.Add(1 * time.Hour)},
-				},
-			}},
+			// 90% with 1h remaining → projected ~112.5 → tier 2
+			{Name: "critical", Display: "Critical", Data: freshData(window(90, time.Hour))},
 			{Name: "errored", Display: "Errored", Data: &provider.UsageData{Error: "fail"}},
-			{Name: "warning", Display: "Warning", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// 75% with 1h remaining → projected ~93.75 → tier 3
-					{Name: "5h", Utilization: 75, ResetsAt: now.Add(1 * time.Hour)},
-				},
-			}},
-		}
+			// 75% with 1h remaining → projected ~93.75 → tier 3
+			{Name: "warning", Display: "Warning", Data: freshData(window(75, time.Hour))},
+		}}
 
-		sortProvidersByUrgency(providers)
+		sortProvidersByUrgency(out)
 
 		wantOrder := []string{"expired", "errored", "critical", "warning", "healthy"}
 		for i, want := range wantOrder {
-			if providers[i].Name != want {
-				t.Errorf("position %d: got %q, want %q", i, providers[i].Name, want)
+			if out.Providers[i].Name != want {
+				t.Errorf("position %d: got %q, want %q", i, out.Providers[i].Name, want)
 			}
 		}
 	})
 
 	t.Run("within same tier, higher projected usage first", func(t *testing.T) {
-		providers := []ProviderFormatter{
-			{Name: "low", Display: "Low", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// 10% with 4h remaining → projected ~50 → tier 4
-					{Name: "5h", Utilization: 10, ResetsAt: now.Add(4 * time.Hour)},
-				},
-			}},
-			{Name: "high", Display: "High", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// 40% with 2h remaining → projected ~66.7 → tier 4
-					{Name: "5h", Utilization: 40, ResetsAt: now.Add(2 * time.Hour)},
-				},
-			}},
-		}
+		out := &MultiProviderOutput{Providers: []ProviderFormatter{
+			// 10% with 4h remaining → projected ~50 → tier 4
+			{Name: "low", Display: "Low", Data: freshData(window(10, 4*time.Hour))},
+			// 40% with 2h remaining → projected ~66.7 → tier 4
+			{Name: "high", Display: "High", Data: freshData(window(40, 2*time.Hour))},
+		}}
 
-		sortProvidersByUrgency(providers)
+		sortProvidersByUrgency(out)
 
-		if providers[0].Name != "high" {
-			t.Errorf("expected 'high' first, got %q", providers[0].Name)
+		if out.Providers[0].Name != "high" {
+			t.Errorf("expected 'high' first, got %q", out.Providers[0].Name)
 		}
-		if providers[1].Name != "low" {
-			t.Errorf("expected 'low' second, got %q", providers[1].Name)
+		if out.Providers[1].Name != "low" {
+			t.Errorf("expected 'low' second, got %q", out.Providers[1].Name)
 		}
 	})
 
 	t.Run("within critical tier, sooner runout beats higher projected usage", func(t *testing.T) {
-		providers := []ProviderFormatter{
-			{Name: "codex", Display: "Codex", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// Projected ~115%, but not blocked until about 3d12h from now.
-					{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
-				},
-			}},
-			{Name: "claude", Display: "Claude", Data: &provider.UsageData{
-				Windows: []provider.UsageWindow{
-					// Projected ~106%, but blocked in about 1h35m from now.
-					{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
-				},
-			}},
-		}
+		out := &MultiProviderOutput{Providers: []ProviderFormatter{
+			{Name: "codex", Display: "Codex", Data: freshData(
+				// Projected ~115%, but not blocked until about 3d12h from now.
+				provider.UsageWindow{Name: "7d", Utilization: 42.3, ResetsAt: now.Add(4*24*time.Hour + 10*time.Hour + 29*time.Minute)},
+			)},
+			{Name: "claude", Display: "Claude", Data: freshData(
+				// Projected ~106%, but blocked in about 1h35m from now.
+				provider.UsageWindow{Name: "7d", Utilization: 99.0, ResetsAt: now.Add(10*time.Hour + 58*time.Minute)},
+			)},
+		}}
 
-		sortProvidersByUrgency(providers)
+		sortProvidersByUrgency(out)
 
-		if providers[0].Name != "claude" {
-			t.Fatalf("first provider = %q, want claude because it runs out sooner", providers[0].Name)
+		if out.Providers[0].Name != "claude" {
+			t.Fatalf("first provider = %q, want claude because it runs out sooner", out.Providers[0].Name)
 		}
 	})
 
 	t.Run("stable sort: same tier and projected pct maintain relative order", func(t *testing.T) {
-		// Two nil-data providers (both tier 1, both projected 0)
-		providers := []ProviderFormatter{
+		// Two nil-data providers (both tier 5, both with no window)
+		out := &MultiProviderOutput{Providers: []ProviderFormatter{
 			{Name: "alpha", Display: "Alpha", Data: nil},
 			{Name: "beta", Display: "Beta", Data: nil},
-		}
+		}}
 
-		sortProvidersByUrgency(providers)
+		sortProvidersByUrgency(out)
 
-		if providers[0].Name != "alpha" {
-			t.Errorf("expected 'alpha' first (stable), got %q", providers[0].Name)
+		if out.Providers[0].Name != "alpha" {
+			t.Errorf("expected 'alpha' first (stable), got %q", out.Providers[0].Name)
 		}
-		if providers[1].Name != "beta" {
-			t.Errorf("expected 'beta' second (stable), got %q", providers[1].Name)
+		if out.Providers[1].Name != "beta" {
+			t.Errorf("expected 'beta' second (stable), got %q", out.Providers[1].Name)
 		}
 	})
 }
@@ -913,7 +850,7 @@ func TestBuildOutputFromCacheRejectsRotatedSourceCredential(t *testing.T) {
 		}},
 		SourceRevisions: map[string]string{"claude:work": "account-a"},
 	}
-	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	if len(output.Providers) != 1 || output.Providers[0].Data != nil {
 		t.Fatalf("rotated source reused cached account data: %#v", output.Providers)
 	}
@@ -997,7 +934,7 @@ func TestBuildOutputKeepsBrowserResetUnderClaudeWhenUsageIsUnavailable(t *testin
 			"claude_web": provider.SourceRevision(sourcedClaudeWebCLIProvider{id: "default"}),
 		},
 	}
-	cached := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	cached := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	if len(cached.Providers) != 1 || cached.Providers[0].Name != "claude" || cached.Providers[0].Data.ResetCredits == nil {
 		t.Fatalf("cached reset-only Claude row = %#v, want one row under Claude", cached.Providers)
 	}
@@ -1027,7 +964,7 @@ func TestBuildOutputFromCacheDropsResetSnapshotWhenClaudeSourceChanged(t *testin
 		},
 	}
 
-	output := buildOutputFromCache(registry, config.DefaultConfig(), entry)
+	output := buildOutputFromCache(registry, config.DefaultConfig(), entry, time.Now())
 	var claude *ProviderFormatter
 	for i := range output.Providers {
 		switch output.Providers[i].Name {
@@ -1043,13 +980,13 @@ func TestBuildOutputFromCacheDropsResetSnapshotWhenClaudeSourceChanged(t *testin
 	}
 }
 
-func TestClassifyProviderTreatsFailedUsageWithResetSnapshotAsError(t *testing.T) {
+func TestSummaryTierTreatsFailedUsageWithResetSnapshotAsError(t *testing.T) {
 	pf := ProviderFormatter{Name: "claude", ExplicitlyEnabled: true, Data: &provider.UsageData{
 		Provider: "claude", Error: "HTTP 429",
 		ResetCredits: &provider.UsageResetCredits{AvailableCount: 1, Snapshot: true, EarliestExpiresAt: time.Now().Add(24 * time.Hour)},
 	}}
-	if got := classifyProvider(&pf).tier; got != 1 {
-		t.Fatalf("tier = %d, want 1 (error) despite attached reset snapshot", got)
+	if got := summaryTierOf(&pf); got != 1 {
+		t.Fatalf("summary tier = %d, want 1 (error) despite attached reset snapshot", got)
 	}
 }
 

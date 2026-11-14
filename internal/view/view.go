@@ -21,6 +21,12 @@ import (
 // It matches provider.UsageResetCredits.Summary.
 const snapshotStale = 5 * time.Minute
 
+// RetainedForecastAge is how old a retained usage reading may be and still
+// forecast, for a surface that passes it as Inputs.RetainedForecast. Past the
+// poll allowance a reading is stale, but its forecast is still the best estimate
+// there is; the stale label and the reading time say how old it is.
+const RetainedForecastAge = time.Hour
+
 // Snapshot is the state of every account at one time.
 type Snapshot struct {
 	At time.Time
@@ -111,11 +117,21 @@ const (
 	ForecastKnown ForecastState = "known"
 	// ForecastWarming means too little of the window has elapsed to project.
 	ForecastWarming ForecastState = "warming"
-	// ForecastStale means the reading is too old or unusable, or the reset has passed.
+	// ForecastStale means the reading is too old to forecast, or unusable.
 	ForecastStale ForecastState = "stale"
+	// ForecastPending means the window's reset has passed, so the reading describes
+	// a window that has ended. Its forecast waits for a reading that reports the
+	// next reset.
+	ForecastPending ForecastState = "pending"
 	// ForecastNone means the window has no reset, or no known length.
 	ForecastNone ForecastState = "none"
 )
+
+// Lapsed reports whether the forecast is stale or pending. Either way the
+// window's usage is not current, so no projection or run-out reads as live.
+func (s ForecastState) Lapsed() bool {
+	return s == ForecastStale || s == ForecastPending
+}
 
 // Forecast is the projected use at reset. Pct is meaningful only when known.
 type Forecast struct {
@@ -185,10 +201,16 @@ type Target struct {
 
 // Inputs are everything Build reads. Maps may be nil.
 type Inputs struct {
-	// MaxReadingAge bounds all usage readings and current credit-grant balances.
+	// MaxReadingAge bounds fresh usage readings and current credit-grant balances.
 	// Zero permits successful usage only at its observation instant and disables
 	// retained forecasts; credit is also current only at its observation instant.
 	MaxReadingAge time.Duration
+	// RetainedForecast bounds how old a retained reading may be and still forecast:
+	// one stale from a failed poll, or aged past MaxReadingAge. Zero keeps retained
+	// forecasts within MaxReadingAge. Surfaces that show forecasts pass
+	// RetainedForecastAge; a decision that must rest on a fresh reading, such as a
+	// reset announcement, leaves it zero.
+	RetainedForecast time.Duration
 	// Results maps a source key to its latest provider data. A nil value is
 	// a source with no data.
 	Results map[string]*provider.UsageData
@@ -290,14 +312,14 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 			account.Reading.Reason = "reading too old"
 		}
 	}
-	usable := validAge && (account.Reading.State == ReadingFresh || account.Reading.State == ReadingStale && in.MaxReadingAge > 0)
+	usable := forecastable(in, account.Reading.State, data.FetchedAt, age)
 
 	for _, grant := range data.CreditGrants {
 		account.CreditGrants = append(account.CreditGrants, buildCreditGrant(grant, account.Reading, at, in.MaxReadingAge))
 	}
 	account.Windows = make([]Window, 0, len(data.Windows))
 	for _, w := range data.Windows {
-		account.Windows = append(account.Windows, buildWindow(in, key, w, usable, data.FetchedAt, at))
+		account.Windows = append(account.Windows, buildWindow(in, key, w, usable, account.Reading.State == ReadingFresh, data.FetchedAt, at))
 	}
 	showAll := allIdle(data.Windows, at)
 	for i, w := range data.Windows {
@@ -389,6 +411,28 @@ func reading(data *provider.UsageData) Reading {
 	return r
 }
 
+// forecastable reports whether a reading may forecast at its age. A fresh
+// reading forecasts within MaxReadingAge. A retained reading, stale from a failed
+// poll or from age, forecasts within RetainedForecast, or within MaxReadingAge
+// when RetainedForecast is zero, as Inputs documents. Errors and expired
+// credentials never forecast.
+func forecastable(in Inputs, state ReadingState, observedAt time.Time, age time.Duration) bool {
+	if observedAt.IsZero() || age < 0 {
+		return false
+	}
+	switch state {
+	case ReadingFresh:
+		return age <= in.MaxReadingAge
+	case ReadingStale:
+		limit := in.RetainedForecast
+		if limit == 0 {
+			limit = in.MaxReadingAge
+		}
+		return in.MaxReadingAge > 0 && age <= limit
+	}
+	return false
+}
+
 func allIdle(windows []provider.UsageWindow, at time.Time) bool {
 	for _, w := range windows {
 		if !meter.IdleAt(w, at) {
@@ -398,7 +442,7 @@ func allIdle(windows []provider.UsageWindow, at time.Time) bool {
 	return true
 }
 
-func buildWindow(in Inputs, key string, w provider.UsageWindow, usable bool, projectionAt, at time.Time) Window {
+func buildWindow(in Inputs, key string, w provider.UsageWindow, usable, fresh bool, projectionAt, at time.Time) Window {
 	out := Window{
 		Name:      w.Name,
 		Code:      meter.Code(w),
@@ -421,12 +465,14 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, usable bool, pro
 	}
 	var proj forecast.Projection
 	switch {
+	case !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
+		// The window's reset has passed, so the reading describes a window that has
+		// ended, however fresh the reading is.
+		out.Forecast.State = ForecastPending
 	case !usable:
 		out.Forecast.State = ForecastStale
 	case w.ResetsAt.IsZero():
 		out.Forecast.State = ForecastNone
-	case !w.ResetsAt.After(at):
-		out.Forecast.State = ForecastStale
 	case length <= 0:
 		out.Forecast.State = ForecastNone
 	default:
@@ -447,6 +493,11 @@ func buildWindow(in Inputs, key string, w provider.UsageWindow, usable bool, pro
 	switch {
 	case !usable, !w.ResetsAt.IsZero() && !w.ResetsAt.After(at):
 		// A reading from before the window's reset says nothing about now.
+		out.Exhaustion.State = ExhaustionUnknown
+	case !fresh && (w.ResetsAt.IsZero() || w.Utilization >= 100):
+		// A retained reading cannot say that a window is at its limit now. Some
+		// windows are rolling, and their usage falls before the reset, so a stale
+		// 100% may already be below it.
 		out.Exhaustion.State = ExhaustionUnknown
 	case w.Utilization >= 100:
 		out.Exhaustion.State = ExhaustionOut
