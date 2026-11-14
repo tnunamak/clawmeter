@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"net/http"
 	"os"
@@ -61,7 +62,11 @@ func isolateBackoff(t *testing.T) *time.Time {
 	clock := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 	backoffDir = func() (string, error) { return dir, nil }
 	backoffNow = func() time.Time { return clock }
-	t.Cleanup(func() { backoffDir, backoffNow = oldDir, oldNow })
+	resetUnwritten()
+	t.Cleanup(func() {
+		backoffDir, backoffNow = oldDir, oldNow
+		resetUnwritten()
+	})
 	return &clock
 }
 
@@ -262,7 +267,9 @@ func TestPartialReadingWithRateLimitIsKeptAndBacksOff(t *testing.T) {
 // Overlapping writers for one source must not drop each other's cooldown. Each
 // recordRateLimit reads the stored state, adds its own cooldown and writes it
 // back. Without a lock around that read-modify-write, a writer that read before
-// the longest cooldown was stored would overwrite it with a shorter one.
+// the longest cooldown was stored would overwrite it with a shorter one. This is a
+// stress test: it can pass with a race still present. The busy-lock and ID tests at
+// the end of this file are the deterministic checks.
 func TestOverlappingRecordsKeepTheLongestCooldown(t *testing.T) {
 	clock := isolateBackoff(t)
 	const longest = 3 * time.Hour
@@ -450,5 +457,104 @@ func TestSuccessLeavesAStateWithoutAnIDAlone(t *testing.T) {
 	clearBackoff(key, before)
 	if _, ok := readBackoff(key); !ok {
 		t.Fatal("a success cleared a state that has no ID")
+	}
+}
+
+// shortBackoffLockWait makes a busy lock fail fast. The tests that use it hold the lock
+// for the whole call, so the outcome does not depend on the wait.
+func shortBackoffLockWait(t *testing.T) {
+	t.Helper()
+	old := backoffLockWait
+	backoffLockWait = 20 * time.Millisecond
+	t.Cleanup(func() { backoffLockWait = old })
+}
+
+// resetUnwritten empties the cooldowns held in memory. They are keyed by source, not by
+// directory, so a test must not inherit another test's.
+func resetUnwritten() {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	unwritten.byKey = map[string]backoffState{}
+}
+
+// While another process holds the backoff lock, a 429 does not reach the file. This
+// process still skips the source until the cooldown ends.
+func TestBusyLockLeavesTheFileAloneAndStillSkipsTheSource(t *testing.T) {
+	clock := isolateBackoff(t)
+	shortBackoffLockWait(t)
+	p := &limitedProvider{name: "claude", id: "work", err: &RateLimitError{RetryAfter: 72 * time.Hour}}
+	path, err := backoffPath(backoffKey(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := holdBackoffLock(t)
+	fetchExpectingCalls(t, p, 1, "429 while the lock is busy")
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the cooldown reached the file while the lock was busy (stat: %v)", err)
+	}
+	*clock = clock.Add(time.Hour)
+	fetchExpectingCalls(t, p, 1, "an hour into a 72-hour cooldown, lock still busy")
+	release()
+}
+
+// A cooldown held while the lock was busy reaches the file on the next read that holds
+// the lock, and is no longer held in memory after that.
+func TestBusyLockCooldownIsWrittenByTheNextLockedRead(t *testing.T) {
+	isolateBackoff(t)
+	shortBackoffLockWait(t)
+	key := "claude:work"
+	release := holdBackoffLock(t)
+	until := recordRateLimit(key, 72*time.Hour)
+	release()
+	if state, ok := readBackoff(key); !ok || !state.Until.Equal(until) {
+		t.Fatalf("locked read = %#v (found %v), want the cooldown ending %v", state, ok, until)
+	}
+	if stored, ok := loadBackoff(key); !ok || !stored.Until.Equal(until) {
+		t.Fatalf("the file holds %#v (found %v) after the locked read, want the cooldown", stored, ok)
+	}
+	if _, held := peekUnwritten(key); held {
+		t.Fatal("the cooldown is still held in memory after the file holds it")
+	}
+}
+
+// A success drops a cooldown held in memory only when it has the cooldown's ID. A 429
+// that the success did not see stays in force.
+func TestBusyLockSuccessDropsOnlyTheCooldownItsRequestSaw(t *testing.T) {
+	isolateBackoff(t)
+	shortBackoffLockWait(t)
+	key := "claude:work"
+	release := holdBackoffLock(t)
+	recordRateLimit(key, 72*time.Hour)
+	held, ok := peekUnwritten(key)
+	if !ok {
+		t.Fatal("the busy-lock 429 was not held in memory")
+	}
+	clearBackoff(key, backoffState{ID: held.ID + 1})
+	if _, ok := peekUnwritten(key); !ok {
+		t.Fatal("a success dropped a cooldown that its request did not see")
+	}
+	clearBackoff(key, backoffState{ID: held.ID})
+	if _, ok := peekUnwritten(key); ok {
+		t.Fatal("a success that saw the held cooldown did not drop it")
+	}
+	release()
+}
+
+// A 429 that lands while a request is in flight, and is held because the lock is busy,
+// survives that request's success once the lock is free. The success clears only the
+// cooldown its request read when it was sent.
+func TestHeldCooldownFromAnInFlightRequestSurvivesItsSuccess(t *testing.T) {
+	clock := isolateBackoff(t)
+	shortBackoffLockWait(t)
+	key := "claude:work"
+	recordRateLimit(key, 0)
+	*clock = clock.Add(time.Hour) // the request is sent once the 5-minute cooldown has ended
+	before, _ := readBackoff(key)
+	release := holdBackoffLock(t)
+	want := recordRateLimit(key, 72*time.Hour) // another request's 429, while ours is in flight
+	release()
+	clearBackoff(key, before)
+	if state, ok := readBackoff(key); !ok || !state.Until.Equal(want) {
+		t.Fatalf("after the success the cooldown ends %v (found %v), want %v", state.Until, ok, want)
 	}
 }

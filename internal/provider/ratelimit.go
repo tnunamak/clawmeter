@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tnunamak/clawmeter/internal/filelock"
@@ -60,9 +61,9 @@ func parseRetryAfter(value string) time.Duration {
 // floor of 5 minutes, doubling per consecutive 429 up to 1 hour. The floor equals
 // the default poll interval, so after a 429 the next scheduled poll is usually
 // skipped. A Retry-After from the server is the server's own cooldown, so it wins
-// over the local cap and is honored in full. A monthly quota can send days, and a
-// retry before its reset is refused again. The state lives on disk because the
-// CLI and the tray are separate processes.
+// over the local cap and is honored in full, up to the largest time.Duration (about
+// 292 years). A monthly quota can send days, and a retry before its reset is refused
+// again. The state lives on disk because the CLI and the tray are separate processes.
 const (
 	backoffFloor = 5 * time.Minute
 	backoffCap   = time.Hour
@@ -179,8 +180,71 @@ type backoffState struct {
 	ID       uint64    `json:"id"`
 }
 
-// backoffPath gives each source and credential route its own state file. Every
-// read and write of these files holds the one backoff lock (see lockBackoff).
+// mergeBackoff combines two states for one source. It keeps the later end time, with
+// the ID of the 429 that set it, and the larger failure count, so a merge never
+// shortens a cooldown or restarts the doubling.
+func mergeBackoff(a, b backoffState) backoffState {
+	if b.Until.After(a.Until) {
+		a.Until, a.ID = b.Until, b.ID
+	}
+	a.Failures = max(a.Failures, b.Failures)
+	return a
+}
+
+// unwritten holds, by key, the cooldowns this process recorded while it could not take
+// the backoff lock. Writing them without the lock could drop a longer cooldown that
+// another process had just stored, so they stay in memory. The process still honors
+// them, and the next read or record that holds the lock writes them. A cooldown leaves
+// memory when the file holds it, or when a success clears it.
+var unwritten = struct {
+	sync.Mutex
+	byKey map[string]backoffState
+}{byKey: map[string]backoffState{}}
+
+// keepUnwritten holds state for key, merged with any cooldown already held, so a
+// concurrent update cannot replace a longer cooldown with a shorter one.
+func keepUnwritten(key string, state backoffState) {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	if held, ok := unwritten.byKey[key]; ok {
+		state = mergeBackoff(held, state)
+	}
+	unwritten.byKey[key] = state
+}
+
+// peekUnwritten returns the cooldown held for key, if any, and keeps holding it.
+func peekUnwritten(key string) (backoffState, bool) {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	state, ok := unwritten.byKey[key]
+	return state, ok
+}
+
+// takeUnwritten returns the cooldown held for key, if any, and releases it. Call it only
+// while holding the lock, and merge the result into the state the caller stores or
+// removes.
+func takeUnwritten(key string) (backoffState, bool) {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	state, ok := unwritten.byKey[key]
+	delete(unwritten.byKey, key)
+	return state, ok
+}
+
+// dropUnwrittenWithID releases the cooldown held for key only if it has this ID. A
+// success calls it without the lock, so it cannot touch the file. A held cooldown that
+// the success did not see stays in force.
+func dropUnwrittenWithID(key string, id uint64) {
+	unwritten.Lock()
+	defer unwritten.Unlock()
+	if state, ok := unwritten.byKey[key]; ok && state.ID == id {
+		delete(unwritten.byKey, key)
+	}
+}
+
+// backoffPath gives each source and credential route its own state file. Writes hold
+// the one backoff lock (see lockBackoff). Reads hold it too, except when it cannot be
+// taken (see readBackoff).
 func backoffPath(key string) (string, error) {
 	dir, err := backoffDir()
 	if err != nil {
@@ -189,17 +253,33 @@ func backoffPath(key string) (string, error) {
 	return filepath.Join(dir, fmt.Sprintf("%x.json", sha256.Sum256([]byte(key)))), nil
 }
 
-// readBackoff returns the stored state for key, and whether there is one. It holds
-// the backoff lock, so a read never overlaps a writer's rename.
+// readBackoff returns the cooldown in force for key, and whether there is one. It takes
+// the backoff lock so a read does not overlap a writer's rename, which Windows can
+// refuse while the file is open. With the lock, it also writes any unwritten cooldown
+// this process holds. Without it, the file is only read, and a rename in progress can
+// make the read miss the stored cooldown.
 func readBackoff(key string) (backoffState, bool) {
-	unlock, _ := lockBackoff()
+	unlock, locked := lockBackoff()
 	defer unlock()
-	return loadBackoff(key)
+	state, ok := loadBackoff(key)
+	if locked {
+		if held, had := takeUnwritten(key); had {
+			state, ok = mergeBackoff(state, held), true
+			if !writeBackoff(key, state) {
+				keepUnwritten(key, state)
+			}
+		}
+		return state, ok
+	}
+	if held, had := peekUnwritten(key); had {
+		return mergeBackoff(state, held), true
+	}
+	return state, ok
 }
 
-// loadBackoff reads the stored state without taking the lock. Call it only while
-// holding the lock. The lock is not reentrant, so calling readBackoff inside it
-// would wait out backoffLockWait and then read without the lock.
+// loadBackoff reads the stored state without taking the lock. Code that already holds
+// the lock uses it. The lock is not reentrant, so readBackoff inside the lock would wait
+// out backoffLockWait and then read without it.
 func loadBackoff(key string) (backoffState, bool) {
 	var state backoffState
 	path, err := backoffPath(key)
@@ -213,30 +293,33 @@ func loadBackoff(key string) (backoffState, bool) {
 	return state, true
 }
 
-func writeBackoff(key string, state backoffState) {
+// writeBackoff replaces the stored state for key, and reports whether it did.
+func writeBackoff(key string, state backoffState) bool {
 	path, err := backoffPath(key)
 	if err != nil {
-		return
+		return false
 	}
 	data, err := json.Marshal(state)
 	if err != nil || os.MkdirAll(filepath.Dir(path), 0o755) != nil {
-		return
+		return false
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".backoff-*")
 	if err != nil {
-		return
+		return false
 	}
 	_, werr := tmp.Write(data)
 	cerr := tmp.Close()
 	if werr != nil || cerr != nil || os.Rename(tmp.Name(), path) != nil {
 		_ = os.Remove(tmp.Name())
+		return false
 	}
+	return true
 }
 
 // backoffLockWait bounds how long a read or write waits for the backoff lock. The
-// holder keeps it for one small file read and write, so a longer wait means a
-// stalled disk or a suspended process.
-const backoffLockWait = 2 * time.Second
+// holder keeps it for one small file read and write, so a longer wait means a stalled
+// disk or a suspended process. Tests shorten it.
+var backoffLockWait = 2 * time.Second
 
 // lockBackoff takes the backoff lock, one lock file shared by all sources. It orders
 // reads and read-modify-writes of backoff state across processes, because the CLI
@@ -255,14 +338,22 @@ func lockBackoff() (unlock func(), ok bool) {
 	return release, true
 }
 
-// recordRateLimit starts or extends the backoff after a 429 and returns when
-// fetching may resume. The read, the new cooldown and the write happen under the
-// backoff lock, so an overlapping writer's longer cooldown is not overwritten. If
-// no lock can be taken, the write still happens, as it did before the lock existed.
+// recordRateLimit starts or extends the backoff after a 429 and returns when fetching
+// may resume. With the lock, the read, the new cooldown and the write happen together,
+// so an overlapping writer's longer cooldown is not overwritten. Without it, the
+// cooldown is kept in memory, and the next read or record that holds the lock writes
+// it. Nothing is written without the lock.
 func recordRateLimit(key string, retryAfter time.Duration) time.Time {
-	unlock, _ := lockBackoff()
+	unlock, locked := lockBackoff()
 	defer unlock()
 	state, _ := loadBackoff(key)
+	if locked {
+		held, _ := takeUnwritten(key)
+		state = mergeBackoff(state, held)
+	} else {
+		held, _ := peekUnwritten(key)
+		state = mergeBackoff(state, held)
+	}
 	state.Failures++
 	state.ID = rand.Uint64()
 	delay := backoffFloor
@@ -273,31 +364,39 @@ func recordRateLimit(key string, retryAfter time.Duration) time.Time {
 	if until := backoffNow().Add(delay); until.After(state.Until) {
 		state.Until = until
 	}
-	writeBackoff(key, state)
+	if !locked || !writeBackoff(key, state) {
+		keepUnwritten(key, state)
+	}
 	return state.Until
 }
 
-// clearBackoff ends a backoff after a clean reading, but only the backoff that was
-// in effect when the request was sent. A 429 recorded while the request was in
-// flight is newer, and its cooldown still applies after this success, which shows
-// only that the request was answered. A zero ID means the request saw no state, or
-// saw a state written by a build without IDs. Such a state cannot be matched to this
-// request, so a success leaves it alone. If the lock cannot be taken, nothing is
-// cleared, and a later clean reading tries again.
+// clearBackoff ends a backoff after a clean reading, but only the backoff that was in
+// effect when the request was sent. A 429 recorded while the request was in flight is
+// newer, and its cooldown still applies after this success, which shows only that the
+// request was answered. A zero ID means the request saw no state, or saw a state written
+// by a build without IDs. Such a state cannot be matched to this request, so a success
+// leaves it alone. Without the lock, the file is not touched, and only a held cooldown
+// with the same ID is dropped.
 func clearBackoff(key string, before backoffState) {
 	if before.ID == 0 {
 		return
 	}
-	unlock, ok := lockBackoff()
+	unlock, locked := lockBackoff()
 	defer unlock()
-	if !ok {
+	if !locked {
+		dropUnwrittenWithID(key, before.ID)
 		return
 	}
-	now, ok := loadBackoff(key)
-	if !ok || now.ID != before.ID {
+	state, _ := loadBackoff(key)
+	held, hadHeld := takeUnwritten(key)
+	state = mergeBackoff(state, held)
+	if state.ID == before.ID {
+		if path, err := backoffPath(key); err == nil {
+			_ = os.Remove(path)
+		}
 		return
 	}
-	if path, err := backoffPath(key); err == nil {
-		_ = os.Remove(path)
+	if hadHeld && !writeBackoff(key, state) {
+		keepUnwritten(key, state)
 	}
 }
