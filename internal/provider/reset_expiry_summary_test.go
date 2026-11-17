@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata"
 )
 
 func TestResetExpirySummaryShowsConsecutiveDeadlines(t *testing.T) {
