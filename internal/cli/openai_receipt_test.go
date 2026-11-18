@@ -24,6 +24,8 @@ import (
 func TestOpenAIReceiptJourney(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", base)
+	// No Codex login: this journey is the extension's, and tests stay offline.
+	t.Setenv("CODEX_HOME", t.TempDir())
 	if runtime.GOOS == "windows" {
 		t.Setenv("LocalAppData", base)
 	}

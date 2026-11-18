@@ -2879,7 +2879,7 @@ func nextAPICreditDeadline(results map[string]*provider.UsageData, now time.Time
 			}
 		}
 		for _, benefit := range data.CreditBenefits {
-			for _, deadline := range []time.Time{benefit.ObservedAt.Add(5 * time.Minute), benefit.LinkObservedAt.Add(5 * time.Minute), benefit.ExpiresAt} {
+			for _, deadline := range []time.Time{benefit.CurrentUntil(benefit.ObservedAt), benefit.CurrentUntil(benefit.LinkObservedAt), benefit.ExpiresAt} {
 				if deadline.After(now) && (earliest.IsZero() || deadline.Before(earliest)) {
 					earliest = deadline
 				}

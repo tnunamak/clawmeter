@@ -102,3 +102,37 @@ func TestCreditBenefitSummaryIncludesExpiry(t *testing.T) {
 		t.Fatal("an offer expiring tomorrow reads the same as one expiring in months")
 	}
 }
+
+func TestCreditBenefitPolledReadingUsesItsOwnHorizon(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	claim, period := int64(20000), int64(20000)
+	b := UsageCreditBenefit{Eligibility: "eligible", LinkState: "unlinked", Currency: "USD", Claimable: &claim, PeriodCredit: &period,
+		Cadence: "monthly", ObservedAt: now, LinkObservedAt: now, ExpiresAt: now.Add(24 * time.Hour), FreshUntil: now.Add(11 * time.Minute)}
+	if b.State(now.Add(10*time.Minute)) != "claimable" {
+		t.Fatal("polled offer went stale before its reading age")
+	}
+	if b.State(now.Add(11*time.Minute)) != "stale" || b.CurrentUntil(now) != now.Add(11*time.Minute) {
+		t.Fatal("polled offer outlived its reading age")
+	}
+	b.LinkState = "linked"
+	if b.State(now.Add(10*time.Minute)) != "linked" || b.State(now.Add(11*time.Minute)) != "unknown" {
+		t.Fatal("polled link did not age with its reading")
+	}
+	b.FreshUntil = time.Time{}
+	if b.CurrentUntil(now) != now.Add(5*time.Minute) || b.State(now.Add(6*time.Minute)) != "unknown" {
+		t.Fatal("browser snapshot lost its five-minute rule")
+	}
+}
+
+func TestCreditBenefitAgedIneligibilityStaysQuiet(t *testing.T) {
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	b := UsageCreditBenefit{Eligibility: "ineligible", LinkState: "unlinked", ObservedAt: now}
+	later := now.Add(time.Hour)
+	if b.State(later) != "stale" || b.Summary(later) != "" || b.ActionURL(later) != "" {
+		t.Fatal("an old refusal asked the user to check the benefit")
+	}
+	b.Eligibility = "eligible"
+	if b.Summary(later) != "Check API credit benefit…" || b.ActionURL(later) != OpenAIAPIBillingURL {
+		t.Fatal("an aged offer lost its check action")
+	}
+}
