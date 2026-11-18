@@ -21,6 +21,22 @@ type UsageCreditBenefit struct {
 	Cadence        string    `json:"cadence,omitempty"`
 	ExpiresAt      time.Time `json:"expires_at,omitzero"`
 	ObservedAt     time.Time `json:"observed_at"`
+	// FreshUntil is when a reading taken on every poll stops being current.
+	// It covers the offer and link observations of that one read. Zero means
+	// a one-off browser snapshot: each observation is current for five minutes.
+	FreshUntil time.Time `json:"fresh_until,omitzero"`
+}
+
+// CurrentUntil is when an observation of this benefit stops being current.
+func (b UsageCreditBenefit) CurrentUntil(observed time.Time) time.Time {
+	if !b.FreshUntil.IsZero() {
+		return b.FreshUntil
+	}
+	return observed.Add(5 * time.Minute)
+}
+
+func (b UsageCreditBenefit) current(observed, now time.Time) bool {
+	return !observed.IsZero() && !observed.After(now) && now.Before(b.CurrentUntil(observed))
 }
 
 // State evaluates the claim against the clock, not the provider's last poll.
@@ -28,12 +44,12 @@ func (b UsageCreditBenefit) State(now time.Time) string {
 	// An aged or future link time is unknown, so a stale link cannot hide a fresh
 	// offer behind the linked state. An unstamped link is kept, as the offer path keeps it.
 	if b.LinkState == "linked" {
-		if !b.LinkObservedAt.IsZero() && (b.LinkObservedAt.After(now) || now.Sub(b.LinkObservedAt) >= 5*time.Minute) {
+		if !b.LinkObservedAt.IsZero() && !b.current(b.LinkObservedAt, now) {
 			return "unknown"
 		}
 		return "linked"
 	}
-	if b.ObservedAt.IsZero() || b.ObservedAt.After(now) || now.Sub(b.ObservedAt) >= 5*time.Minute {
+	if !b.current(b.ObservedAt, now) {
 		return "stale"
 	}
 	if b.Eligibility == "ineligible" {
@@ -42,7 +58,7 @@ func (b UsageCreditBenefit) State(now time.Time) string {
 	if b.Eligibility != "eligible" {
 		return "unknown"
 	}
-	if !b.LinkObservedAt.IsZero() && (b.LinkObservedAt.After(now) || now.Sub(b.LinkObservedAt) >= 5*time.Minute) {
+	if !b.LinkObservedAt.IsZero() && !b.current(b.LinkObservedAt, now) {
 		return "unknown"
 	}
 	if b.LinkState != "unlinked" || b.Currency != "USD" || b.Claimable == nil || *b.Claimable <= 0 ||
@@ -68,6 +84,9 @@ func (b UsageCreditBenefit) Summary(now time.Time) string {
 		}
 		return ""
 	}
+	if b.quiet(now) {
+		return ""
+	}
 	switch b.State(now) {
 	case "claimable":
 		period := "month"
@@ -78,8 +97,6 @@ func (b UsageCreditBenefit) Summary(now time.Time) string {
 			formatMinorUnits(int(*b.PeriodCredit), b.Currency) + "/" + period + ") · offer expires " + expiryTime(b.ExpiresAt, now) + "…"
 	case "linked":
 		return "API credit benefit linked"
-	case "ineligible":
-		return ""
 	default:
 		return "Check API credit benefit…"
 	}
@@ -88,10 +105,17 @@ func (b UsageCreditBenefit) Summary(now time.Time) string {
 // ActionURL opens an account-aware provider UI for the user to review. The
 // collector does not accept action URLs from page messages or cached input.
 func (b UsageCreditBenefit) ActionURL(now time.Time) string {
-	if b.State(now) == "ineligible" || b.State(now) == "linked" {
+	if b.quiet(now) || b.State(now) == "linked" {
 		return ""
 	}
 	return OpenAIAPIBillingURL
+}
+
+// quiet reports a benefit with nothing to act on. An ineligible account stays
+// quiet when that reading ages: an old refusal is no reason to go and check.
+func (b UsageCreditBenefit) quiet(now time.Time) bool {
+	state := b.State(now)
+	return state == "ineligible" || (state == "stale" && b.Eligibility == "ineligible")
 }
 
 func (b UsageCreditBenefit) Clone() UsageCreditBenefit {

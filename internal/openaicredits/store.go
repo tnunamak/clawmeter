@@ -3,6 +3,8 @@ package openaicredits
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +27,14 @@ const maxPools = 20
 
 var poolPattern = regexp.MustCompile("^[0-9a-f]{64}$")
 var errReceipt = errors.New("invalid OpenAI credit receipt")
+
+// PoolID is the opaque pool for an API organization. The browser extension
+// derives the same value (extension/openai-observer.js), so readings of one
+// organization from either source meet in one pool.
+func PoolID(organization string) string {
+	sum := sha256.Sum256([]byte("clawmeter:openai-api-org:v1:" + organization))
+	return hex.EncodeToString(sum[:])
+}
 
 type Snapshot struct {
 	Pool    string   `json:"pool"`
