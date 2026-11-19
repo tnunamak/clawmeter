@@ -16,6 +16,32 @@ import (
 	"time"
 )
 
+// fixtureDeadline is the command deadline for tests whose fixture must start a
+// shell, fork a descendant, and publish its pid file before that deadline fires.
+// A tight deadline races that setup: when the machine is busy, starting the
+// shell and forking takes hundreds of milliseconds (measured p99 ~250 ms, max
+// ~300 ms with every CPU busy), and a deadline that lands first kills the group
+// before the fixture writes anything. The test then fails on the missing pid
+// file with no product bug behind it.
+const fixtureDeadline = 2 * time.Second
+
+// boundedReturn is the wall-clock bound for a command that has hit its deadline
+// or had its context canceled, and the poll budget for the fixtures below. It is
+// far below the 30 s descendants these tests wait on, so a command that blocks on
+// one still fails, and far above the millisecond-scale reaping delay, because a
+// loaded machine can starve the reaping goroutine for seconds.
+const boundedReturn = 10 * time.Second
+
+// assertReturnedBoundedly fails when a command did not return within
+// boundedReturn. A command that waits on a long-lived descendant trips this: it
+// returns only once that descendant exits.
+func assertReturnedBoundedly(t *testing.T, started time.Time, subject string) {
+	t.Helper()
+	if elapsed := time.Since(started); elapsed > boundedReturn {
+		t.Fatalf("%s returned after %s, want within %s", subject, elapsed, boundedReturn)
+	}
+}
+
 func TestRunShellCommandTimeoutKillsSameGroupDescendant(t *testing.T) {
 	shell, err := exec.LookPath("sh")
 	if err != nil {
@@ -27,13 +53,11 @@ func TestRunShellCommandTimeoutKillsSameGroupDescendant(t *testing.T) {
 	script := "sleep 30 & child=$!; echo $child > " + shellQuote(pidFile) + "; wait"
 
 	started := time.Now()
-	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, fixtureDeadline)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("timed-out command returned after %s", elapsed)
-	}
+	assertReturnedBoundedly(t, started, "timed-out command")
 
 	data := waitForPIDFile(t, pidFile)
 	childPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
@@ -53,10 +77,8 @@ func TestRunShellCommandRootExitWithPipeHoldingDescendantReturnsBoundedly(t *tes
 	script := "sleep 30 & child=$!; echo $child > " + shellQuote(pidFile)
 
 	started := time.Now()
-	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("pipe-holding descendant held command for %s", elapsed)
-	}
+	_, _ = runShellCommand(context.Background(), shell, []string{"-c", script}, fixtureDeadline)
+	assertReturnedBoundedly(t, started, "pipe-holding descendant")
 	data := waitForPIDFile(t, pidFile)
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
@@ -74,7 +96,7 @@ func TestRunShellCommandSuccessKillsSameGroupClosedStdoutDescendant(t *testing.T
 	registerPIDFileCleanup(t, pidFile)
 	script := "sleep 30 >/dev/null 2>&1 & child=$!; echo $child > " + shellQuote(pidFile) + "; printf marker"
 
-	out, err := runShellCommand(context.Background(), shell, []string{"-c", script}, time.Second)
+	out, err := runShellCommand(context.Background(), shell, []string{"-c", script}, boundedReturn)
 	if err != nil {
 		t.Fatalf("runShellCommand error = %v, want success", err)
 	}
@@ -100,13 +122,11 @@ func TestRunShellCommandTimeoutAfterStdoutEOFKillsSameGroupDescendant(t *testing
 	script := "exec 1>&-; sleep 30 & child=$!; echo $child > " + shellQuote(pidFile) + "; wait"
 
 	started := time.Now()
-	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, fixtureDeadline)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("timed-out command returned after %s", elapsed)
-	}
+	assertReturnedBoundedly(t, started, "timed-out command after stdout EOF")
 	data := waitForPIDFile(t, pidFile)
 	childPID, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
@@ -124,13 +144,11 @@ func TestRunShellCommandDirectlyKillsRootAfterStdoutEOF(t *testing.T) {
 	registerPIDFileCleanup(t, pidFile)
 
 	started := time.Now()
-	_, err = runShellCommand(context.Background(), shell, []string{"-c", "echo $$ > " + shellQuote(pidFile) + "; exec 1>&-; sleep 30"}, 100*time.Millisecond)
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", "echo $$ > " + shellQuote(pidFile) + "; exec 1>&-; sleep 30"}, fixtureDeadline)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("root without stdout was not killed promptly: %s", elapsed)
-	}
+	assertReturnedBoundedly(t, started, "root without stdout")
 }
 
 func TestRunShellCommandCallerCancellationAfterStdoutEOF(t *testing.T) {
@@ -144,7 +162,7 @@ func TestRunShellCommandCallerCancellationAfterStdoutEOF(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := runShellCommand(ctx, shell, []string{"-c", "echo $$ > " + shellQuote(pidFile) + "; exec 1>&-; sleep 30"}, 2*time.Second)
+		_, err := runShellCommand(ctx, shell, []string{"-c", "echo $$ > " + shellQuote(pidFile) + "; exec 1>&-; sleep 30"}, boundedReturn)
 		done <- err
 	}()
 	pidData := waitForPIDFile(t, pidFile)
@@ -162,11 +180,11 @@ func TestRunShellCommandCallerCancellationAfterStdoutEOF(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("runShellCommand error = %v, want context canceled", err)
 		}
-		if elapsed := time.Since(started); elapsed > time.Second {
+		if elapsed := time.Since(started); elapsed > boundedReturn {
 			t.Fatalf("EOF-then-canceled command returned after %s", elapsed)
 		}
 		waitForProcessGone(t, pid)
-	case <-time.After(time.Second):
+	case <-time.After(boundedReturn):
 		t.Fatal("EOF-then-canceled command did not return")
 	}
 }
@@ -185,13 +203,11 @@ func TestRunShellCommandEscapedDescendantStillReturnsBoundedly(t *testing.T) {
 	script := "" + setsid + " sleep 30 & echo $! > " + shellQuote(pidFile)
 
 	started := time.Now()
-	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, fixtureDeadline)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("escaped descendant held command for %s", elapsed)
-	}
+	assertReturnedBoundedly(t, started, "escaped descendant")
 	data := waitForPIDFile(t, pidFile)
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
@@ -218,13 +234,11 @@ func TestRunShellCommandEscapedDescendantUsesDirectStderrFile(t *testing.T) {
 	script := shellQuote(setsid) + " " + shellQuote(shell) + " -c " + shellQuote(childScript) + " & child=$!; echo $child > " + shellQuote(pidFile) + "; wait"
 
 	started := time.Now()
-	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, 100*time.Millisecond)
+	_, err = runShellCommand(context.Background(), shell, []string{"-c", script}, fixtureDeadline)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runShellCommand error = %v, want deadline exceeded", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("escaped stderr holder held command for %s", elapsed)
-	}
+	assertReturnedBoundedly(t, started, "escaped stderr holder")
 	if got := strings.TrimSpace(string(waitForPIDFile(t, stderrFile))); got != "direct" {
 		t.Fatalf("escaped child stderr target = %q, want direct /dev/null", got)
 	}
@@ -287,7 +301,7 @@ func TestRunShellCommandCallerCancellationWhileRunning(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := runShellCommand(ctx, shell, []string{"-c", "echo $$ > " + shellQuote(ready) + "; sleep 30 & wait"}, time.Second)
+		_, err := runShellCommand(ctx, shell, []string{"-c", "echo $$ > " + shellQuote(ready) + "; sleep 30 & wait"}, boundedReturn)
 		done <- err
 	}()
 	waitForPIDFile(t, ready)
@@ -298,17 +312,17 @@ func TestRunShellCommandCallerCancellationWhileRunning(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("runShellCommand error = %v, want context canceled", err)
 		}
-		if elapsed := time.Since(started); elapsed > time.Second {
+		if elapsed := time.Since(started); elapsed > boundedReturn {
 			t.Fatalf("caller-canceled command returned after %s", elapsed)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(boundedReturn):
 		t.Fatal("caller-canceled command did not return")
 	}
 }
 
 func waitForPIDFile(t *testing.T, path string) []byte {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(boundedReturn)
 	for time.Now().Before(deadline) {
 		if data, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(data)) != "" {
 			return data
@@ -335,7 +349,7 @@ func registerPIDFileCleanup(t *testing.T, path string) {
 
 func waitForProcessGone(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(boundedReturn)
 	for time.Now().Before(deadline) {
 		err := syscall.Kill(pid, 0)
 		if errors.Is(err, syscall.ESRCH) || processIsZombie(pid) {
