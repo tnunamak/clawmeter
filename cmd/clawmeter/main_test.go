@@ -181,7 +181,12 @@ func buildBinary(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "clawmeter")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	// -buildvcs=false keeps the fixture a dev build. The go tool stamps the main
+	// module version from the checkout's tags, so a checkout whose HEAD is a
+	// release tag produces a binary that resolveVersion correctly promotes from
+	// "dev" to that tag. Tests that exercise dev-build behavior would then take
+	// the release path instead, depending on which commit the suite runs on.
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", bin, ".")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
