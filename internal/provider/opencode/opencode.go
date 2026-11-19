@@ -366,7 +366,7 @@ func (p *Provider) usageData(plan goPlan) (*provider.UsageData, error) {
 		{plan.Weekly, "7d", "7 days", 168 * time.Hour},
 		// OpenCode gives the monthly window only as its reset instant. A length
 		// worked out from that instant would be a guess, so none is claimed.
-		{plan.Monthly, "monthly", "Monthly", 0},
+		{plan.Monthly, "monthly", "1M", 0},
 	} {
 		if spec.m == nil {
 			continue

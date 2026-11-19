@@ -145,7 +145,7 @@ func TestFetchUsageSuccess(t *testing.T) {
 	}{
 		{"5h", "5 hours", 42.5, 5 * time.Hour, 1800000000000},
 		{"7d", "7 days", 100, 168 * time.Hour, 1800100000000},
-		{"monthly", "Monthly", 100, 0, 1800200000000},
+		{"monthly", "1M", 100, 0, 1800200000000},
 	}
 	for i, w := range want {
 		g := data.Windows[i]
