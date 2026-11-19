@@ -75,11 +75,12 @@ func TestOpenCodeLocalActivityDoesNotHideMissingQuota(t *testing.T) {
 	defer systray.ResetMenu()
 	menu := createProviderMenuItems(sourceMenuTestProvider{name: "opencode_free"}, false, nil, false)
 	now := time.Now()
+	messages := int64(3)
 	s.mu.Lock()
 	oldResults := s.lastResults
 	s.lastResults = map[string]*provider.UsageData{"opencode_free": {
 		Provider: "opencode_free", FetchedAt: now,
-		LocalModels: []provider.LocalModelUsage{{Model: "example-free", Day: now.UTC().Format("2006-01-02")}},
+		LocalModels: []provider.LocalModelUsage{{Model: "example-free", Day: now.UTC().Format("2006-01-02"), AssistantMessages: &messages}},
 	}}
 	s.mu.Unlock()
 	defer func() {

@@ -23,6 +23,7 @@ var experimentalProviderByName = map[string]bool{
 	"copilot":       true,
 	"deepseek":      true,
 	"opencode_free": true,
+	"opencode_go":   true,
 	"openrouter":    true,
 	"jetbrains":     true,
 	"synthetic":     true,
