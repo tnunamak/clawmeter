@@ -23,8 +23,8 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider/kimik2"
 	"github.com/tnunamak/clawmeter/internal/provider/openai"
 	"github.com/tnunamak/clawmeter/internal/provider/openaiapi"
+	"github.com/tnunamak/clawmeter/internal/provider/opencode"
 	"github.com/tnunamak/clawmeter/internal/provider/opencodefree"
-	"github.com/tnunamak/clawmeter/internal/provider/opencodego"
 	"github.com/tnunamak/clawmeter/internal/provider/openrouter"
 	"github.com/tnunamak/clawmeter/internal/provider/synthetic"
 	"github.com/tnunamak/clawmeter/internal/provider/xai"
@@ -32,9 +32,7 @@ import (
 )
 
 var aliases = map[string]string{
-	"opencode":           "opencode_go",
 	"opencode-free":      "opencode_free",
-	"opencode-go":        "opencode_go",
 	"codex":              "openai",
 	"grok":               "xai",
 	"x.ai":               "xai",
@@ -56,7 +54,7 @@ var aliases = map[string]string{
 // credentials, such as browser snapshots and local activity records. They hold no
 // credentials, so they have no enrolled sources, but users can select and
 // disable them by name. Register builds the live instances.
-var localProviders = []provider.Provider{claudeapi.New(nil), opencodefree.New(), opencodego.New(), openaiapi.New(nil, 0)}
+var localProviders = []provider.Provider{claudeapi.New(nil), opencodefree.New(), opencode.New(), openaiapi.New(nil, 0)}
 
 type registration struct {
 	name string
@@ -107,7 +105,7 @@ func Register(registry *provider.Registry, cfg *config.Config, resolvers ...prov
 	if err := registry.Register(opencodefree.New()); err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 	}
-	if err := registry.Register(opencodego.New()); err != nil {
+	if err := registry.Register(opencode.New()); err != nil {
 		fmt.Fprintf(os.Stderr, "clawmeter: provider registration: %v\n", err)
 	}
 	if err := registry.Register(openaiapi.New(registry.GetFamily("openai"), config.ReadingMaxAge(cfg.Settings.PollInterval))); err != nil {

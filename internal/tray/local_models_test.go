@@ -29,9 +29,10 @@ func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	models[12].AssistantMessages = &used
 	models[35].LimitHitAt = time.Now()
 	acct := &view.Account{LocalModels: models}
+	want := []provider.LocalModelUsage{models[12], models[35]}
 
-	if rows := showBalanceRows(menu, acct, nil, time.Now()); rows != len(models) {
-		t.Fatalf("reported rows = %d, want %d", rows, len(models))
+	if rows := showBalanceRows(menu, acct, nil, time.Now()); rows != len(want) {
+		t.Fatalf("reported rows = %d, want %d observed models", rows, len(want))
 	}
 	if !menu.localModelsState.visible || !menu.localModelsState.enabled || menu.localModelsState.title != "Local activity (2 models)" {
 		t.Fatalf("submenu parent = %+v", menu.localModelsState)
@@ -39,20 +40,18 @@ func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	if len(menu.localModelItems) != 2 {
 		t.Fatalf("submenu items = %d, want only 2 models with observations", len(menu.localModelItems))
 	}
-	want := []provider.LocalModelUsage{models[12], models[35]}
 	for i, item := range menu.localModelStates {
 		if !item.visible || item.enabled || item.title != want[i].Summary() {
 			t.Fatalf("submenu row %d = %+v", i, item)
 		}
 	}
-	showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free"}})
-	if menu.localModelsState.enabled || menu.localModelsState.title != "Local activity unavailable · quota unknown" {
-		t.Fatalf("unused catalog appeared as capacity: %+v", menu.localModelsState)
+	// Unused catalog entries, unknown or zero, get no group at all.
+	if rows := showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free"}}); rows != 0 || menu.localModelsState.visible {
+		t.Fatalf("unused catalog showed a group: rows=%d %+v", rows, menu.localModelsState)
 	}
 	zero := int64(0)
-	showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free", AssistantMessages: &zero}})
-	if menu.localModelsState.enabled || menu.localModelsState.title != "No local activity · quota unknown" {
-		t.Fatal("known zero and unknown activity conflated")
+	if rows := showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free", AssistantMessages: &zero}}); rows != 0 || menu.localModelsState.visible {
+		t.Fatalf("zero-count catalog showed a group: rows=%d %+v", rows, menu.localModelsState)
 	}
 	for _, item := range menu.localModelStates {
 		if item.visible {
