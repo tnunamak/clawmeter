@@ -67,6 +67,18 @@ func (m LocalModelUsage) Observed() bool {
 	return false
 }
 
+// ObservedLocalModels keeps the models whose record shows use. A catalog
+// candidate that was never used is not activity, so no output lists it.
+func ObservedLocalModels(raw []LocalModelUsage) []LocalModelUsage {
+	var observed []LocalModelUsage
+	for _, model := range raw {
+		if model.Observed() {
+			observed = append(observed, model)
+		}
+	}
+	return observed
+}
+
 // escapeControls shows control characters and line or paragraph separators
 // from catalog-supplied names as escapes, so they cannot clear a terminal, start
 // a new row or split a one-line label. Ordinary Unicode is kept as written.

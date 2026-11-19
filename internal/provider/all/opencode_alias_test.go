@@ -2,16 +2,16 @@ package all
 
 import "testing"
 
-// A bare "opencode" names the paid OpenCode Go plan. The free catalog keeps its
-// own name, so the two cannot be confused.
-func TestBareOpenCodeNamesTheGoPlan(t *testing.T) {
-	for alias, want := range map[string]string{
-		"opencode":      "opencode_go",
-		"opencode-go":   "opencode_go",
+// The account provider is "opencode" and covers every plan the account has.
+// The free-model collector keeps its own name, so its local observations are
+// never reported as the account's usage.
+func TestOpenCodeNames(t *testing.T) {
+	for name, want := range map[string]string{
+		"opencode":      "opencode",
 		"opencode-free": "opencode_free",
 	} {
-		if got, ok := CanonicalName(alias); !ok || got != want {
-			t.Errorf("CanonicalName(%q) = %q, %t; want %q", alias, got, ok, want)
+		if got, ok := CanonicalName(name); !ok || got != want {
+			t.Errorf("CanonicalName(%q) = %q, %t; want %q", name, got, ok, want)
 		}
 	}
 }
