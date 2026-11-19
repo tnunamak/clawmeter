@@ -53,6 +53,20 @@ func (m LocalModelUsage) Summary() string {
 	return label + ": " + strings.Join(facts, " · ")
 }
 
+// Observed reports whether the record shows use: an assistant message, a token
+// count, or a limit hit. A catalog candidate with none of these is not observed.
+func (m LocalModelUsage) Observed() bool {
+	if !m.LimitHitAt.IsZero() {
+		return true
+	}
+	for _, count := range []*int64{m.AssistantMessages, m.InputTokens, m.OutputTokens, m.ReasoningTokens, m.CacheReadTokens, m.CacheWriteTokens} {
+		if count != nil && *count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // escapeControls shows control characters and line or paragraph separators
 // from catalog-supplied names as escapes, so they cannot clear a terminal, start
 // a new row or split a one-line label. Ordinary Unicode is kept as written.

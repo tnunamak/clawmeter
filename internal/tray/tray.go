@@ -1227,11 +1227,7 @@ func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsa
 	unknown := false
 	for _, model := range models {
 		unknown = unknown || model.AssistantMessages == nil
-		used := !model.LimitHitAt.IsZero()
-		for _, count := range []*int64{model.AssistantMessages, model.InputTokens, model.OutputTokens, model.ReasoningTokens, model.CacheReadTokens, model.CacheWriteTokens} {
-			used = used || (count != nil && *count > 0)
-		}
-		if used {
+		if model.Observed() {
 			observed = append(observed, model)
 		}
 	}

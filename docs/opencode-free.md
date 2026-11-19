@@ -1,7 +1,9 @@
 # OpenCode Free local observations
 
-`clawmeter opencode` (alias `opencode_free`) reports local activity for OpenCode's
-zero-priced model candidates. It is separate from the paid DeepSeek API balance.
+`clawmeter opencode-free` (alias `opencode_free`) reports local activity for OpenCode's
+zero-priced model candidates. Plain `opencode` now names the paid OpenCode Go plan;
+see [opencode-go.md](opencode-go.md). This free provider is separate from the paid
+DeepSeek API balance.
 No model request or remote quota probe is made.
 
 The collector requires `sqlite3`, an existing local `opencode.db`, and the

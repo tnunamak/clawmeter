@@ -74,6 +74,7 @@ var ProviderLogos = map[string][]byte{
 	"alibaba":       ProviderAlibaba,
 	"alibaba_token": ProviderAlibaba,
 	"deepseek":      ProviderDeepSeek,
+	"opencode_go":   ProviderOpenCode,
 }
 
 type logoTreatment struct {
@@ -98,6 +99,7 @@ var providerLogoTreatments = map[string]logoTreatment{
 	"antigravity":   {darkenMonochrome: true},
 	"alibaba":       {contrastPlate: true},
 	"alibaba_token": {contrastPlate: true},
+	"opencode_go":   {contrastPlate: true},
 }
 
 const (
