@@ -1210,16 +1210,14 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 	return rows + localRows
 }
 
-// showLocalModelRows lists the models with recorded use and returns how many rows
-// it showed. With none, the group is hidden. A catalog entry with no use says
-// nothing about available quota, so it gets no row.
+// showLocalModelRows lists the models the view reports and returns how many rows
+// it showed. With none, the group is hidden. The view drops catalog entries with
+// no recorded use, and it keeps a dated observation even when its counts are
+// withheld, so the tray lists the same models as the CLI.
 func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsage) int {
 	if menu.localModelsItem == nil {
 		return 0
 	}
-	// Activity today and dated limit events are shown. Yesterday's counts are
-	// withheld by the view, so they do not earn a row here.
-	models = provider.ObservedLocalModels(models)
 	if len(models) == 0 {
 		hideLocalModelRows(menu)
 		return 0
