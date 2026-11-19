@@ -36,7 +36,7 @@ When both routes fail, the status line names each failure and the step to run.
 | --- | --- | --- |
 | 5 hours | 5 hours, from first use | Yes, from average use since the window began |
 | 7 days | 7 days, resets Monday 00:00 UTC | Yes, from average use since the window began |
-| Monthly | Not published; OpenCode gives only the reset time | None; clawmeter shows use and reset only |
+| 1M (monthly) | Not published; OpenCode gives only the reset time | None; clawmeter shows use and reset only |
 
 A length worked out from the monthly reset time would be a guess, so clawmeter
 claims no length for the monthly window and makes no projection from it.
