@@ -1,15 +1,17 @@
 # OpenCode account
 
 `clawmeter opencode` shows the usage windows of your OpenCode Go plan: 5 hours,
-7 days and monthly. It reads them by one of two routes, in this order:
+7 days and monthly, and your OpenCode Console budgets in dollars. It reads the
+plan by one of two routes, in this order:
 
 1. **The OpenCode service on this machine.** Needs `opencode serve --service`
    running and a sign-in to OpenCode Console on that service.
 2. **`OPENCODE_API_KEY`.** Used only when the service route fails, so a machine
    that runs no service can still read the plan.
 
-Both routes return the same windows, and each window the response includes is
-shown. An account without the Go plan has no windows and no error. Free-model
+Both routes return the same Go plan windows, and each window the response includes
+is shown. Budgets come from the service route only. An account without the Go plan
+has no Go windows and no error, but it still shows any budgets. Free-model
 activity is a separate provider, `opencode-free`; see
 [opencode-free.md](opencode-free.md).
 
@@ -45,6 +47,21 @@ A forecast needs a warm-up. The 5-hour forecast appears after 30 minutes, and
 the 7-day forecast after one hour. The one-hour cap on warm-up is shared by all
 providers, and for the 7-day window it is short: 2% used after one hour projects
 to 336% by the end of the week. Treat early 7-day forecasts as rough.
+
+## Console budgets
+
+A Console budget is a dollar limit that the OpenCode Console workspace sets on
+you. clawmeter shows each budget that has a positive limit as one row, in
+dollars: the amount spent, the limit, and when the budget resets. The row name
+says what the budget counts, for example `Budget (all models)` or
+`Per-model budget (GLM-5.3, Kimi K2.5)`. The tray does not show whether a budget
+is shared with the workspace, where reaching it pauses model use for everyone, or
+whether it is pooled across members. OpenCode Console shows both.
+
+A budget has no published length, so its row has no forecast, like the monthly
+window. Spend over the limit is shown as it is, with `over cap`. For a per-model
+budget, the spent figure is the most spent on any one model, so the row tracks
+the model nearest its limit.
 
 ## Plan rules
 
@@ -88,3 +105,8 @@ than an error number; that has not been run on Windows either.
 
 On 2026-11-19 the key route returned HTTP 200 with a real key, and its three
 percentages matched OpenCode Console.
+
+No budget has been checked against a live response. The workspace checked has no
+budgets, so the budget field names and dollar units come from OpenCode's public
+schema. Check the first real budget against OpenCode Console before relying on its
+figures.
