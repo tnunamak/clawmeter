@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -170,6 +171,20 @@ func TestFetchUsageClampsPercent(t *testing.T) {
 	}
 	if len(data.Windows) != 2 || data.Windows[0].Utilization != 100 || data.Windows[1].Utilization != 0 {
 		t.Fatalf("unexpected windows: %+v", data.Windows)
+	}
+}
+
+// OpenCode may omit a window from a response. The windows it sends are shown,
+// and an omitted one is left out rather than shown as zero.
+func TestPartialGoPlanShowsOnlyTheWindowsSent(t *testing.T) {
+	const body = `{"data":{"go":{"rolling":{"percent":12,"limited":false,"resetsAt":1800000000000}}}}`
+	p, _ := serve(t, 200, "application/json", body)
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Windows) != 1 || data.Windows[0].Name != "5h" || data.Windows[0].Utilization != 12 {
+		t.Fatalf("windows = %+v, want only the 5-hour window", data.Windows)
 	}
 }
 
@@ -371,6 +386,48 @@ func TestAPIKeyRouteReadsTheSameWindows(t *testing.T) {
 	}
 	if got := route.header("User-Agent"); got != "Clawmeter" {
 		t.Errorf("User-Agent = %q", got)
+	}
+}
+
+// roundTripFunc stands in for the HTTP transport so a test can see each request.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The other key tests point apiKeyURL at a local server. This one keeps the
+// production default and records the request the route is sent.
+func TestAPIKeyRouteUsesOpenCodeUsageURL(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir()) // no service.json, so only the key route can answer
+	t.Setenv(apiKeyEnv, fakeKey)
+	p := New()
+	var sent *http.Request
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sent = r
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(keyBody)),
+			Request:    r,
+		}, nil
+	})
+	data, err := p.FetchUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent == nil {
+		t.Fatal("the key route sent no request")
+	}
+	if got := sent.URL.String(); got != "https://opencode.ai/zen/go/v1/usage" {
+		t.Fatalf("key route requested %s", got)
+	}
+	if got := sent.Header.Get("Authorization"); got != "Bearer "+fakeKey {
+		t.Fatalf("Authorization = %q", got)
+	}
+	if got := sent.Header.Get("User-Agent"); got != "Clawmeter" {
+		t.Fatalf("User-Agent = %q; the usage route refuses a request without one", got)
+	}
+	if len(data.Windows) != 3 {
+		t.Fatalf("windows = %+v, want the three in the response", data.Windows)
 	}
 }
 

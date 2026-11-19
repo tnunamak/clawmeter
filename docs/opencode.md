@@ -8,9 +8,10 @@
 2. **`OPENCODE_API_KEY`.** Used only when the service route fails, so a machine
    that runs no service can still read the plan.
 
-Both routes return the same three windows. An account without the Go plan has
-no windows and no error. Free-model activity is a separate provider,
-`opencode-free`; see [opencode-free.md](opencode-free.md).
+Both routes return the same windows, and each window the response includes is
+shown. An account without the Go plan has no windows and no error. Free-model
+activity is a separate provider, `opencode-free`; see
+[opencode-free.md](opencode-free.md).
 
 ## What it needs
 
