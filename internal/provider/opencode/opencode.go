@@ -1,10 +1,10 @@
 // Package opencode implements the Provider interface for an OpenCode account.
-// It reads the usage windows of the OpenCode Go plan. OpenCode's usage routes
-// report no other plan's windows, so an account without Go has no windows and
-// no error.
+// It reads the usage windows of the OpenCode Go plan and the account's OpenCode
+// Console budgets. OpenCode's usage routes report no other plan's windows, so an
+// account without Go has no Go windows and no error.
 //
-// Two routes give the same windows. The service is tried first; the key is used
-// only when the service fails:
+// Two routes give the same Go windows. The service is tried first; the key is
+// used only when the service fails. Budgets come from the service route alone:
 //
 //   - the OpenCode service on this machine, which holds the OpenCode Console
 //     sign-in. Its url and password are in $XDG_STATE_HOME/opencode/service.json
@@ -13,22 +13,25 @@
 //     machine that runs no service.
 //
 // Neither secret is logged, placed in an error, or sent to a redirect target.
-// The monthly window has no published length, so it is reported without one and
-// is never projected.
+// The monthly window and each budget have no published length, so each is
+// reported without one and is never projected.
 package opencode
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -162,16 +165,19 @@ type meter struct {
 func (m meter) refused() bool { return m.Limited || m.Status == "rate-limited" }
 
 // reset reads resetsAt as epoch milliseconds or as an RFC 3339 string.
-func (m meter) reset() (time.Time, bool) {
-	if len(m.ResetsAt) == 0 || string(m.ResetsAt) == "null" {
+func (m meter) reset() (time.Time, bool) { return parseReset(m.ResetsAt) }
+
+// parseReset reads a reset time as epoch milliseconds or as an RFC 3339 string.
+func parseReset(raw json.RawMessage) (time.Time, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
 		return time.Time{}, false
 	}
 	var ms int64
-	if json.Unmarshal(m.ResetsAt, &ms) == nil {
+	if json.Unmarshal(raw, &ms) == nil {
 		return time.UnixMilli(ms), true
 	}
 	var s string
-	if json.Unmarshal(m.ResetsAt, &s) != nil {
+	if json.Unmarshal(raw, &s) != nil {
 		return time.Time{}, false
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
@@ -185,9 +191,32 @@ type goPlan struct {
 	Monthly *meter `json:"monthly"`
 }
 
+// budget is one OpenCode Console budget on the service route, in dollars. Limit
+// and Spent are pointers so that a missing value is an error, not a zero.
+type budget struct {
+	ID                string          `json:"id"`
+	Limit             *float64        `json:"limit"`
+	Spent             *float64        `json:"spent"`
+	Scope             string          `json:"scope"`
+	Per               string          `json:"per"`
+	Coverage          string          `json:"coverage"`
+	Models            []budgetModel   `json:"models"`
+	Vendors           []string        `json:"vendors"`
+	InputPriceAtLeast *float64        `json:"inputPriceAtLeast"`
+	Shared            bool            `json:"shared"`
+	ResetsAt          json.RawMessage `json:"resetsAt"`
+}
+
+// budgetModel is a model a budget counts, by the name the Console shows.
+type budgetModel struct {
+	ModelID string `json:"modelID"`
+	Name    string `json:"name"`
+}
+
 type limitsResponse struct {
 	Data *struct {
-		Go *goPlan `json:"go"`
+		Go      *goPlan  `json:"go"`
+		Budgets []budget `json:"budgets"`
 	} `json:"data"`
 }
 
@@ -284,11 +313,9 @@ func (p *Provider) fetchService(ctx context.Context) (*provider.UsageData, error
 	if parsed.Data == nil {
 		return nil, errors.New(notSignedIn)
 	}
-	if parsed.Data.Go == nil {
-		// The account has no Go plan, so there are no windows to show. Not an error.
-		return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now()}, nil
-	}
-	return p.usageData(*parsed.Data.Go)
+	// An account without Go has no Go windows, and that is not an error. It may
+	// still have Console budgets.
+	return p.usageData(parsed.Data.Go, parsed.Data.Budgets)
 }
 
 // fetchKey reads the same windows from OpenCode's usage route with the API key.
@@ -333,7 +360,7 @@ func (p *Provider) fetchKey(ctx context.Context, key string) (*provider.UsageDat
 	if parsed.Usage == nil {
 		return nil, errors.New("opencode:usage response has no usage object")
 	}
-	return p.usageData(*parsed.Usage)
+	return p.usageData(parsed.Usage, nil)
 }
 
 func (p *Provider) apiKeyEndpoint() string {
@@ -354,8 +381,27 @@ func readBody(resp *http.Response) ([]byte, error) {
 	return body, nil
 }
 
-// usageData turns the Go plan's meters into windows.
-func (p *Provider) usageData(plan goPlan) (*provider.UsageData, error) {
+// usageData turns the Go plan and the account's budgets into windows. The key
+// route has no budgets, so it passes none.
+func (p *Provider) usageData(plan *goPlan, budgets []budget) (*provider.UsageData, error) {
+	windows, err := goWindows(plan)
+	if err != nil {
+		return nil, err
+	}
+	dollars, err := budgetWindows(budgets)
+	if err != nil {
+		return nil, err
+	}
+	windows = append(windows, dollars...)
+	return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), Windows: windows}, nil
+}
+
+// goWindows turns the Go plan's meters into windows. An account without Go has
+// no plan, so it has none.
+func goWindows(plan *goPlan) ([]provider.UsageWindow, error) {
+	if plan == nil {
+		return nil, nil
+	}
 	var windows []provider.UsageWindow
 	for _, spec := range []struct {
 		m           *meter
@@ -396,5 +442,98 @@ func (p *Provider) usageData(plan goPlan) (*provider.UsageData, error) {
 	if len(windows) == 0 {
 		return nil, errors.New("opencode:usage response is missing Go plan usage windows")
 	}
-	return &provider.UsageData{Provider: p.Name(), FetchedAt: p.now(), Windows: windows}, nil
+	return windows, nil
+}
+
+// budgetWindows turns each budget with a positive limit into a window in cents.
+// OpenCode publishes no length for a budget's period, as for the monthly window,
+// so a budget window has none and is never projected. Budgets are sorted by ID
+// and numbered by their place in that order, so a name never carries text from
+// an ID. A budget with no positive limit is skipped but keeps its number.
+func budgetWindows(budgets []budget) ([]provider.UsageWindow, error) {
+	sorted := slices.Clone(budgets)
+	slices.SortFunc(sorted, func(a, b budget) int { return strings.Compare(a.ID, b.ID) })
+	var windows []provider.UsageWindow
+	for i, b := range sorted {
+		if b.Limit == nil || b.Spent == nil {
+			return nil, errors.New("opencode:malformed usage response (budget missing limit or spent)")
+		}
+		limit := usdCents(*b.Limit)
+		if limit <= 0 {
+			continue
+		}
+		reset, ok := parseReset(b.ResetsAt)
+		if !ok {
+			return nil, errors.New("opencode:malformed usage response (budget missing reset)")
+		}
+		used := usdCents(*b.Spent)
+		windows = append(windows, provider.UsageWindow{
+			Name:          fmt.Sprintf("budget-%d", i+1),
+			DisplayName:   budgetLabel(b),
+			Scope:         budgetScope(b),
+			Description:   budgetDescription(b),
+			Utilization:   min(max(float64(used)/float64(limit)*100, 0), 100),
+			LengthUnknown: true,
+			ResetsAt:      reset,
+			Limit:         limit,
+			Used:          used,
+			Currency:      "USD",
+		})
+	}
+	return windows, nil
+}
+
+// usdCents converts dollars to whole cents, the unit UsageWindow uses for money.
+func usdCents(dollars float64) int { return int(math.Round(dollars * 100)) }
+
+// budgetScope names the models a budget counts, as the Console does. It is the
+// window's scope.
+func budgetScope(b budget) string {
+	switch {
+	case b.Coverage == "all":
+		return "all models"
+	case len(b.Models) > 0:
+		names := make([]string, 0, len(b.Models))
+		for _, m := range b.Models {
+			names = append(names, cmp.Or(m.Name, m.ModelID))
+		}
+		return strings.Join(names, ", ")
+	case len(b.Vendors) > 0:
+		return strings.Join(b.Vendors, ", ")
+	case b.InputPriceAtLeast != nil:
+		return fmt.Sprintf("models from $%g per 1M input tokens", *b.InputPriceAtLeast)
+	}
+	return "selected models"
+}
+
+// budgetLabel is the row name. A list of more than three models is counted, not
+// named. A per-model budget says so, because its dollars are the most spent on
+// one model, not the total across models.
+func budgetLabel(b budget) string {
+	covers := budgetScope(b)
+	if b.Coverage != "all" && len(b.Models) > 3 {
+		covers = fmt.Sprintf("%d models", len(b.Models))
+	}
+	if b.Per == "model" {
+		return "Per-model budget (" + covers + ")"
+	}
+	return "Budget (" + covers + ")"
+}
+
+// budgetDescription says how the limit applies. The same dollars mean different
+// things for one member, for a pooled workspace, and for a single model.
+func budgetDescription(b budget) string {
+	first := "Each member has this limit."
+	if b.Scope == "combined" {
+		first = "The whole workspace shares this limit."
+	}
+	second := "Spent counts across the budget's models."
+	if b.Per == "model" {
+		second = "Each model has its own limit, and spent is the most spent on one model."
+	}
+	sentences := []string{first, second}
+	if b.Shared {
+		sentences = append(sentences, "Reaching it pauses model use for everyone in the workspace.")
+	}
+	return strings.Join(sentences, " ")
 }

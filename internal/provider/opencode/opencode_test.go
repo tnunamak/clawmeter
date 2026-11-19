@@ -127,7 +127,7 @@ func TestFetchUsageSuccess(t *testing.T) {
 	const body = `{"location":{"directory":"/home/fake"},"data":{"workspace":{"id":"w","name":"n","usageURL":"u"},
 	"go":{"rolling":{"percent":42.5,"limited":false,"resetsAt":1800000000000},
 	"weekly":{"percent":10,"limited":true,"resetsAt":1800100000000},
-	"monthly":{"percent":150,"limited":false,"resetsAt":1800200000000}},"budgets":[{"x":1}]}}`
+	"monthly":{"percent":150,"limited":false,"resetsAt":1800200000000}},"budgets":[]}}`
 	p, req := serve(t, 200, "application/json", body)
 	data, err := p.FetchUsage(context.Background())
 	if err != nil {
