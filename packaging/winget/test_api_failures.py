@@ -37,6 +37,27 @@ exit 99
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("No open superseded", r.stdout)
 
+    def test_cleanup_requires_exact_head_repository(self):
+        gh = self.cwd / "gh"
+        gh.write_text("""#!/bin/bash
+case "$1 $2" in
+  'api --include') echo 'HTTP/2.0 200' ;;
+  'pr list')
+    printf '%s\\t%s\\t%s\\t%s\\n' 12 'New package: tnunamak.Clawmeter version foreign' 'https://example.test/12' fixture
+    printf '%s\\t%s\\t%s\\t%s\\n' 13 'New package: tnunamak.Clawmeter version match' 'https://example.test/13' fixture
+    printf '%s\\t%s\\t%s\\t%s\\n' 14 'New package: tnunamak.Clawmeter version unknown' 'https://example.test/14' fixture ;;
+  'api repos/example/upstream/pulls/12') echo 'other/fork' ;;
+  'api repos/example/upstream/pulls/13') echo 'fixture/fork' ;;
+  'api repos/example/upstream/pulls/14') : ;; # null head repo, jq emits nothing
+  *) exit 99 ;;
+esac
+""")
+        self.env.update(WINGET_FORK_REPO="fixture/fork", WINGET_UPSTREAM_REPO="example/upstream")
+        r = self.run_script("close-superseded-first-package-prs.sh", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([line for line in r.stdout.splitlines() if line.startswith("Dry run: would close ")],
+                         ["Dry run: would close https://example.test/13"])
+
     def test_cleanup_lookup_failure_is_not_absence(self):
         for code in ["401", "429", "503"]:
             with self.subTest(code=code):

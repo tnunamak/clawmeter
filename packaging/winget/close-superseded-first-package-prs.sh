@@ -110,6 +110,15 @@ for row in "${prs[@]}"; do
     continue
   fi
 
+  if ! head_repo="$(gh api "repos/${upstream_repo}/pulls/${number}" --jq '.head.repo.full_name // empty')"; then
+    echo "Skipping PR #${number}: head repository could not be verified." >&2
+    continue
+  fi
+  if [[ "$head_repo" != "$fork_repo" ]]; then
+    echo "Skipping PR #${number}: head repository does not match ${fork_repo}."
+    continue
+  fi
+
   echo "Closing superseded first-package PR #${number}: ${title}"
   if [[ "$dry_run" == "1" ]]; then
     echo "Dry run: would close ${url}"
