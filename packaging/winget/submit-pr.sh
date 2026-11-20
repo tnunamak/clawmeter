@@ -70,6 +70,42 @@ if [[ ! -d "$manifest_dir" ]]; then
 fi
 manifest_dir="$(cd "$manifest_dir" && pwd)"
 
+# Generated installer manifests use unquoted, single-line scalar values.
+# Reject unfamiliar or ambiguous forms rather than guessing a release asset.
+shopt -s nullglob
+installer_manifests=("$manifest_dir"/*.installer.yaml "$manifest_dir"/*.installer.yml)
+shopt -u nullglob
+if (( ${#installer_manifests[@]} != 1 )) ||
+    [[ "${installer_manifests[0]}" != "$manifest_dir/$package_id.installer.yaml" ||
+       ! -f "${installer_manifests[0]}" || -L "${installer_manifests[0]}" ]]; then
+  echo "refusing to submit: expected exactly one selected installer manifest for $package_id" >&2
+  exit 1
+fi
+if ! installer_url="$(awk -v package="$package_id" -v version="$version" '
+  function scalar(text) {
+    sub(/^[^:]*:[[:space:]]*/, "", text)
+    sub(/[[:space:]]+$/, "", text)
+    return text
+  }
+  /^PackageIdentifier:/ { identifiers++; if (scalar($0) != package) invalid = 1 }
+  /^PackageVersion:/ { versions++; if (scalar($0) != version) invalid = 1 }
+  /^ManifestType:/ { types++; if (scalar($0) != "installer") invalid = 1 }
+  /^[[:space:]]*(-[[:space:]]+)?InstallerUrl[[:space:]]*:/ {
+    value = scalar($0)
+    # An HTTPS bare URI with no whitespace or formatting characters.
+    if (value !~ /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?\/[A-Za-z0-9._~:%\/?&=+#@!$*,;-]+$/) invalid = 1
+    if (url != "" && url != value) invalid = 1
+    url = value
+  }
+  END {
+    if (invalid || identifiers != 1 || versions != 1 || types != 1 || url == "") exit 1
+    print url
+  }
+' "${installer_manifests[0]}")"; then
+  echo "refusing to submit: installer manifest package, version, or InstallerUrl is invalid or ambiguous" >&2
+  exit 1
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "missing dependency: gh" >&2
   exit 1
@@ -168,7 +204,7 @@ body="$(cat <<EOF
 - Package: ${package_id}
 - Version: ${version}
 - Release: https://github.com/tnunamak/clawmeter/releases/tag/${tag}
-- Installer: https://github.com/tnunamak/clawmeter/releases/download/${tag}/ClawmeterSetup.exe
+- Installer: ${installer_url}
 
 Clawmeter is a system tray and CLI quota meter for AI coding tools.
 EOF
