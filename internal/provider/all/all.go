@@ -50,11 +50,12 @@ var aliases = map[string]string{
 	"claude-api":         "claude_api",
 }
 
-// localProviders name providers that read local observations without selecting
-// credentials, such as browser snapshots and local activity records. They hold no
-// credentials, so they have no enrolled sources, but users can select and
-// disable them by name. Register builds the live instances.
-var localProviders = []provider.Provider{claudeapi.New(nil), opencodefree.New(), opencode.New(), openaiapi.New(nil, 0)}
+// directProviders are built by Register, not from the registrations table. That
+// table holds only providers with enrollable sources (provider.SourceCapability);
+// these have none. The OpenCode account reads one service or key, the free-model
+// collector reads local OpenCode activity, and the Claude and OpenAI API providers
+// use those families' sources. Their names are valid for config enable and disable.
+var directProviders = []provider.Provider{claudeapi.New(nil), opencodefree.New(), opencode.New(), openaiapi.New(nil, 0)}
 
 type registration struct {
 	name string
@@ -153,8 +154,8 @@ func canonicalRegistrationName(name string) (string, bool) {
 			return normalized, true
 		}
 	}
-	for _, local := range localProviders {
-		if local.Name() == normalized {
+	for _, direct := range directProviders {
+		if direct.Name() == normalized {
 			return normalized, true
 		}
 	}
@@ -165,12 +166,12 @@ func canonicalRegistrationName(name string) (string, bool) {
 // This is the source of truth the CLI uses to validate `config enable/disable`
 // arguments without paying for full registry construction.
 func Names() []string {
-	names := make([]string, 0, len(registrations)+len(localProviders))
+	names := make([]string, 0, len(registrations)+len(directProviders))
 	for _, registration := range registrations {
 		names = append(names, registration.name)
 	}
-	for _, local := range localProviders {
-		names = append(names, local.Name())
+	for _, direct := range directProviders {
+		names = append(names, direct.Name())
 	}
 	sort.Strings(names)
 	return names
