@@ -15,6 +15,25 @@ has no Go windows and no error, but it still shows any budgets. Free-model
 activity is a separate provider, `opencode-free`; see
 [opencode-free.md](opencode-free.md).
 
+## Which OpenCode is which
+
+OpenCode has several surfaces, and clawmeter reads each one differently:
+
+- **The Go plan** is read by `opencode`. It shows the 5-hour, weekly and monthly
+  windows, in percent.
+- **OpenCode Console budgets** are read by `opencode`. They are dollar limits set
+  in the Console workspace, and they come from the service route only.
+- **Hosted free models** run on OpenCode's servers. Your local OpenCode data
+  records their use under the provider `opencode`. `opencode-free` counts the
+  zero-priced ones for the current UTC day. That is observed activity, not a
+  quota. See [opencode-free.md](opencode-free.md).
+- **OpenCode's temporary free DeepSeek route** is a separate inference service.
+  The DeepSeek balance provider does not measure its availability, usage fees or
+  limits.
+
+Earlier releases mapped `clawmeter opencode` to `opencode-free`. Use
+`clawmeter opencode-free` for local activity.
+
 ## What it needs
 
 Either route:
