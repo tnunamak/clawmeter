@@ -32,6 +32,9 @@ import (
 )
 
 var aliases = map[string]string{
+	// Preserve the historical selector without renaming either registry key.
+	"opencode":           "opencode_free",
+	"opencode-account":   "opencode",
 	"opencode-free":      "opencode_free",
 	"codex":              "openai",
 	"grok":               "xai",
