@@ -302,7 +302,8 @@ In T3, enter `http://127.0.0.1:8318` as the hub URL and the same key as the mana
 | Alibaba Coding Plan | Coding Plan 5-hour, weekly, and monthly quotas |
 | Alibaba Token Plan | Personal Token Plan 5-hour, 7-day, and reset-credit data after one-time Model Studio quota connection |
 | DeepSeek | Account balance only (read-only); no utilization, spend, or reset-time data |
-| OpenCode Free | Local daily activity and observed free-limit events per zero-priced model; quota and reset remain unknown |
+| OpenCode | Go plan: 5-hour and 7-day usage with forecasts; monthly usage and reset without a forecast, since OpenCode publishes no monthly length; read from the local OpenCode service, or from `OPENCODE_API_KEY` when no service runs |
+| OpenCode Free | Local daily activity and observed free-limit events per zero-priced model, shown only after recorded use; quota and reset remain unknown |
 
 Unavailable providers stay hidden by default. Use `clawmeter --all` to see everything Clawmeter checked.
 

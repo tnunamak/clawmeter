@@ -294,7 +294,7 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 	for _, benefit := range data.CreditBenefits {
 		account.CreditBenefits = append(account.CreditBenefits, buildCreditBenefit(benefit, at))
 	}
-	account.LocalModels = provider.LocalModelsAt(data.LocalModels, data.FetchedAt, at, account.Reading.State == ReadingFresh && !data.FetchedAt.IsZero() && at.Sub(data.FetchedAt) <= in.MaxReadingAge)
+	account.LocalModels = provider.LocalModelsAt(provider.ObservedLocalModels(data.LocalModels), data.FetchedAt, at, account.Reading.State == ReadingFresh && !data.FetchedAt.IsZero() && at.Sub(data.FetchedAt) <= in.MaxReadingAge)
 	if len(account.LocalModels) > 0 && len(data.Windows) == 0 {
 		status := provider.SummarizeLocalModelStatus(account.LocalModels, at)
 		account.LocalModelStatus = &status

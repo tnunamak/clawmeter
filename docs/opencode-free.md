@@ -1,7 +1,9 @@
 # OpenCode Free local observations
 
-`clawmeter opencode` (alias `opencode_free`) reports local activity for OpenCode's
-zero-priced model candidates. It is separate from the paid DeepSeek API balance.
+`clawmeter opencode-free` (alias `opencode_free`) reports local activity for OpenCode's
+zero-priced model candidates. The paid OpenCode account is the `opencode` provider;
+see [opencode.md](opencode.md). This free provider is separate from the paid
+DeepSeek API balance.
 No model request or remote quota probe is made.
 
 The collector requires `sqlite3`, an existing local `opencode.db`, and the
@@ -12,7 +14,7 @@ executable; their live OpenCode layouts have not been verified.
 
 The model catalog supplies IDs and prices rather than a fixed model list. A
 zero price is a candidate classification, not proof of eligibility or remaining
-allowance. Unused candidates remain visible. Previously used `-free` IDs absent
+allowance. Unused candidates are not listed. Previously used `-free` IDs absent
 from the current catalog remain local observations; currently paid catalog
 entries are excluded. The collector is bounded to 256 catalog entries.
 
@@ -33,10 +35,11 @@ agent output as `retry_hint_at`, not a verified reset time. Passing midnight or
 a retry hint never clears an account's quota. Failed reads, old observations and
 a new reporting date do not turn unknown data into fresh zero usage.
 
-The tray's local-observations submenu lists only models with recorded activity
-or a dated limit event. Detailed plain, table, agent and JSON output also list
-unused catalog candidates, with the same observations. These facts do not enter
-percentage bars, forecasts, quota risk selection or pinning.
+Every surface lists only models with recorded activity or a dated limit event:
+the tray, plain, table, agent output and the JSON `view` section. The JSON
+`usage` section keeps the provider's full record, including catalog candidates
+with a known zero count. These facts do not enter percentage bars, forecasts,
+quota risk selection or pinning.
 SQLite reads are limited to five seconds, catalog data to 8 MiB and selected
 SQLite output to 4 MiB. A catalog that is not a regular file fails without
 waiting. Unsupported schemas or oversized results fail visibly. SQLite

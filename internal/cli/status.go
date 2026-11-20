@@ -405,6 +405,10 @@ func (v outputView) plainLine(i int) string {
 	for _, pool := range pf.Data.CreditPools {
 		parts = append(parts, fmt.Sprintf("%s: %s", pool.Name, pool.Summary(now)))
 	}
+	if len(parts) == 0 {
+		// The tray shows the same words for a reading with nothing to report.
+		parts = append(parts, "no usage reported")
+	}
 	if len(acct.LocalModels) > 0 {
 		return fmt.Sprintf("%s: %s%s\n  %s", display, prefix, suffix, strings.Join(parts, "\n  "))
 	}

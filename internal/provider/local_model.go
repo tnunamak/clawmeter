@@ -53,6 +53,32 @@ func (m LocalModelUsage) Summary() string {
 	return label + ": " + strings.Join(facts, " · ")
 }
 
+// Observed reports whether the record shows use: an assistant message, a token
+// count, or a limit hit. A catalog candidate with none of these is not observed.
+func (m LocalModelUsage) Observed() bool {
+	if !m.LimitHitAt.IsZero() {
+		return true
+	}
+	for _, count := range []*int64{m.AssistantMessages, m.InputTokens, m.OutputTokens, m.ReasoningTokens, m.CacheReadTokens, m.CacheWriteTokens} {
+		if count != nil && *count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ObservedLocalModels keeps the models whose record shows use. A catalog
+// candidate that was never used is not activity, so no output lists it.
+func ObservedLocalModels(raw []LocalModelUsage) []LocalModelUsage {
+	var observed []LocalModelUsage
+	for _, model := range raw {
+		if model.Observed() {
+			observed = append(observed, model)
+		}
+	}
+	return observed
+}
+
 // escapeControls shows control characters and line or paragraph separators
 // from catalog-supplied names as escapes, so they cannot clear a terminal, start
 // a new row or split a one-line label. Ordinary Unicode is kept as written.

@@ -10,7 +10,7 @@ import (
 )
 
 func TestLocalModelsVisibleWithoutQuotaClaims(t *testing.T) {
-	n := int64(0)
+	n := int64(3)
 	at := matrixNow
 	data := &provider.UsageData{Provider: "opencode_free", FetchedAt: at, LocalModels: []provider.LocalModelUsage{{Model: "future-free", Label: "Future Free", Day: at.UTC().Format("2006-01-02"), AssistantMessages: &n}}}
 	m := &MultiProviderOutput{Providers: []ProviderFormatter{{Name: "opencode_free", DisplayName: "OpenCode Free", Data: data}}}
@@ -30,13 +30,41 @@ func TestLocalModelsVisibleWithoutQuotaClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(b), `"local_models"`) != 2 || !strings.Contains(string(b), `"assistant_messages": 0`) {
+	if strings.Count(string(b), `"local_models"`) != 2 || !strings.Contains(string(b), `"assistant_messages": 3`) {
 		t.Fatalf("raw and evaluated JSON lost observations: %s", b)
 	}
 	// Past the 11-minute freshness bound of the default poll interval.
 	later := m.buildView(at.Add(12 * time.Minute))
 	if later.snap.Accounts[0].LocalModels[0].AssistantMessages != nil {
 		t.Fatal("old cache advertised current activity")
+	}
+}
+
+// A catalog entry with no recorded use is not activity. No surface lists it,
+// and the raw JSON keeps the provider's record of it, including the known zero.
+func TestUnusedLocalCandidatesAreNotListed(t *testing.T) {
+	zero := int64(0)
+	at := matrixNow
+	data := &provider.UsageData{Provider: "opencode_free", FetchedAt: at, LocalModels: []provider.LocalModelUsage{{Model: "future-free", Label: "Future Free", Day: at.UTC().Format("2006-01-02"), AssistantMessages: &zero}}}
+	m := &MultiProviderOutput{Providers: []ProviderFormatter{{Name: "opencode_free", DisplayName: "OpenCode Free", Data: data}}}
+	v := m.buildView(at)
+	for name, s := range map[string]string{"plain": v.plainLine(0), "table": strings.Join(v.colorTable(), "\n"), "agent": v.agentLine()} {
+		if strings.Contains(s, "Future Free") {
+			t.Fatalf("%s lists an unused catalog entry: %s", name, s)
+		}
+	}
+	if line := v.plainLine(0); !strings.Contains(line, "no usage reported") {
+		t.Fatalf("plain output names no state for a provider without recorded use: %s", line)
+	}
+	if n := len(v.snap.Accounts[0].LocalModels); n != 0 {
+		t.Fatalf("evaluated account kept %d unused entries", n)
+	}
+	b, err := v.jsonDocument(nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(b), `"local_models"`) != 1 || !strings.Contains(string(b), `"assistant_messages": 0`) {
+		t.Fatalf("raw JSON lost the provider's record of the known zero: %s", b)
 	}
 }
 
