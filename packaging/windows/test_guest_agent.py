@@ -25,7 +25,7 @@ function net { $global:LASTEXITCODE = 5 }
             self.assertEqual(agent.create_user(Path('unused'), 'fixture', 'fake-value', 5), 5)
 
     def test_timeout_exposes_unsettled_guest_pid(self):
-        with patch.object(agent, 'qga_call', return_value={'return': {'pid': 42}}), patch.object(agent.time, 'time', side_effect=[0, 10]):
+        with patch.object(agent, 'qga_call', return_value={'return': {'pid': 42}}), patch.object(agent.time, 'monotonic', side_effect=[0, 10]):
             with self.assertRaisesRegex(TimeoutError, 'guest pid 42 may still be running'):
                 agent.guest_exec(Path('unused'), ['fixture.exe'], 1)
 
@@ -33,5 +33,62 @@ function net { $global:LASTEXITCODE = 5 }
         with patch.object(agent, 'qga_call', side_effect=[{'return': {'pid': 42}}, OSError('status unavailable')]):
             with self.assertRaisesRegex(RuntimeError, 'guest pid 42 may still be running'):
                 agent.guest_exec(Path('unused'), ['fixture.exe'], 10)
+
+
+    def test_guest_deadline_covers_launch_io_polling_and_sleep(self):
+        now = 0.0
+        sent, limits, sleeps = [], [], []
+        replies = [
+            (0.1, 0.1, [(0.05, b'{"return":'), (0.05, b'{"pid":42}}\n')]),
+            (0.1, 0.1, [(0.1, b'{"return":{"exited":false}}\n')]),
+        ]
+
+        def sleep(delay):
+            nonlocal now
+            sleeps.append(delay)
+            now += delay
+
+        class FakeSocket:
+            def __init__(self, *args):
+                self.connect_time, self.send_time, self.chunks = replies.pop(0)
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def settimeout(self, seconds): self.limit = seconds
+            def spend(self, phase, amount):
+                nonlocal now
+                limits.append((phase, self.limit, now))
+                if amount > self.limit:
+                    now += self.limit
+                    raise TimeoutError('synthetic timeout')
+                now += amount
+            def connect(self, address): self.spend('connect', self.connect_time)
+            def sendall(self, body):
+                self.spend('send', self.send_time)
+                sent.append(agent.json.loads(body)['execute'])
+            def recv(self, _size):
+                seconds, payload = self.chunks.pop(0)
+                self.spend('recv', seconds)
+                return payload
+
+        with patch.object(agent.time, 'monotonic', lambda: now), \
+                patch.object(agent.time, 'time', lambda: now), \
+                patch.object(agent.time, 'sleep', sleep), \
+                patch.object(agent.socket, 'socket', FakeSocket):
+            with self.assertRaisesRegex(TimeoutError, 'guest pid 42 may still be running'):
+                agent.guest_exec(Path('unused'), ['fixture.exe'], 1)
+        self.assertEqual(sent, ['guest-exec', 'guest-exec-status'])
+        self.assertEqual(len(limits), 7)
+        for phase, seconds, started in limits:
+            with self.subTest(phase=phase, started=started):
+                self.assertAlmostEqual(seconds, 1 - started)
+        self.assertEqual(len(sleeps), 1)
+        self.assertAlmostEqual(sleeps[0], 0.4)
+        self.assertAlmostEqual(now, 1)
+
+    def test_guest_launch_timeout_has_unknown_outcome_without_resubmission(self):
+        with patch.object(agent, 'qga_call', side_effect=TimeoutError('synthetic')) as call:
+            with self.assertRaisesRegex(TimeoutError, 'launch outcome unknown'):
+                agent.guest_exec(Path('unused'), ['fixture.exe'], 1)
+            self.assertEqual(call.call_count, 1)
 
 if __name__ == '__main__': unittest.main()

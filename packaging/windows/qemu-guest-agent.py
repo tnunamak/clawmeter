@@ -19,18 +19,27 @@ import time
 from pathlib import Path
 
 
-def qga_call(socket_path: Path, payload: dict, timeout: int = 30) -> dict:
+def remaining_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("QGA deadline exhausted")
+    return remaining
+
+
+def qga_call(socket_path: Path, payload: dict, timeout: int = 30, *,
+             deadline: float | None = None) -> dict:
+    if deadline is None:
+        deadline = time.monotonic() + timeout
+    body = (json.dumps(payload) + "\n").encode("utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
+        client.settimeout(remaining_time(deadline))
         client.connect(str(socket_path))
-        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        client.settimeout(remaining_time(deadline))
+        client.sendall(body)
         chunks: list[bytes] = []
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                chunk = client.recv(65536)
-            except TimeoutError:
-                break
+        while True:
+            client.settimeout(remaining_time(deadline))
+            chunk = client.recv(65536)
             if not chunk:
                 break
             chunks.append(chunk)
@@ -39,41 +48,52 @@ def qga_call(socket_path: Path, payload: dict, timeout: int = 30) -> dict:
     raw = b"".join(chunks).decode("utf-8", errors="replace")
     if not raw:
         raise RuntimeError("empty QGA response")
-    return json.loads(raw)
+    reply = json.loads(raw)
+    remaining_time(deadline)
+    return reply
 
 
 def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
-    start = qga_call(
-        socket_path,
-        {
-            "execute": "guest-exec",
-            "arguments": {
-                "path": args[0],
-                "arg": args[1:],
-                "capture-output": True,
+    deadline = time.monotonic() + timeout
+    try:
+        start = qga_call(
+            socket_path,
+            {
+                "execute": "guest-exec",
+                "arguments": {
+                    "path": args[0],
+                    "arg": args[1:],
+                    "capture-output": True,
+                },
             },
-        },
-    )
+            deadline=deadline,
+        )
+    except TimeoutError as error:
+        raise TimeoutError(f"guest command timed out after {timeout}s; launch outcome unknown") from error
     pid = start["return"]["pid"]
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    timed_out = f"guest command timed out after {timeout}s; guest pid {pid} may still be running: {args}"
+    while True:
         try:
+            remaining_time(deadline)
             status = qga_call(
                 socket_path,
                 {"execute": "guest-exec-status", "arguments": {"pid": pid}},
+                deadline=deadline,
             )["return"]
+            if not status.get("exited"):
+                time.sleep(min(1, remaining_time(deadline)))
+                continue
+        except TimeoutError as error:
+            raise TimeoutError(timed_out) from error
         except (OSError, RuntimeError, KeyError, ValueError) as error:
             raise RuntimeError(f"guest status unavailable; guest pid {pid} may still be running") from error
-        if status.get("exited"):
-            stdout = decode_output(status.get("out-data"))
-            stderr = decode_output(status.get("err-data"))
-            if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
-            if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            return int(status.get("exitcode", 0))
-        time.sleep(1)
-    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running: {args}")
+        stdout = decode_output(status.get("out-data"))
+        stderr = decode_output(status.get("err-data"))
+        if stdout:
+            print(stdout, end="" if stdout.endswith("\n") else "\n")
+        if stderr:
+            print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+        return int(status.get("exitcode", 0))
 
 
 def decode_output(value: str | None) -> str:
