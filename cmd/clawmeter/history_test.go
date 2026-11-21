@@ -86,3 +86,34 @@ func TestUsageHistoryConfigSetting(t *testing.T) {
 		t.Fatalf("show disabled history: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
+
+func TestParseHistoryDurationDaysAndStandardUnits(t *testing.T) {
+	for input, want := range map[string]time.Duration{
+		"1d": 24 * time.Hour,
+		"36500d": 36500 * 24 * time.Hour,
+		"90m": 90 * time.Minute,
+	} {
+		got, err := parseHistoryDuration(input)
+		if err != nil || got != want {
+			t.Errorf("parseHistoryDuration(%q) = %v, %v; want %v", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"0d", "-1d", "36501d", "1.5d", "d"} {
+		if got, err := parseHistoryDuration(input); err == nil || got != 0 {
+			t.Errorf("parseHistoryDuration(%q) = %v, %v; want a zero duration and error", input, got, err)
+		}
+	}
+}
+
+func TestStatusShortcutFlagUsesExactNameBeforeEquals(t *testing.T) {
+	for _, arg := range []string{"--source=fixture", "-source=fixture", "--json=false", "-check"} {
+		if !isStatusShortcutFlag(arg) {
+			t.Errorf("isStatusShortcutFlag(%q) = false; want true", arg)
+		}
+	}
+	for _, arg := range []string{"--source-extra=fixture", "--", "source", "unrelated=--json"} {
+		if isStatusShortcutFlag(arg) {
+			t.Errorf("isStatusShortcutFlag(%q) = true; want false", arg)
+		}
+	}
+}
