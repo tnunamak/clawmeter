@@ -26,20 +26,22 @@ extension. Copy each field as written.
 
 **Summary** (132 characters at most):
 
-> Live Claude reset grants and prepaid Claude API credits in the Clawmeter tray app on your computer.
+> Claude reset grants and Claude and OpenAI API credit readings in the Clawmeter tray on your computer.
 
 **Description:**
 
 > Clawmeter is a tray app that shows how much of your AI coding quota is left.
-> This extension adds two things Claude does not expose to Clawmeter directly:
+> The extension adds these readings:
 >
 > • Claude reset grants from claude.ai: how many resets you have and when they expire.
 > • Prepaid Claude API credits from the Claude Console: balance, spend this month, and when the credit expires.
+> • Optional OpenAI API billing readings from platform.openai.com, after you grant access to that site.
 >
-> The extension reads them once a minute with your signed-in browser session
-> and sends them only to the Clawmeter app on the same computer
-> (127.0.0.1). It sends nothing anywhere else. Keep a claude.ai tab open for
-> reset grants: claude.ai answers only requests from its own pages.
+> Claude sources are checked once a minute with your signed-in browser session.
+> Keep a claude.ai tab open for reset grants. The optional OpenAI reader observes
+> the billing page when it loads; it is not part of the Claude polling schedule.
+> Readings are delivered only to the Clawmeter app on the same computer
+> (127.0.0.1).
 >
 > Requires the Clawmeter app: https://github.com/tnunamak/clawmeter
 
@@ -64,7 +66,7 @@ The images are rendered from the HTML files next to them; re-render with
 
 **Single purpose:**
 
-> Show the user's Claude reset grants and prepaid Claude API credits in the Clawmeter app on the same computer.
+> Show the user's Claude reset grants and Claude and optional OpenAI API credit readings in the Clawmeter app on the same computer.
 
 **Permission justifications:**
 
@@ -75,6 +77,7 @@ The images are rendered from the HTML files next to them; re-render with
 | `scripting` | Runs the reads inside open claude.ai and Claude Console tabs. claude.ai refuses the same request from the extension's background worker, and tabs in different containers can be signed in to different accounts. |
 | Host `https://claude.ai/*` | Reads the user's organizations and reset grants. |
 | Host `https://platform.claude.com/*` | Reads the user's Console organizations, prepaid credit balance, credit grants, and usage costs. |
+| Optional host `https://platform.openai.com/*` | Observes the signed-in OpenAI billing page only after permission is granted, to read API billing data for Clawmeter. |
 | Host `http://127.0.0.1/*` | Sends the readings to the Clawmeter app on the same computer. |
 
 **Remote code:** No, I am not using remote code. All code is in the package.
