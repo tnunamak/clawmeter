@@ -78,4 +78,53 @@ kill_vm_processes() { :; }; cleanup_safe_vm_conf() { :; }
 main''')
         self.assertNotEqual(result.returncode, 0, result.stderr)
 
+
+class ExtensionPackageTest(unittest.TestCase):
+    def setUp(self):
+        import json
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        self.packager = scripts / 'package-extension.py'
+        self.packager.write_bytes(Path(__file__).with_name('package-extension.py').read_bytes())
+        self.extension = self.root / 'extension'
+        self.extension.mkdir()
+        self.manifest = self.extension / 'manifest.json'
+        self.manifest.write_text(json.dumps({
+            'version': '0.0.1', 'key': 'synthetic-fixture-marker', 'icons': {'16': 'icon.png'},
+        }))
+        for name in ('background.js', 'console.js', 'resets.js', 'popup.html', 'popup.js', 'icon.png', 'README.md'):
+            (self.extension / name).write_bytes(b'synthetic fixture')
+
+    def package(self, name):
+        import sys
+        archive = self.root / name
+        result = subprocess.run(
+            [sys.executable, str(self.packager), str(archive)],
+            cwd=self.root, text=True, capture_output=True, timeout=10,
+        )
+        return result, archive
+
+    def test_extension_archive_is_reproducible_and_omits_development_metadata(self):
+        import json
+        import zipfile
+        first, first_path = self.package('first.zip')
+        second, second_path = self.package('second.zip')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(first_path.read_bytes(), second_path.read_bytes())
+        with zipfile.ZipFile(first_path) as archive:
+            self.assertEqual(set(archive.namelist()), {
+                'manifest.json', 'background.js', 'console.js', 'resets.js', 'popup.html', 'popup.js', 'icon.png',
+            })
+            self.assertNotIn('key', json.loads(archive.read('manifest.json')))
+        self.assertIn('key', json.loads(self.manifest.read_text()))
+
+    def test_missing_manifest_icon_fails_without_writing_archive(self):
+        (self.extension / 'icon.png').unlink()
+        result, archive = self.package('failed.zip')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing from extension/: icon.png', result.stderr)
+        self.assertFalse(archive.exists())
+
 if __name__ == '__main__': unittest.main()
