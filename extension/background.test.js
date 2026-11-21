@@ -744,3 +744,23 @@ test("a failed cost-cache write still saves the status and renewal lookups", asy
   assert.ok(saved.status);
   assert.deepEqual(saved.resetLinks.map(([id]) => id), ["org-a"]);
 });
+
+test("another user's app takes precedence over a concurrent local outage", () => {
+  const { context } = worker(async () => ({ status: "ok", payloads: [] }));
+  for (const delivery of [["unreachable", "foreign"], ["foreign", "unreachable"]]) {
+    const result = JSON.parse(JSON.stringify(context.signal({ delivery })));
+    assert.deepEqual(result, {
+      off: true, problem: "Another user's Clawmeter is answering on this computer",
+    });
+  }
+});
+
+test("a successful local delivery clears both a prior outage and a refusal streak", () => {
+  const { context } = worker(async () => ({ status: "ok", payloads: [] }));
+  const status = { delivery: ["saved"] };
+  const previous = { off: "unreachable", refused: "failed", refusals: 5 };
+  const result = JSON.parse(JSON.stringify(context.signal(status, previous)));
+  assert.deepEqual(result, { off: false, problem: "" });
+  assert.equal(status.off, "");
+  assert.equal(status.refusals, 0);
+});
