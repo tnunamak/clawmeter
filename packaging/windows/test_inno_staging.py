@@ -51,4 +51,22 @@ if [[ "$version" == B ]]; then touch "$TEST_ROOT/B-done"; fi
                 if a.poll() is None: a.kill()
                 a.communicate()
 
+class InnoTemplateTest(unittest.TestCase):
+    def section(self, name):
+        template = SCRIPT.with_name('clawmeter.iss').read_text(encoding='utf-8')
+        start = template.split(f'[{name}]\n', 1)[1]
+        return start.split('\n[', 1)[0].splitlines()
+
+    def test_start_menu_shortcut_starts_the_installed_tray(self):
+        shortcut = next(line for line in self.section('Icons') if 'Parameters: "tray"' in line)
+        self.assertIn(r'Filename: "{app}\clawmeter.exe"', shortcut)
+        self.assertIn(r'IconFilename: "{app}\clawmeter.ico"', shortcut)
+
+    def test_postinstall_tray_launch_is_optional_and_skipped_in_silent_setup(self):
+        launch = next(line for line in self.section('Run') if 'Parameters: "tray"' in line)
+        flags = launch.split('Flags: ', 1)[1].split()
+        self.assertIn('postinstall', flags)
+        self.assertIn('skipifsilent', flags)
+
+
 if __name__ == '__main__': unittest.main()
