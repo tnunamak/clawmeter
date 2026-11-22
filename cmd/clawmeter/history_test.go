@@ -10,6 +10,27 @@ import (
 	"time"
 )
 
+func TestHistoryCommandRejectsInvalidArguments(t *testing.T) {
+	bin := buildBinary(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"unexpected positional argument", []string{"--json", "extra"}, "Usage: clawmeter history --json"},
+		{"invalid duration", []string{"--json", "--since", "not-a-duration"}, `invalid --since duration "not-a-duration"`},
+		{"zero duration", []string{"--json", "--since", "0h"}, `invalid --since duration "0h"`},
+		{"too many days", []string{"--json", "--since", "36501d"}, `invalid --since duration "36501d"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code := runWithHome(t, bin, t.TempDir(), append([]string{"history"}, tc.args...)...)
+			if code != 1 || stdout != "" || !strings.Contains(stderr, tc.want) {
+				t.Fatalf("history argument error: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+		})
+	}
+}
+
 func TestHistoryCommandJSONLinesFilters(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()
