@@ -1715,3 +1715,20 @@ func TestThresholdNotificationsUseSharedForecastWords(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendUpdateLineWithoutBaseTooltip(t *testing.T) {
+	if got := AppendUpdateLine(" \n \t", "v1.2.3"); got != "Update available: v1.2.3" {
+		t.Fatalf("AppendUpdateLine = %q, want only the update line", got)
+	}
+}
+
+func TestAppendUpdateLinePreservesExistingTooltip(t *testing.T) {
+	const original = "Ready\nWaiting"
+	if got := AppendUpdateLine(original, ""); got != original {
+		t.Fatalf("without update: got %q, want %q", got, original)
+	}
+	const want = original + "\nUpdate available: v1.2.3"
+	if got := AppendUpdateLine(original, "v1.2.3"); got != want {
+		t.Fatalf("with update: got %q, want %q", got, want)
+	}
+}
