@@ -301,3 +301,35 @@ func TestResetlessExhaustionAcrossSurfaces(t *testing.T) {
 		})
 	}
 }
+
+func TestPendingForecastKeepsStableCLIStatus(t *testing.T) {
+	deadline := time.Date(2030, 1, 2, 3, 4, 0, 0, time.UTC)
+	w := view.Window{
+		Name:       "fixture",
+		Forecast:   view.Forecast{State: view.ForecastPending},
+		Exhaustion: view.Exhaustion{State: view.ExhaustionUnknown},
+		Reset:      view.Reset{Known: true, At: deadline},
+	}
+	current := jsonWindowView(w, true)
+	if current.Forecast.State != "stale" || current.Forecast.Pct != nil || current.Forecast.Basis != "" {
+		t.Fatalf("a pending window must not publish a current estimate: %+v", current.Forecast)
+	}
+	if !current.Reset.Known || current.Reset.At != deadline.Format(time.RFC3339) || current.Exhaustion.State != "unknown" {
+		t.Fatalf("known reset or unknown exhaustion lost: %+v", current)
+	}
+	legacy := forecastFor(&view.Account{Windows: []view.Window{w}})
+	if legacy == nil || legacy.Windows[w.Name].Indicator != "stale" {
+		t.Fatalf("legacy pending-window indicator: %+v", legacy)
+	}
+}
+
+func TestUnknownResetDoesNotCreateLegacyForecast(t *testing.T) {
+	w := view.Window{Name: "fixture", Forecast: view.Forecast{State: view.ForecastNone}}
+	if got := forecastFor(&view.Account{Windows: []view.Window{w}}); got != nil {
+		t.Fatalf("unknown reset should omit the legacy forecast: %+v", got)
+	}
+	current := jsonWindowView(w, true)
+	if current.Reset.Known || current.Reset.At != "" || current.Forecast.State != "none" {
+		t.Fatalf("unknown reset should remain unknown in the current view: %+v", current)
+	}
+}
