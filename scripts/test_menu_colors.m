@@ -33,6 +33,17 @@ int main(void) {
     }
     require(styledMenuTitle(json, @"different title") == nil, @"mismatched spans accepted");
 
+    // A future style is still a valid byte and must not discard adjacent colors.
+    NSString *future = @"[{\"text\":\"x\",\"style\":255},{\"text\":\"y\",\"style\":1}]";
+    NSAttributedString *futureTitle = styledMenuTitle(future, @"xy");
+    require([futureTitle.string isEqualToString:@"xy"], @"future style discarded the title");
+    require([futureTitle attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:NULL] == nil, @"future style was colored");
+    require([[futureTitle attribute:NSForegroundColorAttributeName atIndex:1 effectiveRange:NULL] isEqual:[NSColor systemRedColor]], @"future style discarded the known color");
+
+    // Reject the whole title if a later span is malformed, not only its tail.
+    NSString *badTail = @"[{\"text\":\"x\",\"style\":1},{\"text\":\"y\"}]";
+    require(styledMenuTitle(badTail, @"xy") == nil, @"malformed tail left a partial styled title");
+
     // KVC initializes just the adapter's in-memory menu, avoiding a status item.
     owner = [[SystrayAppDelegate alloc] init];
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"fixture"];
