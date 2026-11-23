@@ -21,6 +21,33 @@ func TestUsageHistoryDefaultsOnAndCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestNotificationThresholdsExplicitZerosRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		warning float64
+	}{
+		{name: "critical only", warning: 80},
+		{name: "both thresholds", warning: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scopeHome(t)
+			cfg := DefaultConfig()
+			want := NotificationConfig{Warning: tc.warning, Critical: 0}
+			cfg.Settings.NotificationThresholds = want
+			if err := cfg.Save(); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reloaded.Settings.NotificationThresholds; got != want {
+				t.Fatalf("reloaded thresholds = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
 func TestValidateSourcesSkipsEmptyEntries(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.EnsureProvider("legacy_unknown", false)

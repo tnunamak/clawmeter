@@ -188,7 +188,7 @@ type GlobalSettings struct {
 	CheckForUpdates *bool `yaml:"check_for_updates,omitempty"`
 
 	// NotificationThresholds for usage warnings
-	NotificationThresholds NotificationConfig `yaml:"notification_thresholds,omitempty"`
+	NotificationThresholds NotificationConfig `yaml:"notification_thresholds"`
 
 	// CodexResetAnnouncements opts into reading the third-party
 	// codex-resets.com feed. Off by default; when off, no request is made.
@@ -209,8 +209,8 @@ func (s GlobalSettings) ShouldRecordUsageHistory() bool {
 
 // NotificationConfig holds notification settings.
 type NotificationConfig struct {
-	Warning  float64 `yaml:"warning"`            // Default: 80%; persist explicit zero.
-	Critical float64 `yaml:"critical,omitempty"` // Default: 95%
+	Warning  float64 `yaml:"warning"`  // Default: 80%; persist explicit zero.
+	Critical float64 `yaml:"critical"` // Default: 95%; persist explicit zero.
 }
 
 // DefaultConfig returns a default configuration.
