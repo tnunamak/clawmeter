@@ -69,4 +69,39 @@ function net { $global:LASTEXITCODE = 5 }
             self.assertEqual(agent.guest_exec(Path('unused'), ['fixture.exe'], 10), 8)
         self.assertEqual(''.join(call.args[0] for call in stderr.write.call_args_list), '\ufffd\n')
 
+
+    def test_guest_result_preserves_exit_status_and_separate_output(self):
+        from io import StringIO
+
+        replies = [
+            {'return': {'pid': 42}},
+            {'return': {'exited': True, 'exitcode': 9, 'out-data': 'b3V0Cg==', 'err-data': 'ZXJy'}},
+        ]
+        with (
+            patch.object(agent, 'qga_call', side_effect=replies),
+            patch.object(agent.sys, 'stdout', new_callable=StringIO) as stdout,
+            patch.object(agent.sys, 'stderr', new_callable=StringIO) as stderr,
+        ):
+            self.assertEqual(agent.guest_exec(Path('unused'), ['fixture.exe'], 10), 9)
+        self.assertEqual(stdout.getvalue(), 'out\n')
+        self.assertEqual(stderr.getvalue(), 'err\n')
+
+    def test_guest_running_status_does_not_publish_partial_output(self):
+        from io import StringIO
+
+        replies = [
+            {'return': {'pid': 42}},
+            {'return': {'exited': False, 'out-data': 'cGFydGlhbA==', 'err-data': 'cGFydGlhbA=='}},
+            {'return': {'exited': True, 'exitcode': 0, 'out-data': 'ZmluYWw='}},
+        ]
+        with (
+            patch.object(agent, 'qga_call', side_effect=replies),
+            patch.object(agent.time, 'sleep'),
+            patch.object(agent.sys, 'stdout', new_callable=StringIO) as stdout,
+            patch.object(agent.sys, 'stderr', new_callable=StringIO) as stderr,
+        ):
+            self.assertEqual(agent.guest_exec(Path('unused'), ['fixture.exe'], 10), 0)
+        self.assertEqual(stdout.getvalue(), 'final\n')
+        self.assertEqual(stderr.getvalue(), '')
+
 if __name__ == '__main__': unittest.main()
