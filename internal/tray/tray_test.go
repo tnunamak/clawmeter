@@ -296,6 +296,26 @@ func TestTrayTitleForPlatform(t *testing.T) {
 	}
 }
 
+func TestAccountHeadingUsesActionableErrorWhenNoQuotaCanBeShown(t *testing.T) {
+	acct := view.Account{Label: "Example", Reading: view.Reading{State: view.ReadingExpired}}
+	if got := accountHead(&acct); got != "Example: token expired" {
+		t.Fatalf("expired fallback: %q", got)
+	}
+	acct.Reading = view.Reading{State: view.ReadingError, Reason: "reading unavailable"}
+	if got := accountHead(&acct); got != "Example: reading unavailable" {
+		t.Fatalf("fetch error heading: %q", got)
+	}
+}
+
+func TestUpdateMessageStandsAloneWhenTheTooltipHasNoReading(t *testing.T) {
+	if got := AppendUpdateLine(" \t\n", "v0.0.1"); got != "Update available: v0.0.1" {
+		t.Fatalf("empty tooltip has a stray separator or lost the update: %q", got)
+	}
+	if got := AppendUpdateLine("Example: reading unavailable", ""); got != "Example: reading unavailable" {
+		t.Fatalf("empty version changed the existing diagnostic: %q", got)
+	}
+}
+
 func TestTooltipShowsOneEstimateAndReset(t *testing.T) {
 	// 99% used three hours before a reset runs out an hour and a half in,
 	// well before the reset.
