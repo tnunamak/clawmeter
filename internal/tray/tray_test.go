@@ -1752,3 +1752,20 @@ func TestAppendUpdateLinePreservesExistingTooltip(t *testing.T) {
 		t.Fatalf("with update: got %q, want %q", got, want)
 	}
 }
+
+func TestResetLinePreservesMultibytePolicyText(t *testing.T) {
+	for _, tc := range []struct {
+		policy string
+		want   string
+	}{
+		{"échéance mensuelle", "Échéance mensuelle"},
+		{"毎月更新", "毎月更新"},
+		{"monthly reset", "Monthly reset"},
+		{"", "Reset not reported"},
+	} {
+		got := resetLine(view.Window{Reset: view.Reset{Policy: tc.policy}})
+		if got != tc.want {
+			t.Errorf("resetLine policy %q: got %q, want %q", tc.policy, got, tc.want)
+		}
+	}
+}

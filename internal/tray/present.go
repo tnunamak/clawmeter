@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tnunamak/clawmeter/internal/forecast"
 	"github.com/tnunamak/clawmeter/internal/format"
@@ -450,7 +452,8 @@ func upperFirst(s string) string {
 	if s == "" {
 		return ""
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	first, width := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(first)) + s[width:]
 }
 
 func iconTooltipTitle(display string, w view.Window) string {
