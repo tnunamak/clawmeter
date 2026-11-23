@@ -4,6 +4,47 @@ import subprocess
 import tempfile
 import unittest
 
+class ExtensionPackagingErrorsTest(unittest.TestCase):
+    def run_packager_fixture(self, root, manifest, output):
+        import sys
+
+        scripts = root / "scripts"
+        scripts.mkdir()
+        script = scripts / "package-extension.py"
+        script.write_bytes(Path(__file__).with_name(script.name).read_bytes())
+        extension = root / "extension"
+        extension.mkdir()
+        (extension / "manifest.json").write_text(manifest)
+        return subprocess.run(
+            [sys.executable, "-I", "-B", str(script), str(output)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_missing_inputs_do_not_replace_a_previous_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "previous.zip"
+            output.write_bytes(b"synthetic previous archive")
+            result = self.run_packager_fixture(
+                root, '{"version":"0.0.0","icons":{"16":"missing.png"}}', output
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("missing from extension/:", result.stderr)
+            self.assertIn("missing.png", result.stderr)
+            self.assertEqual(output.read_bytes(), b"synthetic previous archive")
+
+    def test_malformed_manifest_does_not_create_an_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "unwritten.zip"
+            result = self.run_packager_fixture(root, "{", output)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("JSONDecodeError", result.stderr)
+            self.assertFalse(output.exists())
+
+
 class TCGSmokeTest(unittest.TestCase):
     def run_fixture(self, statements):
         with tempfile.TemporaryDirectory() as tmp:
