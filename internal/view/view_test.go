@@ -489,6 +489,34 @@ func TestResetCreditsEffective(t *testing.T) {
 	}
 }
 
+func TestResetCreditsSnapshotStalenessBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		snapshot  bool
+		fetchedAt time.Time
+		stale     bool
+	}{
+		{name: "future snapshot", snapshot: true, fetchedAt: at.Add(time.Nanosecond), stale: true},
+		{name: "current snapshot", snapshot: true, fetchedAt: at},
+		{name: "at the age limit", snapshot: true, fetchedAt: at.Add(-snapshotStale)},
+		{name: "past the age limit", snapshot: true, fetchedAt: at.Add(-snapshotStale - time.Nanosecond), stale: true},
+		{name: "unknown observation time", snapshot: true},
+		{name: "not a snapshot", fetchedAt: at.Add(time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := fresh("claude")
+			data.ResetCredits = &provider.UsageResetCredits{Snapshot: tc.snapshot, FetchedAt: tc.fetchedAt}
+			credits := account(t, Build(inputs(map[string]*provider.UsageData{"claude": data}), at), "claude").ResetCredits
+			if credits == nil {
+				t.Fatal("no reset credits")
+			}
+			if credits.Stale != tc.stale {
+				t.Errorf("stale = %v, want %v", credits.Stale, tc.stale)
+			}
+		})
+	}
+}
+
 func TestAnnouncementPassesThrough(t *testing.T) {
 	data := fresh("codex", namedWindow("7d", 10, midWindow))
 	data.AnnouncedReset = &provider.ResetAnnouncement{Feed: provider.ResetAnnouncementFeed, Windows: []string{"7d"}}

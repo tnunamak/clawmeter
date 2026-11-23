@@ -334,7 +334,7 @@ func buildAccount(in Inputs, key string, data *provider.UsageData, at time.Time)
 			Schedule:   r.ExpirySchedule(at),
 			ObservedAt: r.FetchedAt,
 			Snapshot:   r.Snapshot,
-			Stale:      r.Snapshot && !r.FetchedAt.IsZero() && at.Sub(r.FetchedAt) > snapshotStale,
+			Stale:      r.Snapshot && !r.FetchedAt.IsZero() && (r.FetchedAt.After(at) || at.Sub(r.FetchedAt) > snapshotStale),
 		}
 		if expiry, ok := r.EarliestExpiry(at); ok {
 			credits.NextExpiry = expiry
