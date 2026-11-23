@@ -788,6 +788,37 @@ test("a copy without a pairing file sends no token", async () => {
   assert.ok(headers.every(sent => !("Clawmeter-Token" in sent)));
 });
 
+test("reset counts include starts but exclude ends and paused grants at the poll time", async () => {
+  const { readResets } = require("./resets.js");
+  const at = Date.parse("2026-11-01T12:00:00Z");
+  const before = "2026-11-01T11:00:00Z", after = "2026-11-01T13:00:00Z";
+  const now = new Date(at).toISOString();
+  const grants = [
+    { resets_left: 2, starts_at: now, ends_at: after, paused: false },
+    { resets_left: 3, starts_at: before, ends_at: now, paused: false },
+    { resets_left: 4, starts_at: before, ends_at: after, paused: true },
+  ];
+  const get = async url => ({ status: 200, body: url.endsWith("/api/organizations")
+    ? [{ id: "fixture-team", name: "Fixture team" }]
+    : url.includes("/usage?") ? { cedar_ember: { eligible: true, grants } } : {} });
+  const posted = [];
+  const result = await readResets(get, at, async reading => { posted.push(reading); return "saved"; });
+  assert.equal(result.accounts[0].resets, 2);
+  assert.deepEqual(posted.map(reading => reading.grants), [grants]);
+});
+
+test("explicitly ineligible reset offers publish a known zero", async () => {
+  const { readResets } = require("./resets.js");
+  const get = async url => ({ status: 200, body: url.endsWith("/api/organizations")
+    ? [{ id: "fixture-team", name: "Fixture team" }]
+    : url.includes("/usage?") ? { cedar_ember: { eligible: false } } : {} });
+  const posted = [];
+  const result = await readResets(get, Date.parse("2026-11-01T12:00:00Z"),
+    async reading => { posted.push(reading); return "saved"; });
+  assert.deepEqual(posted.map(reading => reading.grants), [[]]);
+  assert.deepEqual(result.accounts, [{ name: "Fixture team", resets: 0, delivery: "saved" }]);
+});
+
 test("a restarted worker keeps the hourly renewal lookup", async () => {
   const { readResets } = require("./resets.js");
   const reads = [];
