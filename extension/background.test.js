@@ -613,6 +613,27 @@ test("the icon greys while Clawmeter is down and badges only refusals that persi
   assert.equal(status.refusals, 0);
 });
 
+test("toolbar offline projection takes precedence over a simultaneous three-strike refusal", () => {
+  const { context } = worker(async () => { throw new Error("unexpected read"); });
+  const status = { delivery: ["failed", "unreachable", "foreign"] };
+  const result = context.signal(status, { refusals: 2 });
+  assert.equal(status.refusals, 3);
+  assert.equal(result.off, true);
+  assert.equal(result.problem, "Another user's Clawmeter is answering on this computer");
+});
+
+test("toolbar sets matching 16 and 32 pixel assets for offline and normal states", async () => {
+  const { context } = worker(async () => { throw new Error("unexpected read"); });
+  const paths = [];
+  context.chrome.action.setIcon = async ({ path }) => paths.push({ 16: path[16], 32: path[32] });
+  await context.showSignal({ off: true, problem: "fixture offline" });
+  await context.showSignal({ off: false, problem: "" });
+  assert.deepEqual(paths, [
+    { 16: "icons/icon-16-off.png", 32: "icons/icon-32-off.png" },
+    { 16: "icons/icon-16.png", 32: "icons/icon-32.png" },
+  ]);
+});
+
 test("checks keep the icon and badge across checks that send nothing", async () => {
   let code = 500, send = true;
   const w = worker(async () => ({ status: "ok", payloads: [] }), async () => ({ ok: code < 300, status: code, headers: new Headers() }),
