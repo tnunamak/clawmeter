@@ -89,4 +89,13 @@ kill_vm_processes "$vm_dir"
 PATH="$saved_path"
 [[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'cleanup ran when quickemu was missing'
 
+: >"$QUICKEMU_LOG"
+kill_vm_processes "$tmp_dir/nonexistent-vm" 2>/dev/null
+[[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'cleanup ran when the VM directory could not be entered'
+
+: >"$QUICKEMU_LOG"
+VM_CONF="$vm_dir"
+kill_vm_processes "$vm_dir"
+[[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'cleanup ran when the config path was a directory'
+
 printf 'PASS: scoped VM cleanup (%s)\n' "$source_file"
