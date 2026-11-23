@@ -27,6 +27,10 @@ int main(void) {
     id muted = [title attribute:NSForegroundColorAttributeName atIndex:[plain rangeOfString:@"▒"].location effectiveRange:NULL];
     require([muted isEqual:[NSColor secondaryLabelColor]], @"future cell muting missing");
     require([title attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:NULL] == nil, @"ordinary title text was colored");
+    NSAttributedString *future = styledMenuTitle(@"[{\"text\":\"A\",\"style\":1},{\"text\":\"B\",\"style\":200}]", @"AB");
+    require([future.string isEqualToString:@"AB"], @"an unknown future style discarded the title");
+    require([[future attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:NULL] isEqual:[NSColor systemRedColor]], @"known color was lost beside a future style");
+    require([future attribute:NSForegroundColorAttributeName atIndex:1 effectiveRange:NULL] == nil, @"future style inherited the previous color");
     require(([[NSFontManager sharedFontManager] traitsOfFont:pace] & NSBoldFontMask) != 0, @"pace emphasis missing");
     for (NSString *invalid in @[@"", @"null", @"[]", @"{}", @"[null]", @"[{\"text\":\"x\",\"style\":true}]", @"[{\"text\":\"x\",\"style\":-1}]", @"[{\"text\":\"x\",\"style\":1.5}]", @"[{\"text\":\"x\",\"style\":256}]", @"[{\"text\":\"x\",\"style\":\"red\"}]", @"[{\"text\":7,\"style\":0}]"]) {
       require(styledMenuTitle(invalid, @"x") == nil, @"invalid spans accepted");
@@ -53,6 +57,11 @@ int main(void) {
     NSMenuItem *item = [menu itemWithTag:7];
     require([item.attributedTitle.string isEqualToString:plain] && item.enabled, @"styled native item missing");
     require(item.target == owner && [item.representedObject intValue] == 7 && item.state == NSControlStateValueOn, @"menu action or check changed");
+    row->titleSpansJSON = @"[{\"text\":\"📌 é 账户 \u2588\u2503\u2591\u2592\",\"style\":2}]";
+    [owner add_or_update_menu_item:row];
+    require([menu itemWithTag:7] == item && [item.attributedTitle.string isEqualToString:plain], @"style-only update replaced the item or changed its title");
+    require([[item.attributedTitle attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:NULL] isEqual:[NSColor systemGreenColor]], @"style-only update retained stale attributes");
+    row->titleSpansJSON = json;
     row->disabled = 1; [owner add_or_update_menu_item:row];
     require(!item.enabled && item.attributedTitle.length == 0, @"disabled item retained colors");
     row->disabled = 0; [owner add_or_update_menu_item:row];
