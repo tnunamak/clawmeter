@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -23,6 +24,25 @@ function net { $global:LASTEXITCODE = 5 }
                 return subprocess.run(['pwsh', '-NoProfile', '-File', str(file)], capture_output=True, timeout=15).returncode
         with patch.object(agent, 'powershell', execute):
             self.assertEqual(agent.create_user(Path('unused'), 'fixture', 'fake-value', 5), 5)
+
+    def test_reply_timeout_without_bytes_reports_empty_response(self):
+        with patch.object(agent.socket, 'socket') as transport:
+            client = transport.return_value.__enter__.return_value
+            client.recv.side_effect = TimeoutError('fixture deadline')
+            with self.assertRaisesRegex(RuntimeError, '^empty QGA response$'):
+                agent.qga_call(Path('fixture.sock'), {'execute': 'guest-ping'}, timeout=5)
+            client.settimeout.assert_called_once_with(5)
+            client.recv.assert_called_once()
+            transport.return_value.__exit__.assert_called_once()
+
+    def test_peer_close_mid_reply_reports_json_error_and_closes_transport(self):
+        with patch.object(agent.socket, 'socket') as transport:
+            client = transport.return_value.__enter__.return_value
+            client.recv.side_effect = [b'{"return":', b'']
+            with self.assertRaises(json.JSONDecodeError):
+                agent.qga_call(Path('fixture.sock'), {'execute': 'guest-ping'})
+            self.assertEqual(client.recv.call_count, 2)
+            transport.return_value.__exit__.assert_called_once()
 
     def test_timeout_exposes_unsettled_guest_pid(self):
         with patch.object(agent, 'qga_call', return_value={'return': {'pid': 42}}), patch.object(agent.time, 'time', side_effect=[0, 10]):
