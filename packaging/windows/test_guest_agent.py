@@ -34,4 +34,19 @@ function net { $global:LASTEXITCODE = 5 }
             with self.assertRaisesRegex(RuntimeError, 'guest pid 42 may still be running'):
                 agent.guest_exec(Path('unused'), ['fixture.exe'], 10)
 
+
+    def test_guest_failure_without_output_keeps_nonzero_exit_code(self):
+        replies = [{'return': {'pid': 42}}, {'return': {'exited': True, 'exitcode': 7}}]
+        with patch.object(agent, 'qga_call', side_effect=replies):
+            self.assertEqual(agent.guest_exec(Path('unused'), ['fixture.exe'], 10), 7)
+
+    def test_guest_failure_with_non_utf8_stderr_keeps_exit_code_and_visible_output(self):
+        replies = [
+            {'return': {'pid': 42}},
+            {'return': {'exited': True, 'exitcode': 8, 'err-data': '/w=='}},
+        ]
+        with patch.object(agent, 'qga_call', side_effect=replies), patch.object(agent.sys, 'stderr') as stderr:
+            self.assertEqual(agent.guest_exec(Path('unused'), ['fixture.exe'], 10), 8)
+        self.assertEqual(''.join(call.args[0] for call in stderr.write.call_args_list), '\ufffd\n')
+
 if __name__ == '__main__': unittest.main()
