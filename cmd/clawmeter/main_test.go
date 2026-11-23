@@ -699,6 +699,24 @@ func TestResolveVersionStaysDevForNonReleaseBuilds(t *testing.T) {
 	}
 }
 
+func TestResolveVersionTreatsMissingBuildInfoAsDevelopment(t *testing.T) {
+	read := func() (*debug.BuildInfo, bool) { return nil, true }
+	if got := resolveVersion(defaultVersion, read); got != defaultVersion {
+		t.Errorf("resolveVersion with missing metadata = %q, want %q", got, defaultVersion)
+	}
+}
+
+func TestReleaseVersionRejectsPseudoVersionsAcrossBaseShapes(t *testing.T) {
+	for _, v := range []string{
+		"v0.0.0-20260910012458-c0abf48acfd4",
+		"v0.34.4-rc.1.0.20260910012458-c0abf48acfd4",
+	} {
+		if got := releaseVersionOrDev(v); got != defaultVersion {
+			t.Errorf("releaseVersionOrDev(%q) = %q, want %q", v, got, defaultVersion)
+		}
+	}
+}
+
 func TestReleaseVersionOrDevAcceptsOnlyReleaseTags(t *testing.T) {
 	releases := []string{"v0.34.4", "v1.0.0", "v2.10.3-rc.1"}
 	for _, v := range releases {
