@@ -94,6 +94,14 @@ kill_vm_processes "$tmp_dir/missing vm directory" 2>"$tmp_dir/missing-vm-dir.std
 [[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'a missing VM directory triggered cleanup'
 
 : >"$QUICKEMU_LOG"
+VM_CONF="$vm_dir"
+kill_vm_processes "$vm_dir"
+[[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'cleanup ran with a directory instead of a config file'
+
+VM_CONF="$config_path"
+kill_vm_processes "$tmp_dir/nonexistent VM directory" 2>/dev/null
+[[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'cleanup ran when it could not enter the VM directory'
+
 saved_path="$PATH"
 PATH="$tmp_dir/no-quickemu"
 kill_vm_processes "$vm_dir"
