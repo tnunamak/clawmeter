@@ -38,6 +38,18 @@ test("opening a pinned tab can be retried after the worker rejects", async () =>
   assert.equal(sends, 2);
 });
 
+test("opening a pinned tab can be retried after the worker replies false", async () => {
+  const { context } = popup();
+  let sends = 0;
+  context.chrome.runtime.sendMessage = async () => ++sends === 1 ? false : true;
+  const button = context.openClaude();
+  await button.handlers.click();
+  assert.equal(button.disabled, false);
+  assert.match(button.textContent, /Try again/);
+  await button.handlers.click();
+  assert.equal(sends, 2);
+});
+
 test("a partial claude.ai reading with no accounts says a tab did not answer, not that there is no plan", () => {
   const { context, text } = popup();
   const rendered = context.claude({ state: "ok", accounts: [], unchecked: 1 }).map(text).join("\n");

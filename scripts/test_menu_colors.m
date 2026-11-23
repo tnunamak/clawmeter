@@ -38,8 +38,8 @@ int main(void) {
     require(styledMenuTitle(json, @"different title") == nil, @"mismatched spans accepted");
 
     // A future style is still a valid byte and must not discard adjacent colors.
-    NSString *future = @"[{\"text\":\"x\",\"style\":255},{\"text\":\"y\",\"style\":1}]";
-    NSAttributedString *futureTitle = styledMenuTitle(future, @"xy");
+    NSString *futureJSON = @"[{\"text\":\"x\",\"style\":255},{\"text\":\"y\",\"style\":1}]";
+    NSAttributedString *futureTitle = styledMenuTitle(futureJSON, @"xy");
     require([futureTitle.string isEqualToString:@"xy"], @"future style discarded the title");
     require([futureTitle attribute:NSForegroundColorAttributeName atIndex:0 effectiveRange:NULL] == nil, @"future style was colored");
     require([[futureTitle attribute:NSForegroundColorAttributeName atIndex:1 effectiveRange:NULL] isEqual:[NSColor systemRedColor]], @"future style discarded the known color");

@@ -46,7 +46,7 @@ function openClaude() {
     button.disabled = true;
     button.textContent = "Opening…";
     try {
-      await chrome.runtime.sendMessage("open-claude");
+      if (await chrome.runtime.sendMessage("open-claude") === false) throw new Error("the worker could not open a pinned tab");
     } catch {
       button.disabled = false;
       button.textContent = "Couldn't open a pinned tab. Try again.";
