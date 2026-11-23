@@ -745,6 +745,20 @@ func TestReleaseVersionOrDevAcceptsOnlyReleaseTags(t *testing.T) {
 	}
 }
 
+func TestReleaseVersionRejectsMajorZeroBasePseudoVersion(t *testing.T) {
+	const candidate = "v0.0.0-20300101123456-abcdef012345"
+	if got := releaseVersionOrDev(candidate); got != defaultVersion {
+		t.Fatalf("releaseVersionOrDev(%q) = %q, want %q", candidate, got, defaultVersion)
+	}
+}
+
+func TestReleaseVersionRejectsPseudoVersionDerivedFromPrerelease(t *testing.T) {
+	const candidate = "v1.2.3-rc.1.0.20300101123456-abcdef012345"
+	if got := releaseVersionOrDev(candidate); got != defaultVersion {
+		t.Fatalf("releaseVersionOrDev(%q) = %q, want %q", candidate, got, defaultVersion)
+	}
+}
+
 func TestUpdateHomebrewRunningExecutable(t *testing.T) {
 	bin := buildBinary(t)
 	body, err := os.ReadFile(bin)
