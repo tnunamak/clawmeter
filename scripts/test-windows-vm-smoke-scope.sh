@@ -82,6 +82,17 @@ kill_vm_processes "$vm_dir"
 [[ -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'quickemu failure triggered a fallback'
 export QUICKEMU_STATUS=0
 
+VM_CONF="$vm_dir/config-is-directory.conf"
+mkdir "$VM_CONF"
+: >"$QUICKEMU_LOG"
+kill_vm_processes "$vm_dir"
+[[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'a non-file config triggered cleanup'
+
+VM_CONF="$config_path"
+: >"$QUICKEMU_LOG"
+kill_vm_processes "$tmp_dir/missing vm directory" 2>"$tmp_dir/missing-vm-dir.stderr"
+[[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'a missing VM directory triggered cleanup'
+
 : >"$QUICKEMU_LOG"
 saved_path="$PATH"
 PATH="$tmp_dir/no-quickemu"
