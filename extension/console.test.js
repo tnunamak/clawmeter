@@ -143,6 +143,25 @@ test("cache throttles costs but credits, spend and link are polled again", async
   assert.deepEqual(payloads[0].daily, { [today]: 1000 });
 });
 
+test("recent restored entries with malformed costs never throttle or populate the next payload", async () => {
+  const pool = poolHash("org-api");
+  for (const daily of [undefined, [], { [today]: "11" }]) {
+    const f = fixture(), cache = { [pool]: { at: now, reconciledAt: now, daily } };
+    const { payloads } = await readConsole(f.getJSON, now + 1000, cache);
+    assert.equal(f.calls.filter(url => url.includes("usage_cost")).length, 2);
+    assert.deepEqual(payloads[0].daily, { [today]: 11.29645 });
+    assert.equal(cache[pool].reconciledAt, now + 1000);
+  }
+
+  const f = fixture(), cache = { [pool]: { at: now, reconciledAt: now } };
+  f.data["/api/organizations/org-api/current_spend"].amount = 1000;
+  const posted = [];
+  const result = await readConsole(f.getJSON, now + 1000, cache, value => posted.push(value));
+  assert.deepEqual(result.payloads, []);
+  assert.deepEqual(posted, []);
+  assert.equal(cache[pool], undefined);
+});
+
 test("month start includes the last seven days and month end includes every month day", async () => {
   for (const [date, start] of [["2026-10-01T12:00:00Z", "2026-09-25"], ["2026-10-31T12:00:00Z", "2026-10-01"]]) {
     const f = fixture();

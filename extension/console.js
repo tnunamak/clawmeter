@@ -129,12 +129,18 @@ async function readConsole(getJSON, now, cache, post = async () => {}, shared = 
       }
       return daily;
     };
+    const validDaily = daily => object(daily) && Object.entries(daily).every(([date, value]) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(date) && typeof value === "number" && Number.isFinite(value) && value >= 0);
     // Costs reconcile when this month's daily total matches current spend.
-    const reconciles = daily => object(daily) && Object.entries(daily).every(([date, value]) =>
-      /^\d{4}-\d{2}-\d{2}$/.test(date) && typeof value === "number" && Number.isFinite(value) && value >= 0) &&
+    const reconciles = daily => validDaily(daily) &&
       Math.abs(Object.entries(daily).filter(([date]) => date.startsWith(month))
         .reduce((sum, [, value]) => sum + value, 0) - spend.amount) <= Math.max(5, spend.amount * 0.1);
     let entry = cache[pool];
+    // Validate restored costs before letting their age throttle a refresh.
+    if (entry !== undefined && (!object(entry) || !validDaily(entry.daily))) {
+      delete cache[pool];
+      entry = undefined;
+    }
     const age = entry && Number.isFinite(entry.at) && entry.at <= observedTime ? observedTime - entry.at : Infinity;
     if (age >= usageInterval || ((!Number.isFinite(entry.reconciledAt) || !reconciles(entry.daily)) && age >= usageRetry)) {
       let daily = null;
