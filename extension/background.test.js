@@ -742,6 +742,39 @@ test("open-claude reads the new tab even when a check was already running", asyn
   assert.deepEqual(replies, [true]);
 });
 
+test("open-claude finishes when the new tab never sends a completion event", async () => {
+  let reads = 0;
+  const w = worker(async () => { reads++; return { status: "ok", payloads: [] }; });
+  await tick();
+  const response = new Promise(resolve => {
+    assert.equal(w.listeners.message("open-claude", { id: "self" }, resolve), true);
+  });
+  await tick();
+  assert.equal(reads, 0);
+  assert.equal(typeof w.listeners.updated, "function");
+  assert.equal(w.timers.size, 1);
+  const [id, expire] = w.timers.entries().next().value;
+  w.timers.delete(id);
+  expire();
+  assert.equal(await response, true);
+  assert.equal(reads, 1);
+  assert.equal(w.listeners.updated, null);
+});
+
+test("open-claude reports tab creation failure without starting a read", async () => {
+  let reads = 0;
+  const w = worker(async () => { reads++; return { status: "ok", payloads: [] }; });
+  await tick();
+  w.context.chrome.tabs.create = async () => { throw new Error("Synthetic tab creation failure"); };
+  const response = new Promise(resolve => {
+    assert.equal(w.listeners.message("open-claude", { id: "self" }, resolve), true);
+  });
+  assert.equal(await response, false);
+  assert.equal(reads, 0);
+  assert.equal(w.listeners.updated, undefined);
+  assert.equal(w.timers.size, 0);
+});
+
 test("a copy without a pairing file sends no token", async () => {
   const headers = [];
   const w = worker(async (getJSON, now, cache, post) => { await post({}); return { status: "ok", payloads: [] }; },
