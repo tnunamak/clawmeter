@@ -126,6 +126,15 @@ func TestParseHistoryDurationDaysAndStandardUnits(t *testing.T) {
 	}
 }
 
+func TestParseHistoryDurationPreservesCompoundSubdayPrecision(t *testing.T) {
+	const input = "2h30m500ms"
+	want := 2*time.Hour + 30*time.Minute + 500*time.Millisecond
+	got, err := parseHistoryDuration(input)
+	if err != nil || got != want {
+		t.Fatalf("parseHistoryDuration(%q) = %v, %v; want %v", input, got, err, want)
+	}
+}
+
 func TestStatusShortcutFlagUsesExactNameBeforeEquals(t *testing.T) {
 	for _, arg := range []string{"--source=fixture", "-source=fixture", "--json=false", "-check"} {
 		if !isStatusShortcutFlag(arg) {
