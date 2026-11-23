@@ -57,6 +57,30 @@ test("credit receipts require an explicit organization header and retain genuine
   s.advance(1); await s.read(url,{...body,total_available:undefined},{organization:"org-a"}).then(()=>assert.fail("malformed receipt accepted"),()=>{});
   assert.equal(s.receipts.length,1);
 });
+test("duplicate and older credit observations leave the latest balance intact", async () => {
+  const s=setup(), url="https://api.openai.com/v1/dashboard/billing/credit_grants";
+  const body={object:"credit_summary",total_granted:10,total_used:0,total_available:10,grants:{object:"list",data:[]}};
+  const organization="fixture-org";
+  const at=s.now();
+  await s.read(url,body,{organization});
+  await s.read(url,{...body,total_used:8,total_available:2},{organization});
+  await s.read(url,{...body,total_used:9,total_available:1},{organization,at:at-1});
+  assert.deepEqual(s.receipts.map(r=>r.credits.balance),[1000]);
+  s.advance(1);
+  await s.read(url,{...body,total_used:7,total_available:3},{organization});
+  assert.deepEqual(s.receipts.map(r=>r.credits.balance),[1000,300]);
+});
+
+test("credit observation time expires at the exact freshness boundary", async () => {
+  const s=setup(), url="https://api.openai.com/v1/dashboard/billing/credit_grants";
+  const body={object:"credit_summary",total_granted:1,total_used:0,total_available:1,grants:{object:"list",data:[]}};
+  const at=s.now()-300000, organization="fixture-org";
+  await s.read(url,body,{organization,at});
+  assert.equal(s.receipts.length,0);
+  await s.read(url,body,{organization,at:at+1});
+  assert.equal(s.receipts.length,1);
+});
+
 test("installed fetch observer returns the original response and emits only normalized financial data", {timeout:5000}, async () => {
   let releaseHash;
   const hashReady=new Promise(resolve=>{releaseHash=resolve;});
