@@ -76,6 +76,28 @@ sleep() { echo "sleep:$1" >> "$fixture/events"; SECONDS=$((SECONDS + $1)); }
         self.assertIn('application-smoke', events)
         self.assertNotIn('sleep:60', events)
 
+    def check_fallback_verdict(self, enabled, status):
+        script = Path(__file__).with_name('windows-vm-smoke.sh').read_text()
+        start = script.index('should_try_tcg() {')
+        end = script.index('\n}', start) + 2
+        return subprocess.run(
+            ['bash', '-c', script[start:end] + '\nTCG_FALLBACK=$1; should_try_tcg "$2"',
+             'fixture', str(enabled), str(status)],
+            capture_output=True, text=True,
+        )
+
+    def test_disabled_fallback_does_not_retry_no_response_statuses(self):
+        for status in (2, 4):
+            with self.subTest(status=status):
+                result = self.check_fallback_verdict(0, status)
+                self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_enabled_fallback_retries_only_no_response_statuses(self):
+        for status, expected in ((0, 1), (1, 1), (2, 0), (3, 1), (4, 0)):
+            with self.subTest(status=status):
+                result = self.check_fallback_verdict(1, status)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
     def test_successful_fallback_clears_failed_kvm_status(self):
         result, _ = self.run_fixture('''RUN_VM=1
 run_quota_preflight() { :; }; build_artifacts() { :; }; check_pe_subsystem() { :; }; run_wine_smoke() { :; }
