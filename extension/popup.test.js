@@ -7,10 +7,10 @@ const vm = require("node:vm");
 
 // popup loads popup.js against a minimal DOM and returns the rendered text.
 function popup() {
-  const node = tag => ({ tag, children: [], textContent: "", className: "",
+  const node = tag => ({ tag, children: [], textContent: "", className: "", handlers: {},
     append(...nodes) { this.children.push(...nodes); },
     replaceChildren(...nodes) { this.children = nodes; },
-    addEventListener() {} });
+    addEventListener(type, handler) { this.handlers[type] = handler; } });
   const elements = {};
   const context = vm.createContext({
     document: { createElement: node, getElementById: id => (elements[id] ??= node()) },
@@ -21,6 +21,22 @@ function popup() {
   const text = n => typeof n === "string" ? n : [n.textContent, ...n.children.map(text)].filter(Boolean).join(" | ");
   return { context, text };
 }
+
+test("opening a pinned tab can be retried after the worker rejects", async () => {
+  const { context } = popup();
+  let sends = 0;
+  context.chrome.runtime.sendMessage = async message => {
+    assert.equal(message, "open-claude");
+    if (++sends === 1) throw new Error("synthetic worker failure");
+    return true;
+  };
+  const button = context.openClaude();
+  await button.handlers.click();
+  assert.equal(button.disabled, false);
+  assert.match(button.textContent, /Try again/);
+  await button.handlers.click();
+  assert.equal(sends, 2);
+});
 
 test("a partial claude.ai reading with no accounts says a tab did not answer, not that there is no plan", () => {
   const { context, text } = popup();

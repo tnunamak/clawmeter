@@ -45,7 +45,12 @@ function openClaude() {
   button.addEventListener("click", async () => {
     button.disabled = true;
     button.textContent = "Opening…";
-    await chrome.runtime.sendMessage("open-claude");
+    try {
+      await chrome.runtime.sendMessage("open-claude");
+    } catch {
+      button.disabled = false;
+      button.textContent = "Couldn't open a pinned tab. Try again.";
+    }
   });
   return button;
 }
