@@ -113,3 +113,22 @@ for (const responseType of ["json", "text"]) test(`reused XHR ${responseType} re
   assert.equal(emitted.find(r=>r.pool===poolA)?.credits.balance,200);
   assert.equal(emitted.find(r=>r.pool===poolB)?.credits.balance,300);
 });
+
+for (const [name, rejectedBody] of [["malformed JSON", "{"], ["oversized JSON", " ".repeat(262145)]]) {
+  test(`a ${name} response clone does not block the next observation`, {timeout:5000}, async () => {
+    const s=setup(), emitted=[];
+    const url="https://api.openai.com/v1/dashboard/billing/credit_grants";
+    const valid={object:"credit_summary",total_granted:0,total_used:0,total_available:0,grants:{object:"list",data:[]}};
+    const replies=[rejectedBody, JSON.stringify(valid)].map(text=>({ok:true,url,clone:()=>({text:async()=>text})}));
+    let fetches=0, finish;
+    const ready=new Promise(resolve=>{finish=resolve;});
+    function XHR() {} XHR.prototype.open=function(){}; XHR.prototype.setRequestHeader=function(){};
+    const win={location:{origin:"https://platform.openai.com",href:"https://platform.openai.com/"},
+      fetch:async()=>replies[fetches++], XMLHttpRequest:XHR, postMessage:event=>{emitted.push(event);finish();}};
+    s.context.installOpenAIObserver(win);
+    for (const response of replies) assert.equal(await win.fetch(url,{headers:{"OpenAI-Organization":"synthetic-org"}}),response);
+    await ready;
+    assert.equal(emitted.length,1);
+    assert.equal(emitted[0].receipt.credits.balance,0);
+  });
+}
