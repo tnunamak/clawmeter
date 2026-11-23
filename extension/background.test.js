@@ -642,6 +642,34 @@ test("checks keep the icon and badge across checks that send nothing", async () 
   assert.equal(w.sessions.at(-1).status.off, "unreachable");
 });
 
+test("poll still refreshes the toolbar when session storage refuses a write", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  const save = w.context.chrome.storage.session.set;
+  w.context.chrome.storage.session.set = async () => { throw new Error("Synthetic session quota"); };
+  await w.context.poll();
+  assert.equal(w.sessions.length, 0);
+  assert.equal(w.icons.at(-1), "icons/icon-16.png");
+  assert.equal(w.badges.at(-1), "Clawmeter");
+  w.context.chrome.storage.session.set = save;
+  await w.context.poll();
+  assert.ok(w.sessions.at(-1)?.status);
+});
+
+test("poll saves status even when the toolbar API refuses to update", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  const show = w.context.chrome.action.setIcon;
+  w.context.chrome.action.setIcon = async () => { throw new Error("Synthetic toolbar failure"); };
+  await w.context.poll();
+  assert.ok(w.sessions.at(-1)?.status);
+  assert.equal(w.icons.length, 0);
+  w.context.chrome.action.setIcon = show;
+  await w.context.poll();
+  assert.equal(w.icons.at(-1), "icons/icon-16.png");
+  assert.equal(w.sessions.length, 2);
+});
+
 test("install forgets the claude.ai flag earlier versions kept", async () => {
   const w = worker(async () => ({ status: "ok", payloads: [] }));
   await tick();
