@@ -12,6 +12,20 @@ function setup(crypto = webcrypto) {
 const base = "https://chatgpt.com/backend-api/product-account-links/";
 const offer = () => ({ eligible:true, offer:{currency:"USD",cadence:"monthly",period_credit_amount_usd:"70.00",claimable_credit_amount_usd:"35",expires_at:"2026-11-20T00:00:00Z"} });
 const discovery = org => ({destinations:[{destination_type:"api_org",destination_account_id:org,display_name:"Synthetic organization"}]});
+test("ordinary annual credit offer preserves a zero claimable amount", () => {
+  const s=setup();
+  const body=offer();
+  body.offer={...body.offer,cadence:"annual",claimable_credit_amount_usd:"0"};
+  const result=s.context.normalizeOpenAIBenefit(body,s.now());
+  assert.equal(result.cadence,"annual");
+  assert.equal(result.period_credit,7000);
+  assert.equal(result.claimable_credit,0);
+});
+test("an ineligible credit offer does not display offer terms", () => {
+  const s=setup();
+  const result=s.context.normalizeOpenAIBenefit({...offer(),eligible:false},s.now());
+  assert.deepEqual({...result},{eligible:false,observed_at:new Date(s.now()).toISOString()});
+});
 test("an offer needs an exact account to organization discovery binding, regardless of arrival order", async () => {
   const s=setup();
   await s.read(base+"accounts/account-a/benefits/chatgpt_api_credits_promo?destination_type=api_org",offer());
