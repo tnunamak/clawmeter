@@ -69,4 +69,27 @@ class InnoTemplateTest(unittest.TestCase):
         self.assertIn('skipifsilent', flags)
 
 
+class InnoArtifactContractTest(unittest.TestCase):
+    def test_builder_checks_the_artifact_name_declared_by_inno(self):
+        iss = SCRIPT.with_name("clawmeter.iss").read_text(encoding="utf-8")
+        output_names = [
+            line.split("=", 1)[1].strip()
+            for line in iss.splitlines()
+            if line.startswith("OutputBaseFilename=")
+        ]
+        self.assertEqual(len(output_names), 1, "Inno should declare one artifact basename")
+        build = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(f'$setup = Join-Path $out.FullName "{output_names[0]}.exe"', build)
+        self.assertIn("Test-Path $setup", build)
+
+    def test_install_version_uses_the_builder_argument_and_has_a_dev_fallback(self):
+        iss = SCRIPT.with_name("clawmeter.iss").read_text(encoding="utf-8").splitlines()
+        fallback = iss.index("#ifndef AppVersion")
+        self.assertEqual(iss[fallback + 1:fallback + 3], [
+            '#define AppVersion "0.0.0-dev"', "#endif",
+        ])
+        self.assertIn("AppVersion={#AppVersion}", iss)
+        self.assertIn('"/DAppVersion=$versionValue"', SCRIPT.read_text(encoding="utf-8"))
+
+
 if __name__ == '__main__': unittest.main()
