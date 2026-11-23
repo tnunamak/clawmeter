@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,11 @@ func setupTmuxIntegration(dryRun bool) integrationResult {
 		return integrationResult{Name: "tmux", Status: "would change", Detail: next, Changed: true}
 	}
 
-	if backup, err := backupTmuxStatusRight(current); err == nil && backup != "" {
+	backup, err := backupTmuxStatusRight(current)
+	if err != nil {
+		return integrationResult{Name: "tmux", Status: "error", Detail: fmt.Sprintf("backup status-right: %v", err)}
+	}
+	if backup != "" {
 		fmt.Printf("tmux backup: %s\n", backup)
 	}
 	if err := exec.Command("tmux", "set", "-g", "status-right", next).Run(); err != nil {
@@ -141,21 +146,41 @@ func backupTmuxStatusRight(current string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if errors.Is(err, os.ErrExist) {
-		return "", nil
-	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".tmux-status-right-*")
 	if err != nil {
 		return "", err
 	}
-	if _, err := file.Write([]byte(current)); err != nil {
-		file.Close()
+	defer os.Remove(file.Name())
+	published := false
+	if err := writeTmuxBackup(file, current, func() error {
+		err := os.Link(file.Name(), path)
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		published = err == nil
+		return err
+	}); err != nil {
 		return "", err
 	}
-	if err := file.Close(); err != nil {
-		return "", err
+	if !published {
+		return "", nil
 	}
 	return path, nil
+}
+
+func writeTmuxBackup(file io.WriteCloser, current string, publish func() error) error {
+	n, err := io.WriteString(file, current)
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if n != len(current) {
+		return io.ErrShortWrite
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return publish()
 }
 
 func claudeSettingsPath() (string, error) {

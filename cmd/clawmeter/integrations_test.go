@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -312,5 +314,46 @@ func TestClaudeForceReplacesCustomStatusline(t *testing.T) {
 	got, _ = os.ReadFile(backups[0])
 	if string(got) != string(input) {
 		t.Fatal("backup did not preserve original")
+	}
+}
+
+type fakeTmuxBackup struct {
+	n        int
+	writeErr error
+	closeErr error
+	closed   bool
+}
+
+func (f *fakeTmuxBackup) Write(_ []byte) (int, error) { return f.n, f.writeErr }
+func (f *fakeTmuxBackup) Close() error {
+	f.closed = true
+	return f.closeErr
+}
+
+func TestWriteTmuxBackupDoesNotPublishAnIncompleteBackup(t *testing.T) {
+	failed := errors.New("fake disk error")
+	for _, tc := range []struct {
+		name    string
+		file    fakeTmuxBackup
+		wantErr error
+	}{
+		{"partial with error", fakeTmuxBackup{n: 1, writeErr: failed}, failed},
+		{"short without error", fakeTmuxBackup{n: 1}, io.ErrShortWrite},
+		{"close error", fakeTmuxBackup{n: 4, closeErr: failed}, failed},
+		{"complete", fakeTmuxBackup{n: 4}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			published := false
+			err := writeTmuxBackup(&tc.file, "test", func() error {
+				if !tc.file.closed {
+					t.Fatal("backup published before close")
+				}
+				published = true
+				return nil
+			})
+			if !errors.Is(err, tc.wantErr) || published != (tc.wantErr == nil) || !tc.file.closed {
+				t.Fatalf("err=%v published=%v closed=%v, want error %v", err, published, tc.file.closed, tc.wantErr)
+			}
+		})
 	}
 }
