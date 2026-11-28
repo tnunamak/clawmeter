@@ -569,6 +569,26 @@ test("a pool a container lists but cannot read yet is remembered for a week", as
   assert.ok(posts.some(url => url.endsWith("/v1/status")));
 });
 
+test("an empty or malformed injected tab result is not treated as a signed-out session", async () => {
+  for (const result of [[], [{ result: null }], [{ result: { status: "401", body: null } }]]) {
+    const w = worker(async () => ({ status: "ok", payloads: [] }), undefined, undefined,
+      { executeScript: async () => result });
+    await assert.rejects(w.context.readInTab({ id: 1 }, "https://claude.ai/api/organizations"),
+      /Tab did not answer/);
+  }
+});
+
+test("a tab with an HTTP response retains its actual status for the polling decision", async () => {
+  const replies = [{ result: { status: 503, body: null } }];
+  let calls = 0;
+  const w = worker(async () => ({ status: "ok", payloads: [] }), undefined, undefined,
+    { executeScript: async () => { calls++; return replies; } });
+  const result = await w.context.readInTab({ id: 1 }, "https://claude.ai/api/organizations");
+  assert.equal(result.status, 503);
+  assert.equal(result.body, null);
+  assert.equal(calls, 1);
+});
+
 test("post says what Clawmeter did with a reading", async () => {
   const reply = (status, ignored) => async () => ({ ok: status < 300, status, headers: new Headers(ignored ? { "Clawmeter-Reading": "ignored" } : {}) });
   for (const [fetch, want] of [[reply(204), "saved"], [reply(204, true), "ignored"], [reply(400), "rejected"],
