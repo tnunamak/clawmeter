@@ -42,8 +42,10 @@ func TestE1ProjectionSampleThreshold(t *testing.T) {
 	}{
 		{"five hours before minimum", 5 * time.Hour, 29 * time.Minute, true},
 		{"five hours after minimum", 5 * time.Hour, 31 * time.Minute, false},
-		{"monthly before minimum", 30 * 24 * time.Hour, 59 * time.Minute, true},
-		{"monthly after minimum", 30 * 24 * time.Hour, 61 * time.Minute, false},
+		{"weekly before minimum", 7 * 24 * time.Hour, 16 * time.Hour, true},
+		{"weekly after minimum", 7 * 24 * time.Hour, 17 * time.Hour, false},
+		{"monthly before minimum", 30 * 24 * time.Hour, 23 * time.Hour, true},
+		{"monthly after minimum", 30 * 24 * time.Hour, 25 * time.Hour, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Project(3, time.Now().Add(tt.length-tt.elapsed), tt.length).Indicator()

@@ -17,7 +17,7 @@ func TestReview039GrokPreservesActualBillingPeriod(t *testing.T) {
 	for _, days := range []int{28, 31} {
 		t.Run(strconv.Itoa(days)+"d", func(t *testing.T) {
 			period := time.Duration(days) * 24 * time.Hour
-			reset := time.Now().Add(period - 2*time.Hour).Truncate(time.Second)
+			reset := time.Now().Add(period - 25*time.Hour).Truncate(time.Second)
 			msg := append(protoFixed32(1, math.Float32bits(1)), protoMessage(5, protoVarint(1, uint64(reset.Unix())))...)
 			msg = append(msg, protoMessage(4, protoVarint(1, uint64(reset.Add(-period).Unix())))...)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -34,7 +34,7 @@ func TestReview039GrokPreservesActualBillingPeriod(t *testing.T) {
 			w := data.Windows[0]
 			got := forecast.Project(w.Utilization, w.ResetsAt, forecast.WindowLength(w))
 			want := forecast.Project(w.Utilization, w.ResetsAt, period)
-			if w.Length != period || got.Unknown || got.ProjectedPct < 100 {
+			if w.Length != period || got.Unknown || math.Abs(got.ProjectedPct-want.ProjectedPct) > 1e-3 {
 				t.Fatalf("known period=%s discarded: window=%+v inferred=%+v actual=%+v", period, w, got, want)
 			}
 		})

@@ -1683,9 +1683,9 @@ func trayWindowText(window provider.UsageWindow) string {
 
 func TestTrayForecastColumnWidensForAnEarlyForecastItShows(t *testing.T) {
 	now := time.Now()
-	// 20% used two hours into a week projects about 1680%.
-	early := provider.UsageWindow{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 20, ResetsAt: now.Add(7*24*time.Hour - 2*time.Hour)}
-	steady := provider.UsageWindow{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: now.Add(3 * time.Hour)}
+	// 40% used 25 hours into a 30-day window projects about 1150%.
+	early := provider.UsageWindow{Name: "30d", Length: 30 * 24 * time.Hour, Utilization: 40, ResetsAt: now.Add(30*24*time.Hour - 25*time.Hour)}
+	steady := provider.UsageWindow{Name: "10d", Length: 10 * 24 * time.Hour, Utilization: 40, ResetsAt: now.Add(6 * 24 * time.Hour)}
 	rows := MenuRows(viewOf(map[string]*provider.UsageData{
 		"a": {FetchedAt: now, Windows: []provider.UsageWindow{early}},
 		"b": {FetchedAt: now, Windows: []provider.UsageWindow{steady}},
