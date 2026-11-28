@@ -8,7 +8,7 @@ import (
 	"github.com/tnunamak/clawmeter/internal/provider"
 )
 
-// A 7-day window six hours in used 14%: the average since reset projected "est. 215% at reset" for Dondo's account.
+// A 7-day window six hours in used 14%: the average since reset projected "est. 392% at reset (average since reset)".
 // `clawmeter --plain` must say the forecast is not ready yet until a tenth of the window has elapsed.
 func TestPlainEarlyWindowShowsNoEstimate(t *testing.T) {
 	now := time.Now()
