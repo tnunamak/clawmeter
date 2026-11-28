@@ -38,6 +38,10 @@ try:
         write_entry(archive, "manifest.json", json.dumps(manifest, indent=2) + "\n")
         for name in files:
             write_entry(archive, name, (root / name).read_bytes())
+    # NamedTemporaryFile creates 0600; the output gets the mode a plain open() would give it.
+    umask = os.umask(0)
+    os.umask(umask)
+    os.chmod(staged, 0o666 & ~umask)
     staged.replace(out)
 finally:
     staged.unlink(missing_ok=True)

@@ -1,6 +1,8 @@
 import json
+import os
 from pathlib import Path
 import runpy
+import stat
 import sys
 import tempfile
 import unittest
@@ -31,6 +33,14 @@ class PackageExtensionTests(unittest.TestCase):
     def package(self):
         with patch.object(sys, "argv", [str(self.script), str(self.output)]):
             runpy.run_path(str(self.script), run_name="__main__")
+
+    def test_packaged_zip_gets_the_umask_default_mode_not_the_temp_file_mode(self):
+        old = os.umask(0o022)
+        try:
+            self.package()
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(self.output.stat().st_mode), 0o644)
 
     def test_failed_rebuild_keeps_last_good_zip(self):
         with zipfile.ZipFile(self.output, "w") as original:
