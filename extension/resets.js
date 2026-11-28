@@ -77,7 +77,8 @@ async function readResets(getJSON, now, post = async () => {}, read = new Set(),
       const grants = [];
       for (const grant of offered) {
         if (!Number.isInteger(grant?.resets_left) || grant.resets_left < 0 || (grant.resets_left > 0 &&
-            (typeof grant.paused !== "boolean" || !timestamp(grant.starts_at) || !timestamp(grant.ends_at)))) changed();
+            (typeof grant.paused !== "boolean" || !timestamp(grant.starts_at) || !timestamp(grant.ends_at) ||
+              Date.parse(grant.starts_at) >= Date.parse(grant.ends_at)))) changed();
         grants.push({ resets_left: grant.resets_left, starts_at: grant.starts_at, ends_at: grant.ends_at, paused: grant.paused });
       }
       // Date each organization by its own read; a slow poll must not age later ones.

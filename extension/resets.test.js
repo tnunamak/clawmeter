@@ -66,7 +66,7 @@ test("signed out sends nothing", async () => {
 });
 
 test("changed grant data sends nothing for that organization", async () => {
-  for (const bad of [{ ...grant, paused: "no" }, { ...grant, ends_at: "soon" }, { ...grant, resets_left: -1 }, { ...grant, resets_left: 1.5 }]) {
+  for (const bad of [{ ...grant, paused: "no" }, { ...grant, ends_at: "soon" }, { ...grant, ends_at: grant.starts_at }, { ...grant, resets_left: -1 }, { ...grant, resets_left: 1.5 }]) {
     const { getJSON } = fixture({
       "/api/organizations": [{ uuid: "org-max" }],
       "/api/organizations/org-max/usage?at_wall=1&skip_spend=1": { cedar_ember: { grants: [bad] } },
