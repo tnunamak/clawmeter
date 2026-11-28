@@ -19,17 +19,37 @@ import time
 from pathlib import Path
 
 
-def qga_call(socket_path: Path, payload: dict, timeout: int = 30) -> dict:
+def remaining_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("QGA deadline exhausted")
+    return remaining
+
+
+class DecodedReplyTimeout(TimeoutError):
+    def __init__(self, reply: dict):
+        super().__init__("QGA deadline exhausted after decoding a reply")
+        self.reply = reply
+
+
+def qga_call(socket_path: Path, payload: dict, timeout: float = 30, *,
+             deadline: float | None = None) -> dict:
+    call_deadline = time.monotonic() + timeout
+    if deadline is not None:
+        call_deadline = min(call_deadline, deadline)
+    body = (json.dumps(payload) + "\n").encode("utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
+        client.settimeout(remaining_time(call_deadline))
         client.connect(str(socket_path))
-        client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        client.settimeout(remaining_time(call_deadline))
+        client.sendall(body)
         chunks: list[bytes] = []
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        while True:
+            client.settimeout(remaining_time(call_deadline))
             try:
                 chunk = client.recv(65536)
             except TimeoutError:
+                remaining_time(call_deadline)
                 break
             if not chunk:
                 break
@@ -50,30 +70,52 @@ def qga_call(socket_path: Path, payload: dict, timeout: int = 30) -> dict:
         raise RuntimeError(f"QGA error: {kind}")
     if "return" not in response:
         raise RuntimeError("QGA response has no return value")
+    # Only the launch reply carries a pid that must survive a late decode.
+    if payload.get("execute") == "guest-exec" and time.monotonic() >= call_deadline:
+        raise DecodedReplyTimeout(response)
     return response
 
 
 def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
-    start = qga_call(
-        socket_path,
-        {
-            "execute": "guest-exec",
-            "arguments": {
-                "path": args[0],
-                "arg": args[1:],
-                "capture-output": True,
+    deadline = time.monotonic() + timeout
+    try:
+        start = qga_call(
+            socket_path,
+            {
+                "execute": "guest-exec",
+                "arguments": {
+                    "path": args[0],
+                    "arg": args[1:],
+                    "capture-output": True,
+                },
             },
-        },
-    )
+            timeout=min(30, remaining_time(deadline)),
+            deadline=deadline,
+        )
+    except TimeoutError as error:
+        if isinstance(error, DecodedReplyTimeout):
+            returned = error.reply.get("return")
+            pid = returned.get("pid") if isinstance(returned, dict) else None
+            if type(pid) is int and pid > 0:
+                raise TimeoutError(f"guest launch reply exceeded its deadline; guest pid {pid} may still be running") from error
+        raise TimeoutError("guest launch timed out; launch outcome unknown") from error
     pid = start["return"]["pid"]
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    timed_out = f"guest command timed out after {timeout}s; guest pid {pid} may still be running"
+    while True:
+        try:
+            status_budget = min(30, remaining_time(deadline))
+        except TimeoutError as error:
+            raise TimeoutError(timed_out) from error
         try:
             status = qga_call(
                 socket_path,
                 {"execute": "guest-exec-status", "arguments": {"pid": pid}},
+                timeout=status_budget,
+                deadline=deadline,
             )["return"]
         except (OSError, RuntimeError, KeyError, ValueError) as error:
+            if isinstance(error, TimeoutError) and time.monotonic() >= deadline:
+                raise TimeoutError(timed_out) from error
             raise RuntimeError(f"guest status unavailable; guest pid {pid} may still be running") from error
         if status.get("exited"):
             stdout = decode_output(status.get("out-data"))
@@ -89,8 +131,10 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
             if type(exit_code) is not int:
                 raise RuntimeError(f"guest process reported no numeric exit code; guest pid {pid}")
             return exit_code
-        time.sleep(1)
-    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running")
+        time_left = deadline - time.monotonic()
+        if time_left <= 0:
+            raise TimeoutError(timed_out)
+        time.sleep(min(1, time_left))
 
 
 def decode_output(value: str | None) -> str:

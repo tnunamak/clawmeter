@@ -12,8 +12,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/update"
 )
+
+type alternatingSetupProvider struct {
+	provider.Provider
+	calls int
+}
+
+func (p *alternatingSetupProvider) Name() string { return "claude" }
+
+func (p *alternatingSetupProvider) SetupStatus() provider.SetupStatus {
+	p.calls++
+	if p.calls == 1 {
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "first"}
+	}
+	return provider.SetupStatus{State: "ready"}
+}
+
+func TestDescribeProviderStateUsesSingleSetupSnapshot(t *testing.T) {
+	p := &alternatingSetupProvider{}
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{"claude": {Enabled: true}}}
+	if got := describeProviderState(p, cfg); got != "enabled, setup needed: first" || p.calls != 1 {
+		t.Fatalf("describeProviderState = %q, observer called %d times; want first status and one call", got, p.calls)
+	}
+}
 
 func TestRedteamSourceAddWithNullProviders(t *testing.T) {
 	bin := buildBinary(t)
@@ -36,6 +61,30 @@ func TestRedteamSourceAddWithNullProviders(t *testing.T) {
 				t.Fatalf("enrollment was not persisted: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestProviderSourceRemoveMissingContext(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	if _, stderr, code := runWithHome(t, bin, home, "providers", "source", "add", "claude", "default", "native"); code != 0 {
+		t.Fatalf("seed fixture source: exit=%d stderr=%q", code, stderr)
+	}
+	path := configPathForHome(home)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runWithHome(t, bin, home, "providers", "source", "remove", "claude", "  MISSING-FIXTURE  ")
+	if code != 1 || !strings.Contains(stderr, `source "missing-fixture" not found for provider "claude"`) {
+		t.Fatalf("missing source should name its normalized ID and canonical provider: exit=%d stderr=%q", code, stderr)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("failed removal changed the fixture configuration")
 	}
 }
 
