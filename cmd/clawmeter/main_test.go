@@ -510,6 +510,34 @@ func TestSourceCommandWithoutSubcommandListsSafely(t *testing.T) {
 	}
 }
 
+func TestSourceAddRejectsMissingLabelOperand(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	configPath := configPathForHome(home)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	before := []byte("providers: {}\n")
+	if err := os.WriteFile(configPath, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(home, "synthetic-claude")
+	if err := os.Mkdir(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, labels := range [][]string{{"--label", "--label"}, {"--label"}} {
+		args := append([]string{"providers", "source", "add", "claude", "work", "config-dir", profile}, labels...)
+		stdout, stderr, code := runWithHome(t, bin, home, args...)
+		if code != 1 || !strings.Contains(stderr, "--label requires a value") {
+			t.Errorf("expected missing-operand refusal for %v: code=%d stdout=%q stderr=%q", labels, code, stdout, stderr)
+		}
+		after, err := os.ReadFile(configPath)
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("rejected source add changed config bytes: %v", err)
+		}
+	}
+}
+
 func TestSourceAddUsesProviderDeclaredReferenceRules(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()

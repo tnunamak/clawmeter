@@ -901,7 +901,11 @@ func providerSourceAddCmd(args []string) int {
 	}
 	label := ""
 	for i := nextArg; i < len(args); i++ {
-		if args[i] == "--label" && i+1 < len(args) {
+		if args[i] == "--label" {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				fmt.Fprintln(os.Stderr, "clawmeter: --label requires a value")
+				return 1
+			}
 			label = strings.TrimSpace(args[i+1])
 			i++
 			continue
