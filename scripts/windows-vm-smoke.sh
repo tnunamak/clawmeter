@@ -487,6 +487,9 @@ start_quickemu_vm() {
   local started=$SECONDS deadline waited remaining delay
   deadline=$((started + BOOT_WAIT))
   local screenshot_count=0 next_screenshot=60
+  local vm_name_re
+  vm_name_re="$(printf '%s\n' "$VM_NAME" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+  local vm_process_re="qemu-system-x86_64.*[[:space:]/=,]${vm_name_re}([[:space:]/,]|$)"
   while (( SECONDS < deadline )); do
     remaining=$((deadline - SECONDS))
     delay="$PROBE_INTERVAL"
@@ -495,7 +498,7 @@ start_quickemu_vm() {
     remaining=$((deadline - SECONDS))
     (( remaining > 0 )) || break
     waited=$((SECONDS - started))
-    if ! pgrep -f 'qemu-system-x86_64.*windows-11' >/dev/null; then
+    if ! pgrep -f "$vm_process_re" >/dev/null; then
       warn "QEMU is not running after ${waited}s"
       sed -n '1,160p' "$log_file" | tee -a "$REPORT"
       return 2

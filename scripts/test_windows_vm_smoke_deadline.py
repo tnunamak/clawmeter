@@ -80,5 +80,37 @@ printf 'elapsed %s code %s\n' "$SECONDS" "$rc" >> "$fixture/trace"
         self.assertTrue(all(start < 360 and limit <= 360 - start for start, limit in probes), probes)
 
 
+    def test_kvm_process_check_matches_the_config_name_literally(self):
+        source = SOURCE.read_text()
+        start = re.search(r"(?ms)^start_quickemu_vm\(\) \{.*?^\}$", source)
+        self.assertIsNotNone(start)
+        trailer = r"""
+VM_NAME="$2"
+VM_CONF="$fixture/$VM_NAME.conf"
+touch "$VM_CONF"
+pgrep() {
+  [[ "$1" == "-f" ]] || return 1
+  local pattern="$2"
+  printf '%s\n' "$pattern" > "$fixture/pattern"
+  [[ "qemu-system-x86_64 -name $VM_NAME,process=$VM_NAME" =~ $pattern ]] || return 1
+  [[ "qemu-system-x86_64 -name $VM_NAME-other" =~ $pattern ]] && return 1
+  [[ "qemu-system-x86_64 -name axbbc" =~ $pattern ]] && return 1
+  return 0
+}
+probe_ssh_ready() { return 0; }
+run_guest_cli_smoke() { return 0; }
+start_quickemu_vm
+wait "$QUICKEMU_PID" || true
+"""
+        for name in ("win11-test", "a.b+c"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as fixture:
+                command = "\n".join([HARNESS, start.group(), trailer])
+                process = subprocess.run(["bash", "-c", command, "fixture", fixture, name],
+                                         capture_output=True, text=True, timeout=5)
+                pattern = Path(fixture, "pattern").read_text()
+                self.assertEqual(process.returncode, 0, process.stdout + process.stderr + pattern)
+                self.assertIn(name if name == "win11-test" else r"a\.b\+c", pattern)
+
+
 if __name__ == "__main__":
     unittest.main()
