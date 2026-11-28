@@ -162,13 +162,33 @@ else
   git commit -m "$title"
 fi
 
+installer_line=""
+installer_manifest="$manifest_dir/${package_id}.installer.yaml"
+if [[ -f "$installer_manifest" ]]; then
+  installer_url="$(awk '
+    /^[[:space:]]*(-[[:space:]]*)?InstallerUrl:[[:space:]]*/ {
+      sub(/^[[:space:]]*(-[[:space:]]*)?InstallerUrl:[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      if ($0 ~ /^https:\/\/[^[:space:]<>]+$/) {
+        if (url != "" && url != $0) ambiguous = 1
+        url = $0
+      } else {
+        ambiguous = 1
+      }
+    }
+    END { if (!ambiguous && url != "") print url }
+  ' "$installer_manifest")"
+  if [[ -n "$installer_url" ]]; then
+    printf -v installer_line '\n- Installer: %s' "$installer_url"
+  fi
+fi
+
 body="$(cat <<EOF
 ## Package Details
 
 - Package: ${package_id}
 - Version: ${version}
-- Release: https://github.com/tnunamak/clawmeter/releases/tag/${tag}
-- Installer: https://github.com/tnunamak/clawmeter/releases/download/${tag}/ClawmeterSetup.exe
+- Release: https://github.com/tnunamak/clawmeter/releases/tag/${tag}${installer_line}
 
 Clawmeter is a system tray and CLI quota meter for AI coding tools.
 EOF
@@ -178,6 +198,7 @@ if [[ "$dry_run" == "1" ]]; then
   echo "Dry run: would push ${fork_repo}:${branch}"
   echo "Dry run: would create/update PR against ${upstream_repo}:master"
   echo "PR title: ${title}"
+  printf "PR body:\n%s\n" "$body"
   exit 0
 fi
 
