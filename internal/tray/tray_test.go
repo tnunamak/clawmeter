@@ -130,6 +130,57 @@ func TestTrayDoesNotCreateMenusForLinkedClaudeResetSources(t *testing.T) {
 	}
 }
 
+// TestUsageCreditBenefitAgedLinkIsNotLinked pins the rule that an aged link
+// observation cannot keep a benefit "linked": a link last observed more than
+// five minutes ago reports "unknown", while a freshly observed link stays
+// "linked". Entry point: provider.UsageCreditBenefit.State, reached from the
+// tray tooltip and CLI via Summary/ActionURL.
+func TestUsageCreditBenefitAgedLinkIsNotLinked(t *testing.T) {
+	now := time.Date(2026, time.November, 27, 9, 45, 0, 0, time.UTC)
+	fresh := provider.UsageCreditBenefit{
+		LinkState:      "linked",
+		LinkObservedAt: now,
+		ObservedAt:     now,
+		Eligibility:    "eligible",
+	}
+	if got := fresh.State(now); got != "linked" {
+		t.Fatalf("fresh linked benefit State = %q, want linked", got)
+	}
+	aged := provider.UsageCreditBenefit{
+		LinkState:      "linked",
+		LinkObservedAt: now.Add(-10 * time.Minute),
+		ObservedAt:     now,
+		Eligibility:    "eligible",
+	}
+	if got := aged.State(now); got != "unknown" {
+		t.Fatalf("aged linked benefit State = %q, want unknown", got)
+	}
+}
+
+// TestLocalModelsAtWithholdsYesterdayCounts pins that counts observed on a
+// previous UTC reporting day are withheld, while today's counts are kept.
+// Entry point: provider.LocalModelsAt, reached from the tray/CLI summaries.
+func TestLocalModelsAtWithholdsYesterdayCounts(t *testing.T) {
+	msgs := int64(12)
+	in := int64(3456)
+	observed := time.Date(2026, time.November, 26, 12, 0, 0, 0, time.UTC)
+	at := time.Date(2026, time.November, 27, 0, 30, 0, 0, time.UTC)
+	raw := []provider.LocalModelUsage{
+		{Model: "today-model", Day: "2026-11-27", AssistantMessages: &msgs, InputTokens: &in},
+		{Model: "yesterday-model", Day: "2026-11-26", AssistantMessages: &msgs, InputTokens: &in},
+	}
+	got := provider.LocalModelsAt(raw, observed, at, true)
+	if got[0].AssistantMessages == nil || *got[0].AssistantMessages != 12 || got[0].InputTokens == nil || *got[0].InputTokens != 3456 {
+		t.Fatalf("today's counts were withheld or changed: %+v", got[0])
+	}
+	if got[1].AssistantMessages != nil || got[1].InputTokens != nil {
+		t.Fatalf("yesterday's counts were kept: %+v", got[1])
+	}
+	if raw[1].AssistantMessages == nil {
+		t.Fatalf("LocalModelsAt mutated its input slice")
+	}
+}
+
 func TestTrayProviderHeadingNamesAccountOnlyWhenRepeated(t *testing.T) {
 	if got := trayProviderDisplayName("Claude", "Default", false); got != "Claude" {
 		t.Fatalf("single default account heading = %q, want concise heading", got)
