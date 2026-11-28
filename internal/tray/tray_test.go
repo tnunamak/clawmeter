@@ -1820,3 +1820,33 @@ func TestResetLinePreservesMultibytePolicyText(t *testing.T) {
 		}
 	}
 }
+
+func TestTrayMenuCountsOnlyOmittedVisibleWindows(t *testing.T) {
+	now := time.Now()
+	windows := []provider.UsageWindow{
+		{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: now.Add(3 * time.Hour)},
+		{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 25, ResetsAt: now.Add(5 * 24 * time.Hour)},
+	}
+	snap := viewOf(map[string]*provider.UsageData{"a": {FetchedAt: now, Windows: windows}}, now)
+	if rows, more := MenuRows(snap, 1)["a"], MenuMore(snap, 1)["a"]; len(rows) != 1 || more != 1 {
+		t.Fatalf("one visible row and one omitted: rows=%v more=%d", rows, more)
+	}
+	if _, ok := MenuMore(snap, 2)["a"]; ok {
+		t.Fatal("no overflow row should be shown when both windows fit")
+	}
+}
+
+func TestTrayErrorReadingDoesNotAdvertiseQuotaOverflow(t *testing.T) {
+	now := time.Now()
+	snap := viewOf(map[string]*provider.UsageData{"a": {
+		FetchedAt: now,
+		Windows:   []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: now.Add(3 * time.Hour)}},
+	}}, now)
+	if MenuMore(snap, 0)["a"] != 1 {
+		t.Fatal("fixture must contain one visible quota window")
+	}
+	snap.Accounts[0].Reading.State = view.ReadingError
+	if rows, more := MenuRows(snap, 0), MenuMore(snap, 0); len(rows) != 0 || len(more) != 0 {
+		t.Fatalf("error reading should show neither quota rows nor overflow: rows=%v more=%v", rows, more)
+	}
+}
