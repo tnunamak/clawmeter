@@ -143,13 +143,25 @@ func (p *Provider) readService() (serviceInfo, error) {
 		info.URL = p.baseURL
 	}
 	u, err := url.Parse(info.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return serviceInfo{}, errors.New("opencode:OpenCode service file has no usable url")
+	if err != nil || !localServiceOrigin(u) {
+		return serviceInfo{}, errors.New("opencode:OpenCode service URL must be a loopback origin")
 	}
 	if info.Password == "" {
 		return serviceInfo{}, errors.New("opencode:OpenCode service file has no password")
 	}
 	return info, nil
+}
+
+// A service password and local path are valid only for the local service origin.
+func localServiceOrigin(u *url.URL) bool {
+	if u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
+		(u.EscapedPath() != "" && u.EscapedPath() != "/") {
+		return false
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	return (u.Scheme == "http" && strings.EqualFold(host, "localhost")) ||
+		((u.Scheme == "http" || u.Scheme == "https") && ip != nil && ip.IsLoopback())
 }
 
 // meter is one window as either route reports it. The service sends limited and

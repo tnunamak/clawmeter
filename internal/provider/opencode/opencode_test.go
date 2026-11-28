@@ -36,6 +36,33 @@ func newTestProvider(t *testing.T, url string) *Provider {
 	return p
 }
 
+func TestServiceOriginRequiresLocalBase(t *testing.T) {
+	for _, value := range []string{
+		"https://service.example.invalid",
+		"http://127.0.0.1:4096/extra",
+		"http://127.0.0.1:4096/?q=1",
+		"http://127.0.0.1:4096/#part",
+	} {
+		p := newTestProvider(t, value)
+		_, err := p.readService()
+		if err == nil || err.Error() != "opencode:OpenCode service URL must be a loopback origin" {
+			t.Fatalf("expected static origin validation error, got %v", err)
+		}
+	}
+	for _, value := range []string{"http://127.0.0.1:4096", "http://[::1]:4096/", "http://localhost:4096"} {
+		p := newTestProvider(t, value)
+		got, err := p.readService()
+		if err != nil || got.URL != value {
+			t.Errorf("loopback validation failed: %v", err)
+		}
+	}
+	p := newTestProvider(t, "http://127.0.0.1:4096")
+	p.baseURL = "https://override.example.invalid"
+	if _, err := p.readService(); err == nil || err.Error() != "opencode:OpenCode service URL must be a loopback origin" {
+		t.Fatalf("expected the same policy for a URL override, got %v", err)
+	}
+}
+
 func serve(t *testing.T, status int, contentType, body string) (*Provider, *http.Request) {
 	t.Helper()
 	var got http.Request
