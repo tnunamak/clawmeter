@@ -1,14 +1,44 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestHubPreflightReportsInvalidInputBeforeOpeningListener(t *testing.T) {
+	bin := buildBinary(t)
+	valid := strings.Repeat("x", 32)
+	for _, tc := range []struct {
+		name, key, want string
+		args            []string
+	}{
+		{"positional", valid, "hub does not take positional arguments", []string{"extra"}},
+		{"surrounding-whitespace", valid + " ", "with no surrounding whitespace", nil},
+		{"unpaired-tls", valid, "--tls-cert and --tls-key must be set together", []string{"--tls-cert", "unused-test-cert.pem"}},
+		{"non-loopback-plain-http", valid, "refusing plain HTTP on a non-loopback address", []string{"--listen", "192.0.2.1:8318"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, bin, append([]string{"hub"}, tc.args...)...)
+			cmd.Env = append(cmd.Environ(), hubKeyEnv+"="+tc.key)
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			err := cmd.Run()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 || ctx.Err() != nil || stdout.Len() != 0 || !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("hub preflight: err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
 
 func TestHistoryCommandRejectsInvalidArguments(t *testing.T) {
 	bin := buildBinary(t)

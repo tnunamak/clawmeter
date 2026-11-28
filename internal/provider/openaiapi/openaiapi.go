@@ -140,7 +140,7 @@ func (p *Provider) readBenefits(ctx context.Context) ([]provider.UsageCreditBene
 
 func mergeReadings(kept, other provider.UsageCreditBenefit) provider.UsageCreditBenefit {
 	merged := kept
-	if kept.Eligibility != "eligible" && other.Eligibility == "eligible" {
+	if other.Eligibility == "eligible" && (kept.Eligibility != "eligible" || other.ObservedAt.After(kept.ObservedAt)) {
 		merged = other
 	}
 	link := kept

@@ -45,6 +45,33 @@ class ExtensionPackagingErrorsTest(unittest.TestCase):
             self.assertFalse(output.exists())
 
 
+    def test_shared_icon_is_written_once_when_two_sizes_reference_it(self):
+        import sys
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            script = scripts / "package-extension.py"
+            script.write_bytes(Path(__file__).with_name(script.name).read_bytes())
+            extension = root / "extension"
+            extension.mkdir()
+            (extension / "manifest.json").write_text(
+                '{"version":"0.0.0","icons":{"16":"shared.png","32":"shared.png"}}'
+            )
+            for name in ("background.js", "console.js", "resets.js", "popup.html", "popup.js", "shared.png"):
+                (extension / name).write_bytes(b"fixture")
+            out = root / "archive.zip"
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", str(script), str(out)], check=True, capture_output=True, text=True
+            )
+            self.assertNotIn("Duplicate name", result.stderr)
+            with zipfile.ZipFile(out) as archive:
+                self.assertEqual(archive.namelist().count("shared.png"), 1)
+                self.assertEqual(archive.read("shared.png"), b"fixture")
+
+
 class TCGSmokeTest(unittest.TestCase):
     def run_fixture(self, statements):
         with tempfile.TemporaryDirectory() as tmp:

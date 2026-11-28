@@ -15,7 +15,8 @@ root = Path(__file__).resolve().parent.parent / "extension"
 manifest = json.loads((root / "manifest.json").read_text())
 manifest.pop("key", None)
 
-files = ["background.js", "console.js", "resets.js", "popup.html", "popup.js", *manifest["icons"].values()]
+# Different manifest sizes may legitimately point to the same icon file.
+files = list(dict.fromkeys(["background.js", "console.js", "resets.js", "popup.html", "popup.js", *manifest["icons"].values()]))
 missing = [name for name in files if not (root / name).is_file()]
 if missing:
     sys.exit(f"missing from extension/: {', '.join(missing)}")
