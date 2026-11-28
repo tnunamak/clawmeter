@@ -987,7 +987,7 @@ func providerSourceRemoveCmd(args []string) int {
 		}
 		pc, ok := cfg.Providers[family]
 		if !ok {
-			return errors.New("source not found")
+			return fmt.Errorf("source %q not found for provider %q", id, family)
 		}
 		found := false
 		kept := pc.Sources[:0]
@@ -999,7 +999,7 @@ func providerSourceRemoveCmd(args []string) int {
 			kept = append(kept, source)
 		}
 		if !found {
-			return errors.New("source not found")
+			return fmt.Errorf("source %q not found for provider %q", id, family)
 		}
 		pc.Sources = kept
 		if len(kept) == 0 {
