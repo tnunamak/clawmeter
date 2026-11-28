@@ -70,7 +70,8 @@ def qga_call(socket_path: Path, payload: dict, timeout: float = 30, *,
         raise RuntimeError(f"QGA error: {kind}")
     if "return" not in response:
         raise RuntimeError("QGA response has no return value")
-    if time.monotonic() >= call_deadline:
+    # Only the launch reply carries a pid that must survive a late decode.
+    if payload.get("execute") == "guest-exec" and time.monotonic() >= call_deadline:
         raise DecodedReplyTimeout(response)
     return response
 

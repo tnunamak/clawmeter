@@ -242,4 +242,29 @@ function net { $global:LASTEXITCODE = 5 }
         self.assertEqual(sent, ['guest-exec'])
         self.assertNotIn('private-fixture-argument', str(error.exception))
 
+    def test_decoded_non_launch_reply_is_returned_when_parse_crosses_deadline(self):
+        now = 0.0
+        loads = agent.json.loads
+
+        class FakeSocket:
+            def __init__(self, *args): pass
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def settimeout(self, seconds): pass
+            def connect(self, address): pass
+            def sendall(self, body): pass
+            def recv(self, size): return b'{"return":{"exited":true,"exitcode":0}}\n'
+
+        def parse_past_deadline(raw):
+            nonlocal now
+            reply = loads(raw)
+            now = 1.01
+            return reply
+
+        with patch.object(agent.socket, 'socket', FakeSocket), \
+                patch.object(agent.time, 'monotonic', lambda: now), \
+                patch.object(agent.json, 'loads', parse_past_deadline):
+            reply = agent.qga_call(Path('unused'), {'execute': 'guest-exec-status', 'arguments': {'pid': 42}}, timeout=1)
+        self.assertEqual(reply['return']['exitcode'], 0)
+
 if __name__ == '__main__': unittest.main()
