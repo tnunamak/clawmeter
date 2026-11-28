@@ -25,6 +25,27 @@ function net { $global:LASTEXITCODE = 5 }
         with patch.object(agent, 'powershell', execute):
             self.assertEqual(agent.create_user(Path('unused'), 'fixture', 'fake-value', 5), 5)
 
+    def test_guest_agent_error_names_class_without_raw_description(self):
+        with patch.object(agent.socket, 'socket') as transport:
+            client = transport.return_value.__enter__.return_value
+            client.recv.return_value = b'{"error":{"class":"GenericError","desc":"private fixture"}}\n'
+            with self.assertRaisesRegex(RuntimeError, 'GenericError') as caught:
+                agent.qga_call(Path('fixture.sock'), {'execute': 'guest-ping'})
+            self.assertNotIn('private fixture', str(caught.exception))
+
+    def test_signal_termination_does_not_return_zero(self):
+        replies = [{'return': {'pid': 42}}, {'return': {'exited': True, 'signal': 9}}]
+        with patch.object(agent, 'qga_call', side_effect=replies):
+            with self.assertRaisesRegex(RuntimeError, 'signal 9'):
+                agent.guest_exec(Path('unused'), ['fixture.exe'], 10)
+
+    def test_timeout_does_not_expose_guest_arguments(self):
+        with patch.object(agent, 'qga_call', return_value={'return': {'pid': 42}}), patch.object(agent.time, 'time', side_effect=[0, 10]):
+            with self.assertRaisesRegex(TimeoutError, 'after 1s; guest pid 42') as caught:
+                agent.guest_exec(Path('unused'), ['fixture.exe', 'synthetic-private-argument'], 1)
+        self.assertNotIn('fixture.exe', str(caught.exception))
+        self.assertNotIn('synthetic-private-argument', str(caught.exception))
+
     def test_reply_timeout_without_bytes_reports_empty_response(self):
         with patch.object(agent.socket, 'socket') as transport:
             client = transport.return_value.__enter__.return_value
