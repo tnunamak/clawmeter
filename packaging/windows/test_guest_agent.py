@@ -104,4 +104,12 @@ function net { $global:LASTEXITCODE = 5 }
         self.assertEqual(stdout.getvalue(), 'final\n')
         self.assertEqual(stderr.getvalue(), '')
 
+    def test_timeout_does_not_include_guest_command_arguments(self):
+        secret = 'synthetic-guest-password'
+        with patch.object(agent, 'qga_call', return_value={'return': {'pid': 42}}), patch.object(agent.time, 'time', side_effect=[0, 10]):
+            with self.assertRaises(TimeoutError) as caught:
+                agent.guest_exec(Path('unused'), ['fixture.exe', secret], 1)
+        self.assertIn('guest pid 42 may still be running', str(caught.exception))
+        self.assertNotIn(secret, str(caught.exception))
+
 if __name__ == '__main__': unittest.main()

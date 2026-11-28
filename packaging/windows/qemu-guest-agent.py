@@ -73,7 +73,7 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
                 print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
             return int(status.get("exitcode", 0))
         time.sleep(1)
-    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running: {args}")
+    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running")
 
 
 def decode_output(value: str | None) -> str:
