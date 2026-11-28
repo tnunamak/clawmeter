@@ -12,7 +12,7 @@ import (
 
 func TestRevisionHumanForecastBasis(t *testing.T) {
 	now := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
-	data := &provider.UsageData{Provider: "claude", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "7d", Utilization: 40, ResetsAt: now.Add(150 * time.Hour)}}}
+	data := &provider.UsageData{Provider: "claude", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "7d", Utilization: 5, ResetsAt: now.Add(167 * time.Hour)}}}
 	output := MultiProviderOutput{Providers: []ProviderFormatter{{Name: "claude", Display: "Claude", Data: data}}}
 	output.Providers = append(output.Providers, ProviderFormatter{Name: "openai", Display: "Codex", Data: &provider.UsageData{Provider: "openai", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "5h", Utilization: 10, ResetsAt: now.Add(3 * time.Hour)}}}})
 	v := output.buildView(now)

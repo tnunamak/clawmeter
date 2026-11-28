@@ -131,11 +131,9 @@ func ProjectAt(currentPct float64, resetsAt time.Time, windowLen time.Duration, 
 		return Projection{Unknown: true, Stale: true, WillLastToReset: true}
 	}
 	elapsed := windowLen - remaining
-	// No projection from the first tenth of a window, capped at a day. A one-hour cap
-	// let a weekly window extrapolate 3% after 2h into 260% and rank the account last.
 	minimum := windowLen / 10
-	if minimum > 24*time.Hour {
-		minimum = 24 * time.Hour
+	if minimum > time.Hour {
+		minimum = time.Hour
 	}
 	if resetsAt.IsZero() || windowLen <= 0 || elapsed < minimum {
 		return Projection{Unknown: true, WillLastToReset: true}
