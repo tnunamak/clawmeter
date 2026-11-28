@@ -217,4 +217,36 @@ class ExtensionPackageTest(unittest.TestCase):
         self.assertIn('missing from extension/: icon.png', result.stderr)
         self.assertFalse(archive.exists())
 
+    def test_default_archive_uses_the_manifest_version_in_the_callers_directory(self):
+        import sys
+        caller = self.root / 'caller'
+        caller.mkdir()
+        result = subprocess.run(
+            [sys.executable, '-I', '-B', str(self.packager)],
+            cwd=caller, text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['clawmeter-extension-0.0.1.zip'])
+        self.assertTrue((caller / 'clawmeter-extension-0.0.1.zip').is_file())
+        self.assertFalse((self.root / 'clawmeter-extension-0.0.1.zip').exists())
+
+    def test_packager_keeps_all_declared_icons_and_other_manifest_fields(self):
+        import json
+        import zipfile
+        icons_dir = self.extension / 'icons'
+        icons_dir.mkdir()
+        (icons_dir / 'large.png').write_bytes(b'large fixture bytes')
+        manifest = json.loads(self.manifest.read_text())
+        manifest['icons']['128'] = 'icons/large.png'
+        manifest['name'] = 'Fixture Package'
+        self.manifest.write_text(json.dumps(manifest))
+        result, target = self.package('multi-icon.zip')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(target) as archive:
+            self.assertEqual(archive.read('icon.png'), b'synthetic fixture')
+            self.assertEqual(archive.read('icons/large.png'), b'large fixture bytes')
+            self.assertEqual(json.loads(archive.read('manifest.json')),
+                             {k: v for k, v in manifest.items() if k != 'key'})
+
+
 if __name__ == '__main__': unittest.main()
