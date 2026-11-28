@@ -531,3 +531,67 @@ func TestHomebrewStandaloneUpdateStillReachesDownload(t *testing.T) {
 		t.Fatalf("standalone download requests = %d, want 2", requests)
 	}
 }
+
+func TestParseVersionPrereleaseAndBuild(t *testing.T) {
+	for _, tt := range []struct {
+		tag, major, minor, patch, prerelease, build string
+	}{
+		{"1.2.3", "1", "2", "3", "", ""},
+		{"v1.2.3-rc.0+build.007", "1", "2", "3", "rc.0", "build.007"},
+		{"0.1.2-01alpha", "0", "1", "2", "01alpha", ""},
+	} {
+		t.Run(tt.tag, func(t *testing.T) {
+			parts, err := parseVersion(tt.tag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(parts[1:], "|")
+			want := strings.Join([]string{tt.major, tt.minor, tt.patch, tt.prerelease, tt.build}, "|")
+			if got != want {
+				t.Fatalf("version parts = %q; want %q", got, want)
+			}
+		})
+	}
+	for _, tag := range []string{"1.2", "01.2.3", "1.2.3-alpha..1", "1.2.3-01", "1.2.3-rc.00", "1.2.3+"} {
+		t.Run(tag, func(t *testing.T) {
+			if parts, err := parseVersion(tag); err == nil || parts != nil {
+				t.Fatalf("parseVersion(%q) = %v, %v; want no parts and an error", tag, parts, err)
+			}
+		})
+	}
+}
+
+func TestNewerVersionSemverPrecedence(t *testing.T) {
+	ordered := []string{
+		"1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
+		"1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0",
+		"1.0.1", "1.1.0", "2.0.0",
+	}
+	for i := 1; i < len(ordered); i++ {
+		older, newer := ordered[i-1], ordered[i]
+		if got, err := newerVersion(older, newer); err != nil || !got {
+			t.Errorf("newerVersion(%q, %q) = %t, %v; want true, nil", older, newer, got, err)
+		}
+		if got, err := newerVersion(newer, older); err != nil || got {
+			t.Errorf("newerVersion(%q, %q) = %t, %v; want false, nil", newer, older, got, err)
+		}
+	}
+	for _, tt := range []struct {
+		current, next string
+		want          bool
+	}{
+		{"v1.2.3+old", "1.2.3+new", false},
+		{"1.2.3-1", "1.2.3-alpha", true},
+		{"1.2.3-alpha", "1.2.3-1", false},
+		{"99999999999999999999.0.0", "100000000000000000000.0.0", true},
+	} {
+		if got, err := newerVersion(tt.current, tt.next); err != nil || got != tt.want {
+			t.Errorf("newerVersion(%q, %q) = %t, %v; want %t, nil", tt.current, tt.next, got, err, tt.want)
+		}
+	}
+	for _, pair := range [][2]string{{"1.2.3-01", "1.2.3"}, {"1.2.3", "1.2.3-rc.01"}} {
+		if got, err := newerVersion(pair[0], pair[1]); err == nil || got {
+			t.Errorf("newerVersion(%q, %q) = %t, %v; want false and an error", pair[0], pair[1], got, err)
+		}
+	}
+}
