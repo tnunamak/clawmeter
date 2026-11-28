@@ -140,13 +140,20 @@ async function load() {
   render(status);
 }
 
-element("refresh").addEventListener("click", async () => {
-  const button = element("refresh");
+const refreshButton = element("refresh");
+const refreshNotice = paragraph("", "warn");
+refreshNotice.setAttribute("role", "status");
+refreshButton.after(refreshNotice);
+refreshButton.addEventListener("click", async () => {
+  const button = refreshButton;
+  refreshNotice.textContent = "";
   button.disabled = true;
   button.textContent = "Reading…";
   try {
     await chrome.runtime.sendMessage("poll");
     await load();
+  } catch {
+    refreshNotice.textContent = "Couldn't refresh. Try again.";
   } finally {
     button.disabled = false;
     button.textContent = "Refresh";
