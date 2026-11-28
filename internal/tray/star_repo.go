@@ -14,6 +14,7 @@ import (
 
 // starRepoSlug is the repository the Settings item stars.
 const starRepoSlug = "tnunamak/clawmeter"
+const starRepoHost = "github.com"
 
 const (
 	// starCheckTimeout bounds the whole check: gh on PATH, auth, and the
@@ -37,6 +38,9 @@ type starRepo struct {
 	timeout  time.Duration
 	now      func() time.Time
 	setShown func(shown bool)
+
+	// Serialize visibility callbacks without holding the state mutex across UI code.
+	visibilityMu sync.Mutex
 
 	mu        sync.Mutex
 	checking  bool
@@ -72,6 +76,17 @@ func (r *starRepo) Check() {
 	r.mu.Lock()
 	r.checking = false
 	r.checkedAt = r.now()
+	r.mu.Unlock()
+	r.publishVisibility(offer)
+}
+
+// The callback must not synchronously publish visibility again. Re-read starred
+// at the serialized publication point so a stale check cannot show the item
+// after a successful Star has hidden it.
+func (r *starRepo) publishVisibility(offer bool) {
+	r.visibilityMu.Lock()
+	defer r.visibilityMu.Unlock()
+	r.mu.Lock()
 	shown := offer && !r.starred
 	r.mu.Unlock()
 	r.setShown(shown)
@@ -102,7 +117,7 @@ func (r *starRepo) Star() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), starWriteTimeout)
 	defer cancel()
-	_, stderr, err := r.run(ctx, "api", "-X", "PUT", "user/starred/"+starRepoSlug)
+	_, stderr, err := r.run(ctx, "api", "--hostname", starRepoHost, "-X", "PUT", "user/starred/"+starRepoSlug)
 
 	r.mu.Lock()
 	r.starring = false
@@ -112,7 +127,7 @@ func (r *starRepo) Star() error {
 	}
 	r.starred = true
 	r.mu.Unlock()
-	r.setShown(false)
+	r.publishVisibility(false)
 	return nil
 }
 
@@ -124,11 +139,11 @@ func (r *starRepo) offer() bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
 	defer cancel()
-	if _, _, err := r.run(ctx, "auth", "status"); err != nil {
+	if _, _, err := r.run(ctx, "auth", "status", "--hostname", starRepoHost); err != nil {
 		return false
 	}
 	// gh api exits 0 on 204 (starred) and 1 with "HTTP 404" on 404 (not starred).
-	_, stderr, err := r.run(ctx, "api", "user/starred/"+starRepoSlug)
+	_, stderr, err := r.run(ctx, "api", "--hostname", starRepoHost, "user/starred/"+starRepoSlug)
 	if err == nil {
 		return false
 	}

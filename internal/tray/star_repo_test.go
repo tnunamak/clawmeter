@@ -32,7 +32,15 @@ func (f *fakeGH) lookPath(string) (string, error) {
 }
 
 func (f *fakeGH) run(_ context.Context, args ...string) ([]byte, []byte, error) {
-	key := strings.Join(args, " ")
+	var command []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--hostname" && i+1 < len(args) {
+			i++
+			continue
+		}
+		command = append(command, args[i])
+	}
+	key := strings.Join(command, " ")
 	f.calls = append(f.calls, key)
 	switch key {
 	case "auth status":
@@ -65,6 +73,116 @@ func lastShown(t *testing.T, shown *[]bool) bool {
 		t.Fatal("setShown was never called")
 	}
 	return (*shown)[len(*shown)-1]
+}
+
+func TestStarRepoPinsGithubHost(t *testing.T) {
+	t.Setenv("GH_HOST", "enterprise.example.invalid")
+	f := &fakeGH{getErr: errExit1, getStderr: notStarred}
+	r, _ := newTestStarRepo(f)
+	run := r.run
+	var calls [][]string
+	r.run = func(ctx context.Context, args ...string) ([]byte, []byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return run(ctx, args...)
+	}
+	r.Check()
+	if err := r.Star(); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("expected auth, lookup and star: %v", calls)
+	}
+	for _, args := range calls {
+		pinned := false
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--hostname" && args[i+1] == "github.com" {
+				pinned = true
+			}
+		}
+		if !pinned {
+			t.Errorf("missing explicit github.com hostname: %v", args)
+		}
+	}
+}
+
+func TestStarRepoPublicationKeepsItemHiddenAfterStar(t *testing.T) {
+	checkAtCallback := make(chan struct{})
+	releaseCheck := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseCheck:
+		default:
+			close(releaseCheck)
+		}
+	}()
+	visibility := make(chan bool, 2)
+	putStarted := make(chan struct{})
+	r := newStarRepo(func(shown bool) {
+		if shown {
+			close(checkAtCallback)
+			<-releaseCheck
+		}
+		visibility <- shown
+	})
+	r.lookPath = func(string) (string, error) { return "inert-gh", nil }
+	r.run = func(_ context.Context, args ...string) ([]byte, []byte, error) {
+		for _, arg := range args {
+			if arg == "PUT" {
+				close(putStarted)
+				return nil, nil, nil
+			}
+		}
+		if args[0] == "api" {
+			return nil, notStarred, errExit1
+		}
+		return nil, nil, nil
+	}
+
+	checkDone := make(chan struct{})
+	go func() { r.Check(); close(checkDone) }()
+	select {
+	case <-checkAtCallback:
+	case <-time.After(2 * time.Second):
+		t.Fatal("check did not reach publication barrier")
+	}
+	starDone := make(chan error, 1)
+	go func() { starDone <- r.Star() }()
+	select {
+	case <-putStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("star did not reach the inert PUT")
+	}
+	// The old implementation finishes hiding while the stale show callback is
+	// parked. The fixed implementation serializes callbacks and waits here.
+	starFinished := false
+	select {
+	case err := <-starDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+		starFinished = true
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(releaseCheck)
+	select {
+	case <-checkDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("check remained blocked")
+	}
+	if !starFinished {
+		select {
+		case err := <-starDone:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("star remained blocked")
+		}
+	}
+	<-visibility
+	if shown := <-visibility; shown {
+		t.Fatal("stale Check showed the item after Star hid it")
+	}
 }
 
 func TestStarRepoHidesWhenGHMissing(t *testing.T) {
