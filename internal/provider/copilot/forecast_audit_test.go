@@ -22,8 +22,7 @@ func TestAuditM2CalendarMonthForecast(t *testing.T) {
 		{"leap February", "2028-02-02T00:00:00Z", "2028-03-01T00:00:00Z", 9, 261, 29, view.ForecastKnown, view.ExhaustionRunsOut},
 		{"April", "2026-04-02T00:00:00Z", "2026-05-01T00:00:00Z", 5, 150, 30, view.ForecastKnown, view.ExhaustionRunsOut},
 		{"first hour", "2026-10-01T00:30:00Z", "2026-11-01T00:00:00Z", 1, 0, 31, view.ForecastWarming, view.ExhaustionUnknown},
-		{"still warming at one hour", "2026-10-01T01:00:00Z", "2026-11-01T00:00:00Z", 1, 0, 31, view.ForecastWarming, view.ExhaustionUnknown},
-		{"warm at one day", "2026-10-02T01:00:00Z", "2026-11-01T00:00:00Z", 1, 744.0 / 25, 31, view.ForecastKnown, view.ExhaustionLasts},
+		{"warm at one hour", "2026-10-01T01:00:00Z", "2026-11-01T00:00:00Z", 1, 744, 31, view.ForecastKnown, view.ExhaustionRunsOut},
 		{"last hour", "2026-02-28T23:00:00Z", "2026-03-01T00:00:00Z", 50, 50 * 672.0 / 671, 28, view.ForecastKnown, view.ExhaustionLasts},
 		{"at reset", "2026-03-01T00:00:00Z", "2026-03-01T00:00:00Z", 50, 0, 28, view.ForecastPending, view.ExhaustionUnknown},
 	} {

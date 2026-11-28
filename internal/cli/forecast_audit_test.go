@@ -95,7 +95,7 @@ func TestAuditM4MachineForecastNamesAverageBasis(t *testing.T) {
 		used    float64
 		elapsed time.Duration
 		pct     float64
-	}{{30, 60 * time.Hour, 84}, {5, 17 * time.Hour, 840.0 / 17}, {5, 24 * time.Hour, 35}} {
+	}{{30, 60 * time.Hour, 84}, {5, time.Hour, 840}, {5, 13 * time.Hour, 840.0 / 13}} {
 		data := &provider.UsageData{Provider: "claude", FetchedAt: now, Windows: []provider.UsageWindow{{Name: "7d", Utilization: tc.used, ResetsAt: now.Add(7*24*time.Hour - tc.elapsed)}}}
 		output := MultiProviderOutput{Providers: []ProviderFormatter{{Name: "claude", Family: "claude", Data: data}}}
 		v := output.buildView(now)
