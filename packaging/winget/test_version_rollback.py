@@ -95,6 +95,25 @@ esac
             self.assertIn('gh pr create ', calls.read_text())
             self.assertNotIn('ClawmeterSetup.exe', (root / 'body').read_text())
 
+    def test_url_outside_list_or_missing_from_an_entry_is_refused_before_git_or_gh(self):
+        url = 'https://example.invalid/releases/Installer.exe'
+        for installers in (
+            f'InstallerUrl: {url}\nInstallers: []',
+            f'Installers:\n- Architecture: x64\n  InstallerUrl: {url}\n- Architecture: arm64',
+        ):
+            with self.subTest(installers=installers), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                write_installer_manifest(root)
+                fixture = root / 'manifest' / 'tnunamak.Clawmeter.installer.yaml'
+                fixture.write_text(
+                    'PackageIdentifier: tnunamak.Clawmeter\nPackageVersion: 1.2.9\n'
+                    f'{installers}\nManifestType: installer\nManifestVersion: 1.6.0\n'
+                )
+                result, calls = self.simulate_submission(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('installer manifest', result.stderr)
+                self.assertFalse(calls.exists())
+
     def test_ambiguous_or_mismatched_installer_manifest_refuses_before_mocked_git_or_gh(self):
         cases = [
             {'urls': ('https://example.invalid/first.exe', 'https://example.invalid/other.exe')},
