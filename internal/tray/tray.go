@@ -2418,7 +2418,7 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 		SourceLabels:       make(map[string]string, len(menus)),
 		Families:           make(map[string]string, len(menus)),
 		FamilySourceCounts: make(map[string]int),
-		OutSince:           make(map[string]map[string]time.Time),
+		OutSince:           exhaustionTimes(shown, now),
 		ExtensionContact:   contact,
 	}
 	// A saved pin applies only while its quota can be pinned, as the rows
@@ -2435,6 +2435,14 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 	}
 	for key, data := range shown {
 		in.Results[key] = data
+	}
+	return in
+}
+
+// exhaustionTimes supplies the same observed run-out times for the icon and notifications.
+func exhaustionTimes(results map[string]*provider.UsageData, now time.Time) map[string]map[string]time.Time {
+	out := make(map[string]map[string]time.Time)
+	for key, data := range results {
 		if data == nil {
 			continue
 		}
@@ -2443,14 +2451,14 @@ func trayViewInputs(shown map[string]*provider.UsageData, menus map[string]*prov
 				continue
 			}
 			if at := windowExhaustion.ranOutAt(key, w, now); !at.IsZero() {
-				if in.OutSince[key] == nil {
-					in.OutSince[key] = make(map[string]time.Time)
+				if out[key] == nil {
+					out[key] = make(map[string]time.Time)
 				}
-				in.OutSince[key][w.Name] = at
+				out[key][w.Name] = at
 			}
 		}
 	}
-	return in
+	return out
 }
 
 // currentIconPin is the quota the user pinned to the icon, or nil when the
@@ -2611,7 +2619,11 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 		warningThreshold = cfg.Settings.NotificationThresholds.Warning
 		criticalThreshold = cfg.Settings.NotificationThresholds.Critical
 	}
-	snap := view.Build(view.Inputs{Results: results, MaxReadingAge: config.ReadingMaxAge(pollSeconds)}, now)
+	snap := view.Build(view.Inputs{
+		Results:       results,
+		MaxReadingAge: config.ReadingMaxAge(pollSeconds),
+		OutSince:      exhaustionTimes(results, now),
+	}, now)
 	for name, data := range results {
 		if data == nil || data.Error != "" || data.Stale || data.IsExpired {
 			continue
@@ -2633,7 +2645,7 @@ func checkThresholds(results map[string]*provider.UsageData, displayNames map[st
 				display = name
 			}
 			words := window.ForecastWords()
-			if note := window.ExhaustionWords(); note != "" {
+			if note := ranOutNote(window.ExhaustionWords(), window.Exhaustion.OutSince, now); note != "" {
 				words += " · " + note
 			}
 			message := fmt.Sprintf("%s window at %s — %s", window.Name, format.Percent(pct), words)
