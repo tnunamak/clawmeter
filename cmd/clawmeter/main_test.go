@@ -39,6 +39,30 @@ func TestRedteamSourceAddWithNullProviders(t *testing.T) {
 	}
 }
 
+func TestProviderSourceRemoveMissingContext(t *testing.T) {
+	bin := buildBinary(t)
+	home := t.TempDir()
+	if _, stderr, code := runWithHome(t, bin, home, "providers", "source", "add", "claude", "default", "native"); code != 0 {
+		t.Fatalf("seed fixture source: exit=%d stderr=%q", code, stderr)
+	}
+	path := configPathForHome(home)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runWithHome(t, bin, home, "providers", "source", "remove", "claude", "  MISSING-FIXTURE  ")
+	if code != 1 || !strings.Contains(stderr, `source "missing-fixture" not found for provider "claude"`) {
+		t.Fatalf("missing source should name its normalized ID and canonical provider: exit=%d stderr=%q", code, stderr)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("failed removal changed the fixture configuration")
+	}
+}
+
 func TestRedteamZeroWarningPreservesThresholdOrderingAfterReload(t *testing.T) {
 	bin := buildBinary(t)
 	home := t.TempDir()
