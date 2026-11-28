@@ -53,7 +53,43 @@ open_package_prs() {
     -f state=open \
     -f per_page=100 \
     --paginate \
-    --jq '.[] | select(.head.repo.full_name == "'"${fork_repo}"'") | select((.title | startswith("New package: '"${package_id}"' version ")) or (.title | startswith("New version: '"${package_id}"' version "))) | [.number, .title, .html_url, .head.ref] | @tsv'
+    --jq '.[] | select(.head.repo.full_name == "'"${fork_repo}"'") | select((.title | startswith("New package: '"${package_id}"' version ")) or (.title | startswith("New version: '"${package_id}"' version "))) | [.number, .title, .html_url, .head.ref, .head.sha] | @tsv'
+}
+
+pending_package_version() {
+  local pr_number="$1" head_sha="$2" files file relative found_path="" found_version="" content current_head
+  [[ "$pr_number" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[a-f0-9]{40}$ ]] || return 1
+  files="$(gh api "repos/${upstream_repo}/pulls/${pr_number}/files" -X GET -f per_page=100 --paginate \
+    --jq '.[] | select(.status != "removed") | .filename' 2>/dev/null)" || return 1
+  while IFS= read -r file; do
+    [[ "$file" == "$target_parent/"*"/$package_id.installer.yaml" ]] || continue
+    relative="${file#"$target_parent"/}"
+    relative="${relative%"/$package_id.installer.yaml"}"
+    [[ "$relative" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && -z "$found_path" ]] || return 1
+    found_path="$file"
+    found_version="$relative"
+  done <<<"$files"
+  [[ -n "$found_path" ]] || return 1
+
+  content="$(gh api "repos/${fork_repo}/contents/${found_path}?ref=${head_sha}" \
+    -H 'Accept: application/vnd.github.raw+json' 2>/dev/null)" || return 1
+  # The mutable PR file list is not a substitute for the immutable head.
+  current_head="$(gh api "repos/${upstream_repo}/pulls/${pr_number}" --jq '.head.sha' 2>/dev/null)" || return 1
+  [[ "$current_head" == "$head_sha" ]] || return 1
+  awk -v package="$package_id" -v version="$found_version" '
+    function scalar(text) {
+      sub(/^[^:]*:[[:space:]]*/, "", text)
+      sub(/[[:space:]]+$/, "", text)
+      return text
+    }
+    /^PackageIdentifier:/ { identifiers++; if (scalar($0) != package) invalid = 1 }
+    /^PackageVersion:/ { versions++; if (scalar($0) != version) invalid = 1 }
+    /^ManifestType:/ { types++; if (scalar($0) != "installer") invalid = 1 }
+    END {
+      if (invalid || identifiers != 1 || versions != 1 || types != 1) exit 1
+      print version
+    }
+  ' <<<"$content"
 }
 
 current_branch_pr() {
@@ -172,11 +208,13 @@ if (( ${#existing_package_prs[@]} > 1 )); then
   printf '  %s\n' "${existing_package_prs[@]}" >&2
   exit 1
 fi
+existing_head=""
 if (( ${#existing_package_prs[@]} == 1 )); then
   existing_package_pr="${existing_package_prs[0]}"
-  existing_title="$(cut -f2 <<<"$existing_package_pr")"
-  pending_version="${existing_title##* version }"
-  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! "$pending_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  existing_number="$(cut -f1 <<<"$existing_package_pr")"
+  existing_head="$(cut -f5 <<<"$existing_package_pr")"
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+      ! pending_version="$(pending_package_version "$existing_number" "$existing_head")"; then
     echo "refusing to replace an open PR with an unrecognized version" >&2
     exit 1
   fi
@@ -185,7 +223,6 @@ if (( ${#existing_package_prs[@]} == 1 )); then
     echo "refusing to replace newer pending version ${pending_version} with ${version}" >&2
     exit 1
   fi
-  existing_number="$(cut -f1 <<<"$existing_package_pr")"
   existing_url="$(cut -f3 <<<"$existing_package_pr")"
   branch="$(cut -f4 <<<"$existing_package_pr")"
   echo "Reusing open WinGet PR #${existing_number}: ${existing_url}"
@@ -254,7 +291,11 @@ if [[ "$dry_run" == "1" ]]; then
   exit 0
 fi
 
-git push --force-with-lease origin "$branch"
+push_lease=(--force-with-lease)
+if [[ -n "$existing_head" ]]; then
+  push_lease=("--force-with-lease=refs/heads/$branch:$existing_head")
+fi
+git push "${push_lease[@]}" origin "$branch"
 
 existing_pr="$(current_branch_pr)"
 
