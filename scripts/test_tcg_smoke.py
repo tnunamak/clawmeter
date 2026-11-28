@@ -97,6 +97,20 @@ sleep() { echo "sleep:$1" >> "$fixture/events"; SECONDS=$((SECONDS + $1)); }
             events = (root/'events').read_text() if (root/'events').exists() else ''
             return p, events
 
+    def test_memory_size_uses_decimal_for_leading_zeroes(self):
+        result, _ = self.run_fixture('size_to_mib 08G; size_to_mib 010M')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['8192', '10'])
+
+    def test_invalid_memory_size_stops_preflight_before_probing(self):
+        result, events = self.run_fixture('''VM_RAM=unknown
+mem_available_mib() { echo probed >> "$fixture/events"; echo 99999; }
+swap_used_mib() { echo 0; }
+if vm_memory_preflight; then exit 9; else exit 1; fi''')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('unsupported size', result.stderr)
+        self.assertNotIn('probed', events)
+
     def test_fallback_runs_application_with_configured_budget(self):
         result, events = self.run_fixture('start_tcg_fallback')
         self.assertEqual(result.returncode, 0, result.stderr)
