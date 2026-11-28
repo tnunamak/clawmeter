@@ -7,10 +7,36 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSetupTmuxIntegration_RefreshFailureWarnsAfterInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("tmux integration requires a POSIX shell")
+	}
+	integrationTestHome(t)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	t.Setenv("TMUX", "fixture")
+	const script = `#!/bin/sh
+case "$1" in
+show-options|show) printf '%s\n' "old status" ;;
+set) exit 0 ;;
+refresh-client) exit 23 ;;
+*) exit 99 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := setupTmuxIntegration(false)
+	if result.Status != "installed" || !result.Changed || !strings.Contains(result.Detail, "refresh warning") {
+		t.Fatalf("expected an installed result with a refresh warning, got %#v", result)
+	}
+}
 
 func TestTmuxStatusRightWithClawmeter_PrependsAndIsIdempotent(t *testing.T) {
 	existing := "#(/home/user/custom.sh) #[fg=white]%H:%M"
