@@ -39,7 +39,18 @@ def qga_call(socket_path: Path, payload: dict, timeout: int = 30) -> dict:
     raw = b"".join(chunks).decode("utf-8", errors="replace")
     if not raw:
         raise RuntimeError("empty QGA response")
-    return json.loads(raw)
+    response = json.loads(raw)
+    if not isinstance(response, dict):
+        raise RuntimeError("invalid QGA response envelope")
+    if "error" in response:
+        error = response["error"]
+        kind = error.get("class") if isinstance(error, dict) else None
+        if not isinstance(kind, str) or not kind.isascii() or not kind.isidentifier() or len(kind) > 64:
+            kind = "unknown class"
+        raise RuntimeError(f"QGA error: {kind}")
+    if "return" not in response:
+        raise RuntimeError("QGA response has no return value")
+    return response
 
 
 def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
@@ -71,9 +82,15 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
                 print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            return int(status.get("exitcode", 0))
+            signal = status.get("signal")
+            if type(signal) is int:
+                raise RuntimeError(f"guest process terminated by signal {signal}; guest pid {pid}")
+            exit_code = status.get("exitcode")
+            if type(exit_code) is not int:
+                raise RuntimeError(f"guest process reported no numeric exit code; guest pid {pid}")
+            return exit_code
         time.sleep(1)
-    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running: {args}")
+    raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running")
 
 
 def decode_output(value: str | None) -> str:

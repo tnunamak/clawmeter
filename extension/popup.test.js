@@ -6,21 +6,47 @@ const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 
 // popup loads popup.js against a minimal DOM and returns the rendered text.
-function popup() {
+function popup(initialStatus) {
   const node = tag => ({ tag, children: [], textContent: "", className: "", handlers: {},
     append(...nodes) { this.children.push(...nodes); },
+    after(node) { this.sibling = node; },
+    setAttribute(name, value) { this[name] = value; },
     replaceChildren(...nodes) { this.children = nodes; },
     addEventListener(type, handler) { this.handlers[type] = handler; } });
   const elements = {};
   const context = vm.createContext({
     document: { createElement: node, getElementById: id => (elements[id] ??= node()) },
-    chrome: { storage: { session: { get: async () => ({}), onChanged: { addListener() {} } } }, runtime: { sendMessage: async () => true } },
+    chrome: { storage: { session: { get: async () => ({ status: initialStatus }), onChanged: { addListener() {} } } }, runtime: { sendMessage: async () => true } },
     Intl, Date,
   });
   vm.runInContext(readFileSync(require.resolve("./popup.js"), "utf8"), context);
   const text = n => typeof n === "string" ? n : [n.textContent, ...n.children.map(text)].filter(Boolean).join(" | ");
   return { context, text };
 }
+
+test("a failed refresh preserves the last status and can retry", async () => {
+  const initialStatus = { delivery: ["saved"], claude: { state: "ok", accounts: [] } };
+  const { context } = popup(initialStatus);
+  context.render(initialStatus);
+  const button = context.document.getElementById("refresh");
+  const status = context.document.getElementById("connection-text");
+  const previous = status.textContent;
+  let calls = 0;
+  context.chrome.runtime.sendMessage = async message => {
+    assert.equal(message, "poll");
+    if (++calls === 1) throw new Error("synthetic poll error");
+    return true;
+  };
+  await button.handlers.click();
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Refresh");
+  assert.equal(status.textContent, previous);
+  assert.equal(button.sibling.role, "status");
+  assert.match(button.sibling.textContent, /Couldn't refresh/);
+  await button.handlers.click();
+  assert.equal(button.sibling.textContent, "");
+  assert.equal(calls, 2);
+});
 
 test("opening a pinned tab can be retried after the worker rejects", async () => {
   const { context } = popup();

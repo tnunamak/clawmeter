@@ -487,21 +487,31 @@ start_quickemu_vm() {
   record "quickemu_pid=${QUICKEMU_PID}"
   log "Quickemu launcher pid=${QUICKEMU_PID}; log=${log_file}"
 
-  local waited=0
-  local screenshot_count=0
-  while [[ "$waited" -lt "$BOOT_WAIT" ]]; do
-    sleep "$PROBE_INTERVAL"
-    waited=$((waited + PROBE_INTERVAL))
+  local started=$SECONDS deadline waited remaining delay
+  deadline=$((started + BOOT_WAIT))
+  local screenshot_count=0 next_screenshot=60
+  while (( SECONDS < deadline )); do
+    remaining=$((deadline - SECONDS))
+    delay="$PROBE_INTERVAL"
+    (( delay <= remaining )) || delay="$remaining"
+    sleep "$delay"
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || break
+    waited=$((SECONDS - started))
     if ! pgrep -f 'qemu-system-x86_64.*windows-11' >/dev/null; then
       warn "QEMU is not running after ${waited}s"
       sed -n '1,160p' "$log_file" | tee -a "$REPORT"
       return 2
     fi
-    if (( waited % 60 == 0 )); then
+    if (( waited >= next_screenshot )); then
       screenshot_count=$((screenshot_count + 1))
+      next_screenshot=$(( (waited / 60 + 1) * 60 ))
       capture_screen "${screenshot_count}"
     fi
-    if probe_ssh_ready; then
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || break
+    (( remaining <= 10 )) || remaining=10
+    if probe_ssh_ready "$remaining"; then
       log "SSH is ready on port ${SSH_PORT} after ${waited}s"
       if run_guest_cli_smoke; then
         log "Guest CLI smoke passed"
