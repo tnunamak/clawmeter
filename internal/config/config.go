@@ -43,6 +43,8 @@ func PollInterval(seconds int) time.Duration {
 
 // Config holds the application configuration.
 type Config struct {
+	ProviderKeysVersion int `yaml:"provider_keys_version,omitempty"`
+
 	// Providers configuration - keys are provider names (claude, openai, etc.)
 	Providers map[string]ProviderConfig `yaml:"providers,omitempty"`
 
@@ -320,6 +322,16 @@ func Load(validators ...SourceValidator) (*Config, error) {
 	if cfg.Providers == nil {
 		cfg.Providers = make(map[string]ProviderConfig)
 	}
+	// Unversioned files predate the distinct OpenCode account key unless both
+	// OpenCode entries already make the intent explicit. Save stamps the new layout.
+	if cfg.ProviderKeysVersion == 0 {
+		legacy, hasLegacy := cfg.Providers["opencode"]
+		_, hasFree := cfg.Providers["opencode_free"]
+		if hasLegacy && !hasFree {
+			cfg.Providers["opencode_free"] = legacy
+			delete(cfg.Providers, "opencode")
+		}
+	}
 	if err := cfg.ValidateSources(validators...); err != nil {
 		return nil, err
 	}
@@ -370,7 +382,11 @@ func (c *Config) Save(validators ...SourceValidator) error {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(c)
+	persisted := *c
+	if persisted.ProviderKeysVersion < 1 {
+		persisted.ProviderKeysVersion = 1
+	}
+	data, err := yaml.Marshal(&persisted)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
