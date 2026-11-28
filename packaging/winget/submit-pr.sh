@@ -91,6 +91,77 @@ else
   kind="New package"
 fi
 
+# Generated manifests have full identity metadata. A dry-run fixture may omit
+# all three fields; its exact filename and requested version still select it.
+shopt -s nullglob
+installer_manifests=("$manifest_dir"/*.installer.yaml "$manifest_dir"/*.installer.yml)
+shopt -u nullglob
+if (( ${#installer_manifests[@]} != 1 )) ||
+    [[ "${installer_manifests[0]}" != "$manifest_dir/$package_id.installer.yaml" ||
+       ! -f "${installer_manifests[0]}" || -L "${installer_manifests[0]}" ]]; then
+  echo "refusing to submit: expected exactly one selected installer manifest for $package_id" >&2
+  exit 1
+fi
+if ! installer_url="$(awk -v package="$package_id" -v version="$version" -v dry="$dry_run" '
+  function scalar(text) {
+    sub(/^[^:]*:[[:space:]]*/, "", text)
+    sub(/[[:space:]]+$/, "", text)
+    return text
+  }
+  /^PackageIdentifier:/ { identifiers++; if (scalar($0) != package) invalid = 1 }
+  /^PackageVersion:/ { versions++; if (scalar($0) != version) invalid = 1 }
+  /^ManifestType:/ { types++; if (scalar($0) != "installer") invalid = 1 }
+  function end_record() {
+    if (record && urls_in_record != 1) invalid = 1
+    record = urls_in_record = 0
+  }
+  /^Installers:[[:space:]]*$/ {
+    end_record()
+    lists++
+    in_installers = 1
+    entry_indent = -1
+    next
+  }
+  /^[^[:space:]#-][^:]*:/ {
+    end_record()
+    in_installers = 0
+  }
+  in_installers && /^[ ]*-[ ]+/ {
+    match($0, /^[ ]*/)
+    indent = RLENGTH
+    if (entry_indent == -1) entry_indent = indent
+    if (indent == entry_indent) {
+      end_record()
+      record = 1
+      records++
+    }
+  }
+  /^[ ]*(-[ ]+)?InstallerUrl[[:space:]]*:/ {
+    if (!in_installers || !record) { invalid = 1; next }
+    match($0, /^[ ]*/)
+    if ($0 ~ /^[ ]*-/ ? RLENGTH != entry_indent : RLENGTH != entry_indent + 2) { invalid = 1; next }
+    urls_in_record++
+    value = scalar($0)
+    # An HTTPS bare URI with no whitespace or formatting characters.
+    if (value !~ /^https:\/\/[A-Za-z0-9.-]+(:[0-9]+)?\/[A-Za-z0-9._~:%\/?&=+#@!$*,;-]+$/) invalid = 1
+    asset_path = value
+    sub(/[?#].*$/, "", asset_path)
+    if (asset_path ~ /\/$/) invalid = 1
+    if (url != "" && url != value) invalid = 1
+    url = value
+  }
+  END {
+    end_record()
+    full_identity = identifiers == 1 && versions == 1 && types == 1
+    minimal_dry_run = dry == 1 && identifiers == 0 && versions == 0 && types == 0
+    if (invalid || (!full_identity && !minimal_dry_run) || lists != 1 || records == 0 || url == "") exit 1
+    print url
+  }
+' "${installer_manifests[0]}")"; then
+  echo "refusing to submit: installer manifest package, version, or InstallerUrl is invalid or ambiguous" >&2
+  exit 1
+fi
+
 existing_package_pr_output="$(open_package_prs)"
 existing_package_prs=()
 if [[ -n "$existing_package_pr_output" ]]; then
@@ -162,26 +233,7 @@ else
   git commit -m "$title"
 fi
 
-installer_line=""
-installer_manifest="$manifest_dir/${package_id}.installer.yaml"
-if [[ -f "$installer_manifest" ]]; then
-  installer_url="$(awk '
-    /^[[:space:]]*(-[[:space:]]*)?InstallerUrl:[[:space:]]*/ {
-      sub(/^[[:space:]]*(-[[:space:]]*)?InstallerUrl:[[:space:]]*/, "")
-      sub(/[[:space:]]+$/, "")
-      if ($0 ~ /^https:\/\/[^[:space:]<>]+$/) {
-        if (url != "" && url != $0) ambiguous = 1
-        url = $0
-      } else {
-        ambiguous = 1
-      }
-    }
-    END { if (!ambiguous && url != "") print url }
-  ' "$installer_manifest")"
-  if [[ -n "$installer_url" ]]; then
-    printf -v installer_line '\n- Installer: %s' "$installer_url"
-  fi
-fi
+printf -v installer_line '\n- Installer: %s' "$installer_url"
 
 body="$(cat <<EOF
 ## Package Details

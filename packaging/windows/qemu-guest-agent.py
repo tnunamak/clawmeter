@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import json
 import os
 import pty
@@ -99,7 +100,10 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
             if type(pid) is int and pid > 0:
                 raise TimeoutError(f"guest launch reply exceeded its deadline; guest pid {pid} may still be running") from error
         raise TimeoutError("guest launch timed out; launch outcome unknown") from error
-    pid = start["return"]["pid"]
+    returned = start.get("return")
+    pid = returned.get("pid") if isinstance(returned, dict) else None
+    if type(pid) is not int or pid <= 0:
+        raise RuntimeError("guest launch reply has no valid pid")
     timed_out = f"guest command timed out after {timeout}s; guest pid {pid} may still be running"
     while True:
         try:
@@ -117,6 +121,8 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
             if isinstance(error, TimeoutError) and time.monotonic() >= deadline:
                 raise TimeoutError(timed_out) from error
             raise RuntimeError(f"guest status unavailable; guest pid {pid} may still be running") from error
+        if not isinstance(status, dict):
+            raise RuntimeError(f"invalid guest status reply; guest pid {pid} may still be running")
         if status.get("exited"):
             stdout = decode_output(status.get("out-data"))
             stderr = decode_output(status.get("err-data"))
@@ -138,9 +144,14 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
 
 
 def decode_output(value: str | None) -> str:
-    if not value:
+    if value is None or value == "":
         return ""
-    return base64.b64decode(value).decode("utf-8", errors="replace")
+    if not isinstance(value, str):
+        raise RuntimeError("guest output is not valid base64")
+    try:
+        return base64.b64decode(value, validate=True).decode("utf-8", errors="replace")
+    except (binascii.Error, ValueError):
+        raise RuntimeError("guest output is not valid base64") from None
 
 
 def powershell(socket_path: Path, script: str, timeout: int) -> int:

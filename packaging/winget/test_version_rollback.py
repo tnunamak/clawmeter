@@ -11,6 +11,10 @@ class VersionRollbackTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             (root / 'manifest').mkdir()
+            (root / 'manifest' / 'tnunamak.Clawmeter.installer.yaml').write_text(
+                'PackageIdentifier: tnunamak.Clawmeter\nPackageVersion: 1.2.9\n'
+                'Installers:\n- Architecture: x64\n  InstallerUrl: https://example.invalid/releases/clawmeter.msi\n'
+                'ManifestType: installer\nManifestVersion: 1.6.0\n')
             gh = root / 'gh'
             gh.write_text('''#!/bin/bash
 printf '%s\n' "$*" >> "$GH_CALL_LOG"
