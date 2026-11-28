@@ -21,7 +21,11 @@ if [[ "$*" == *contents/* ]]; then
   echo 'HTTP/2.0 200'; exit 0
 fi
 if [[ "$*" == 'pr list'* ]]; then exit 7; fi
-if [[ "$*" == *pulls* ]]; then exit 7; fi
+if [[ "$*" == *pulls* ]]; then
+  if [[ "${SUBMIT_FIXTURE:-}" == 1 ]]; then exit 0; fi
+  exit 7
+fi
+if [[ "$*" == "repo clone "* && "${SUBMIT_FIXTURE:-}" == 1 ]]; then exit 0; fi
 exit 99
 """)
         gh.chmod(0o755)
@@ -53,6 +57,21 @@ exit 99
         r = self.run_script("submit-pr.sh", "v1.2.3", "manifest", code="503")
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("upstream package lookup failed", r.stderr)
+
+    def test_submit_dry_run_uses_installer_from_manifest(self):
+        self.env.update(SUBMIT_FIXTURE="1", WINGET_WORK_ROOT=str(self.cwd / "work"))
+        installer = "https://example.invalid/releases/clawmeter-portable.zip"
+        (self.cwd / "manifest" / "tnunamak.Clawmeter.installer.yaml").write_text(
+            "Installers:\n  - Architecture: x64\n    InstallerUrl: " + installer + "\n"
+        )
+        git = self.cwd / "git"
+        git.write_text('#!/bin/bash\nif [[ "$*" == "diff --cached --quiet" ]]; then exit 1; fi\nexit 0\n')
+        git.chmod(0o755)
+        r = self.run_script("submit-pr.sh", "v1.2.3", "manifest")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"- Installer: {installer}", r.stdout)
+        self.assertNotIn("ClawmeterSetup.exe", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
