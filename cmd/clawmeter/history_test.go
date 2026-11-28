@@ -49,6 +49,7 @@ func TestHistoryCommandRejectsInvalidArguments(t *testing.T) {
 	}{
 		{"unexpected positional argument", []string{"--json", "extra"}, "Usage: clawmeter history --json"},
 		{"invalid duration", []string{"--json", "--since", "not-a-duration"}, `invalid --since duration "not-a-duration"`},
+		{"unknown provider", []string{"--json", "--provider", "synthetic-unknown"}, `unknown provider "synthetic-unknown"`},
 		{"zero duration", []string{"--json", "--since", "0h"}, `invalid --since duration "0h"`},
 		{"too many days", []string{"--json", "--since", "36501d"}, `invalid --since duration "36501d"`},
 	} {
@@ -74,7 +75,7 @@ func TestHistoryCommandJSONLinesFilters(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	lines := []any{
-		map[string]any{"schema_version": 1, "reading_time": now.Add(-time.Hour), "recorded_at": now.Add(-time.Hour), "provider": "claude", "account": "Work", "source": "work", "window": "7d", "window_minutes": 10080, "used_percent": 40, "resets_at": now.Add(time.Hour), "age_seconds": 0},
+		map[string]any{"schema_version": 1, "reading_time": now.Add(-time.Hour), "recorded_at": now.Add(-time.Hour), "provider": "claude", "account": "Work <team>", "source": "work", "window": "7d", "window_minutes": 10080, "used_percent": 40, "resets_at": now.Add(time.Hour), "age_seconds": 0},
 		map[string]any{"schema_version": 1, "reading_time": now.Add(-2 * time.Hour), "recorded_at": now.Add(-2 * time.Hour), "provider": "openai", "account": "default", "source": "default", "window": "7d", "window_minutes": 10080, "used_percent": 20, "resets_at": now.Add(time.Hour), "age_seconds": 0},
 	}
 	path := filepath.Join(historyDir, "usage-"+now.Format("2006-01")+".jsonl")
@@ -95,6 +96,13 @@ func TestHistoryCommandJSONLinesFilters(t *testing.T) {
 	stdout, stderr, code := runWithHome(t, bin, home, "history", "--json", "--since", "7d", "--provider", "claude")
 	if code != 0 || stderr != "" || strings.Count(strings.TrimSpace(stdout), "\n") != 0 || !strings.Contains(stdout, `"provider":"claude"`) {
 		t.Fatalf("history command: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, `"account":"Work <team>"`) {
+		t.Fatalf("history must preserve literal display text in JSONL: %q", stdout)
+	}
+	stdout, stderr, code = runWithHome(t, bin, home, "history", "--json", "--since", "30m", "--provider", "claude")
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("history reading before --since cutoff: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if _, stderr, code := runWithHome(t, bin, home, "history"); code == 0 || !strings.Contains(stderr, "--json") {
 		t.Fatalf("history without --json: exit=%d stderr=%q", code, stderr)

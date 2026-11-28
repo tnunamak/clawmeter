@@ -97,6 +97,20 @@ sleep() { echo "sleep:$1" >> "$fixture/events"; SECONDS=$((SECONDS + $1)); }
             events = (root/'events').read_text() if (root/'events').exists() else ''
             return p, events
 
+    def test_memory_size_uses_decimal_for_leading_zeroes(self):
+        result, _ = self.run_fixture('size_to_mib 08G; size_to_mib 010M')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['8192', '10'])
+
+    def test_invalid_memory_size_stops_preflight_before_probing(self):
+        result, events = self.run_fixture('''VM_RAM=unknown
+mem_available_mib() { echo probed >> "$fixture/events"; echo 99999; }
+swap_used_mib() { echo 0; }
+if vm_memory_preflight; then exit 9; else exit 1; fi''')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('unsupported size', result.stderr)
+        self.assertNotIn('probed', events)
+
     def test_fallback_runs_application_with_configured_budget(self):
         result, events = self.run_fixture('start_tcg_fallback')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -216,5 +230,37 @@ class ExtensionPackageTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('missing from extension/: icon.png', result.stderr)
         self.assertFalse(archive.exists())
+
+    def test_default_archive_uses_the_manifest_version_in_the_callers_directory(self):
+        import sys
+        caller = self.root / 'caller'
+        caller.mkdir()
+        result = subprocess.run(
+            [sys.executable, '-I', '-B', str(self.packager)],
+            cwd=caller, text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['clawmeter-extension-0.0.1.zip'])
+        self.assertTrue((caller / 'clawmeter-extension-0.0.1.zip').is_file())
+        self.assertFalse((self.root / 'clawmeter-extension-0.0.1.zip').exists())
+
+    def test_packager_keeps_all_declared_icons_and_other_manifest_fields(self):
+        import json
+        import zipfile
+        icons_dir = self.extension / 'icons'
+        icons_dir.mkdir()
+        (icons_dir / 'large.png').write_bytes(b'large fixture bytes')
+        manifest = json.loads(self.manifest.read_text())
+        manifest['icons']['128'] = 'icons/large.png'
+        manifest['name'] = 'Fixture Package'
+        self.manifest.write_text(json.dumps(manifest))
+        result, target = self.package('multi-icon.zip')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(target) as archive:
+            self.assertEqual(archive.read('icon.png'), b'synthetic fixture')
+            self.assertEqual(archive.read('icons/large.png'), b'large fixture bytes')
+            self.assertEqual(json.loads(archive.read('manifest.json')),
+                             {k: v for k, v in manifest.items() if k != 'key'})
+
 
 if __name__ == '__main__': unittest.main()

@@ -105,6 +105,37 @@ test("alarm lifecycle and one poll at a time", async () => {
   assert.equal(w.stored.length, 3);
 });
 
+test("an open-existing-alarm check does not replace the browser's poll schedule", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  const queried = [];
+  w.context.chrome.alarms.get = async name => {
+    queried.push(name);
+    return { name, periodInMinutes: 1 };
+  };
+  const before = w.created.length;
+  await w.context.ensureAlarm();
+  assert.deepEqual(queried, ["poll"]);
+  assert.equal(w.created.length, before);
+});
+
+test("open-openai reports false without opening a tab when optional permission is absent", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  let checked = 0;
+  w.context.chrome.permissions = {
+    contains: async () => { checked++; return false; },
+    request: () => assert.fail("the worker must not request a browser permission"),
+  };
+  const result = await new Promise((resolve, reject) => {
+    const handled = w.listeners.message("open-openai", { id: "self" }, resolve);
+    if (handled !== true) reject(new Error("worker did not keep the response channel open"));
+  });
+  assert.equal(result, false);
+  assert.ok(checked > 0);
+  assert.deepEqual(w.opened, []);
+});
+
 test("authenticated GET and local JSON POST with failures quiet", async () => {
   const requests = [];
   const w = worker(async (getJSON, now, cache, post) => {
@@ -567,6 +598,26 @@ test("a pool a container lists but cannot read yet is remembered for a week", as
   await vm.runInContext("poll()", w.context);
   assert.deepEqual(w.stored.at(-1).sessions, {});
   assert.ok(posts.some(url => url.endsWith("/v1/status")));
+});
+
+test("an empty or malformed injected tab result is not treated as a signed-out session", async () => {
+  for (const result of [[], [{ result: null }], [{ result: { status: "401", body: null } }]]) {
+    const w = worker(async () => ({ status: "ok", payloads: [] }), undefined, undefined,
+      { executeScript: async () => result });
+    await assert.rejects(w.context.readInTab({ id: 1 }, "https://claude.ai/api/organizations"),
+      /Tab did not answer/);
+  }
+});
+
+test("a tab with an HTTP response retains its actual status for the polling decision", async () => {
+  const replies = [{ result: { status: 503, body: null } }];
+  let calls = 0;
+  const w = worker(async () => ({ status: "ok", payloads: [] }), undefined, undefined,
+    { executeScript: async () => { calls++; return replies; } });
+  const result = await w.context.readInTab({ id: 1 }, "https://claude.ai/api/organizations");
+  assert.equal(result.status, 503);
+  assert.equal(result.body, null);
+  assert.equal(calls, 1);
 });
 
 test("post says what Clawmeter did with a reading", async () => {

@@ -193,17 +193,14 @@ run_wine_smoke() {
 }
 
 size_to_mib() {
-  local value="$1"
-  case "$value" in
-    *[Gg])
-      echo $(( ${value%[Gg]} * 1024 ))
-      ;;
-    *[Mm])
-      echo "${value%[Mm]}"
-      ;;
-    *)
-      die "unsupported size ${value}; use values like 8G or 8192M"
-      ;;
+  local value="$1" mib
+  [[ "$value" =~ ^([0-9]{1,9})([GgMm])$ ]] ||
+    die "unsupported size ${value}; use values like 8G or 8192M"
+  mib=$((10#${BASH_REMATCH[1]}))
+  (( mib > 0 )) || die "VM size must be positive"
+  case "${BASH_REMATCH[2]}" in
+    [Gg]) echo $((mib * 1024)) ;;
+    [Mm]) echo "$mib" ;;
   esac
 }
 
@@ -221,7 +218,7 @@ swap_used_mib() {
 
 vm_memory_preflight() {
   local ram_mib available_mib required_mib swap_mib
-  ram_mib="$(size_to_mib "$VM_RAM")"
+  ram_mib="$(size_to_mib "$VM_RAM")" || return 1
   available_mib="$(mem_available_mib)"
   required_mib=$((ram_mib + MIN_AVAILABLE_GIB * 1024))
   swap_mib="$(swap_used_mib)"

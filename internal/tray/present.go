@@ -214,7 +214,11 @@ func accountHead(acct *view.Account) string {
 		}
 		return fmt.Sprintf("%s: %s", acct.Label, msg)
 	case view.ReadingError:
-		return fmt.Sprintf("%s: %s", acct.Label, acct.Reading.Reason)
+		msg := acct.Reading.Reason
+		if strings.TrimSpace(msg) == "" {
+			msg = "could not read usage"
+		}
+		return fmt.Sprintf("%s: %s", acct.Label, msg)
 	}
 	return acct.Label
 }

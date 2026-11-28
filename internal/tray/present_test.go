@@ -11,6 +11,24 @@ import (
 	"github.com/tnunamak/clawmeter/internal/view"
 )
 
+func TestTooltipErrorExplainsMissingDiagnostic(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		want   string
+	}{
+		{"", "Codex: could not read usage"},
+		{" \t", "Codex: could not read usage"},
+		{"timed out", "Codex: timed out"},
+	} {
+		snap := view.Snapshot{Accounts: []view.Account{{
+			Key: "codex", Label: "Codex", Reading: view.Reading{State: view.ReadingError, Reason: tc.reason},
+		}}}
+		if got := Tooltip(snap, nil); got != tc.want {
+			t.Errorf("reason %q: tooltip = %q; want %q", tc.reason, got, tc.want)
+		}
+	}
+}
+
 func TestTooltipCompactSummary(t *testing.T) {
 	at := time.Date(2026, 11, 2, 11, 23, 0, 0, time.UTC)
 	w := view.Window{

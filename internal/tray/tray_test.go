@@ -130,6 +130,57 @@ func TestTrayDoesNotCreateMenusForLinkedClaudeResetSources(t *testing.T) {
 	}
 }
 
+// TestUsageCreditBenefitAgedLinkIsNotLinked pins the rule that an aged link
+// observation cannot keep a benefit "linked": a link last observed more than
+// five minutes ago reports "unknown", while a freshly observed link stays
+// "linked". Entry point: provider.UsageCreditBenefit.State, reached from the
+// tray tooltip and CLI via Summary/ActionURL.
+func TestUsageCreditBenefitAgedLinkIsNotLinked(t *testing.T) {
+	now := time.Date(2026, time.November, 27, 9, 45, 0, 0, time.UTC)
+	fresh := provider.UsageCreditBenefit{
+		LinkState:      "linked",
+		LinkObservedAt: now,
+		ObservedAt:     now,
+		Eligibility:    "eligible",
+	}
+	if got := fresh.State(now); got != "linked" {
+		t.Fatalf("fresh linked benefit State = %q, want linked", got)
+	}
+	aged := provider.UsageCreditBenefit{
+		LinkState:      "linked",
+		LinkObservedAt: now.Add(-10 * time.Minute),
+		ObservedAt:     now,
+		Eligibility:    "eligible",
+	}
+	if got := aged.State(now); got != "unknown" {
+		t.Fatalf("aged linked benefit State = %q, want unknown", got)
+	}
+}
+
+// TestLocalModelsAtWithholdsYesterdayCounts pins that counts observed on a
+// previous UTC reporting day are withheld, while today's counts are kept.
+// Entry point: provider.LocalModelsAt, reached from the tray/CLI summaries.
+func TestLocalModelsAtWithholdsYesterdayCounts(t *testing.T) {
+	msgs := int64(12)
+	in := int64(3456)
+	observed := time.Date(2026, time.November, 26, 12, 0, 0, 0, time.UTC)
+	at := time.Date(2026, time.November, 27, 0, 30, 0, 0, time.UTC)
+	raw := []provider.LocalModelUsage{
+		{Model: "today-model", Day: "2026-11-27", AssistantMessages: &msgs, InputTokens: &in},
+		{Model: "yesterday-model", Day: "2026-11-26", AssistantMessages: &msgs, InputTokens: &in},
+	}
+	got := provider.LocalModelsAt(raw, observed, at, true)
+	if got[0].AssistantMessages == nil || *got[0].AssistantMessages != 12 || got[0].InputTokens == nil || *got[0].InputTokens != 3456 {
+		t.Fatalf("today's counts were withheld or changed: %+v", got[0])
+	}
+	if got[1].AssistantMessages != nil || got[1].InputTokens != nil {
+		t.Fatalf("yesterday's counts were kept: %+v", got[1])
+	}
+	if raw[1].AssistantMessages == nil {
+		t.Fatalf("LocalModelsAt mutated its input slice")
+	}
+}
+
 func TestTrayProviderHeadingNamesAccountOnlyWhenRepeated(t *testing.T) {
 	if got := trayProviderDisplayName("Claude", "Default", false); got != "Claude" {
 		t.Fatalf("single default account heading = %q, want concise heading", got)
@@ -1767,5 +1818,35 @@ func TestResetLinePreservesMultibytePolicyText(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("resetLine policy %q: got %q, want %q", tc.policy, got, tc.want)
 		}
+	}
+}
+
+func TestTrayMenuCountsOnlyOmittedVisibleWindows(t *testing.T) {
+	now := time.Now()
+	windows := []provider.UsageWindow{
+		{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: now.Add(3 * time.Hour)},
+		{Name: "7d", Length: 7 * 24 * time.Hour, Utilization: 25, ResetsAt: now.Add(5 * 24 * time.Hour)},
+	}
+	snap := viewOf(map[string]*provider.UsageData{"a": {FetchedAt: now, Windows: windows}}, now)
+	if rows, more := MenuRows(snap, 1)["a"], MenuMore(snap, 1)["a"]; len(rows) != 1 || more != 1 {
+		t.Fatalf("one visible row and one omitted: rows=%v more=%d", rows, more)
+	}
+	if _, ok := MenuMore(snap, 2)["a"]; ok {
+		t.Fatal("no overflow row should be shown when both windows fit")
+	}
+}
+
+func TestTrayErrorReadingDoesNotAdvertiseQuotaOverflow(t *testing.T) {
+	now := time.Now()
+	snap := viewOf(map[string]*provider.UsageData{"a": {
+		FetchedAt: now,
+		Windows:   []provider.UsageWindow{{Name: "5h", Length: 5 * time.Hour, Utilization: 40, ResetsAt: now.Add(3 * time.Hour)}},
+	}}, now)
+	if MenuMore(snap, 0)["a"] != 1 {
+		t.Fatal("fixture must contain one visible quota window")
+	}
+	snap.Accounts[0].Reading.State = view.ReadingError
+	if rows, more := MenuRows(snap, 0), MenuMore(snap, 0); len(rows) != 0 || len(more) != 0 {
+		t.Fatalf("error reading should show neither quota rows nor overflow: rows=%v more=%v", rows, more)
 	}
 }
