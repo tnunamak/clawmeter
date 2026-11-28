@@ -124,6 +124,15 @@ func writePNG(path string, img image.Image) {
 }
 
 func writePNGAtomic(path string, img image.Image) error {
+	// Write through a symlink as os.Create did, and give the new file the old file's mode (0644 when there is none):
+	// CreateTemp makes 0600, which would otherwise replace a readable sheet.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".icon-sheet-*.png")
 	if err != nil {
 		return err
@@ -131,6 +140,9 @@ func writePNGAtomic(path string, img image.Image) error {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
 		return err
 	}
 	f, err := createPNGFile(tmpPath)

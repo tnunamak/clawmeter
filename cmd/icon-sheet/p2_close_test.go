@@ -76,3 +76,46 @@ func TestP2PNGCloseFailure(t *testing.T) {
 		t.Fatalf("close failure reported success: %s %v", out, err)
 	}
 }
+
+func TestPNGWriteKeepsTheExistingModeAndDefaultsTo0644(t *testing.T) {
+	dir := t.TempDir()
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	fresh := filepath.Join(dir, "fresh.png")
+	if err := writePNGAtomic(fresh, img); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(fresh); info.Mode().Perm() != 0o644 {
+		t.Fatalf("new sheet mode = %v, want 0644", info.Mode().Perm())
+	}
+	existing := filepath.Join(dir, "existing.png")
+	if err := os.WriteFile(existing, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePNGAtomic(existing, img); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(existing); info.Mode().Perm() != 0o600 {
+		t.Fatalf("rewritten sheet mode = %v, want the old 0600", info.Mode().Perm())
+	}
+}
+
+func TestPNGWriteThroughASymlinkUpdatesTheTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.png")
+	link := filepath.Join(dir, "link.png")
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks unavailable:", err)
+	}
+	if err := writePNGAtomic(link, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link was replaced: %v %v", info, err)
+	}
+	if data, _ := os.ReadFile(target); !bytes.HasPrefix(data, []byte("\x89PNG")) {
+		t.Fatalf("target not rewritten: %q", data)
+	}
+}
