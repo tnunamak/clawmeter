@@ -85,6 +85,34 @@ function net { $global:LASTEXITCODE = 5 }
         self.assertAlmostEqual(sleeps[0], 0.4)
         self.assertAlmostEqual(now, 1)
 
+    def test_decoded_launch_reply_keeps_pid_when_parse_crosses_deadline(self):
+        now = 0.0
+        sent = []
+        loads = agent.json.loads
+
+        class FakeSocket:
+            def __init__(self, *args): pass
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def settimeout(self, seconds): pass
+            def connect(self, address): pass
+            def sendall(self, body): sent.append(loads(body)['execute'])
+            def recv(self, size): return b'{"return":{"pid":42}}\n'
+
+        def parse_past_deadline(raw):
+            nonlocal now
+            reply = loads(raw)
+            now = 1.01
+            return reply
+
+        with patch.object(agent.socket, 'socket', FakeSocket), \
+                patch.object(agent.time, 'monotonic', lambda: now), \
+                patch.object(agent.json, 'loads', parse_past_deadline):
+            with self.assertRaisesRegex(TimeoutError, 'guest pid 42 may still be running') as error:
+                agent.guest_exec(Path('unused'), ['fixture.exe', 'private-fixture-argument'], 1)
+        self.assertEqual(sent, ['guest-exec'])
+        self.assertNotIn('private-fixture-argument', str(error.exception))
+
     def test_guest_launch_timeout_has_unknown_outcome_without_resubmission(self):
         with patch.object(agent, 'qga_call', side_effect=TimeoutError('synthetic')) as call:
             with self.assertRaisesRegex(TimeoutError, 'launch outcome unknown'):

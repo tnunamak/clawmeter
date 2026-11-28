@@ -26,6 +26,14 @@ def remaining_time(deadline: float) -> float:
     return remaining
 
 
+class DecodedReplyTimeout(TimeoutError):
+    """Deadline expired after a reply was decoded; keep it for bounded recovery messages."""
+
+    def __init__(self, reply):
+        super().__init__("QGA deadline exhausted")
+        self.reply = reply
+
+
 def qga_call(socket_path: Path, payload: dict, timeout: int = 30, *,
              deadline: float | None = None) -> dict:
     if deadline is None:
@@ -49,7 +57,10 @@ def qga_call(socket_path: Path, payload: dict, timeout: int = 30, *,
     if not raw:
         raise RuntimeError("empty QGA response")
     reply = json.loads(raw)
-    remaining_time(deadline)
+    try:
+        remaining_time(deadline)
+    except TimeoutError as error:
+        raise DecodedReplyTimeout(reply) from error
     return reply
 
 
@@ -69,9 +80,14 @@ def guest_exec(socket_path: Path, args: list[str], timeout: int) -> int:
             deadline=deadline,
         )
     except TimeoutError as error:
+        if isinstance(error, DecodedReplyTimeout) and isinstance(error.reply, dict):
+            returned = error.reply.get("return")
+            pid = returned.get("pid") if isinstance(returned, dict) else None
+            if type(pid) is int and pid > 0:
+                raise TimeoutError(f"guest command timed out after {timeout}s; guest pid {pid} may still be running") from error
         raise TimeoutError(f"guest command timed out after {timeout}s; launch outcome unknown") from error
     pid = start["return"]["pid"]
-    timed_out = f"guest command timed out after {timeout}s; guest pid {pid} may still be running: {args}"
+    timed_out = f"guest command timed out after {timeout}s; guest pid {pid} may still be running"
     while True:
         try:
             remaining_time(deadline)
