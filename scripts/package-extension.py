@@ -7,6 +7,7 @@ stay out of the package.
 """
 
 import json
+import os
 import sys
 import tempfile
 import zipfile
