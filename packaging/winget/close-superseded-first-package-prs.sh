@@ -99,6 +99,7 @@ if [[ -n "$latest_tag" ]]; then
   release_sentence=" Latest release: https://github.com/tnunamak/clawmeter/releases/tag/${latest_tag}."
 fi
 
+unverifiable=0
 for row in "${prs[@]}"; do
   IFS=$'\t' read -r number title url author <<<"$row"
   if [[ -n "$current_pr" && "$number" == "$current_pr" ]]; then
@@ -112,6 +113,7 @@ for row in "${prs[@]}"; do
 
   if ! head_repo="$(gh api "repos/${upstream_repo}/pulls/${number}" --jq '.head.repo.full_name // empty')"; then
     echo "Skipping PR #${number}: head repository could not be verified." >&2
+    ((unverifiable += 1))
     continue
   fi
   if [[ "$head_repo" != "$fork_repo" ]]; then
@@ -129,3 +131,8 @@ for row in "${prs[@]}"; do
     --repo "$upstream_repo" \
     --comment "Closing as superseded because ${package_id} is now accepted in WinGet. Future releases should use New version PRs.${release_sentence}"
 done
+
+if (( unverifiable > 0 )); then
+  echo "Cleanup incomplete: ${unverifiable} head repository lookup(s) failed." >&2
+  exit 1
+fi
