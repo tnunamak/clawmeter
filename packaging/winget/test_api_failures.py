@@ -116,5 +116,41 @@ esac
         self.assertNotIn("ClawmeterSetup.exe", r.stdout)
 
 
+    def test_submit_refuses_ambiguous_inspected_installer_url_instead_of_printing_a_pr_body(self):
+        self.env.update(SUBMIT_FIXTURE="1", WINGET_WORK_ROOT=str(self.cwd / "work"))
+        installer = self.cwd / "manifest" / "tnunamak.Clawmeter.installer.yaml"
+        installer.write_text(
+            "PackageIdentifier: tnunamak.Clawmeter\nPackageVersion: 1.2.3\n"
+            "Installers:\n- Architecture: x64\n"
+            "  InstallerUrl: https://example.invalid/releases/one.exe\n"
+            "- Architecture: arm64\n"
+            "  InstallerUrl: https://example.invalid/releases/two.exe\n"
+            "ManifestType: installer\n"
+        )
+        git = self.cwd / "git"
+        git.write_text('#!/bin/bash\nif [[ "$*" == "diff --cached --quiet" ]]; then exit 1; fi\nexit 0\n')
+        git.chmod(0o755)
+        r = self.run_script("submit-pr.sh", "v1.2.3", "manifest")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("invalid or ambiguous", r.stderr)
+        self.assertNotIn("PR body:", r.stdout)
+
+    def test_submit_accepts_the_generated_manifest_layout(self):
+        self.env.update(SUBMIT_FIXTURE="1", WINGET_WORK_ROOT=str(self.cwd / "work"))
+        installer = "https://example.invalid/releases/clawmeter-generated.msi"
+        (self.cwd / "manifest" / "tnunamak.Clawmeter.installer.yaml").write_text(
+            "PackageIdentifier: tnunamak.Clawmeter\nPackageVersion: 1.2.3\n"
+            "Installers:\n- Architecture: x64\n  InstallerUrl: " + installer + "\n"
+            "ManifestType: installer\nManifestVersion: 1.6.0\n"
+        )
+        git = self.cwd / "git"
+        git.write_text('#!/bin/bash\nif [[ "$*" == "diff --cached --quiet" ]]; then exit 1; fi\nexit 0\n')
+        git.chmod(0o755)
+        r = self.run_script("submit-pr.sh", "v1.2.3", "manifest")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(f"- Installer: {installer}", r.stdout)
+        self.assertNotIn("ClawmeterSetup.exe", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
