@@ -12,8 +12,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tnunamak/clawmeter/internal/config"
+	"github.com/tnunamak/clawmeter/internal/provider"
 	"github.com/tnunamak/clawmeter/internal/update"
 )
+
+type alternatingSetupProvider struct {
+	provider.Provider
+	calls int
+}
+
+func (p *alternatingSetupProvider) Name() string { return "claude" }
+
+func (p *alternatingSetupProvider) SetupStatus() provider.SetupStatus {
+	p.calls++
+	if p.calls == 1 {
+		return provider.SetupStatus{State: provider.SetupNeedsAuth, Detail: "first"}
+	}
+	return provider.SetupStatus{State: "ready"}
+}
+
+func TestDescribeProviderStateUsesSingleSetupSnapshot(t *testing.T) {
+	p := &alternatingSetupProvider{}
+	cfg := &config.Config{Providers: map[string]config.ProviderConfig{"claude": {Enabled: true}}}
+	if got := describeProviderState(p, cfg); got != "enabled, setup needed: first" || p.calls != 1 {
+		t.Fatalf("describeProviderState = %q, observer called %d times; want first status and one call", got, p.calls)
+	}
+}
 
 func TestRedteamSourceAddWithNullProviders(t *testing.T) {
 	bin := buildBinary(t)

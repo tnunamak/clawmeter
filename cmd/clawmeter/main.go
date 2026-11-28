@@ -1204,20 +1204,27 @@ func providerPollingState(p provider.Provider, cfg *config.Config) string {
 	if p == nil {
 		return "unavailable"
 	}
-	pc, hasEntry := cfg.Providers[p.Name()]
 	setup := provider.GetSetupStatus(p)
+	return providerPollingStateForSetup(p, cfg, setup.IsReady(), setup.State == provider.SetupNeedsAuth)
+}
+
+func providerPollingStateForSetup(p provider.Provider, cfg *config.Config, ready, needsAuth bool) string {
+	if p == nil {
+		return "unavailable"
+	}
+	pc, hasEntry := cfg.Providers[p.Name()]
 	switch {
 	case hasEntry && !pc.Enabled:
 		return "disabled"
-	case hasEntry && pc.Enabled && setup.IsReady():
+	case hasEntry && pc.Enabled && ready:
 		return "enabled"
 	case hasEntry && pc.Enabled:
 		return "setup_needed"
-	case setup.IsReady() && provider.SafeForAutoPolling(p):
+	case ready && provider.SafeForAutoPolling(p):
 		return "detected"
-	case setup.IsReady():
+	case ready:
 		return "available"
-	case setup.State == provider.SetupNeedsAuth:
+	case needsAuth:
 		return "setup_needed"
 	default:
 		return "unavailable"
@@ -1228,7 +1235,7 @@ func providerPollingState(p provider.Provider, cfg *config.Config) string {
 // be treated by default polling and explicit config.
 func describeProviderState(p provider.Provider, cfg *config.Config) string {
 	setup := provider.GetSetupStatus(p)
-	switch providerPollingState(p, cfg) {
+	switch providerPollingStateForSetup(p, cfg, setup.IsReady(), setup.State == provider.SetupNeedsAuth) {
 	case "disabled":
 		return "disabled"
 	case "enabled":
