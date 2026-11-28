@@ -59,8 +59,11 @@ func setupTmuxIntegration(dryRun bool) integrationResult {
 	if err := exec.Command("tmux", "set", "-g", "status-right", next).Run(); err != nil {
 		return integrationResult{Name: "tmux", Status: "error", Detail: fmt.Sprintf("set status-right: %v", err)}
 	}
-	_ = exec.Command("tmux", "refresh-client", "-S").Run()
-	return integrationResult{Name: "tmux", Status: "installed", Detail: "prepended clawmeter statusline", Changed: true}
+	detail := "prepended clawmeter statusline"
+	if err := exec.Command("tmux", "refresh-client", "-S").Run(); err != nil {
+		detail += fmt.Sprintf("; refresh warning: %v", err)
+	}
+	return integrationResult{Name: "tmux", Status: "installed", Detail: detail, Changed: true}
 }
 
 func setupClaudeStatuslineIntegration(dryRun, force bool) integrationResult {
