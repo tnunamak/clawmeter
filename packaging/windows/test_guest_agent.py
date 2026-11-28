@@ -33,6 +33,31 @@ function net { $global:LASTEXITCODE = 5 }
                 agent.qga_call(Path('fixture.sock'), {'execute': 'guest-ping'})
             self.assertNotIn('private fixture', str(caught.exception))
 
+    def test_launch_reply_without_a_positive_integer_pid_has_safe_error(self):
+        for reply in ({}, {'return': []}, {'return': {}}, {'return': {'pid': 0}},
+                      {'return': {'pid': True}}, {'return': {'pid': '42'}}):
+            responses = [reply, {'return': {'exited': True, 'exitcode': 0}}]
+            with self.subTest(reply=reply), patch.object(agent, 'qga_call', side_effect=responses):
+                with self.assertRaisesRegex(RuntimeError, '^guest launch reply has no valid pid$') as caught:
+                    agent.guest_exec(Path('unused'), ['synthetic-private-command'], 10)
+                self.assertNotIn('synthetic-private-command', str(caught.exception))
+
+    def test_non_dict_status_has_safe_error_and_retains_the_pid(self):
+        replies = [{'return': {'pid': 42}}, {'return': []}]
+        with patch.object(agent, 'qga_call', side_effect=replies):
+            with self.assertRaisesRegex(RuntimeError, 'invalid guest status reply; guest pid 42'):
+                agent.guest_exec(Path('unused'), ['synthetic-private-command'], 10)
+
+    def test_invalid_base64_has_safe_error_on_both_output_lanes(self):
+        for field in ('out-data', 'err-data'):
+            with self.subTest(field=field):
+                replies = [{'return': {'pid': 42}},
+                           {'return': {'exited': True, 'exitcode': 0, field: 'YWJj%'}}]
+                with patch.object(agent, 'qga_call', side_effect=replies):
+                    with self.assertRaisesRegex(RuntimeError, '^guest output is not valid base64$'):
+                        agent.guest_exec(Path('unused'), ['fixture.exe'], 10)
+
+
     def test_signal_termination_does_not_return_zero(self):
         replies = [{'return': {'pid': 42}}, {'return': {'exited': True, 'signal': 9}}]
         with patch.object(agent, 'qga_call', side_effect=replies):
