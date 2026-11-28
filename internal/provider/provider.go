@@ -853,7 +853,7 @@ func (u *UsageData) HasPresentableUsage() bool {
 			return true
 		}
 	}
-	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 || len(u.LocalModels) > 0 || len(u.APICreditBalances) > 0 {
+	if len(u.Windows) > 0 || len(u.Balances) > 0 || len(u.CreditGrants) > 0 || u.hasObservedLocalUse() || len(u.APICreditBalances) > 0 {
 		return true
 	}
 	// API credit pools are browser snapshots too: they keep a failed row
@@ -867,6 +867,17 @@ func (u *UsageData) HasPresentableUsage() bool {
 		return false
 	}
 	return u.ResetCredits.DisplayCount(time.Now()) > 0
+}
+
+// hasObservedLocalUse reports whether any local model has recorded use. A
+// catalog candidate that was never used must not make its provider presentable.
+func (u *UsageData) hasObservedLocalUse() bool {
+	for _, model := range u.LocalModels {
+		if model.Observed() {
+			return true
+		}
+	}
+	return false
 }
 
 // PresentationWindows returns every reported window, including windows with

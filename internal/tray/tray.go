@@ -1169,6 +1169,7 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 		}
 		show(fmt.Sprintf("%s: %.2f remaining", label, balance.Remaining), "")
 	}
+	localRows := 0
 	if acct != nil {
 		for _, balance := range acct.APICreditBalances {
 			show(balance.Text, balance.ActionURL)
@@ -1190,7 +1191,7 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 			}
 			show(title, action)
 		}
-		showLocalModelRows(menu, acct.LocalModels)
+		localRows = showLocalModelRows(menu, acct.LocalModels)
 	} else {
 		hideLocalModelRows(menu)
 	}
@@ -1206,48 +1207,27 @@ func showBalanceRows(menu *providerMenuItems, acct *view.Account, balances []pro
 		}
 		setMenuItemVisible(menu.balanceMoreItem, &menu.balanceMoreState, more > 0)
 	}
-	if acct != nil && menu.localModelsItem != nil && len(acct.LocalModels) > 0 {
-		return rows + len(acct.LocalModels)
-	}
-	return rows
+	return rows + localRows
 }
 
-func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsage) {
+// showLocalModelRows lists the models the view reports and returns how many rows
+// it showed. With none, the group is hidden. The view drops catalog entries with
+// no recorded use, and it keeps a dated observation even when its counts are
+// withheld, so the tray lists the same models as the CLI.
+func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsage) int {
 	if menu.localModelsItem == nil {
-		return
+		return 0
 	}
 	if len(models) == 0 {
 		hideLocalModelRows(menu)
-		return
+		return 0
 	}
-	// A catalog entry with no observations says nothing about available quota.
-	// Keep the complete catalog in the detailed CLI/JSON; the tray earns its
-	// space by showing activity and dated limit events only.
-	observed := make([]provider.LocalModelUsage, 0, len(models))
-	unknown := false
-	for _, model := range models {
-		unknown = unknown || model.AssistantMessages == nil
-		used := !model.LimitHitAt.IsZero()
-		for _, count := range []*int64{model.AssistantMessages, model.InputTokens, model.OutputTokens, model.ReasoningTokens, model.CacheReadTokens, model.CacheWriteTokens} {
-			used = used || (count != nil && *count > 0)
-		}
-		if used {
-			observed = append(observed, model)
-		}
-	}
-	models = observed
 	title := fmt.Sprintf("Local activity (%d models)", len(models))
 	if len(models) == 1 {
 		title = "Local activity (1 model)"
 	}
-	if len(models) == 0 {
-		title = "No local activity · quota unknown"
-		if unknown {
-			title = "Local activity unavailable · quota unknown"
-		}
-	}
 	setMenuItemTitle(menu.localModelsItem, &menu.localModelsState, title)
-	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, len(models) > 0)
+	setMenuItemEnabled(menu.localModelsItem, &menu.localModelsState, true)
 	setMenuItemVisible(menu.localModelsItem, &menu.localModelsState, true)
 	for len(menu.localModelItems) < len(models) {
 		item := menu.localModelsItem.AddSubMenuItem("", "")
@@ -1265,6 +1245,7 @@ func showLocalModelRows(menu *providerMenuItems, models []provider.LocalModelUsa
 			setMenuItemVisible(item, &menu.localModelStates[i], false)
 		}
 	}
+	return len(models)
 }
 
 func hideLocalModelRows(menu *providerMenuItems) {

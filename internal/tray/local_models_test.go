@@ -13,6 +13,18 @@ import (
 	"github.com/tnunamak/clawmeter/internal/view"
 )
 
+// openCodeFreeAccount is the opencode_free account the tray renders for a reading
+// taken at fetched and shown at now. The view decides which models it keeps.
+func openCodeFreeAccount(t *testing.T, models []provider.LocalModelUsage, fetched, now time.Time) *view.Account {
+	t.Helper()
+	snap := viewOf(map[string]*provider.UsageData{"opencode_free": {Provider: "opencode_free", FetchedAt: fetched, LocalModels: models}}, now)
+	acct := accountNamed(snap, "opencode_free")
+	if acct == nil {
+		t.Fatal("view has no opencode_free account")
+	}
+	return acct
+}
+
 func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	defer systray.ResetMenu()
 	menu := createProviderMenuItems(sourceMenuTestProvider{name: "opencode_free"}, false, nil, false)
@@ -21,17 +33,22 @@ func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	if len(menu.localModelItems) != 1 || menu.localModelStates[0].visible {
 		t.Fatal("OpenCode submenu must be declared before its first refresh")
 	}
+	now := time.Now()
+	today := now.UTC().Format("2006-01-02")
 	models := make([]provider.LocalModelUsage, 39)
 	for i := range models {
-		models[i] = provider.LocalModelUsage{Model: fmt.Sprintf("provider/model-%02d", i), Day: "2026-10-28"}
+		models[i] = provider.LocalModelUsage{Model: fmt.Sprintf("provider/model-%02d", i), Day: today}
 	}
 	used := int64(3)
 	models[12].AssistantMessages = &used
-	models[35].LimitHitAt = time.Now()
-	acct := &view.Account{LocalModels: models}
+	models[35].LimitHitAt = now
+	acct := openCodeFreeAccount(t, models, now, now)
+	if len(acct.LocalModels) != 2 {
+		t.Fatalf("view kept %d models, want the 2 with observations", len(acct.LocalModels))
+	}
 
-	if rows := showBalanceRows(menu, acct, nil, time.Now()); rows != len(models) {
-		t.Fatalf("reported rows = %d, want %d", rows, len(models))
+	if rows := showBalanceRows(menu, acct, nil, now); rows != 2 {
+		t.Fatalf("reported rows = %d, want 2 observed models", rows)
 	}
 	if !menu.localModelsState.visible || !menu.localModelsState.enabled || menu.localModelsState.title != "Local activity (2 models)" {
 		t.Fatalf("submenu parent = %+v", menu.localModelsState)
@@ -39,20 +56,22 @@ func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	if len(menu.localModelItems) != 2 {
 		t.Fatalf("submenu items = %d, want only 2 models with observations", len(menu.localModelItems))
 	}
-	want := []provider.LocalModelUsage{models[12], models[35]}
 	for i, item := range menu.localModelStates {
-		if !item.visible || item.enabled || item.title != want[i].Summary() {
+		if !item.visible || item.enabled || item.title != acct.LocalModels[i].Summary() {
 			t.Fatalf("submenu row %d = %+v", i, item)
 		}
 	}
-	showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free"}})
-	if menu.localModelsState.enabled || menu.localModelsState.title != "Local activity unavailable · quota unknown" {
-		t.Fatalf("unused catalog appeared as capacity: %+v", menu.localModelsState)
-	}
+	// Unused catalog entries, unknown or zero, get no group at all.
 	zero := int64(0)
-	showLocalModelRows(menu, []provider.LocalModelUsage{{Model: "unused-free", AssistantMessages: &zero}})
-	if menu.localModelsState.enabled || menu.localModelsState.title != "No local activity · quota unknown" {
-		t.Fatal("known zero and unknown activity conflated")
+	unused := openCodeFreeAccount(t, []provider.LocalModelUsage{
+		{Model: "unused-free", Day: today},
+		{Model: "zero-free", Day: today, AssistantMessages: &zero},
+	}, now, now)
+	if len(unused.LocalModels) != 0 {
+		t.Fatalf("view kept %d unused catalog entries", len(unused.LocalModels))
+	}
+	if rows := showBalanceRows(menu, unused, nil, now); rows != 0 || menu.localModelsState.visible {
+		t.Fatalf("unused catalog showed a group: rows=%d %+v", rows, menu.localModelsState)
 	}
 	for _, item := range menu.localModelStates {
 		if item.visible {
@@ -71,15 +90,37 @@ func TestOpenCodeFreeLocalModelsShowObservedActivity(t *testing.T) {
 	}
 }
 
+// A dated observation outlives the reading it came from. The view withholds its
+// counts but keeps the model, so the tray lists it as the CLI does, with the usage
+// marked unknown.
+func TestOpenCodeStaleLocalActivityStaysListed(t *testing.T) {
+	defer systray.ResetMenu()
+	menu := createProviderMenuItems(sourceMenuTestProvider{name: "opencode_free"}, false, nil, false)
+	now := time.Now()
+	used := int64(3)
+	models := []provider.LocalModelUsage{{Model: "example-free", Day: now.UTC().Format("2006-01-02"), AssistantMessages: &used}}
+	acct := openCodeFreeAccount(t, models, now.Add(-time.Hour), now)
+	if len(acct.LocalModels) != 1 || acct.LocalModels[0].AssistantMessages != nil {
+		t.Fatalf("view should keep the dated model with its counts withheld: %+v", acct.LocalModels)
+	}
+	if rows := showBalanceRows(menu, acct, nil, now); rows != 1 || !menu.localModelsState.visible {
+		t.Fatalf("tray hid activity the view reports: rows=%d %+v", rows, menu.localModelsState)
+	}
+	if title := menu.localModelStates[0].title; !strings.Contains(title, "local usage unknown") {
+		t.Fatalf("stale row does not mark its usage unknown: %q", title)
+	}
+}
+
 func TestOpenCodeLocalActivityDoesNotHideMissingQuota(t *testing.T) {
 	defer systray.ResetMenu()
 	menu := createProviderMenuItems(sourceMenuTestProvider{name: "opencode_free"}, false, nil, false)
 	now := time.Now()
+	messages := int64(3)
 	s.mu.Lock()
 	oldResults := s.lastResults
 	s.lastResults = map[string]*provider.UsageData{"opencode_free": {
 		Provider: "opencode_free", FetchedAt: now,
-		LocalModels: []provider.LocalModelUsage{{Model: "example-free", Day: now.UTC().Format("2006-01-02")}},
+		LocalModels: []provider.LocalModelUsage{{Model: "example-free", Day: now.UTC().Format("2006-01-02"), AssistantMessages: &messages}},
 	}}
 	s.mu.Unlock()
 	defer func() {
