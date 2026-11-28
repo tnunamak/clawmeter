@@ -1,35 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source_file="${1:-$(cd "$(dirname "$0")" && pwd)/windows-vm-smoke.sh}"
-[[ -f "$source_file" ]] || { printf 'source not found: %s\n' "$source_file" >&2; exit 2; }
+lifecycle_file="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/windows-vm-smoke-lifecycle.sh}"
+[[ -f "$lifecycle_file" ]] || { printf 'source not found: %s\n' "$lifecycle_file" >&2; exit 2; }
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-extract_function() {
-  local name="$1"
-  awk -v name="$name" '
-    !found && $0 ~ "^[[:space:]]*" name "[[:space:]]*\\(\\)[[:space:]]*\\{" {
-      found=1
-      print
-      next
-    }
-    found {
-      print
-      if ($0 ~ /^[[:space:]]*}[[:space:]]*$/) exit
-    }
-    END { if (!found) exit 1 }
-  ' "$source_file"
-}
-
-for function_name in have kill_vm_processes; do
-  if ! extract_function "$function_name" >>"$tmp_dir/functions.sh"; then
-    printf 'FAIL: %s is missing from %s\n' "$function_name" "$source_file" >&2
-    exit 1
-  fi
-done
-source "$tmp_dir/functions.sh"
+# shellcheck source=scripts/lib/windows-vm-smoke-lifecycle.sh
+source "$lifecycle_file"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -117,4 +96,4 @@ VM_CONF="$vm_dir"
 kill_vm_processes "$vm_dir"
 [[ ! -s "$QUICKEMU_LOG" && ! -s "$PKILL_LOG" ]] || fail 'cleanup ran when the config path was a directory'
 
-printf 'PASS: scoped VM cleanup (%s)\n' "$source_file"
+printf 'PASS: scoped VM cleanup (%s)\n' "$lifecycle_file"
