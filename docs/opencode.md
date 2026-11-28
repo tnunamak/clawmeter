@@ -63,9 +63,11 @@ A length worked out from the monthly reset time would be a guess, so clawmeter
 claims no length for the monthly window and makes no projection from it.
 
 A forecast needs a warm-up. The 5-hour forecast appears after 30 minutes, and
-the 7-day forecast after one hour. The one-hour cap on warm-up is shared by all
-providers, and for the 7-day window it is short: 2% used after one hour projects
-to 336% by the end of the week. Treat early 7-day forecasts as rough.
+the 7-day forecast after about 17 hours. Warm-up is 10% of the window, capped at
+24 hours, and is shared by all providers. Before that the forecast reads `unknown`
+and `projected_pct` is the numeric zero placeholder, not a forecast. Treat early
+7-day forecasts as rough: 2% used after 17 hours projects to 20% by the end of the week,
+but a short burst can still skew it.
 
 ## Console budgets
 
