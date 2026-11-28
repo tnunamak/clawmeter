@@ -190,6 +190,36 @@ func TestTwoLoginsShowOneOrganizationOnce(t *testing.T) {
 	}
 }
 
+func TestTwoEligibleLoginsUseTheNewestOfferRegardlessOfOrder(t *testing.T) {
+	now := time.Now().UTC()
+	pool := strings.Repeat("2", 64)
+	newer := polledOffer(pool, now)
+	older := polledOffer(pool, now.Add(-20*time.Minute))
+	oldClaim := int64(1000)
+	older.Claimable = &oldClaim
+	older.LinkObservedAt = now.Add(2 * time.Second)
+	for _, first := range []provider.UsageCreditBenefit{older, newer} {
+		second := newer
+		if first.ObservedAt.Equal(now) {
+			second = older
+		}
+		p := New([]provider.Provider{
+			&fakeCodex{key: "a", benefits: []provider.UsageCreditBenefit{first}},
+			&fakeCodex{key: "b", benefits: []provider.UsageCreditBenefit{second}},
+		}, 11*time.Minute)
+		p.Store = &openaicredits.Store{Dir: t.TempDir()}
+		data, err := p.FetchUsage(context.Background())
+		if err != nil || len(data.CreditBenefits) != 1 {
+			t.Fatalf("benefits = %+v, %v", data, err)
+		}
+		got := data.CreditBenefits[0]
+		if !got.ObservedAt.Equal(now) || got.Claimable == nil || *got.Claimable != *newer.Claimable ||
+			!got.LinkObservedAt.Equal(older.LinkObservedAt) || !got.FreshUntil.Equal(now.Add(11*time.Minute)) {
+			t.Fatalf("merged eligible offer used the wrong observation: %+v", got)
+		}
+	}
+}
+
 func TestTwoLoginsKeepTheEligibleOfferAndTheNewestLink(t *testing.T) {
 	now := time.Now().UTC()
 	pool := strings.Repeat("1", 64)
