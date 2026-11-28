@@ -105,6 +105,37 @@ test("alarm lifecycle and one poll at a time", async () => {
   assert.equal(w.stored.length, 3);
 });
 
+test("an open-existing-alarm check does not replace the browser's poll schedule", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  const queried = [];
+  w.context.chrome.alarms.get = async name => {
+    queried.push(name);
+    return { name, periodInMinutes: 1 };
+  };
+  const before = w.created.length;
+  await w.context.ensureAlarm();
+  assert.deepEqual(queried, ["poll"]);
+  assert.equal(w.created.length, before);
+});
+
+test("open-openai reports false without opening a tab when optional permission is absent", async () => {
+  const w = worker(async () => ({ status: "ok", payloads: [] }));
+  await tick();
+  let checked = 0;
+  w.context.chrome.permissions = {
+    contains: async () => { checked++; return false; },
+    request: () => assert.fail("the worker must not request a browser permission"),
+  };
+  const result = await new Promise((resolve, reject) => {
+    const handled = w.listeners.message("open-openai", { id: "self" }, resolve);
+    if (handled !== true) reject(new Error("worker did not keep the response channel open"));
+  });
+  assert.equal(result, false);
+  assert.ok(checked > 0);
+  assert.deepEqual(w.opened, []);
+});
+
 test("authenticated GET and local JSON POST with failures quiet", async () => {
   const requests = [];
   const w = worker(async (getJSON, now, cache, post) => {
